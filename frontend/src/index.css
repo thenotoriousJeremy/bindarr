@@ -635,12 +635,20 @@ button, input, select, textarea {
 }
 
 .scan-card-guide {
-  width: 75%;
-  height: 80%;
+  width: 70%;
+  aspect-ratio: 2.5 / 3.5; /* Lock aspect ratio to real Pokemon card (2.5 : 3.5) */
   border: 2px dashed rgba(255, 255, 255, 0.4);
   border-radius: var(--radius-md);
   position: relative;
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5); /* Dim outside scanner */
+}
+
+@media (orientation: landscape) {
+  .scan-card-guide {
+    height: 75%;
+    width: auto;
+    aspect-ratio: 2.5 / 3.5;
+  }
 }
 
 /* Highlighting crop zones for user guidance */

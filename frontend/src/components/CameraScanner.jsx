@@ -141,22 +141,39 @@ function CameraScanner({ onAddSuccess, showToast }) {
     const videoWidth = video.videoWidth;
     const videoHeight = video.videoHeight;
 
-    // Define crops aligned exactly with the guide box percentages:
-    // Centered card guide is width 75%, height 80% (x offset 12.5%, y offset 10%)
-    // Name crop: top 6% of guide (y: 10% + 4.8% = 14.8%)
-    // Number crop: bottom 8% of guide (y: 10% + 68.8% = 78.8%)
+    // Mathematically exact guide coordinate mapping
+    // Pokemon card physical aspect ratio is 2.5 : 3.5 (0.7143)
+    const cardAspectRatio = 2.5 / 3.5;
+    let guideWidth, guideHeight, guideLeft, guideTop;
+
+    if (videoHeight > videoWidth) {
+      // Portrait mode (typical phone)
+      guideWidth = videoWidth * 0.70; // Matches width: 70% of stream
+      guideHeight = guideWidth / cardAspectRatio; // guideWidth * 1.4
+      guideLeft = (videoWidth - guideWidth) / 2;
+      guideTop = (videoHeight - guideHeight) / 2;
+    } else {
+      // Landscape mode (typical desktop/webcam)
+      guideHeight = videoHeight * 0.75; // Matches height: 75% of stream
+      guideWidth = guideHeight * cardAspectRatio; // guideHeight * 0.7143
+      guideLeft = (videoWidth - guideWidth) / 2;
+      guideTop = (videoHeight - guideHeight) / 2;
+    }
+
+    // Name Crop: Top ~4% to 12% of the card's boundary
     const nameCrop = {
-      x: Math.round(videoWidth * 0.16),
-      y: Math.round(videoHeight * 0.15),
-      w: Math.round(videoWidth * 0.68),
-      h: Math.round(videoHeight * 0.08)
+      x: Math.round(guideLeft + guideWidth * 0.05),
+      y: Math.round(guideTop + guideHeight * 0.04),
+      w: Math.round(guideWidth * 0.90),
+      h: Math.round(guideHeight * 0.08)
     };
 
+    // Number Crop: Bottom ~88% to 96% of the card's boundary (full width)
     const numCrop = {
-      x: Math.round(videoWidth * 0.16),
-      y: Math.round(videoHeight * 0.78),
-      w: Math.round(videoWidth * 0.68),
-      h: Math.round(videoHeight * 0.08)
+      x: Math.round(guideLeft + guideWidth * 0.05),
+      y: Math.round(guideTop + guideHeight * 0.88),
+      w: Math.round(guideWidth * 0.90),
+      h: Math.round(guideHeight * 0.08)
     };
 
     try {

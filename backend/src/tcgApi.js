@@ -113,15 +113,60 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
     const q = apiQuery.join(' ');
     console.log(`Querying Pokémon TCG API: q='${q}'`);
     
-    const response = await tcgClient.get('/cards', {
-      params: {
-        q: q || undefined,
-        pageSize: 50,
-        orderBy: 'releaseDate'
-      }
-    });
+    let response;
+    try {
+      response = await tcgClient.get('/cards', {
+        params: {
+          q: q || undefined,
+          pageSize: 50,
+          orderBy: 'releaseDate'
+        }
+      });
+    } catch (err) {
+      console.error('Initial API query failed:', err.message);
+      response = { data: { data: [] } };
+    }
 
-    const cards = response.data.data || [];
+    let cards = response.data.data || [];
+
+    // Fallback 1: If name + number query returned nothing, retry search with number only (numbers are highly specific)
+    if (cards.length === 0 && nameQuery && numberQuery) {
+      const fallbackQ = `number:"${numberQuery}"`;
+      console.log(`No results for '${q}'. Retrying fallback search: ${fallbackQ}`);
+      try {
+        const fallbackResponse = await tcgClient.get('/cards', {
+          params: {
+            q: fallbackQ,
+            pageSize: 50,
+            orderBy: 'releaseDate'
+          }
+        });
+        cards = fallbackResponse.data.data || [];
+      } catch (err) {
+        console.error('Fallback 1 query failed:', err.message);
+      }
+    }
+
+    // Fallback 2: If query still empty, retry search with first word of card name (strip typos/noise)
+    if (cards.length === 0 && nameQuery) {
+      const firstWord = nameQuery.split(' ')[0];
+      if (firstWord && firstWord.length > 2) {
+        const fallbackQ = `name:"*${firstWord}*"`;
+        console.log(`No results. Retrying fallback search: ${fallbackQ}`);
+        try {
+          const fallbackResponse = await tcgClient.get('/cards', {
+            params: {
+              q: fallbackQ,
+              pageSize: 50,
+              orderBy: 'releaseDate'
+            }
+          });
+          cards = fallbackResponse.data.data || [];
+        } catch (err) {
+          console.error('Fallback 2 query failed:', err.message);
+        }
+      }
+    }
     
     // Save to cache in background
     if (cards.length > 0) {
