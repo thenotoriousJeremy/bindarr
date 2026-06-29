@@ -17,6 +17,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const guideScale = 0.70; // Fixed guide box scale to ensure overlay matches scans perfectly
   const [showSettings, setShowSettings] = useState(false);
   const [videoRatio, setVideoRatio] = useState(null);
+  const [cardLayout, setCardLayout] = useState('modern');
   
   // Scanned card text review overrides
   const [scannedName, setScannedName] = useState('');
@@ -329,30 +330,46 @@ function CameraScanner({ onAddSuccess, showToast }) {
     const scaleX = orientedCanvas.width / videoRect.width;
     const scaleY = orientedCanvas.height / videoRect.height;
 
-    // Define crops in screen coordinates matching the CSS guide layout exactly:
-    // Name: top 3.5% of card guide, left 4% of card guide, width 55% of card guide, height 6% of card guide
-    const nameCropScreen = {
-      x: (guideRect.left - videoRect.left) + guideRect.width * 0.04,
-      y: (guideRect.top - videoRect.top) + guideRect.height * 0.035,
-      w: guideRect.width * 0.55,
-      h: guideRect.height * 0.06
-    };
+    // Define crops in screen coordinates matching the selected cardLayout:
+    let nameCropScreen, numLeftCropScreen = null, numRightCropScreen = null;
 
-    // Modern Number (Left): bottom 1.5% of card guide, left 12% of card guide (bypassing logo), width 20% of card guide, height 5% of card guide
-    const numLeftCropScreen = {
-      x: (guideRect.left - videoRect.left) + guideRect.width * 0.12,
-      y: (guideRect.top - videoRect.top) + guideRect.height * (1.0 - 0.015 - 0.05), // 93.5%
-      w: guideRect.width * 0.20,
-      h: guideRect.height * 0.05
-    };
+    if (cardLayout === 'trainer') {
+      // Trainer card name is lower down and wider
+      nameCropScreen = {
+        x: (guideRect.left - videoRect.left) + guideRect.width * 0.04,
+        y: (guideRect.top - videoRect.top) + guideRect.height * 0.11,
+        w: guideRect.width * 0.75,
+        h: guideRect.height * 0.07
+      };
+    } else {
+      // Standard name crop (Modern, Vintage, Japanese)
+      nameCropScreen = {
+        x: (guideRect.left - videoRect.left) + guideRect.width * 0.04,
+        y: (guideRect.top - videoRect.top) + guideRect.height * 0.035,
+        w: guideRect.width * 0.55,
+        h: guideRect.height * 0.06
+      };
+    }
 
-    // Vintage Number (Right): bottom 1.5% of card guide, right 12% of card guide (bypassing rarity), width 20% of card guide, height 5% of card guide
-    const numRightCropScreen = {
-      x: (guideRect.left - videoRect.left) + guideRect.width * 0.68,
-      y: (guideRect.top - videoRect.top) + guideRect.height * (1.0 - 0.015 - 0.05), // 93.5%
-      w: guideRect.width * 0.20,
-      h: guideRect.height * 0.05
-    };
+    if (cardLayout === 'modern' || cardLayout === 'trainer' || cardLayout === 'japanese') {
+      // Left bottom number (Japanese Modern starts closer to left border at 4%)
+      numLeftCropScreen = {
+        x: (guideRect.left - videoRect.left) + guideRect.width * (cardLayout === 'japanese' ? 0.04 : 0.12),
+        y: (guideRect.top - videoRect.top) + guideRect.height * (1.0 - 0.015 - 0.05), // 93.5%
+        w: guideRect.width * 0.20,
+        h: guideRect.height * 0.05
+      };
+    }
+
+    if (cardLayout === 'vintage' || cardLayout === 'trainer' || cardLayout === 'japanese') {
+      // Right bottom number (Vintage, Japanese Vintage)
+      numRightCropScreen = {
+        x: (guideRect.left - videoRect.left) + guideRect.width * 0.68,
+        y: (guideRect.top - videoRect.top) + guideRect.height * (1.0 - 0.015 - 0.05), // 93.5%
+        w: guideRect.width * 0.20,
+        h: guideRect.height * 0.05
+      };
+    }
 
     // Scale screen coordinates to the oriented canvas coordinates
     const nameCrop = {
@@ -362,29 +379,40 @@ function CameraScanner({ onAddSuccess, showToast }) {
       h: Math.round(nameCropScreen.h * scaleY)
     };
 
-    const numLeftCrop = {
+    const numLeftCrop = numLeftCropScreen ? {
       x: Math.round(numLeftCropScreen.x * scaleX),
       y: Math.round(numLeftCropScreen.y * scaleY),
       w: Math.round(numLeftCropScreen.w * scaleX),
       h: Math.round(numLeftCropScreen.h * scaleY)
-    };
+    } : null;
 
-    const numRightCrop = {
+    const numRightCrop = numRightCropScreen ? {
       x: Math.round(numRightCropScreen.x * scaleX),
       y: Math.round(numRightCropScreen.y * scaleY),
       w: Math.round(numRightCropScreen.w * scaleX),
       h: Math.round(numRightCropScreen.h * scaleY)
-    };
+    } : null;
 
     try {
       // 2. Process crop images using the oriented canvas
       const nameDataUrl = getProcessedDataUrl(orientedCanvas, nameCrop.x, nameCrop.y, nameCrop.w, nameCrop.h);
-      const numLeftDataUrl = getProcessedDataUrl(orientedCanvas, numLeftCrop.x, numLeftCrop.y, numLeftCrop.w, numLeftCrop.h);
-      const numRightDataUrl = getProcessedDataUrl(orientedCanvas, numRightCrop.x, numRightCrop.y, numRightCrop.w, numRightCrop.h);
-
       setDebugNameImg(nameDataUrl);
-      setDebugNumLeftImg(numLeftDataUrl);
-      setDebugNumRightImg(numRightDataUrl);
+
+      let numLeftDataUrl = '';
+      if (numLeftCrop) {
+        numLeftDataUrl = getProcessedDataUrl(orientedCanvas, numLeftCrop.x, numLeftCrop.y, numLeftCrop.w, numLeftCrop.h);
+        setDebugNumLeftImg(numLeftDataUrl);
+      } else {
+        setDebugNumLeftImg('');
+      }
+
+      let numRightDataUrl = '';
+      if (numRightCrop) {
+        numRightDataUrl = getProcessedDataUrl(orientedCanvas, numRightCrop.x, numRightCrop.y, numRightCrop.w, numRightCrop.h);
+        setDebugNumRightImg(numRightDataUrl);
+      } else {
+        setDebugNumRightImg('');
+      }
 
       // 3. Perform OCR on Card Name (PSM 7: Treat image as a single text line)
       setScanStatus('Reading Card Name...');
@@ -408,25 +436,37 @@ function CameraScanner({ onAddSuccess, showToast }) {
       });
       const detectedName = filteredNameParts.slice(0, 3).join(' ').trim(); // Take first 3 valid words (e.g. "Charizard", "Dark Raichu", "Mewtwo EX")
 
-      // 4. Perform OCR on Card Number (Left & Right margins in parallel, whitelisting digits/slashes and forcing PSM 7 text line)
+      // 4. Perform OCR on Card Numbers in parallel depending on layout (whitelisting digits and forcing PSM 7 text line)
       setScanStatus('Reading Card Number...');
-      const [numLeftResult, numRightResult] = await Promise.all([
-        Tesseract.recognize(numLeftDataUrl, 'eng', {
-          parameters: {
-            tessedit_char_whitelist: '0123456789/',
-            tessedit_pageseg_mode: '7'
-          }
-        }),
-        Tesseract.recognize(numRightDataUrl, 'eng', {
-          parameters: {
-            tessedit_char_whitelist: '0123456789/',
-            tessedit_pageseg_mode: '7'
-          }
-        })
-      ]);
+      const ocrPromises = [];
+      if (numLeftDataUrl) {
+        ocrPromises.push(
+          Tesseract.recognize(numLeftDataUrl, 'eng', {
+            parameters: {
+              tessedit_char_whitelist: '0123456789/',
+              tessedit_pageseg_mode: '7'
+            }
+          }).then(res => ({ side: 'left', text: res.data.text.trim() }))
+        );
+      }
+      if (numRightDataUrl) {
+        ocrPromises.push(
+          Tesseract.recognize(numRightDataUrl, 'eng', {
+            parameters: {
+              tessedit_char_whitelist: '0123456789/',
+              tessedit_pageseg_mode: '7'
+            }
+          }).then(res => ({ side: 'right', text: res.data.text.trim() }))
+        );
+      }
 
-      const numLeftRaw = numLeftResult.data.text.trim();
-      const numRightRaw = numRightResult.data.text.trim();
+      const ocrResults = await Promise.all(ocrPromises);
+      let numLeftRaw = '';
+      let numRightRaw = '';
+      for (const res of ocrResults) {
+        if (res.side === 'left') numLeftRaw = res.text;
+        if (res.side === 'right') numRightRaw = res.text;
+      }
       
       // Helper to extract numerator (card number) and map common character recognition failures
       const extractNumber = (raw) => {
@@ -659,9 +699,25 @@ function CameraScanner({ onAddSuccess, showToast }) {
             {/* Outline Box Guides */}
             <div className="camera-overlay">
               <div className="scan-card-guide" style={{ width: `${guideScale * 100}%` }}>
-                <div className="scan-region-title"></div>
-                <div className="scan-region-number-left"></div>
-                <div className="scan-region-number-right"></div>
+                {/* Name Guide: shift lower and widen if trainer layout */}
+                <div 
+                  className="scan-region-title" 
+                  style={cardLayout === 'trainer' ? { top: '11%', height: '7%', width: '75%' } : {}}
+                />
+                
+                {/* Left Number Guide: show for Modern, Trainer, Japanese (custom left positioning for Japanese) */}
+                {(cardLayout === 'modern' || cardLayout === 'trainer' || cardLayout === 'japanese') && (
+                  <div 
+                    className="scan-region-number-left" 
+                    style={cardLayout === 'japanese' ? { left: '4%' } : {}}
+                  />
+                )}
+                
+                {/* Right Number Guide: show for Vintage, Trainer, Japanese */}
+                {(cardLayout === 'vintage' || cardLayout === 'trainer' || cardLayout === 'japanese') && (
+                  <div className="scan-region-number-right" />
+                )}
+                
                 {loading && <div className="scan-line"></div>}
               </div>
             </div>
@@ -732,6 +788,24 @@ function CameraScanner({ onAddSuccess, showToast }) {
                     <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
                   ))}
                 </select>
+              </div>
+
+              {/* Card Layout Selection */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Card Layout Mode</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.25rem', marginTop: '0.15rem' }}>
+                  {['modern', 'vintage', 'trainer', 'japanese'].map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={`btn ${cardLayout === mode ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '0.35rem 0', fontSize: '0.7rem', textTransform: 'capitalize' }}
+                      onClick={() => setCardLayout(mode)}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           )}
