@@ -15,6 +15,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [autoScan, setAutoScan] = useState(false);
   const [bulkMode, setBulkMode] = useState(false);
   const [guideScale, setGuideScale] = useState(0.70);
+  const [showSettings, setShowSettings] = useState(false);
   
   // Scanned card text review overrides
   const [scannedName, setScannedName] = useState('');
@@ -99,6 +100,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
     setDebugNameImg('');
     setDebugNumLeftImg('');
     setDebugNumRightImg('');
+    setShowSettings(false);
     try {
       const constraints = {
         video: {
@@ -131,6 +133,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
     setDebugNameImg('');
     setDebugNumLeftImg('');
     setDebugNumRightImg('');
+    setShowSettings(false);
   };
 
   const handleManualSearch = async (e) => {
@@ -212,9 +215,38 @@ function CameraScanner({ onAddSuccess, showToast }) {
     }
   };
 
+  // Resolves the landscape-to-portrait camera stream rotation bug on mobile browsers.
+  // It creates a canvas matching the visual orientation on the user's screen.
+  const getOrientedVideoCanvas = (video) => {
+    const videoWidth = video.videoWidth;
+    const videoHeight = video.videoHeight;
+    const canvas = document.createElement('canvas');
+    
+    // Detect if browser displays stream rotated relative to raw texture resolution
+    const isRotated = videoWidth > videoHeight && video.clientHeight > video.clientWidth;
+    
+    if (isRotated) {
+      canvas.width = videoHeight; // e.g. 720
+      canvas.height = videoWidth; // e.g. 1280
+      const ctx = canvas.getContext('2d');
+      
+      // Rotate 90 degrees clockwise around center
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(90 * Math.PI / 180);
+      ctx.drawImage(video, -videoWidth / 2, -videoHeight / 2, videoWidth, videoHeight);
+    } else {
+      canvas.width = videoWidth;
+      canvas.height = videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
+    }
+    
+    return canvas;
+  };
+
   // Preprocess cropped canvas for higher OCR accuracy (Binarization / Thresholding)
   // Bypasses browser-incompatible canvas context filters to run natively on mobile devices.
-  const getProcessedDataUrl = (video, sourceX, sourceY, sourceW, sourceH) => {
+  const getProcessedDataUrl = (sourceCanvas, sourceX, sourceY, sourceW, sourceH) => {
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = sourceW * 2; // Upscale for clearer OCR text
     tempCanvas.height = sourceH * 2;
@@ -222,7 +254,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
     
     // Draw raw cropped frame first
     tempCtx.drawImage(
-      video,
+      sourceCanvas,
       sourceX, sourceY, sourceW, sourceH,
       0, 0, tempCanvas.width, tempCanvas.height
     );
@@ -276,14 +308,15 @@ function CameraScanner({ onAddSuccess, showToast }) {
     setScanStatus('Initializing OCR scanner...');
 
     const video = videoRef.current;
-    const videoWidth = video.videoWidth;
-    const videoHeight = video.videoHeight;
     const clientWidth = video.clientWidth;
     const clientHeight = video.clientHeight;
 
-    // Scaling factors to translate CSS screen coordinates to raw video stream resolution coordinates
-    const scaleX = videoWidth / clientWidth;
-    const scaleY = videoHeight / clientHeight;
+    // 1. Capture and correctly orient the video frame onto a canvas
+    const orientedCanvas = getOrientedVideoCanvas(video);
+    
+    // Scaling factors to map screen positions (clientWidth/clientHeight) to the oriented canvas width/height
+    const scaleX = orientedCanvas.width / clientWidth;
+    const scaleY = orientedCanvas.height / clientHeight;
 
     // Pokemon card physical aspect ratio is 2.5 : 3.5 (0.7143)
     const cardAspectRatio = 2.5 / 3.5;
@@ -329,7 +362,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
       h: guideHeight * 0.05
     };
 
-    // Scale to raw video coordinates
+    // Scale screen coordinates to the oriented canvas coordinates
     const nameCrop = {
       x: Math.round(nameCropScreen.x * scaleX),
       y: Math.round(nameCropScreen.y * scaleY),
@@ -352,10 +385,10 @@ function CameraScanner({ onAddSuccess, showToast }) {
     };
 
     try {
-      // 1. Process images
-      const nameDataUrl = getProcessedDataUrl(video, nameCrop.x, nameCrop.y, nameCrop.w, nameCrop.h);
-      const numLeftDataUrl = getProcessedDataUrl(video, numLeftCrop.x, numLeftCrop.y, numLeftCrop.w, numLeftCrop.h);
-      const numRightDataUrl = getProcessedDataUrl(video, numRightCrop.x, numRightCrop.y, numRightCrop.w, numRightCrop.h);
+      // 2. Process crop images using the oriented canvas
+      const nameDataUrl = getProcessedDataUrl(orientedCanvas, nameCrop.x, nameCrop.y, nameCrop.w, nameCrop.h);
+      const numLeftDataUrl = getProcessedDataUrl(orientedCanvas, numLeftCrop.x, numLeftCrop.y, numLeftCrop.w, numLeftCrop.h);
+      const numRightDataUrl = getProcessedDataUrl(orientedCanvas, numRightCrop.x, numRightCrop.y, numRightCrop.w, numRightCrop.h);
 
       setDebugNameImg(nameDataUrl);
       setDebugNumLeftImg(numLeftDataUrl);
@@ -604,141 +637,154 @@ function CameraScanner({ onAddSuccess, showToast }) {
             </div>
           </div>
 
-          {/* Scanner Settings Control Panel (CardSlinger Configurations) */}
-          <div className="glass-panel" style={{ width: '100%', padding: '1rem', background: 'rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '0.25rem' }}>
-            <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.25rem' }}>
-              Scanner Configurations (CardSlinger Mode)
-            </div>
-            
-            {/* Toggles Row */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Auto-Capture</span>
-                <button 
-                  type="button"
-                  className={`btn ${autoScan ? 'btn-primary' : 'btn-secondary'}`} 
-                  onClick={() => setAutoScan(!autoScan)}
-                  style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
-                >
-                  {autoScan ? 'ON' : 'OFF'}
-                </button>
+          {/* Collapsible Settings Accordion (CardSlinger Configurations) */}
+          <button 
+            type="button" 
+            className="btn btn-secondary" 
+            style={{ width: '100%', padding: '0.45rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-glass)' }}
+            onClick={() => setShowSettings(!showSettings)}
+          >
+            <Settings size={14} /> {showSettings ? 'Hide Scanner Settings' : 'Configure Scanner Settings'}
+          </button>
+
+          {showSettings && (
+            <div className="glass-panel" style={{ width: '100%', padding: '1rem', background: 'rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '-0.25rem', marginBottom: '0.25rem' }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.25rem' }}>
+                Scanner Configurations
+              </div>
+              
+              {/* Toggles Row */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Auto-Capture</span>
+                  <button 
+                    type="button"
+                    className={`btn ${autoScan ? 'btn-primary' : 'btn-secondary'}`} 
+                    onClick={() => setAutoScan(!autoScan)}
+                    style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
+                  >
+                    {autoScan ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Bulk Auto-Add</span>
+                  <button 
+                    type="button"
+                    className={`btn ${bulkMode ? 'btn-primary' : 'btn-secondary'}`} 
+                    onClick={() => {
+                      setBulkMode(!bulkMode);
+                      if (!bulkMode) {
+                        setAutoScan(true);
+                        showToast('Bulk Mode enabled: Identified cards add automatically!');
+                      }
+                    }}
+                    style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
+                  >
+                    {bulkMode ? 'ON' : 'OFF'}
+                  </button>
+                </div>
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Bulk Auto-Add</span>
-                <button 
-                  type="button"
-                  className={`btn ${bulkMode ? 'btn-primary' : 'btn-secondary'}`} 
-                  onClick={() => {
-                    setBulkMode(!bulkMode);
-                    if (!bulkMode) {
-                      setAutoScan(true);
-                      showToast('Bulk Mode enabled: Identified cards add automatically!');
-                    }
-                  }}
-                  style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
-                >
-                  {bulkMode ? 'ON' : 'OFF'}
-                </button>
-              </div>
-            </div>
-
-            {/* Guide Scale Slider */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                <span>Guide Box Sizing (Scale)</span>
-                <span style={{ color: 'var(--accent-yellow)' }}>{Math.round(guideScale * 100)}%</span>
-              </div>
-              <input 
-                type="range" 
-                min="0.45" 
-                max="0.95" 
-                step="0.01" 
-                value={guideScale}
-                onChange={(e) => setGuideScale(parseFloat(e.target.value))}
-                style={{ width: '100%', height: '4px', background: 'var(--bg-primary)', borderRadius: '2px', cursor: 'pointer', accentColor: 'var(--accent-red)' }}
-              />
-            </div>
-
-            {/* Destination Container Selector */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Destination Container</div>
-              <select 
-                className="select-control" 
-                style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem', width: '100%', marginTop: '0.15rem' }} 
-                value={locationId} 
-                onChange={(e) => setLocationId(e.target.value)}
-              >
-                <option value="">Unassigned Pile</option>
-                {locations.map((loc) => (
-                  <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Manual OCR Correction panel */}
-          <div className="glass-panel" style={{ width: '100%', padding: '0.75rem 1rem', background: 'rgba(0,0,0,0.3)', border: '1px dashed var(--border-glass-hover)', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.25rem' }}>
-            <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Scanned Card Text Review
-            </div>
-            <form onSubmit={handleManualSearch} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-              <div style={{ flex: 2, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Name</span>
+              {/* Guide Scale Slider */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                  <span>Guide Box Sizing (Scale)</span>
+                  <span style={{ color: 'var(--accent-yellow)' }}>{Math.round(guideScale * 100)}%</span>
+                </div>
                 <input 
-                  type="text" 
-                  className="input-control" 
-                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }} 
-                  value={scannedName}
-                  onChange={(e) => setScannedName(e.target.value)}
-                  placeholder="Scanned name..."
+                  type="range" 
+                  min="0.45" 
+                  max="0.95" 
+                  step="0.01" 
+                  value={guideScale}
+                  onChange={(e) => setGuideScale(parseFloat(e.target.value))}
+                  style={{ width: '100%', height: '4px', background: 'var(--bg-primary)', borderRadius: '2px', cursor: 'pointer', accentColor: 'var(--accent-red)' }}
                 />
               </div>
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Number</span>
-                <input 
-                  type="text" 
-                  className="input-control" 
-                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }} 
-                  value={scannedNumber}
-                  onChange={(e) => setScannedNumber(e.target.value)}
-                  placeholder="Scanned number..."
-                />
-              </div>
-              <button 
-                type="submit" 
-                className="btn btn-secondary" 
-                style={{ padding: '0.35rem 1rem', fontSize: '0.85rem', whiteSpace: 'nowrap' }}
-                disabled={loading}
-              >
-                Search
-              </button>
-            </form>
 
-            {/* Show cropped OCR feeds for alignment debugging */}
-            {(debugNameImg || debugNumLeftImg || debugNumRightImg) && (
-              <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginTop: '0.25rem' }}>
-                {debugNameImg && (
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Name Crop Feed</span>
-                    <img src={debugNameImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Name Crop" />
-                  </div>
-                )}
-                {debugNumLeftImg && (
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Modern No. Crop</span>
-                    <img src={debugNumLeftImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Modern Number Crop" />
-                  </div>
-                )}
-                {debugNumRightImg && (
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Vintage No. Crop</span>
-                    <img src={debugNumRightImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Vintage Number Crop" />
-                  </div>
-                )}
+              {/* Destination Container Selector */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Destination Container</div>
+                <select 
+                  className="select-control" 
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem', width: '100%', marginTop: '0.15rem' }} 
+                  value={locationId} 
+                  onChange={(e) => setLocationId(e.target.value)}
+                >
+                  <option value="">Unassigned Pile</option>
+                  {locations.map((loc) => (
+                    <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
+                  ))}
+                </select>
               </div>
-            )}
-          </div>
+            </div>
+          )}
+
+          {/* Manual OCR Correction panel - Only visible after a scan has occurred */}
+          {(debugNameImg || scannedName || scannedNumber) && (
+            <div className="glass-panel" style={{ width: '100%', padding: '0.75rem 1rem', background: 'rgba(0,0,0,0.3)', border: '1px dashed var(--border-glass-hover)', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.25rem' }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Scanned Card Text Review
+              </div>
+              <form onSubmit={handleManualSearch} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
+                <div style={{ flex: 2, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Name</span>
+                  <input 
+                    type="text" 
+                    className="input-control" 
+                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }} 
+                    value={scannedName}
+                    onChange={(e) => setScannedName(e.target.value)}
+                    placeholder="Scanned name..."
+                  />
+                </div>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Number</span>
+                  <input 
+                    type="text" 
+                    className="input-control" 
+                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }} 
+                    value={scannedNumber}
+                    onChange={(e) => setScannedNumber(e.target.value)}
+                    placeholder="Scanned number..."
+                  />
+                </div>
+                <button 
+                  type="submit" 
+                  className="btn btn-secondary" 
+                  style={{ padding: '0.35rem 1rem', fontSize: '0.85rem', whiteSpace: 'nowrap' }}
+                  disabled={loading}
+                >
+                  Search
+                </button>
+              </form>
+
+              {/* Show cropped OCR feeds for alignment debugging */}
+              {(debugNameImg || debugNumLeftImg || debugNumRightImg) && (
+                <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginTop: '0.25rem' }}>
+                  {debugNameImg && (
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Name Crop Feed</span>
+                      <img src={debugNameImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Name Crop" />
+                    </div>
+                  )}
+                  {debugNumLeftImg && (
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Modern No. Crop</span>
+                      <img src={debugNumLeftImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Modern Number Crop" />
+                    </div>
+                  )}
+                  {debugNumRightImg && (
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Vintage No. Crop</span>
+                      <img src={debugNumRightImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Vintage Number Crop" />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{ display: 'flex', gap: '0.75rem' }}>
             <button className="btn btn-secondary" onClick={stopCamera} style={{ flex: 1 }}>
