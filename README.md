@@ -43,10 +43,24 @@ Start both the React development server and the Express API server concurrently:
 ```bash
 npm run dev
 ```
-- **Frontend client**: `http://localhost:5173`
+- **Frontend client**: `https://localhost:5173` (Runs over local HTTPS to allow camera access)
 - **Backend API server**: `http://localhost:3001`
 
-*Tip: Connect your phone and computer to the same Wi-Fi network and open `http://<your-computer-ip>:5173` on your phone to scan cards using your phone's camera!*
+> [!IMPORTANT]
+> **Mobile Camera HTTPS Requirement**: Modern mobile browsers (Safari, Chrome, Firefox) restrict video camera access (`getUserMedia`) to **Secure Contexts (HTTPS)** only. 
+> 
+> To test on your mobile phone:
+> 1. Connect your phone and computer to the same Wi-Fi network.
+> 2. Open **`https://<your-computer-ip>:5173`** in your mobile browser.
+> 3. Your browser will display a warning because the local developer SSL certificate is self-signed. Tap **Advanced** (or *Show Details*) and select **Proceed/Trust** (e.g. *Proceed to 192.168.x.x (unsafe)*). The app will load, and the camera will initialize successfully!
+
+#### Alternative: Chrome Developer Flags (HTTP)
+If you prefer not to use self-signed HTTPS in development:
+1. Open Google Chrome on your phone.
+2. Navigate to `chrome://flags/#unsafely-treat-insecure-origin-as-secure`.
+3. Enable the flag and enter your computer's IP: `http://<your-computer-ip>:5173` (and port `3001` for container testing).
+4. Relaunch Chrome. The browser will treat this address as secure, allowing camera access.
+
 
 ---
 
