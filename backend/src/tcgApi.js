@@ -109,6 +109,9 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
     cleanName = filtered.join(' ');
   }
 
+  // Sanitize number query: strip leading zeroes since database/API stores them as raw numbers (e.g. '021' -> '21')
+  const cleanNumber = numberQuery ? numberQuery.trim().replace(/^0+/, '') : '';
+
   // 1. Try local search first
   let localSql = `SELECT * FROM card_cache WHERE 1=1`;
   const localParams = [];
@@ -117,9 +120,9 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
     localSql += ` AND name LIKE ?`;
     localParams.push(`%${cleanName}%`);
   }
-  if (numberQuery) {
+  if (cleanNumber) {
     localSql += ` AND number = ?`;
-    localParams.push(numberQuery);
+    localParams.push(cleanNumber);
   }
   if (setQuery) {
     localSql += ` AND (set_name LIKE ? OR set_id = ?)`;
@@ -132,7 +135,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
   
   // If we found local results and they are not empty, return them
   // (We'll also query online if they want a fresh search, but for instant UI response, this is perfect)
-  if (localResults.length > 0 && !numberQuery) {
+  if (localResults.length > 0 && !cleanNumber) {
     // Return local cache parsed back
     return localResults.map(r => ({
       ...r,
@@ -148,8 +151,8 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
       // Escape spaces for API search
       apiQuery.push(`name:"*${cleanName}*"`);
     }
-    if (numberQuery) {
-      apiQuery.push(`number:"${numberQuery}"`);
+    if (cleanNumber) {
+      apiQuery.push(`number:"${cleanNumber}"`);
     }
     if (setQuery) {
       apiQuery.push(`(set.name:"*${setQuery}*" OR set.id:"${setQuery}")`);
@@ -175,8 +178,8 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
     let cards = response.data.data || [];
 
     // Fallback 1: If name + number query returned nothing, retry search with number only (numbers are highly specific)
-    if (cards.length === 0 && cleanName && numberQuery) {
-      const fallbackQ = `number:"${numberQuery}"`;
+    if (cards.length === 0 && cleanName && cleanNumber) {
+      const fallbackQ = `number:"${cleanNumber}"`;
       console.log(`No results for '${q}'. Retrying fallback search: ${fallbackQ}`);
       try {
         const fallbackResponse = await tcgClient.get('/cards', {
@@ -221,7 +224,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
     // Fuzzy rank cards by similarity to name and number
     const scoredCards = cards.map(c => {
       const nameSim = getStringSimilarity(c.name, cleanName);
-      const numberSim = getStringSimilarity(c.number, numberQuery);
+      const numberSim = getStringSimilarity(c.number, cleanNumber);
       // Prioritize name match, but give number some weight too
       const score = nameSim * 0.75 + numberSim * 0.25;
       return { card: c, score };

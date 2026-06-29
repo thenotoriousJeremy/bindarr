@@ -271,34 +271,26 @@ function CameraScanner({ onAddSuccess, showToast }) {
       0, 0, tempCanvas.width, tempCanvas.height
     );
     
-    // Apply pixel-level adaptive thresholding
+    // Apply pixel-level high-contrast grayscale enhancement
+    // (Grayscale with linear contrast stretching is superior to harsh binarization for anti-aliased fonts)
     try {
       const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
       const data = imageData.data;
       const len = data.length;
       
-      // Calculate average luma
-      let totalLuma = 0;
       for (let i = 0; i < len; i += 4) {
         const r = data[i];
         const g = data[i+1];
         const b = data[i+2];
-        const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-        totalLuma += luma;
-      }
-      const avgLuma = totalLuma / (len / 4);
-      
-      // Target a contrast-enhancing threshold slightly lower than average (keeps thin text lines from breaking)
-      const threshold = Math.max(70, Math.min(180, avgLuma * 0.95));
-      
-      for (let i = 0; i < len; i += 4) {
-        const r = data[i];
-        const g = data[i+1];
-        const b = data[i+2];
+        
+        // Calculate standard luminance
         const luma = 0.299 * r + 0.587 * g + 0.114 * b;
         
-        // Convert to pure black (0) or pure white (255)
-        const value = luma < threshold ? 0 : 255;
+        // Boost contrast (stretch scale centered around 128)
+        const contrastFactor = 2.0; 
+        let value = contrastFactor * (luma - 128) + 128;
+        value = Math.max(0, Math.min(255, value)); // Clamp
+        
         data[i] = value;
         data[i+1] = value;
         data[i+2] = value;
@@ -436,12 +428,20 @@ function CameraScanner({ onAddSuccess, showToast }) {
       const numLeftRaw = numLeftResult.data.text.trim();
       const numRightRaw = numRightResult.data.text.trim();
       
-      // Helper to extract numerator (card number) from "numerator/denominator" or stand-alone code
+      // Helper to extract numerator (card number) and map common character recognition failures
       const extractNumber = (raw) => {
-        const slashMatch = raw.match(/([a-zA-Z0-9\-]+)\s*\/\s*([a-zA-Z0-9\-]+)/);
+        // Map common OCR letter confusions to numbers
+        const mapped = raw
+          .replace(/[Oo]/g, '0')
+          .replace(/[Ii|l]/g, '1')
+          .replace(/[Zz]/g, '2')
+          .replace(/[Ss]/g, '5')
+          .replace(/[Bb]/g, '8');
+
+        const slashMatch = mapped.match(/([0-9]+)\s*\/\s*([0-9]+)/);
         if (slashMatch) return slashMatch[1].trim();
         
-        const standAloneMatch = raw.match(/([a-zA-Z0-9\-]+)/);
+        const standAloneMatch = mapped.match(/([0-9]+)/);
         if (standAloneMatch) return standAloneMatch[0].trim();
         
         return '';
