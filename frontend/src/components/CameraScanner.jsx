@@ -338,19 +338,19 @@ function CameraScanner({ onAddSuccess, showToast }) {
       h: guideRect.height * 0.06
     };
 
-    // Modern Number (Left): bottom 1.5% of card guide, left 4% of card guide, width 28% of card guide, height 5% of card guide
+    // Modern Number (Left): bottom 1.5% of card guide, left 12% of card guide (bypassing logo), width 20% of card guide, height 5% of card guide
     const numLeftCropScreen = {
-      x: (guideRect.left - videoRect.left) + guideRect.width * 0.04,
+      x: (guideRect.left - videoRect.left) + guideRect.width * 0.12,
       y: (guideRect.top - videoRect.top) + guideRect.height * (1.0 - 0.015 - 0.05), // 93.5%
-      w: guideRect.width * 0.28,
+      w: guideRect.width * 0.20,
       h: guideRect.height * 0.05
     };
 
-    // Vintage Number (Right): bottom 1.5% of card guide, right 4% of card guide, width 28% of card guide, height 5% of card guide
+    // Vintage Number (Right): bottom 1.5% of card guide, right 12% of card guide (bypassing rarity), width 20% of card guide, height 5% of card guide
     const numRightCropScreen = {
-      x: (guideRect.left - videoRect.left) + guideRect.width * (1.0 - 0.04 - 0.28), // 68%
+      x: (guideRect.left - videoRect.left) + guideRect.width * 0.68,
       y: (guideRect.top - videoRect.top) + guideRect.height * (1.0 - 0.015 - 0.05), // 93.5%
-      w: guideRect.width * 0.28,
+      w: guideRect.width * 0.20,
       h: guideRect.height * 0.05
     };
 

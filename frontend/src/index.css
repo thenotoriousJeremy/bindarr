@@ -678,8 +678,8 @@ button, input, select, textarea {
 .scan-region-number-left {
   position: absolute;
   bottom: 1.5%;
-  left: 4%;
-  width: 28%;
+  left: 12%;
+  width: 20%;
   height: 5%;
   border: 1.5px solid var(--accent-yellow);
   background: rgba(234, 179, 8, 0.15);
@@ -699,8 +699,8 @@ button, input, select, textarea {
 .scan-region-number-right {
   position: absolute;
   bottom: 1.5%;
-  right: 4%;
-  width: 28%;
+  right: 12%;
+  width: 20%;
   height: 5%;
   border: 1.5px solid var(--accent-yellow);
   background: rgba(234, 179, 8, 0.15);
