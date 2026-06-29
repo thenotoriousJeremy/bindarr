@@ -617,7 +617,7 @@ button, input, select, textarea {
 .camera-video {
   width: 100%;
   height: 100%;
-  object-fit: cover; /* Stretch to fill matched aspect ratio wrapper perfectly */
+  object-fit: fill; /* Maps display dimensions to stream dimensions 1-to-1 with zero zoom overflow cropping */
   display: block;
 }
 

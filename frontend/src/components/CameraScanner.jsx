@@ -251,9 +251,13 @@ function CameraScanner({ onAddSuccess, showToast }) {
   // Bypasses browser-incompatible canvas context filters to run natively on mobile devices.
   const getProcessedDataUrl = (sourceCanvas, sourceX, sourceY, sourceW, sourceH) => {
     const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = sourceW * 2; // Upscale for clearer OCR text
-    tempCanvas.height = sourceH * 2;
+    tempCanvas.width = sourceW * 4; // Upscale by 4x for high-res OCR on small text
+    tempCanvas.height = sourceH * 4;
     const tempCtx = tempCanvas.getContext('2d');
+    
+    // Enable high-quality image smoothing for clean bicubic interpolation
+    tempCtx.imageSmoothingEnabled = true;
+    tempCtx.imageSmoothingQuality = 'high';
     
     // Draw raw cropped frame first
     tempCtx.drawImage(
@@ -340,29 +344,29 @@ function CameraScanner({ onAddSuccess, showToast }) {
       guideTop = (clientHeight - guideHeight) / 2;
     }
 
-    // Define crops in screen coordinates matching the CSS guide layout exactly:
-    // Name: top 3.5% of card, left 4% of card, width 55% of card, height 6% of card
+    // Define crops in screen coordinates matching the CSS guide layout (with a slightly larger height window for tolerance)
+    // Name: top 3% of card, left 4% of card, width 55% of card, height 7% of card
     const nameCropScreen = {
       x: guideLeft + guideWidth * 0.04,
-      y: guideTop + guideHeight * 0.035,
+      y: guideTop + guideHeight * 0.03,
       w: guideWidth * 0.55,
-      h: guideHeight * 0.06
+      h: guideHeight * 0.07
     };
 
-    // Modern Number (Left): bottom 1.5%, left 4%, width 28%, height 5% of card
+    // Modern Number (Left): bottom 1%, left 4%, width 28%, height 6.5% of card (taller for smaller numbers)
     const numLeftCropScreen = {
       x: guideLeft + guideWidth * 0.04,
-      y: guideTop + guideHeight * (1.0 - 0.015 - 0.05), // 93.5%
+      y: guideTop + guideHeight * 0.925,
       w: guideWidth * 0.28,
-      h: guideHeight * 0.05
+      h: guideHeight * 0.065
     };
 
-    // Vintage Number (Right): bottom 1.5%, right 4%, width 28%, height 5% of card
+    // Vintage Number (Right): bottom 1%, right 4%, width 28%, height 6.5% of card (taller for smaller numbers)
     const numRightCropScreen = {
       x: guideLeft + guideWidth * (1.0 - 0.04 - 0.28), // 68%
-      y: guideTop + guideHeight * (1.0 - 0.015 - 0.05), // 93.5%
+      y: guideTop + guideHeight * 0.925,
       w: guideWidth * 0.28,
-      h: guideHeight * 0.05
+      h: guideHeight * 0.065
     };
 
     // Scale screen coordinates to the oriented canvas coordinates
@@ -397,9 +401,11 @@ function CameraScanner({ onAddSuccess, showToast }) {
       setDebugNumLeftImg(numLeftDataUrl);
       setDebugNumRightImg(numRightDataUrl);
 
-      // 3. Perform OCR on Card Name
+      // 3. Perform OCR on Card Name (PSM 7: Treat image as a single text line)
       setScanStatus('Reading Card Name...');
-      const nameResult = await Tesseract.recognize(nameDataUrl, 'eng');
+      const nameResult = await Tesseract.recognize(nameDataUrl, 'eng', {
+        tessedit_pageseg_mode: '7'
+      });
       const nameRaw = nameResult.data.text.trim();
       
       // Clean name (strip extra characters and common template tags like 'HP' or 'Stage')
@@ -415,14 +421,16 @@ function CameraScanner({ onAddSuccess, showToast }) {
       });
       const detectedName = filteredNameParts.slice(0, 3).join(' ').trim(); // Take first 3 valid words (e.g. "Charizard", "Dark Raichu", "Mewtwo EX")
 
-      // 4. Perform OCR on Card Number (Left & Right margins in parallel, whitelisting digits and slashes only)
+      // 4. Perform OCR on Card Number (Left & Right margins in parallel, whitelisting digits/slashes and forcing PSM 7 text line)
       setScanStatus('Reading Card Number...');
       const [numLeftResult, numRightResult] = await Promise.all([
         Tesseract.recognize(numLeftDataUrl, 'eng', {
-          tessedit_char_whitelist: '0123456789/'
+          tessedit_char_whitelist: '0123456789/',
+          tessedit_pageseg_mode: '7'
         }),
         Tesseract.recognize(numRightDataUrl, 'eng', {
-          tessedit_char_whitelist: '0123456789/'
+          tessedit_char_whitelist: '0123456789/',
+          tessedit_pageseg_mode: '7'
         })
       ]);
 
