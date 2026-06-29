@@ -12,6 +12,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
   // Camera active states
   const [cameraActive, setCameraActive] = useState(false);
   const [hasCameraError, setHasCameraError] = useState(false);
+  const [autoScan, setAutoScan] = useState(false);
   
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -65,6 +66,19 @@ function CameraScanner({ onAddSuccess, showToast }) {
     }
   }, [cameraActive, stream]);
 
+  // Auto-capture scheduler: capture frame 3s after previous capture completes
+  useEffect(() => {
+    let timerId;
+    if (cameraActive && autoScan && !isDrawerOpen && !loading && scanMatches.length === 0) {
+      timerId = setTimeout(() => {
+        handleCapture();
+      }, 3000);
+    }
+    return () => {
+      if (timerId) clearTimeout(timerId);
+    };
+  }, [cameraActive, autoScan, isDrawerOpen, loading, scanMatches]);
+
   const startCamera = async () => {
     setHasCameraError(false);
     setScanMatches([]);
@@ -95,6 +109,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
       setStream(null);
     }
     setCameraActive(false);
+    setAutoScan(false); // Reset autoScan on camera stop
   };
 
   // Preprocess cropped canvas for higher OCR accuracy (Greyscale + High Contrast)
@@ -116,7 +131,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
   };
 
   const handleCapture = async () => {
-    if (!videoRef.current || !cameraActive) return;
+    if (loading || !videoRef.current || !cameraActive) return;
 
     setLoading(true);
     setScanMatches([]);
@@ -150,16 +165,30 @@ function CameraScanner({ onAddSuccess, showToast }) {
       // 2. Perform OCR on Card Name
       setScanStatus('Reading Card Name...');
       const nameResult = await Tesseract.recognize(nameDataUrl, 'eng');
-      const detectedName = nameResult.data.text.trim().replace(/[^a-zA-Z\s]/g, '').trim();
+      const detectedName = nameResult.data.text.trim().replace(/[^a-zA-Z0-9\s\-]/g, '').trim();
 
       // 3. Perform OCR on Card Number
       setScanStatus('Reading Card Number...');
       const numResult = await Tesseract.recognize(numDataUrl, 'eng');
       const numRaw = numResult.data.text.trim();
       
-      // Try to isolate something that matches "XX/YY" or just a number
-      const numMatch = numRaw.match(/(\d+)\s*\/\s*(\d+)/) || numRaw.match(/(\d+)/);
-      const detectedNumber = numMatch ? numMatch[0].replace(/\s+/g, '') : '';
+      // Match numerator (card number) from "numerator/denominator" or just a standalone alphanumeric code
+      let detectedNumber = '';
+      const slashMatch = numRaw.match(/([a-zA-Z0-9\-]+)\s*\/\s*([a-zA-Z0-9\-]+)/);
+      if (slashMatch) {
+        detectedNumber = slashMatch[1].trim(); // Extract numerator
+      } else {
+        const standAloneMatch = numRaw.match(/([a-zA-Z0-9\-]+)/);
+        if (standAloneMatch) {
+          detectedNumber = standAloneMatch[0].trim();
+        }
+      }
+
+      // Safeguard: Card numbers are never exceptionally long (usually 1-5 chars, e.g. 58, 058, TG12, GG60).
+      // If OCR detects garbage text block, discard it.
+      if (detectedNumber.length > 8) {
+        detectedNumber = '';
+      }
 
       console.log(`OCR Detected Name: "${detectedName}"`);
       console.log(`OCR Detected Number: "${detectedNumber}"`);
@@ -335,6 +364,18 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 {loading && <div className="scan-line"></div>}
               </div>
             </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginBottom: '0.25rem' }}>
+            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Auto-Capture Mode</span>
+            <button 
+              type="button"
+              className={`btn ${autoScan ? 'btn-primary' : 'btn-secondary'}`} 
+              onClick={() => setAutoScan(!autoScan)}
+              style={{ padding: '0.35rem 1rem', fontSize: '0.8rem' }}
+            >
+              {autoScan ? 'ENABLED' : 'DISABLED'}
+            </button>
           </div>
 
           <div style={{ display: 'flex', gap: '0.75rem' }}>
