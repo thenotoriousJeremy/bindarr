@@ -397,7 +397,9 @@ function CameraScanner({ onAddSuccess, showToast }) {
       // 3. Perform OCR on Card Name (PSM 7: Treat image as a single text line)
       setScanStatus('Reading Card Name...');
       const nameResult = await Tesseract.recognize(nameDataUrl, 'eng', {
-        tessedit_pageseg_mode: '7'
+        parameters: {
+          tessedit_pageseg_mode: '7'
+        }
       });
       const nameRaw = nameResult.data.text.trim();
       
@@ -418,12 +420,16 @@ function CameraScanner({ onAddSuccess, showToast }) {
       setScanStatus('Reading Card Number...');
       const [numLeftResult, numRightResult] = await Promise.all([
         Tesseract.recognize(numLeftDataUrl, 'eng', {
-          tessedit_char_whitelist: '0123456789/',
-          tessedit_pageseg_mode: '7'
+          parameters: {
+            tessedit_char_whitelist: '0123456789/',
+            tessedit_pageseg_mode: '7'
+          }
         }),
         Tesseract.recognize(numRightDataUrl, 'eng', {
-          tessedit_char_whitelist: '0123456789/',
-          tessedit_pageseg_mode: '7'
+          parameters: {
+            tessedit_char_whitelist: '0123456789/',
+            tessedit_pageseg_mode: '7'
+          }
         })
       ]);
 
