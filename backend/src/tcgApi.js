@@ -64,13 +64,25 @@ async function cacheCards(cards) {
 
 // Search cards locally first, then hit API if not found or empty
 async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
+  // Sanitize name query by removing short noise words (like single-letter OCR errors)
+  let cleanName = '';
+  if (nameQuery) {
+    const words = nameQuery.split(/\s+/);
+    const filtered = words.filter(w => {
+      const upper = w.toUpperCase();
+      if (upper === 'EX' || upper === 'GX' || upper === 'V') return true;
+      return w.length > 2; // skip short noise (like 'i', 'VL', 'Vy')
+    });
+    cleanName = filtered.join(' ');
+  }
+
   // 1. Try local search first
   let localSql = `SELECT * FROM card_cache WHERE 1=1`;
   const localParams = [];
 
-  if (nameQuery) {
+  if (cleanName) {
     localSql += ` AND name LIKE ?`;
-    localParams.push(`%${nameQuery}%`);
+    localParams.push(`%${cleanName}%`);
   }
   if (numberQuery) {
     localSql += ` AND number = ?`;
@@ -99,9 +111,9 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
   // 2. Fetch from external API
   try {
     let apiQuery = [];
-    if (nameQuery) {
+    if (cleanName) {
       // Escape spaces for API search
-      apiQuery.push(`name:"*${nameQuery}*"`);
+      apiQuery.push(`name:"*${cleanName}*"`);
     }
     if (numberQuery) {
       apiQuery.push(`number:"${numberQuery}"`);
@@ -130,7 +142,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
     let cards = response.data.data || [];
 
     // Fallback 1: If name + number query returned nothing, retry search with number only (numbers are highly specific)
-    if (cards.length === 0 && nameQuery && numberQuery) {
+    if (cards.length === 0 && cleanName && numberQuery) {
       const fallbackQ = `number:"${numberQuery}"`;
       console.log(`No results for '${q}'. Retrying fallback search: ${fallbackQ}`);
       try {
@@ -148,8 +160,8 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
     }
 
     // Fallback 2: If query still empty, retry search with first word of card name (strip typos/noise)
-    if (cards.length === 0 && nameQuery) {
-      const firstWord = nameQuery.split(' ')[0];
+    if (cards.length === 0 && cleanName) {
+      const firstWord = cleanName.split(' ')[0];
       if (firstWord && firstWord.length > 2) {
         const fallbackQ = `name:"*${firstWord}*"`;
         console.log(`No results. Retrying fallback search: ${fallbackQ}`);

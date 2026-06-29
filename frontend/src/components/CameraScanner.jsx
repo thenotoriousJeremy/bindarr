@@ -20,6 +20,10 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [scannedName, setScannedName] = useState('');
   const [scannedNumber, setScannedNumber] = useState('');
   
+  // OCR Binarization debug images
+  const [debugNameImg, setDebugNameImg] = useState('');
+  const [debugNumImg, setDebugNumImg] = useState('');
+  
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
 
@@ -91,6 +95,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
     setScanStatus('');
     setScannedName('');
     setScannedNumber('');
+    setDebugNameImg('');
+    setDebugNumImg('');
     try {
       const constraints = {
         video: {
@@ -120,6 +126,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
     setAutoScan(false); // Reset autoScan on camera stop
     setScannedName('');
     setScannedNumber('');
+    setDebugNameImg('');
+    setDebugNumImg('');
   };
 
   const handleManualSearch = async (e) => {
@@ -201,22 +209,60 @@ function CameraScanner({ onAddSuccess, showToast }) {
     }
   };
 
-  // Preprocess cropped canvas for higher OCR accuracy (Greyscale + High Contrast)
+  // Preprocess cropped canvas for higher OCR accuracy (Binarization / Thresholding)
+  // Bypasses browser-incompatible canvas context filters to run natively on mobile devices.
   const getProcessedDataUrl = (video, sourceX, sourceY, sourceW, sourceH) => {
     const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = sourceW * 2; // Upscale for clearer OCR resolution
+    tempCanvas.width = sourceW * 2; // Upscale for clearer OCR text
     tempCanvas.height = sourceH * 2;
     const tempCtx = tempCanvas.getContext('2d');
     
-    // Apply heavy filters for OCR text extraction
-    tempCtx.filter = 'grayscale(100%) contrast(250%) brightness(90%)';
+    // Draw raw cropped frame first
     tempCtx.drawImage(
       video,
       sourceX, sourceY, sourceW, sourceH,
       0, 0, tempCanvas.width, tempCanvas.height
     );
     
-    return tempCanvas.toDataURL('image/jpeg', 0.9);
+    // Apply pixel-level adaptive thresholding
+    try {
+      const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+      const data = imageData.data;
+      const len = data.length;
+      
+      // Calculate average luma
+      let totalLuma = 0;
+      for (let i = 0; i < len; i += 4) {
+        const r = data[i];
+        const g = data[i+1];
+        const b = data[i+2];
+        const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+        totalLuma += luma;
+      }
+      const avgLuma = totalLuma / (len / 4);
+      
+      // Target a contrast-enhancing threshold slightly lower than average (keeps thin text lines from breaking)
+      const threshold = Math.max(70, Math.min(180, avgLuma * 0.95));
+      
+      for (let i = 0; i < len; i += 4) {
+        const r = data[i];
+        const g = data[i+1];
+        const b = data[i+2];
+        const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+        
+        // Convert to pure black (0) or pure white (255)
+        const value = luma < threshold ? 0 : 255;
+        data[i] = value;
+        data[i+1] = value;
+        data[i+2] = value;
+      }
+      
+      tempCtx.putImageData(imageData, 0, 0);
+    } catch (e) {
+      console.error('Manual pixel thresholding failed, using raw crop:', e);
+    }
+    
+    return tempCanvas.toDataURL('image/jpeg', 0.95);
   };
 
   const handleCapture = async () => {
@@ -269,6 +315,9 @@ function CameraScanner({ onAddSuccess, showToast }) {
       // 1. Process images
       const nameDataUrl = getProcessedDataUrl(video, nameCrop.x, nameCrop.y, nameCrop.w, nameCrop.h);
       const numDataUrl = getProcessedDataUrl(video, numCrop.x, numCrop.y, numCrop.w, numCrop.h);
+
+      setDebugNameImg(nameDataUrl);
+      setDebugNumImg(numDataUrl);
 
       // 2. Perform OCR on Card Name
       setScanStatus('Reading Card Name...');
@@ -605,6 +654,24 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 Search
               </button>
             </form>
+
+            {/* Show cropped OCR feeds for alignment debugging */}
+            {(debugNameImg || debugNumImg) && (
+              <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginTop: '0.25rem' }}>
+                {debugNameImg && (
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Name Crop Feed (Binarized)</span>
+                    <img src={debugNameImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Name Crop" />
+                  </div>
+                )}
+                {debugNumImg && (
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Number Crop Feed (Binarized)</span>
+                    <img src={debugNumImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Number Crop" />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div style={{ display: 'flex', gap: '0.75rem' }}>
