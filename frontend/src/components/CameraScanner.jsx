@@ -13,6 +13,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [cameraActive, setCameraActive] = useState(false);
   const [hasCameraError, setHasCameraError] = useState(false);
   const [autoScan, setAutoScan] = useState(false);
+  const [bulkMode, setBulkMode] = useState(false);
+  const [guideScale, setGuideScale] = useState(0.70);
   
   // Scanned card text review overrides
   const [scannedName, setScannedName] = useState('');
@@ -142,8 +144,13 @@ function CameraScanner({ onAddSuccess, showToast }) {
         } else {
           setScanStatus(`Found ${matches.length} matching card(s)!`);
           if (matches.length === 1) {
-            stopCamera();
-            openQuickAdd(matches[0]);
+            if (bulkMode) {
+              await autoAddCard(matches[0]);
+              setScanMatches([]); // Clear results so auto-scan loop continues
+            } else {
+              stopCamera();
+              openQuickAdd(matches[0]);
+            }
           }
         }
       } else {
@@ -154,6 +161,43 @@ function CameraScanner({ onAddSuccess, showToast }) {
       setScanStatus('Search failed.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const autoAddCard = async (card) => {
+    try {
+      const response = await fetch('/api/collection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          card_id: card.id,
+          quantity: 1,
+          condition: 'Near Mint',
+          printing: (card.rarity || '').toLowerCase().includes('holo') ? 'Holofoil' : 'Normal',
+          language: 'English',
+          purchase_price: card.price_trend || 0,
+          location_id: locationId ? parseInt(locationId, 10) : null,
+          sub_location_1: subLocation1,
+          sub_location_2: subLocation2
+        })
+      });
+
+      if (response.ok) {
+        showToast(`Auto-Added: ${card.name} (${card.set_name})`);
+        
+        // Brief confetti blast for ultra-rares
+        const rarity = (card.rarity || '').toLowerCase();
+        if (rarity.includes('secret') || rarity.includes('ultra') || (card.price_trend || 0) > 15) {
+          confetti({ particleCount: 50, spread: 40, origin: { y: 0.8 } });
+        }
+        
+        onAddSuccess(); // Refresh stats
+      } else {
+        showToast(`Failed to auto-add ${card.name}`);
+      }
+    } catch (err) {
+      console.error('Auto-add error:', err);
+      showToast('Error auto-adding card.');
     }
   };
 
@@ -193,13 +237,13 @@ function CameraScanner({ onAddSuccess, showToast }) {
 
     if (videoHeight > videoWidth) {
       // Portrait mode (typical phone)
-      guideWidth = videoWidth * 0.70; // Matches width: 70% of stream
+      guideWidth = videoWidth * guideScale; // Matches width dynamically
       guideHeight = guideWidth / cardAspectRatio; // guideWidth * 1.4
       guideLeft = (videoWidth - guideWidth) / 2;
       guideTop = (videoHeight - guideHeight) / 2;
     } else {
       // Landscape mode (typical desktop/webcam)
-      guideHeight = videoHeight * 0.75; // Matches height: 75% of stream
+      guideHeight = videoHeight * guideScale * 1.07; // scale height similarly
       guideWidth = guideHeight * cardAspectRatio; // guideHeight * 0.7143
       guideLeft = (videoWidth - guideWidth) / 2;
       guideTop = (videoHeight - guideHeight) / 2;
@@ -295,10 +339,15 @@ function CameraScanner({ onAddSuccess, showToast }) {
         } else {
           setScanStatus(`Found ${matches.length} matching card(s)!`);
           
-          // Auto-open drawer if exactly one perfect match is found
+          // Auto-open drawer if exactly one perfect match is found, or auto-add in bulk mode
           if (matches.length === 1) {
-            stopCamera();
-            openQuickAdd(matches[0]);
+            if (bulkMode) {
+              await autoAddCard(matches[0]);
+              setScanMatches([]); // Clear results so auto-scan loop triggers again
+            } else {
+              stopCamera();
+              openQuickAdd(matches[0]);
+            }
           }
         }
       } else {
@@ -438,7 +487,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
             />
             {/* Outline Box Guides */}
             <div className="camera-overlay">
-              <div className="scan-card-guide">
+              <div className="scan-card-guide" style={{ width: `${guideScale * 100}%` }}>
                 <div className="scan-region-title"></div>
                 <div className="scan-region-number"></div>
                 {loading && <div className="scan-line"></div>}
@@ -446,16 +495,77 @@ function CameraScanner({ onAddSuccess, showToast }) {
             </div>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginBottom: '0.25rem' }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Auto-Capture Mode</span>
-            <button 
-              type="button"
-              className={`btn ${autoScan ? 'btn-primary' : 'btn-secondary'}`} 
-              onClick={() => setAutoScan(!autoScan)}
-              style={{ padding: '0.35rem 1rem', fontSize: '0.8rem' }}
-            >
-              {autoScan ? 'ENABLED' : 'DISABLED'}
-            </button>
+          {/* Scanner Settings Control Panel (CardSlinger Configurations) */}
+          <div className="glass-panel" style={{ width: '100%', padding: '1rem', background: 'rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '0.25rem' }}>
+            <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.25rem' }}>
+              Scanner Configurations (CardSlinger Mode)
+            </div>
+            
+            {/* Toggles Row */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Auto-Capture</span>
+                <button 
+                  type="button"
+                  className={`btn ${autoScan ? 'btn-primary' : 'btn-secondary'}`} 
+                  onClick={() => setAutoScan(!autoScan)}
+                  style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
+                >
+                  {autoScan ? 'ON' : 'OFF'}
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Bulk Auto-Add</span>
+                <button 
+                  type="button"
+                  className={`btn ${bulkMode ? 'btn-primary' : 'btn-secondary'}`} 
+                  onClick={() => {
+                    setBulkMode(!bulkMode);
+                    if (!bulkMode) {
+                      setAutoScan(true);
+                      showToast('Bulk Mode enabled: Identified cards add automatically!');
+                    }
+                  }}
+                  style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
+                >
+                  {bulkMode ? 'ON' : 'OFF'}
+                </button>
+              </div>
+            </div>
+
+            {/* Guide Scale Slider */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                <span>Guide Box Sizing (Scale)</span>
+                <span style={{ color: 'var(--accent-yellow)' }}>{Math.round(guideScale * 100)}%</span>
+              </div>
+              <input 
+                type="range" 
+                min="0.45" 
+                max="0.95" 
+                step="0.01" 
+                value={guideScale}
+                onChange={(e) => setGuideScale(parseFloat(e.target.value))}
+                style={{ width: '100%', height: '4px', background: 'var(--bg-primary)', borderRadius: '2px', cursor: 'pointer', accentColor: 'var(--accent-red)' }}
+              />
+            </div>
+
+            {/* Destination Container Selector */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Destination Container</div>
+              <select 
+                className="select-control" 
+                style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem', width: '100%', marginTop: '0.15rem' }} 
+                value={locationId} 
+                onChange={(e) => setLocationId(e.target.value)}
+              >
+                <option value="">Unassigned Pile</option>
+                {locations.map((loc) => (
+                  <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {/* Manual OCR Correction panel */}
