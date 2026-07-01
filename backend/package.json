@@ -1,7 +1,7 @@
 {
-  "name": "pokekeep-backend",
+  "name": "pokedexrr-backend",
   "version": "1.0.0",
-  "description": "Backend API for PokeKeep",
+  "description": "Backend API for Pokedexrr",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

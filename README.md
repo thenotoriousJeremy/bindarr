@@ -1,17 +1,19 @@
-# PokeKeep 🎴
+# Pokedexrr 🎴
 
-PokeKeep is a self-hostable, mobile-friendly full-stack web application designed for Pokémon card collectors. It allows you to scan your physical cards using your phone's camera, track real-time market valuations, organize card placements in physical binders and boxes, view rich analytics, and export your database for external trackers.
+Pokedexrr is a self-hostable, mobile-friendly full-stack web application designed for Pokémon card collectors. It allows you to scan your physical cards using your phone's camera, track real-time market valuations, organize card placements in physical binders and boxes, view rich analytics, and export your database for external trackers.
 
 ---
 
 ## ✨ Features
 
-- **📱 Phone-to-Camera OCR Scanning**: Uses client-side video cropping and **Tesseract.js** to scan card Names and Collector Numbers (e.g. `58/102`) directly from your phone's browser—no heavy server-side AI required.
-- **📊 Interactive Dashboard & Metrics**: Track total collection value, investment spend, return on spend (ROI), card counts, energy type distributions (pie chart), rarity distributions, and set completion milestones.
+- **📱 Phone-to-Camera OCR Scanning**: Uses client-side video cropping and **Tesseract.js** to scan card Names and Collector Numbers (e.g. `58/102`) directly from your phone's browser—no heavy server-side AI required. Supports **English**, **Japanese**, and **Vintage** card layouts with automatic name translation.
+- **📊 Interactive Dashboard & Metrics**: Track total collection value, net worth trends (24H / 7D / 30D), average card value, holo print rates, energy type distributions (pie chart), rarity distributions, and set completion milestones.
 - **🗺️ Real-world Location Coordinator**: Assign physical coordinate mappings to your cards so you can locate them instantly:
-  - **Binders**: Maps by Binder Name, Page Number, and Slot (1-9).
+  - **Binders**: Maps by Binder Name, Page Number, and Slot (1-9). Features a double-page book view with 3D page-flip animations and multi-card slot stacking.
   - **Storage Boxes**: Maps by Box Name, Row ID/Letter, and Divider Section.
+- **🇯🇵 Japanese Card Support**: OCR scans Japanese card names (hiragana, katakana, kanji), automatically translates them to English for API lookups, and displays them in their native Japanese names across the app.
 - **💾 Universal Database Exports**: One-click downloads of your complete database in CSV (TCGplayer format compatible) or JSON.
+- **🔐 Multi-User Auth**: JWT-based authentication with admin controls for managing users and roles.
 - **🐳 100% Self-Hostable & Portable**: Single-container Docker build with a local SQLite database that mounts to a persistent volume.
 - **⚡ CI/CD Automation**: GitHub Actions workflow to auto-build and publish the container image to GitHub Container Registry (GHCR).
 
@@ -20,7 +22,7 @@ PokeKeep is a self-hostable, mobile-friendly full-stack web application designed
 ## 🛠️ Tech Stack
 
 - **Frontend**: React, Vite, Recharts, Lucide React, Tesseract.js, Canvas Confetti
-- **Backend**: Node.js, Express, SQLite (`sqlite3` module), Axios
+- **Backend**: Node.js, Express, SQLite (`sqlite3` module), Axios, JWT
 - **Deployment**: Docker, Docker Compose, GitHub Actions
 
 ---
@@ -66,7 +68,7 @@ If you prefer not to use self-signed HTTPS in development:
 
 ## 🐳 Docker Deployment (Production)
 
-PokeKeep is packaged as a single-container multi-stage Docker build, serving the compiled frontend directly from the Node server.
+Pokedexrr is packaged as a single-container multi-stage Docker build, serving the compiled frontend directly from the Node server.
 
 ### Run with Docker Compose
 1. Ensure Docker is running.
@@ -74,13 +76,13 @@ PokeKeep is packaged as a single-container multi-stage Docker build, serving the
    ```bash
    docker-compose up -d
    ```
-3. Open `http://localhost:3001` in your browser. All database files are persisted in the `pokekeep-data` Docker volume.
+3. Open `http://localhost:3001` in your browser. All database files are persisted in the `pokedexrr-data` Docker volume.
 
 ### Environment variables (`.env`)
-You can configure PokeKeep by passing these environment variables in your container configuration:
+You can configure Pokedexrr by passing these environment variables in your container configuration:
 - `PORT` (Default: `3001`) - The port the server runs on.
 - `DB_PATH` (Default: `/app/database/pokemon_cards.db`) - Location of the SQLite database.
-- `POKEMON_TCG_API_KEY` (Optional) - Your API key from [pokemontcg.io](https://pokemontcg.io). While PokeKeep works without one, adding a free key increases TCG API rate limits (from 20k to 50k requests/day).
+- `POKEMON_TCG_API_KEY` (Optional) - Your API key from [pokemontcg.io](https://pokemontcg.io). While Pokedexrr works without one, adding a free key increases TCG API rate limits (from 20k to 50k requests/day).
 
 ---
 
@@ -96,7 +98,8 @@ You can configure PokeKeep by passing these environment variables in your contai
   │     └── package.json
   ├── frontend/
   │     ├── src/
-  │     │     ├── components/    # Reusable Dashboard, Scanner, Search, Locations, and Collection views
+  │     │     ├── components/    # Dashboard, Scanner, Search, Locations, Collection, Admin, Settings, DeckBuilder
+  │     │     ├── utils/         # Language translation helpers
   │     │     ├── App.jsx        # Routing tab controller
   │     │     ├── index.css      # Core premium dark styling
   │     │     └── main.jsx

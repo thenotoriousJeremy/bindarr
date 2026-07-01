@@ -14,7 +14,7 @@ import DeckBuilder from './components/DeckBuilder';
 // Global fetch interceptor to append authorization headers and handle 401s
 const originalFetch = window.fetch;
 window.fetch = function (url, options = {}) {
-  const token = localStorage.getItem('pokekeep_token');
+  const token = localStorage.getItem('pokedexrr_token');
   if (token && url.startsWith('/api/') && !url.includes('/api/shared/')) {
     options.headers = {
       ...options.headers,
@@ -24,17 +24,17 @@ window.fetch = function (url, options = {}) {
   return originalFetch(url, options).then(response => {
     if (response.status === 401 && !url.includes('/api/shared/')) {
       // Dispatch custom event to trigger logout without page refresh
-      window.dispatchEvent(new Event('pokekeep_logout'));
+      window.dispatchEvent(new Event('pokedexrr_logout'));
     }
     return response;
   });
 };
 
 function App() {
-  const [token, setToken] = useState(localStorage.getItem('pokekeep_token'));
+  const [token, setToken] = useState(localStorage.getItem('pokedexrr_token'));
   const [user, setUser] = useState(() => {
     try {
-      const u = localStorage.getItem('pokekeep_user');
+      const u = localStorage.getItem('pokedexrr_user');
       return u ? JSON.parse(u) : null;
     } catch {
       return null;
@@ -70,19 +70,19 @@ function App() {
     const handleAutoLogout = () => {
       setToken(null);
       setUser(null);
-      localStorage.removeItem('pokekeep_token');
-      localStorage.removeItem('pokekeep_user');
+      localStorage.removeItem('pokedexrr_token');
+      localStorage.removeItem('pokedexrr_user');
       showToast('Session expired. Please log in again.');
     };
-    window.addEventListener('pokekeep_logout', handleAutoLogout);
-    return () => window.removeEventListener('pokekeep_logout', handleAutoLogout);
+    window.addEventListener('pokedexrr_logout', handleAutoLogout);
+    return () => window.removeEventListener('pokedexrr_logout', handleAutoLogout);
   }, []);
 
   const handleLoginSuccess = (newToken, newUser) => {
     setToken(newToken);
     setUser(newUser);
-    localStorage.setItem('pokekeep_token', newToken);
-    localStorage.setItem('pokekeep_user', JSON.stringify(newUser));
+    localStorage.setItem('pokedexrr_token', newToken);
+    localStorage.setItem('pokedexrr_user', JSON.stringify(newUser));
     showToast(`Welcome back, ${newUser.username}!`);
     setActiveTab('dashboard');
   };
@@ -93,14 +93,14 @@ function App() {
 
     setToken(null);
     setUser(null);
-    localStorage.removeItem('pokekeep_token');
-    localStorage.removeItem('pokekeep_user');
+    localStorage.removeItem('pokedexrr_token');
+    localStorage.removeItem('pokedexrr_user');
     showToast('Logged out successfully.');
   };
 
   const handleUpdateUser = (updatedUser) => {
     setUser(updatedUser);
-    localStorage.setItem('pokekeep_user', JSON.stringify(updatedUser));
+    localStorage.setItem('pokedexrr_user', JSON.stringify(updatedUser));
   };
 
   const triggerRefresh = () => {
@@ -143,7 +143,7 @@ function App() {
       <header className="app-header" style={{ position: 'relative' }}>
         <div className="logo-section">
           <div className="logo-icon"></div>
-          <h1 className="logo-text">Poke<span>Keep</span></h1>
+          <h1 className="logo-text">Poke<span>dexrr</span></h1>
         </div>
 
         {/* Navigation Tabs (Nested inside header for unified layout) */}

@@ -1011,13 +1011,13 @@ app.get('/api/export', authenticateToken, async (req, res) => {
 
     if (format.toLowerCase() === 'json') {
       res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', 'attachment; filename=pokekeep_collection.json');
+      res.setHeader('Content-Disposition', 'attachment; filename=pokedexrr_collection.json');
       return res.json(rows);
     }
 
     // Default to CSV
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename=pokekeep_collection.csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=pokedexrr_collection.csv');
 
     // Headers
     const headers = [
@@ -1310,7 +1310,7 @@ app.get('*', (req, res, next) => {
 // Start Express Server
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`=========================================`);
-  console.log(`PokeKeep Server running on port ${PORT}`);
+  console.log(`Pokedexrr Server running on port ${PORT}`);
   console.log(`Access local: http://localhost:${PORT}`);
   console.log(`=========================================`);
 });

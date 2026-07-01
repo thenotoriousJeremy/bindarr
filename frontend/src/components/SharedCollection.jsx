@@ -89,7 +89,7 @@ function SharedCollection({ shareToken }) {
             borderRadius: 'var(--radius-sm)',
             boxShadow: 'var(--shadow-accent)'
           }}>
-            Go to PokeKeep
+            Go to Pokedexrr
           </a>
         </div>
       </div>

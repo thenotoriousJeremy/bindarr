@@ -1,7 +1,7 @@
 {
-  "name": "pokekeep-monorepo",
+  "name": "pokedexrr-monorepo",
   "version": "1.0.0",
-  "description": "Monorepo for PokeKeep Pokémon Card Collection Manager",
+  "description": "Monorepo for Pokedexrr Pokémon Card Collection Manager",
   "scripts": {
     "install:all": "npm install && npm install --prefix backend && npm install --prefix frontend",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
