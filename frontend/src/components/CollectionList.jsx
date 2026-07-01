@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Download, Trash2, Edit2, X, MapPin, LayoutGrid, List } from 'lucide-react';
+import { Search, Download, Trash2, Edit2, X, MapPin, LayoutGrid, List, Database, Upload, ChevronDown } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
 import { getCardDisplayName } from '../utils/langHelper';
 import DeckBuilder from './DeckBuilder';
@@ -36,6 +36,49 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
   const [editSubLocation2, setEditSubLocation2] = useState('');
   const [editIsTrade, setEditIsTrade] = useState(0);
   const [editListType, setEditListType] = useState('collection');
+  const [showDataMenu, setShowDataMenu] = useState(false);
+
+  const handleImportFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    const isJson = file.name.endsWith('.json');
+    const format = isJson ? 'json' : 'csv';
+
+    reader.onload = async (event) => {
+      try {
+        const fileData = event.target.result;
+        showToast('Importing collection...');
+        const response = await fetch('/api/import', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            format,
+            data: fileData
+          })
+        });
+
+        const result = await response.json();
+        if (response.ok) {
+          showToast(result.message || 'Import successful!');
+          fetchCollection();
+          if (onUpdate) onUpdate();
+        } else {
+          showToast(`Import failed: ${result.error || 'Unknown error'}`);
+        }
+      } catch (err) {
+        console.error(err);
+        showToast(`Import failed: ${err.message}`);
+      }
+    };
+
+    reader.readAsText(file);
+    e.target.value = null;
+  };
 
   useEffect(() => {
     fetchCollection();
@@ -229,15 +272,111 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
             </button>
           </div>
 
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <a href={`/api/export?format=csv&token=${token}`} download className="btn btn-secondary" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-              <Download size={14} />
-              Export CSV
-            </a>
-            <a href={`/api/export?format=json&token=${token}`} download className="btn btn-secondary" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-              <Download size={14} />
-              Export JSON
-            </a>
+          <div style={{ position: 'relative' }}>
+            <button 
+              type="button"
+              className="btn btn-secondary" 
+              onClick={() => setShowDataMenu(!showDataMenu)}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.45rem 1rem' }}
+            >
+              <Database size={14} />
+              <span>Manage Data</span>
+              <ChevronDown size={14} style={{ transform: showDataMenu ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+            </button>
+            
+            {showDataMenu && (
+              <>
+                <div 
+                  style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 90 }}
+                  onClick={() => setShowDataMenu(false)}
+                />
+                <div style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 0.5rem)',
+                  right: 0,
+                  background: 'var(--bg-secondary)',
+                  border: '1px solid var(--border-glass)',
+                  borderRadius: 'var(--radius-md)',
+                  boxShadow: '0 10px 25px -5px rgba(0,0,0,0.5)',
+                  padding: '0.5rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.25rem',
+                  minWidth: '170px',
+                  zIndex: 95
+                }}>
+                  <a 
+                    href={`/api/export?format=csv&token=${token}`} 
+                    download 
+                    onClick={() => setShowDataMenu(false)}
+                    style={{ 
+                      textDecoration: 'none', 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: '0.5rem',
+                      padding: '0.5rem 0.75rem',
+                      fontSize: '0.85rem',
+                      color: 'var(--text-primary)',
+                      borderRadius: 'var(--radius-sm)',
+                      cursor: 'pointer'
+                    }}
+                    className="dropdown-item-hover"
+                  >
+                    <Download size={14} />
+                    Export CSV (Backup)
+                  </a>
+                  <a 
+                    href={`/api/export?format=json&token=${token}`} 
+                    download 
+                    onClick={() => setShowDataMenu(false)}
+                    style={{ 
+                      textDecoration: 'none', 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: '0.5rem',
+                      padding: '0.5rem 0.75rem',
+                      fontSize: '0.85rem',
+                      color: 'var(--text-primary)',
+                      borderRadius: 'var(--radius-sm)',
+                      cursor: 'pointer'
+                    }}
+                    className="dropdown-item-hover"
+                  >
+                    <Download size={14} />
+                    Export JSON (Backup)
+                  </a>
+                  
+                  <div style={{ borderTop: '1px solid var(--border-glass)', margin: '0.25rem 0' }} />
+                  
+                  <label 
+                    style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: '0.5rem',
+                      padding: '0.5rem 0.75rem',
+                      fontSize: '0.85rem',
+                      color: 'var(--text-primary)',
+                      borderRadius: 'var(--radius-sm)',
+                      cursor: 'pointer',
+                      margin: 0
+                    }}
+                    className="dropdown-item-hover"
+                  >
+                    <Upload size={14} />
+                    <span>Import Backup</span>
+                    <input 
+                      type="file" 
+                      accept=".json,.csv" 
+                      onChange={(e) => {
+                        setShowDataMenu(false);
+                        handleImportFile(e);
+                      }}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>

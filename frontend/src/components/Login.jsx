@@ -104,7 +104,7 @@ function Login({ onLoginSuccess }) {
             </div>
           </div>
           <h2 style={{ fontSize: '1.8rem', color: '#fff', fontWeight: 800 }}>
-            Poke<span style={{ color: 'var(--accent-red)' }}>Keep</span>
+            Pokedex<span style={{ color: 'var(--accent-red)' }}>rr</span>
           </h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
             {isRegister ? 'Create your trainer account' : 'Access your personal card database'}

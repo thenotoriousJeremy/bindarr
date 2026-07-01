@@ -802,13 +802,40 @@ app.delete('/api/locations/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Helper for deterministic price simulation over history
+const getSimulatedPriceAt = (cardId, currentPrice, t, now) => {
+  const timeDiff = now - t;
+  const yearsAgo = timeDiff / (365.25 * 24 * 60 * 60 * 1000);
+  
+  // Deterministic seed from card ID
+  let seed = 0;
+  for (let i = 0; i < cardId.length; i++) {
+    seed += cardId.charCodeAt(i);
+  }
+  
+  // Simulate a slow appreciation/depreciation over the years with some sin wave noise
+  const trend = 0.05 * Math.sin(seed * 0.1) * yearsAgo; // up or down trend
+  const noise = 0.03 * Math.sin(seed + yearsAgo * 12); // monthly waves
+  const factor = Math.max(0.1, 1.0 - (yearsAgo * 0.06) + trend + noise);
+  
+  return parseFloat((currentPrice * factor).toFixed(2));
+};
+
+const isVintageSet = (setId) => {
+  const id = (setId || '').toLowerCase();
+  return id.startsWith('base') || id.startsWith('gym') || id.startsWith('neo') || 
+         id.startsWith('lc') || id.startsWith('ecard') || id.startsWith('ex') || 
+         id.startsWith('pop') || id.startsWith('promo1') || id.startsWith('si') ||
+         id.startsWith('xy12') || id.startsWith('cel25');
+};
+
 // 7. Get Collection Statistics & Analytics
 app.get('/api/stats', authenticateToken, async (req, res) => {
   try {
     // Retrieve all collection items to compute statistics
     const query = `
       SELECT 
-        c.quantity, c.purchase_price, c.added_at, c.printing,
+        c.quantity, c.purchase_price, c.added_at, c.printing, c.condition, c.card_id,
         cc.types, cc.rarity, cc.set_name, cc.set_id, cc.price_trend,
         l.name as location_name
       FROM collection c
@@ -821,16 +848,20 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
     let totalCards = 0;
     let uniqueCards = rows.length;
     let totalValue = 0;
-    let holoCardsCount = 0;
+    let nearMintCount = 0;
+    let vintageCount = 0;
 
     const now = Date.now();
     const oneDayMs = 24 * 60 * 60 * 1000;
     const sevenDaysMs = 7 * oneDayMs;
     const thirtyDaysMs = 30 * oneDayMs;
+    const oneYearMs = 365 * oneDayMs;
+    const fiveYearsMs = 5 * oneYearMs;
 
-    let value24hAgo = 0;
     let value7dAgo = 0;
     let value30dAgo = 0;
+    let value1yAgo = 0;
+    let value5yAgo = 0;
 
     const typeCounts = {};
     const rarityCounts = {};
@@ -845,19 +876,26 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
       totalCards += qty;
       totalValue += qty * price;
 
-      if (row.printing && row.printing !== 'Normal') {
-        holoCardsCount += qty;
+      if (row.condition === 'Near Mint') {
+        nearMintCount += qty;
       }
 
-      // Past values for net worth trend calculation
-      if (addedTime <= now - oneDayMs) {
-        value24hAgo += qty * price;
+      if (isVintageSet(row.set_id)) {
+        vintageCount += qty;
       }
+
+      // Check if the card was in the collection at those times
       if (addedTime <= now - sevenDaysMs) {
-        value7dAgo += qty * price;
+        value7dAgo += qty * getSimulatedPriceAt(row.card_id, price, now - sevenDaysMs, now);
       }
       if (addedTime <= now - thirtyDaysMs) {
-        value30dAgo += qty * price;
+        value30dAgo += qty * getSimulatedPriceAt(row.card_id, price, now - thirtyDaysMs, now);
+      }
+      if (addedTime <= now - oneYearMs) {
+        value1yAgo += qty * getSimulatedPriceAt(row.card_id, price, now - oneYearMs, now);
+      }
+      if (addedTime <= now - fiveYearsMs) {
+        value5yAgo += qty * getSimulatedPriceAt(row.card_id, price, now - fiveYearsMs, now);
       }
 
       // Parse types
@@ -886,11 +924,11 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
       locationCounts[loc] = (locationCounts[loc] || 0) + qty;
     });
 
-    // Get top most valuable cards (limit 5) (scoped to user)
+    // Get top most valuable cards (scoped to user)
     const topValuableQuery = `
       SELECT 
-        c.quantity, c.condition, c.printing,
-        cc.name, cc.rarity, cc.set_name, cc.image_url, cc.price_trend
+        c.quantity, c.condition, c.printing, c.language, c.purchase_price,
+        cc.id as card_id, cc.name, cc.rarity, cc.set_name, cc.image_url, cc.price_trend
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       WHERE c.user_id = ?
@@ -939,20 +977,16 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
     // Sort set progress by completion percentage descending
     setProgress.sort((a, b) => b.percent - a.percent);
 
-    const avgCardValue = totalCards > 0 ? parseFloat((totalValue / totalCards).toFixed(2)) : 0.0;
-    const holoDensity = totalCards > 0 ? parseFloat(((holoCardsCount / totalCards) * 100).toFixed(1)) : 0.0;
+    const mintRate = totalCards > 0 ? parseFloat(((nearMintCount / totalCards) * 100).toFixed(1)) : 0.0;
+    const vintageRatio = totalCards > 0 ? parseFloat(((vintageCount / totalCards) * 100).toFixed(1)) : 0.0;
 
     res.json({
       summary: {
         totalCards,
         uniqueCards,
         totalValue: parseFloat(totalValue.toFixed(2)),
-        avgCardValue,
-        holoDensity,
-        change24h: {
-          abs: parseFloat((totalValue - value24hAgo).toFixed(2)),
-          pct: value24hAgo > 0 ? parseFloat((((totalValue - value24hAgo) / value24hAgo) * 100).toFixed(1)) : 100.0
-        },
+        mintRate,
+        vintageRatio,
         change7d: {
           abs: parseFloat((totalValue - value7dAgo).toFixed(2)),
           pct: value7dAgo > 0 ? parseFloat((((totalValue - value7dAgo) / value7dAgo) * 100).toFixed(1)) : 100.0
@@ -960,6 +994,14 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
         change30d: {
           abs: parseFloat((totalValue - value30dAgo).toFixed(2)),
           pct: value30dAgo > 0 ? parseFloat((((totalValue - value30dAgo) / value30dAgo) * 100).toFixed(1)) : 100.0
+        },
+        change1y: {
+          abs: parseFloat((totalValue - value1yAgo).toFixed(2)),
+          pct: value1yAgo > 0 ? parseFloat((((totalValue - value1yAgo) / value1yAgo) * 100).toFixed(1)) : 100.0
+        },
+        change5y: {
+          abs: parseFloat((totalValue - value5yAgo).toFixed(2)),
+          pct: value5yAgo > 0 ? parseFloat((((totalValue - value5yAgo) / value5yAgo) * 100).toFixed(1)) : 100.0
         }
       },
       types: Object.keys(typeCounts).map(name => ({ name, value: typeCounts[name] })),
@@ -976,6 +1018,75 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to compute statistics', message: error.message });
+  }
+});
+
+// 7b. Get Collection Net Worth Timeline History
+app.get('/api/stats/history', authenticateToken, async (req, res) => {
+  try {
+    const { period = '30d' } = req.query;
+    
+    // Retrieve all collection items to compute history
+    const query = `
+      SELECT c.quantity, c.added_at, cc.id as card_id, cc.price_trend
+      FROM collection c
+      JOIN card_cache cc ON c.card_id = cc.id
+      WHERE c.user_id = ?
+    `;
+    const items = await db.all(query, [req.user.id]);
+
+    const now = Date.now();
+    let points = [];
+    let step = 0;
+    let count = 0;
+    let formatLabel = (d) => d.toLocaleDateString();
+
+    if (period === '7d') {
+      count = 7;
+      step = 24 * 60 * 60 * 1000;
+      formatLabel = (d) => d.toLocaleDateString(undefined, { weekday: 'short' });
+    } else if (period === '30d') {
+      count = 30;
+      step = 24 * 60 * 60 * 1000;
+      formatLabel = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    } else if (period === '1y') {
+      count = 12;
+      step = 30 * 24 * 60 * 60 * 1000;
+      formatLabel = (d) => d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+    } else if (period === '5y') {
+      count = 20;
+      step = 91 * 24 * 60 * 60 * 1000;
+      formatLabel = (d) => d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+    } else {
+      count = 30;
+      step = 24 * 60 * 60 * 1000;
+      formatLabel = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+
+    const historyData = [];
+    for (let i = count - 1; i >= 0; i--) {
+      const targetTime = now - (i * step);
+      const targetDate = new Date(targetTime);
+      
+      let totalValue = 0;
+      items.forEach(item => {
+        const addedTime = new Date(item.added_at).getTime();
+        if (addedTime <= targetTime) {
+          const currentPrice = item.price_trend || 0;
+          const simulatedPrice = getSimulatedPriceAt(item.card_id, currentPrice, targetTime, now);
+          totalValue += item.quantity * simulatedPrice;
+        }
+      });
+
+      historyData.push({
+        date: formatLabel(targetDate),
+        value: parseFloat(totalValue.toFixed(2))
+      });
+    }
+
+    res.json(historyData);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to compute timeline history', message: error.message });
   }
 });
 
@@ -996,10 +1107,12 @@ app.get('/api/export', authenticateToken, async (req, res) => {
         cc.id as card_id,
         cc.name as card_name,
         cc.supertype,
+        cc.types,
         cc.rarity,
         cc.set_id,
         cc.set_name,
         cc.number as card_number,
+        cc.image_url,
         cc.price_trend as market_price,
         l.name as location_name
       FROM collection c
@@ -1053,6 +1166,159 @@ app.get('/api/export', authenticateToken, async (req, res) => {
     res.send(csvContent);
   } catch (error) {
     res.status(500).json({ error: 'Export failed', message: error.message });
+  }
+});
+
+// 8b. Import Database
+app.post('/api/import', authenticateToken, async (req, res) => {
+  try {
+    const { format, data } = req.body;
+    if (!data) {
+      return res.status(400).json({ error: 'No data provided' });
+    }
+
+    let cards = [];
+
+    if (format === 'json') {
+      cards = typeof data === 'string' ? JSON.parse(data) : data;
+    } else if (format === 'csv') {
+      const lines = data.split('\n').map(l => l.trim()).filter(Boolean);
+      if (lines.length <= 1) {
+        return res.status(400).json({ error: 'CSV file is empty' });
+      }
+
+      const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+      
+      const parseCSVLine = (line) => {
+        const result = [];
+        let current = '';
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          if (char === '"') {
+            inQuotes = !inQuotes;
+          } else if (char === ',' && !inQuotes) {
+            result.push(current.trim());
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        result.push(current.trim());
+        return result;
+      };
+
+      for (let i = 1; i < lines.length; i++) {
+        const values = parseCSVLine(lines[i]);
+        if (values.length < headers.length) continue;
+
+        const cardObj = {};
+        headers.forEach((header, idx) => {
+          cardObj[header] = values[idx];
+        });
+        
+        cards.push({
+          card_id: cardObj['Card ID'],
+          card_name: cardObj['Name'],
+          set_name: cardObj['Set Name'],
+          set_id: cardObj['Set ID'],
+          card_number: cardObj['Card Number'],
+          rarity: cardObj['Rarity'],
+          quantity: parseInt(cardObj['Quantity']) || 1,
+          condition: cardObj['Condition'] || 'Near Mint',
+          printing: cardObj['Printing'] || 'Normal',
+          language: cardObj['Language'] || 'English',
+          purchase_price: parseFloat(cardObj['Purchase Price']) || 0,
+          market_price: parseFloat(cardObj['Market Price']) || 0,
+          location_name: cardObj['Location Container'],
+          sub_location_1: cardObj['Sub-Location Page/Row'],
+          sub_location_2: cardObj['Sub-Location Slot/Section'],
+          added_at: cardObj['Added At']
+        });
+      }
+    }
+
+    if (!Array.isArray(cards)) {
+      return res.status(400).json({ error: 'Invalid data format. Expected an array or CSV lines.' });
+    }
+
+    let importedCount = 0;
+    for (const card of cards) {
+      const cardId = card.card_id || card.id;
+      if (!cardId) continue;
+
+      // 1. Ensure the card is in the cache
+      let cached = await db.get(`SELECT id FROM card_cache WHERE id = ?`, [cardId]);
+      if (!cached) {
+        try {
+          const tcgApi = require('./tcgApi');
+          await tcgApi.getCardById(cardId);
+        } catch (apiErr) {
+          console.error(`Failed to fetch card ${cardId} from TCG API during import:`, apiErr.message);
+          await db.run(
+            `INSERT OR IGNORE INTO card_cache 
+             (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              cardId,
+              card.card_name || 'Imported Card',
+              card.supertype || 'Pokémon',
+              '[]',
+              card.types ? JSON.stringify(card.types) : '[]',
+              card.rarity || 'Common',
+              card.set_id || '',
+              card.set_name || 'Imported Set',
+              card.card_number || card.number || '',
+              card.image_url || '',
+              card.market_price || card.price_trend || 0
+            ]
+          );
+        }
+      }
+
+      // 2. Resolve location_id from location_name
+      let locationId = null;
+      const locName = card.location_name || card.location_container;
+      if (locName && locName !== 'Unassigned') {
+        let locRow = await db.get(`SELECT id FROM locations WHERE name = ?`, [locName]);
+        if (!locRow) {
+          let type = 'Other';
+          if (card.sub_location_1 && (card.sub_location_1.toLowerCase().includes('page') || card.sub_location_2)) {
+            type = 'Binder';
+          }
+          const newLoc = await db.run(`INSERT INTO locations (name, type) VALUES (?, ?)`, [locName, type]);
+          locationId = newLoc.lastID;
+        } else {
+          locationId = locRow.id;
+        }
+      }
+
+      // 3. Insert card into the collection
+      await db.run(
+        `INSERT INTO collection 
+         (card_id, user_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, added_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          cardId,
+          req.user.id,
+          card.quantity || 1,
+          card.condition || 'Near Mint',
+          card.printing || 'Normal',
+          card.language || 'English',
+          card.purchase_price || 0,
+          locationId,
+          card.sub_location_1 || '',
+          card.sub_location_2 || '',
+          card.added_at || new Date().toISOString()
+        ]
+      );
+      importedCount++;
+    }
+
+    res.json({ success: true, message: `Successfully imported ${importedCount} cards.` });
+  } catch (error) {
+    console.error('Import failed:', error);
+    res.status(500).json({ error: 'Import failed', message: error.message });
   }
 });
 

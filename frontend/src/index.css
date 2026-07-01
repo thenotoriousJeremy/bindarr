@@ -1142,3 +1142,8 @@ button, input, select, textarea {
     padding: 1rem;
   }
 }
+
+.dropdown-item-hover:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: var(--accent-red) !important;
+}

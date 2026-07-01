@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
-import { TrendingUp, Coins, Library, Compass, Trophy, Plus, ArrowUpRight, Sparkles } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, AreaChart, Area } from 'recharts';
+import { TrendingUp, Coins, Library, Compass, Trophy, Plus, ArrowUpRight, Sparkles, X } from 'lucide-react';
+import { getCardDisplayName } from '../utils/langHelper';
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
   '#ec4899', '#14b8a6', '#f43f5e', '#a855f7', '#6366f1'
 ];
 
-// Color mapping for Pokemon Card types
 const TYPE_COLORS = {
   'Grass': '#4ade80',
   'Fire': '#f87171',
@@ -26,16 +26,42 @@ function Dashboard({ statsTrigger, onNavigate }) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [timePeriod, setTimePeriod] = useState('7d');
+  const [timePeriod, setTimePeriod] = useState('30d');
+  
+  // Timeline Chart State
+  const [historyData, setHistoryData] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // Clickable Card Inspector State
+  const [inspectorCard, setInspectorCard] = useState(null);
+  const [cardHistory, setCardHistory] = useState([]);
+  const [loadingCardHistory, setLoadingCardHistory] = useState(false);
 
   useEffect(() => {
     fetchStats();
   }, [statsTrigger]);
 
+  useEffect(() => {
+    if (stats && stats.summary.totalCards > 0) {
+      fetchTimelineHistory();
+    }
+  }, [timePeriod, stats]);
+
+  useEffect(() => {
+    if (inspectorCard) {
+      fetchCardPriceHistory(inspectorCard.card_id);
+    }
+  }, [inspectorCard]);
+
   const fetchStats = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/stats');
+      const token = localStorage.getItem('pokedexrr_token');
+      const response = await fetch('/api/stats', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
       if (!response.ok) {
         throw new Error('Failed to load stats');
       }
@@ -46,6 +72,46 @@ function Dashboard({ statsTrigger, onNavigate }) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchTimelineHistory = async () => {
+    try {
+      setLoadingHistory(true);
+      const token = localStorage.getItem('pokedexrr_token');
+      const response = await fetch(`/api/stats/history?period=${timePeriod}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setHistoryData(data);
+      }
+    } catch (err) {
+      console.error('Error loading history timeline:', err);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const fetchCardPriceHistory = async (cardId) => {
+    try {
+      setLoadingCardHistory(true);
+      const token = localStorage.getItem('pokedexrr_token');
+      const response = await fetch(`/api/cards/${cardId}/price-history`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setCardHistory(data);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingCardHistory(false);
     }
   };
 
@@ -82,7 +148,6 @@ function Dashboard({ statsTrigger, onNavigate }) {
 
   const { summary, types, rarities, sets, locations, topValuable, setProgress } = stats;
 
-  // Setup data for type charts with default colors
   const typeChartData = types.map(t => ({
     name: t.name,
     value: t.value,
@@ -98,7 +163,7 @@ function Dashboard({ statsTrigger, onNavigate }) {
           <div className="metric-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span>Net Worth</span>
             <div style={{ display: 'flex', gap: '4px', background: 'rgba(255,255,255,0.05)', padding: '2px', borderRadius: '4px' }}>
-              {['24h', '7d', '30d'].map(p => (
+              {['7d', '30d', '1y', '5y'].map(p => (
                 <button 
                   key={p} 
                   type="button" 
@@ -122,7 +187,9 @@ function Dashboard({ statsTrigger, onNavigate }) {
           </div>
           <div className="metric-value">${summary.totalValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
           {(() => {
-            const change = timePeriod === '24h' ? summary.change24h : timePeriod === '30d' ? summary.change30d : summary.change7d;
+            const change = timePeriod === '7d' ? summary.change7d : 
+                           timePeriod === '30d' ? summary.change30d : 
+                           timePeriod === '1y' ? summary.change1y : summary.change5y;
             const isPositive = change.abs >= 0;
             return (
               <div className={`metric-footer ${isPositive ? 'positive' : 'negative'}`} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -135,27 +202,27 @@ function Dashboard({ statsTrigger, onNavigate }) {
           })()}
         </div>
 
-        {/* Average Card Value */}
+        {/* Mint Rate */}
         <div className="glass-panel metric-card">
           <div className="metric-header">
-            <span>Avg. Card Value</span>
-            <Coins size={18} />
-          </div>
-          <div className="metric-value">${(summary.avgCardValue || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-          <div className="metric-footer">Collection density value</div>
-        </div>
-
-        {/* Holo Print Density */}
-        <div className="glass-panel metric-card">
-          <div className="metric-header">
-            <span>Holo Print Rate</span>
+            <span>Mint Rate</span>
             <Sparkles size={18} style={{ color: 'var(--accent-yellow)' }} />
           </div>
-          <div className="metric-value">{summary.holoDensity || 0}%</div>
-          <div className="metric-footer">Holographic printing ratio</div>
+          <div className="metric-value">{summary.mintRate || 0}%</div>
+          <div className="metric-footer">Near Mint condition ratio</div>
         </div>
 
-        {/* Total Cards count & Unique style split */}
+        {/* Vintage Ratio */}
+        <div className="glass-panel metric-card">
+          <div className="metric-header">
+            <span>Vintage Ratio</span>
+            <Coins size={18} />
+          </div>
+          <div className="metric-value">{summary.vintageRatio || 0}%</div>
+          <div className="metric-footer">Classic vintage set ratio</div>
+        </div>
+
+        {/* Total Cards count */}
         <div className="glass-panel metric-card">
           <div className="metric-header">
             <span>Total Cards Owned</span>
@@ -165,6 +232,40 @@ function Dashboard({ statsTrigger, onNavigate }) {
           <div className="metric-footer">
             <span>{summary.uniqueCards} unique card styles</span>
           </div>
+        </div>
+      </div>
+
+      {/* Net Worth History Timeline Chart */}
+      <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1.5rem 1.75rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h3 className="chart-title" style={{ margin: 0 }}>Net Worth Valuation Timeline</h3>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+            Showing performance history ({timePeriod.toUpperCase()})
+          </span>
+        </div>
+        <div className="chart-container" style={{ height: '240px', position: 'relative' }}>
+          {loadingHistory ? (
+            <div className="spinner" style={{ position: 'absolute', top: '45%', left: '45%' }}></div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={historyData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--accent-red)" stopOpacity={0.4}/>
+                    <stop offset="95%" stopColor="var(--accent-red)" stopOpacity={0.0}/>
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="date" stroke="var(--text-secondary)" style={{ fontSize: '0.7rem' }} />
+                <YAxis stroke="var(--text-secondary)" style={{ fontSize: '0.7rem' }} tickFormatter={(v) => `$${v}`} />
+                <Tooltip 
+                  contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }}
+                  labelStyle={{ color: 'var(--text-primary)' }}
+                  formatter={(v) => [`$${v}`, 'Portfolio Value']}
+                />
+                <Area type="monotone" dataKey="value" stroke="var(--accent-red)" strokeWidth={2} fillOpacity={1} fill="url(#colorVal)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 
@@ -275,10 +376,27 @@ function Dashboard({ statsTrigger, onNavigate }) {
             </h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1.25rem' }}>
               {topValuable.map((card, idx) => (
-                <div key={idx} style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                <div 
+                  key={idx} 
+                  onClick={() => setInspectorCard(card)}
+                  style={{ 
+                    display: 'flex', 
+                    gap: '0.75rem', 
+                    alignItems: 'center', 
+                    background: 'rgba(255, 255, 255, 0.02)', 
+                    padding: '0.5rem', 
+                    borderRadius: 'var(--radius-sm)', 
+                    border: '1px solid var(--border-glass)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease'
+                  }}
+                  className="dashboard-card-clickable"
+                >
                   <img src={card.image_url} alt={card.name} style={{ width: '40px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '4px' }} />
                   <div style={{ flex: 1, overflow: 'hidden' }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{card.name}</div>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {getCardDisplayName(card.name, card.language)}
+                    </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{card.set_name} • {card.rarity}</div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
@@ -312,6 +430,131 @@ function Dashboard({ statsTrigger, onNavigate }) {
 
         </div>
       </div>
+
+      {/* Card Inspector Modal Overlay */}
+      {inspectorCard && (
+        <div style={{
+          position: 'fixed',
+          top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          backdropFilter: 'blur(5px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 999,
+          padding: '1.5rem'
+        }} onClick={() => setInspectorCard(null)}>
+          <div className="glass-panel" style={{
+            maxWidth: '680px',
+            width: '100%',
+            padding: '2rem',
+            display: 'flex',
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            gap: '2rem',
+            position: 'relative'
+          }} onClick={(e) => e.stopPropagation()}>
+            <button className="btn btn-secondary btn-icon-only" onClick={() => setInspectorCard(null)} style={{
+              position: 'absolute',
+              top: '1rem',
+              right: '1rem',
+              borderRadius: '50%'
+            }}>
+              <X size={16} />
+            </button>
+
+            {/* Left side: Card Image */}
+            <div style={{ flex: '1 1 240px', display: 'flex', justifyContent: 'center' }}>
+              <img 
+                src={inspectorCard.image_url} 
+                alt={inspectorCard.name} 
+                style={{
+                  width: '100%',
+                  maxWidth: '260px',
+                  aspectRatio: 0.718,
+                  objectFit: 'cover',
+                  borderRadius: 'var(--radius-md)',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.5), 0 0 15px rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+
+            {/* Right side: Information */}
+            <div style={{ flex: '1 1 300px', display: 'flex', flexDirection: 'column', gap: '1rem', justifyContent: 'center' }}>
+              <div>
+                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.4rem' }}>
+                  <span style={{
+                    fontSize: '0.7rem',
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
+                    padding: '0.15rem 0.4rem',
+                    borderRadius: '4px',
+                    backgroundColor: 'rgba(234, 179, 8, 0.1)',
+                    color: 'var(--accent-yellow)',
+                    border: '1px solid rgba(234, 179, 8, 0.2)'
+                  }}>
+                    {inspectorCard.rarity || 'Common'}
+                  </span>
+                </div>
+
+                <h3 style={{ fontSize: '1.5rem', color: '#fff', lineHeight: 1.2 }}>
+                  {getCardDisplayName(inspectorCard.name, inspectorCard.language)}
+                </h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{inspectorCard.set_name} • Card #{inspectorCard.number}</p>
+              </div>
+
+              <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
+                <div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>TCG MARKET</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>
+                    ${inspectorCard.price_trend ? inspectorCard.price_trend.toFixed(2) : '0.00'}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>PURCHASE PRICE</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>
+                    ${inspectorCard.purchase_price ? inspectorCard.purchase_price.toFixed(2) : '0.00'}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>QUANTITY</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>
+                    x{inspectorCard.quantity}
+                  </div>
+                </div>
+              </div>
+
+              {/* Price History Area Chart */}
+              {loadingCardHistory ? (
+                <div className="spinner" style={{ height: '30px', margin: '0.5rem auto' }}></div>
+              ) : cardHistory.length > 0 && (
+                <div style={{ width: '100%', height: '80px', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', marginBottom: '4px', letterSpacing: '0.05em' }}>Price Trend History (30 Days)</div>
+                  <div style={{ width: '100%', height: '50px' }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={cardHistory} margin={{ top: 0, right: 0, left: -25, bottom: 0 }}>
+                        <XAxis dataKey="recorded_at" hide />
+                        <YAxis stroke="var(--text-secondary)" style={{ fontSize: '0.6rem' }} />
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)', fontSize: '0.7rem' }}
+                          formatter={(v) => [`$${v}`, 'Price']}
+                        />
+                        <Area type="monotone" dataKey="price" stroke="var(--accent-yellow)" strokeWidth={1.5} fill="rgba(234,179,8,0.1)" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <div><span style={{ color: 'var(--text-muted)' }}>Condition:</span> <span style={{ color: '#fff' }}>{inspectorCard.condition}</span></div>
+                <div><span style={{ color: 'var(--text-muted)' }}>Printing:</span> <span style={{ color: '#fff' }}>{inspectorCard.printing}</span></div>
+                <div><span style={{ color: 'var(--text-muted)' }}>Language:</span> <span style={{ color: '#fff' }}>{inspectorCard.language}</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
