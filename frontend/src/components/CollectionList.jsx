@@ -243,180 +243,65 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
 
   return (
     <div>
-      {/* Title & Exports Bar */}
-      <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem', padding: '0.75rem 1.25rem' }}>
-        <div>
-          <h2 style={{ fontSize: '1.15rem', color: '#fff', margin: 0 }}>My Pokémon Card Collection</h2>
+      {/* Sub Navigation Tabs & View Toggle */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button 
+            className={`btn ${subTab === 'collection' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setSubTab('collection')}
+            style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
+          >
+            Collection
+          </button>
+          <button 
+            className={`btn ${subTab === 'wishlist' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setSubTab('wishlist')}
+            style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
+          >
+            Wishlist
+          </button>
+          <button 
+            className={`btn ${subTab === 'trade' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setSubTab('trade')}
+            style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
+          >
+            Trade Binder
+          </button>
+          <button 
+            className={`btn ${subTab === 'deckbuilder' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setSubTab('deckbuilder')}
+            style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
+          >
+            Deck Builder
+          </button>
+          <button 
+            className={`btn ${subTab === 'locations' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setSubTab('locations')}
+            style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
+          >
+            Storage Locations
+          </button>
         </div>
-        
-        {/* Toggle & Export buttons */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-          {/* View Toggle */}
-          <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-            <button 
-              className={`btn btn-icon-only ${viewMode === 'gallery' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setViewMode('gallery')}
-              style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
-              title="Gallery View"
-            >
-              <LayoutGrid size={14} />
-            </button>
-            <button 
-              className={`btn btn-icon-only ${viewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setViewMode('list')}
-              style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
-              title="List Table View"
-            >
-              <List size={14} />
-            </button>
-          </div>
 
-          <div style={{ position: 'relative' }}>
-            <button 
-              type="button"
-              className="btn btn-secondary" 
-              onClick={() => setShowDataMenu(!showDataMenu)}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.45rem 1rem' }}
-            >
-              <Database size={14} />
-              <span>Manage Data</span>
-              <ChevronDown size={14} style={{ transform: showDataMenu ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
-            </button>
-            
-            {showDataMenu && (
-              <>
-                <div 
-                  style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 90 }}
-                  onClick={() => setShowDataMenu(false)}
-                />
-                <div style={{
-                  position: 'absolute',
-                  top: 'calc(100% + 0.5rem)',
-                  right: 0,
-                  background: 'var(--bg-secondary)',
-                  border: '1px solid var(--border-glass)',
-                  borderRadius: 'var(--radius-md)',
-                  boxShadow: '0 10px 25px -5px rgba(0,0,0,0.5)',
-                  padding: '0.5rem',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.25rem',
-                  minWidth: '170px',
-                  zIndex: 95
-                }}>
-                  <a 
-                    href={`/api/export?format=csv&token=${token}`} 
-                    download 
-                    onClick={() => setShowDataMenu(false)}
-                    style={{ 
-                      textDecoration: 'none', 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      gap: '0.5rem',
-                      padding: '0.5rem 0.75rem',
-                      fontSize: '0.85rem',
-                      color: 'var(--text-primary)',
-                      borderRadius: 'var(--radius-sm)',
-                      cursor: 'pointer'
-                    }}
-                    className="dropdown-item-hover"
-                  >
-                    <Download size={14} />
-                    Export CSV (Backup)
-                  </a>
-                  <a 
-                    href={`/api/export?format=json&token=${token}`} 
-                    download 
-                    onClick={() => setShowDataMenu(false)}
-                    style={{ 
-                      textDecoration: 'none', 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      gap: '0.5rem',
-                      padding: '0.5rem 0.75rem',
-                      fontSize: '0.85rem',
-                      color: 'var(--text-primary)',
-                      borderRadius: 'var(--radius-sm)',
-                      cursor: 'pointer'
-                    }}
-                    className="dropdown-item-hover"
-                  >
-                    <Download size={14} />
-                    Export JSON (Backup)
-                  </a>
-                  
-                  <div style={{ borderTop: '1px solid var(--border-glass)', margin: '0.25rem 0' }} />
-                  
-                  <label 
-                    style={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      gap: '0.5rem',
-                      padding: '0.5rem 0.75rem',
-                      fontSize: '0.85rem',
-                      color: 'var(--text-primary)',
-                      borderRadius: 'var(--radius-sm)',
-                      cursor: 'pointer',
-                      margin: 0
-                    }}
-                    className="dropdown-item-hover"
-                  >
-                    <Upload size={14} />
-                    <span>Import Backup</span>
-                    <input 
-                      type="file" 
-                      accept=".json,.csv" 
-                      onChange={(e) => {
-                        setShowDataMenu(false);
-                        handleImportFile(e);
-                      }}
-                      style={{ display: 'none' }}
-                    />
-                  </label>
-                </div>
-              </>
-            )}
-          </div>
+        {/* View Toggle */}
+        <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+          <button 
+            className={`btn btn-icon-only ${viewMode === 'gallery' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setViewMode('gallery')}
+            style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
+            title="Gallery View"
+          >
+            <LayoutGrid size={14} />
+          </button>
+          <button 
+            className={`btn btn-icon-only ${viewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setViewMode('list')}
+            style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
+            title="List Table View"
+          >
+            <List size={14} />
+          </button>
         </div>
-      </div>
-
-      {/* Sub Navigation Tabs */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem', flexWrap: 'wrap' }}>
-        <button 
-          className={`btn ${subTab === 'collection' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setSubTab('collection')}
-          style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
-        >
-          Collection
-        </button>
-        <button 
-          className={`btn ${subTab === 'wishlist' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setSubTab('wishlist')}
-          style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
-        >
-          Wishlist
-        </button>
-        <button 
-          className={`btn ${subTab === 'trade' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setSubTab('trade')}
-          style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
-        >
-          Trade Binder
-        </button>
-        <button 
-          className={`btn ${subTab === 'deckbuilder' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setSubTab('deckbuilder')}
-          style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
-        >
-          Deck Builder
-        </button>
-        <button 
-          className={`btn ${subTab === 'locations' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setSubTab('locations')}
-          style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
-        >
-          Storage Locations
-        </button>
       </div>
 
       {subTab === 'deckbuilder' ? (

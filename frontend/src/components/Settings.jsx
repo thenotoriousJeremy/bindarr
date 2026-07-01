@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check } from 'lucide-react';
+import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload } from 'lucide-react';
 
 function Settings({ user, onUpdateUser, showToast }) {
   const [password, setPassword] = useState('');
@@ -12,6 +12,47 @@ function Settings({ user, onUpdateUser, showToast }) {
 
   const [tcgApiKey, setTcgApiKey] = useState(user?.tcg_api_key || '');
   const [apiKeyLoading, setApiKeyLoading] = useState(false);
+  const token = localStorage.getItem('pokedexrr_token');
+
+  const handleImportFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    const isJson = file.name.endsWith('.json');
+    const format = isJson ? 'json' : 'csv';
+
+    reader.onload = async (event) => {
+      try {
+        const fileData = event.target.result;
+        showToast('Importing collection...');
+        const response = await fetch('/api/import', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            format,
+            data: fileData
+          })
+        });
+
+        const result = await response.json();
+        if (response.ok) {
+          showToast(result.message || 'Import successful!');
+        } else {
+          showToast(`Import failed: ${result.error || 'Unknown error'}`);
+        }
+      } catch (err) {
+        console.error(err);
+        showToast(`Import failed: ${err.message}`);
+      }
+    };
+
+    reader.readAsText(file);
+    e.target.value = null;
+  };
 
   useEffect(() => {
     if (user) {
@@ -359,6 +400,53 @@ function Settings({ user, onUpdateUser, showToast }) {
               ) : 'Save API Key'}
             </button>
           </form>
+        </div>
+
+        {/* Collection Backup & Data Options Panel */}
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
+            <Database size={20} style={{ color: 'var(--accent-red)' }} />
+            <h3 style={{ color: '#fff', fontSize: '1.1rem' }}>Collection Backup & Data</h3>
+          </div>
+
+          <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-glass)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+            Export your card collection as a CSV or JSON backup, or import a previously exported database. Importing will merge cards into your collection.
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <a 
+              href={`/api/export?format=csv&token=${token}`} 
+              download 
+              className="btn btn-secondary" 
+              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
+            >
+              <Download size={14} />
+              <span>Export CSV</span>
+            </a>
+            <a 
+              href={`/api/export?format=json&token=${token}`} 
+              download 
+              className="btn btn-secondary" 
+              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
+            >
+              <Download size={14} />
+              <span>Export JSON</span>
+            </a>
+
+            <label 
+              className="btn btn-primary" 
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', margin: 0 }}
+            >
+              <Upload size={14} />
+              <span>Import Backup</span>
+              <input 
+                type="file" 
+                accept=".json,.csv" 
+                onChange={handleImportFile}
+                style={{ display: 'none' }}
+              />
+            </label>
+          </div>
         </div>
       </div>
     </div>
