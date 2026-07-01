@@ -22,6 +22,12 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
   const [inspectedSlot, setInspectedSlot] = useState(null);
   const [isFlipping, setIsFlipping] = useState(false);
   
+  // Unsorted Cards states
+  const [unsortedCards, setUnsortedCards] = useState([]);
+  const [unsortedSearch, setUnsortedSearch] = useState('');
+  const [unsortedSortOrder, setUnsortedSortOrder] = useState('name-asc');
+  const [newBoxRowName, setNewBoxRowName] = useState('');
+  
   // Touch Swiping states
   const [touchStart, setTouchStart] = useState(null);
   const [touchEnd, setTouchEnd] = useState(null);
@@ -42,12 +48,12 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
   }, [statsTrigger]);
 
   useEffect(() => {
-    if (activeLocationId) {
-      fetchLocationCards(activeLocationId);
-    } else {
-      setLocationCards([]);
-    }
-  }, [activeLocationId, statsTrigger]);
+    fetchLocations();
+  }, [statsTrigger]);
+
+  useEffect(() => {
+    fetchLocationCards(activeLocationId);
+  }, [activeLocationId, statsTrigger, locations]);
 
   const fetchLocations = async () => {
     try {
@@ -74,6 +80,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
       const response = await fetch('/api/collection');
       if (response.ok) {
         const allCards = await response.json();
+        
+        // Unsorted cards: location_id is null or empty
+        const unsorted = allCards.filter(c => !c.location_id);
+        setUnsortedCards(unsorted);
+
+        if (!locId) {
+          setLocationCards([]);
+          return;
+        }
+
         // Filter by selected location id
         const filtered = allCards.filter(c => c.location_id === locId);
         
@@ -108,6 +124,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
       }
     } catch (err) {
       console.error(err);
+      showToast('Error loading cards.');
     }
   };
 
@@ -147,36 +164,154 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
     e.dataTransfer.setData('card_entry_id', card.entry_id.toString());
   };
 
+  const moveCardToLocation = async (cardEntryId, locationId, sub1, sub2) => {
+    try {
+      const targetCard = unsortedCards.find(c => c.entry_id == cardEntryId) || 
+                         locationCards.find(c => c.entry_id == cardEntryId);
+      if (!targetCard) return;
+
+      const response = await fetch(`/api/collection/${cardEntryId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location_id: locationId,
+          sub_location_1: sub1,
+          sub_location_2: sub2,
+          quantity: targetCard.quantity,
+          condition: targetCard.condition,
+          printing: targetCard.printing,
+          language: targetCard.language,
+          purchase_price: targetCard.purchase_price || 0,
+          is_trade: targetCard.is_trade || 0,
+          list_type: targetCard.list_type || 'collection'
+        })
+      });
+
+      if (response.ok) {
+        showToast(`Moved ${targetCard.name} successfully!`);
+        fetchLocations();
+        fetchLocationCards(activeLocationId);
+        onUpdate();
+      } else {
+        showToast('Failed to relocate card.');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error moving card.');
+    }
+  };
+
+  const autoSortContainerCards = async (orderMode) => {
+    if (locationCards.length === 0) return;
+    
+    if (!window.confirm(`Are you sure you want to auto-sort all cards in this container by "${orderMode}"? This will overwrite their current page/row coordinates.`)) {
+      return;
+    }
+
+    try {
+      showToast('Sorting container cards...');
+      const sorted = [...locationCards];
+      if (orderMode === 'name-asc') {
+        sorted.sort((a, b) => a.name.localeCompare(b.name));
+      } else if (orderMode === 'price-desc') {
+        sorted.sort((a, b) => (b.price_trend || 0) - (a.price_trend || 0));
+      } else if (orderMode === 'set-number') {
+        sorted.sort((a, b) => {
+          const setA = a.set_name || '';
+          const setB = b.set_name || '';
+          const cmp = setA.localeCompare(setB);
+          if (cmp !== 0) return cmp;
+          const numA = parseInt(a.number || '0', 10) || 0;
+          const numB = parseInt(b.number || '0', 10) || 0;
+          return numA - numB;
+        });
+      } else if (orderMode === 'type-name') {
+        sorted.sort((a, b) => {
+          const typeA = (a.types && a.types[0]) || 'Unknown';
+          const typeB = (b.types && b.types[0]) || 'Unknown';
+          const cmp = typeA.localeCompare(typeB);
+          if (cmp !== 0) return cmp;
+          return a.name.localeCompare(b.name);
+        });
+      }
+
+      const updates = sorted.map((card, index) => {
+        let sub1 = card.sub_location_1;
+        let sub2 = card.sub_location_2;
+
+        if (selectedLoc.type === 'Binder') {
+          const page = Math.floor(index / 9) + 1;
+          const slot = (index % 9) + 1;
+          sub1 = `Page ${page}`;
+          sub2 = `Slot ${slot}`;
+        } else if (selectedLoc.type === 'Box') {
+          const rowNum = Math.floor(index / 40) + 1;
+          const seq = (index % 40) + 1;
+          sub1 = `Row ${rowNum}`;
+          sub2 = `Section ${seq}`;
+        }
+
+        return {
+          entry_id: card.entry_id,
+          location_id: selectedLoc.id,
+          sub_location_1: sub1,
+          sub_location_2: sub2,
+          quantity: card.quantity,
+          condition: card.condition,
+          printing: card.printing,
+          language: card.language,
+          purchase_price: card.purchase_price || 0,
+          is_trade: card.is_trade || 0,
+          list_type: card.list_type || 'collection'
+        };
+      });
+
+      await Promise.all(updates.map(up => 
+        fetch(`/api/collection/${up.entry_id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(up)
+        })
+      ));
+
+      showToast('Container auto-sorted successfully!');
+      fetchLocations();
+      fetchLocationCards(selectedLoc.id);
+    } catch (err) {
+      console.error(err);
+      showToast('Error auto-sorting container.');
+    }
+  };
+
   const handleDrop = async (e, targetSlot, targetPageNum = selectedPage) => {
     e.preventDefault();
     const entryId = parseInt(e.dataTransfer.getData('card_entry_id'), 10);
     if (!entryId) return;
 
-    const sourceCard = locationCards.find(c => c.entry_id === entryId);
+    const sourceCard = locationCards.find(c => c.entry_id === entryId) || 
+                       unsortedCards.find(c => c.entry_id === entryId);
     if (!sourceCard) return;
 
-    // Check if target slot is occupied to swap
     const getPageNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
     const getSlotNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
     const targetCard = locationCards.find(c => getPageNum(c.sub_location_1) === targetPageNum && getSlotNum(c.sub_location_2) === targetSlot);
 
     if (targetCard) {
-      // SWAP Slots!
       try {
         const res1 = await fetch(`/api/collection/${sourceCard.entry_id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            location_id: sourceCard.location_id,
+            location_id: activeLocationId,
             sub_location_1: `Page ${targetPageNum}`,
             sub_location_2: `Slot ${targetSlot}`,
             quantity: sourceCard.quantity,
             condition: sourceCard.condition,
             printing: sourceCard.printing,
             language: sourceCard.language,
-            purchase_price: sourceCard.purchase_price,
-            list_type: sourceCard.list_type,
-            is_trade: sourceCard.is_trade
+            purchase_price: sourceCard.purchase_price || 0,
+            list_type: sourceCard.list_type || 'collection',
+            is_trade: sourceCard.is_trade || 0
           })
         });
 
@@ -184,22 +319,24 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            location_id: targetCard.location_id,
-            sub_location_1: sourceCard.sub_location_1,
-            sub_location_2: sourceCard.sub_location_2,
+            location_id: sourceCard.location_id ? sourceCard.location_id : null,
+            sub_location_1: sourceCard.sub_location_1 ? sourceCard.sub_location_1 : null,
+            sub_location_2: sourceCard.sub_location_2 ? sourceCard.sub_location_2 : null,
             quantity: targetCard.quantity,
             condition: targetCard.condition,
             printing: targetCard.printing,
             language: targetCard.language,
-            purchase_price: targetCard.purchase_price,
-            list_type: targetCard.list_type,
-            is_trade: targetCard.is_trade
+            purchase_price: targetCard.purchase_price || 0,
+            list_type: targetCard.list_type || 'collection',
+            is_trade: targetCard.is_trade || 0
           })
         });
 
         if (res1.ok && res2.ok) {
-          showToast(`Swapped slots of ${sourceCard.name} and ${targetCard.name}`);
+          showToast(`Relocated cards successfully!`);
+          fetchLocations();
           fetchLocationCards(activeLocationId);
+          onUpdate();
         } else {
           showToast('Failed to swap cards.');
         }
@@ -208,27 +345,28 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
         showToast('Error swapping cards.');
       }
     } else {
-      // Move card to empty slot
       try {
         const response = await fetch(`/api/collection/${sourceCard.entry_id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            location_id: sourceCard.location_id,
+            location_id: activeLocationId,
             sub_location_1: `Page ${targetPageNum}`,
             sub_location_2: `Slot ${targetSlot}`,
             quantity: sourceCard.quantity,
             condition: sourceCard.condition,
             printing: sourceCard.printing,
             language: sourceCard.language,
-            purchase_price: sourceCard.purchase_price,
-            list_type: sourceCard.list_type,
-            is_trade: sourceCard.is_trade
+            purchase_price: sourceCard.purchase_price || 0,
+            list_type: sourceCard.list_type || 'collection',
+            is_trade: sourceCard.is_trade || 0
           })
         });
         if (response.ok) {
           showToast(`Moved ${sourceCard.name} to Page ${targetPageNum} Slot ${targetSlot}`);
+          fetchLocations();
           fetchLocationCards(activeLocationId);
+          onUpdate();
         } else {
           showToast('Failed to move card.');
         }
@@ -237,6 +375,134 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
         showToast('Error moving card.');
       }
     }
+  };
+
+  const handleDropToBoxRow = async (cardEntryId, rowName) => {
+    const entryId = parseInt(cardEntryId, 10);
+    if (!entryId) return;
+
+    const sourceCard = locationCards.find(c => c.entry_id === entryId) || 
+                       unsortedCards.find(c => c.entry_id === entryId);
+    if (!sourceCard) return;
+
+    const existingInRow = locationCards.filter(c => c.sub_location_1 === rowName);
+    const targetSeq = existingInRow.length + 1;
+    
+    await moveCardToLocation(entryId, selectedLoc.id, rowName, `Section ${targetSeq}`);
+  };
+
+  const renderBoxVisualizer = () => {
+    const cardsByRow = {};
+    locationCards.forEach(c => {
+      const r = c.sub_location_1 || 'Row 1';
+      if (!cardsByRow[r]) cardsByRow[r] = [];
+      cardsByRow[r].push(c);
+    });
+
+    const customRows = newBoxRowName ? [newBoxRowName] : [];
+    const allRowNames = Array.from(new Set([
+      'Row 1', 'Row 2', 'Row 3',
+      ...Object.keys(cardsByRow),
+      ...customRows
+    ])).filter(Boolean).sort();
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(255,255,255,0.02)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>New Compartment Row Name:</span>
+          <input 
+            type="text" 
+            className="input-control" 
+            placeholder="e.g. Row 4, Vintage, Holo Row" 
+            value={newBoxRowName} 
+            onChange={(e) => setNewBoxRowName(e.target.value)} 
+            style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', flex: 1 }}
+          />
+          <button 
+            type="button" 
+            className="btn btn-primary" 
+            onClick={() => {
+              if (newBoxRowName.trim()) {
+                showToast(`Row "${newBoxRowName}" registered! Drag cards to organize.`);
+                setLocations([...locations]); 
+              }
+            }}
+            style={{ fontSize: '0.75rem', padding: '0.35rem 0.75rem' }}
+          >
+            Create Row
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {allRowNames.map((rowName) => {
+            const rowCards = cardsByRow[rowName] || [];
+            return (
+              <div 
+                key={rowName}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  const cardId = e.dataTransfer.getData('card_entry_id');
+                  handleDropToBoxRow(cardId, rowName);
+                }}
+                style={{
+                  background: 'rgba(0,0,0,0.25)',
+                  border: '1.5px dashed var(--border-glass)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '1rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem',
+                  minHeight: '130px'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.35rem' }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--accent-red)' }}>{rowName}</span>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{rowCards.length} Stack(s) • Value: ${rowCards.reduce((acc, c) => acc + (c.quantity * (c.price_trend || 0)), 0).toFixed(2)}</span>
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.65rem', overflowX: 'auto', paddingBottom: '0.4rem', flexWrap: 'nowrap' }}>
+                  {rowCards.map((card) => (
+                    <div 
+                      key={card.entry_id}
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, card)}
+                      style={{
+                        position: 'relative',
+                        width: '75px',
+                        flexShrink: 0,
+                        cursor: 'grab'
+                      }}
+                      title={`${card.name} - Drag to relocate or drag back to Unsorted`}
+                    >
+                      <img src={card.image_url} alt={card.name} style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.08)' }} />
+                      <div style={{
+                        position: 'absolute',
+                        bottom: '2px',
+                        right: '2px',
+                        background: 'var(--accent-red)',
+                        color: '#fff',
+                        fontSize: '0.6rem',
+                        fontWeight: 800,
+                        padding: '1px 4px',
+                        borderRadius: '3px'
+                      }}>
+                        x{card.quantity}
+                      </div>
+                    </div>
+                  ))}
+
+                  {rowCards.length === 0 && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '80px', width: '100%', color: 'var(--text-muted)', fontSize: '0.75rem', fontStyle: 'italic' }}>
+                      Row empty. Drag unsorted cards here.
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
   };
 
   const handleQuickSearch = async (e) => {
@@ -353,74 +619,59 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
   const selectedLoc = locations.find(l => l.id === activeLocationId);
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
-      {/* Location Manager Title Panel */}
-      <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h2 style={{ fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <MapPin size={22} style={{ color: 'var(--accent-red)' }} />
-            Physical Card Storage Coordinator
-          </h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
-            Track and search exactly where your physical cards reside in your real-world binders, boxes, and folders.
-          </p>
+    <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr 320px', gap: '1.25rem', height: 'calc(100vh - 120px)', minHeight: '650px' }} className="storage-workspace-grid">
+      {/* Column 1: Locations Sidebar */}
+      <div className="location-sidebar-col" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', overflowY: 'auto', borderRight: '1px solid var(--border-glass)', paddingRight: '0.75rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
+          <span style={{ fontSize: '0.75rem', fontWeight: 850, color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>STORAGE CONTAINERS</span>
+          <button 
+            type="button"
+            className="btn btn-secondary btn-icon-only" 
+            onClick={() => setIsAdding(!isAdding)}
+            style={{ width: '24px', height: '24px', padding: 0 }}
+            title="Create New Container"
+          >
+            <Plus size={12} />
+          </button>
         </div>
-        <button 
-          className="btn btn-primary" 
-          onClick={() => setIsAdding(!isAdding)}
-        >
-          <Plus size={16} />
-          {isAdding ? 'Close Form' : 'New Storage Container'}
-        </button>
-      </div>
 
-      {/* Add New Container Form */}
-      {isAdding && (
-        <div className="glass-panel" style={{ borderLeft: '3px solid var(--accent-red)' }}>
-          <h3 style={{ fontSize: '1rem', color: '#fff', marginBottom: '1rem' }}>Create Storage Container</h3>
-          <form onSubmit={handleCreateLocation} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem' }}>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>Container Name</label>
-                <input 
-                  type="text" 
-                  className="input-control" 
-                  placeholder="e.g. Master Binder, Neo Era Box, Bulk Row A" 
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>Container Type</label>
-                <select className="select-control" value={type} onChange={(e) => setType(e.target.value)}>
-                  <option value="Binder">Binder</option>
-                  <option value="Box">Storage Box</option>
-                  <option value="Other">Other / Shelf</option>
-                </select>
-              </div>
+        {/* Add Container Form Inline in Sidebar */}
+        {isAdding && (
+          <div className="glass-panel" style={{ padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', border: '1px solid var(--accent-red)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#fff' }}>New Container</span>
+              <button onClick={() => setIsAdding(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}><X size={12} /></button>
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Description / Notes</label>
               <input 
                 type="text" 
                 className="input-control" 
-                placeholder="e.g. Blue Ultra Pro 9-Pocket Binder for Scarlet & Violet era cards." 
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Container Name" 
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+                style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
               />
             </div>
-            <button type="submit" className="btn btn-primary" style={{ alignSelf: 'flex-end', padding: '0.5rem 1.5rem' }}>
-              Create Container
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <select 
+                className="select-control" 
+                value={type} 
+                onChange={(e) => setType(e.target.value)}
+                style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
+              >
+                <option value="Binder">Binder</option>
+                <option value="Box">Storage Box</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <button type="button" className="btn btn-primary" onClick={handleCreateLocation} style={{ width: '100%', fontSize: '0.75rem', padding: '0.4rem' }}>
+              Create
             </button>
-          </form>
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* Main Containers Layout */}
-      <div className="location-split-layout">
-        {/* Left Side: Container Tabs (Vertical Sidebar on Desktop) */}
-        <div className="location-sidebar">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {locations.map((loc) => {
             const isActive = loc.id === activeLocationId;
             return (
@@ -429,90 +680,92 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
                 className="glass-panel"
                 onClick={() => setActiveLocationId(loc.id)}
                 style={{ 
-                  padding: '1rem', 
+                  padding: '0.65rem 0.75rem', 
                   cursor: 'pointer',
                   border: isActive ? '1.5px solid var(--accent-red)' : '1px solid var(--border-glass)',
                   background: isActive ? 'rgba(255, 71, 71, 0.05)' : 'var(--bg-glass)',
                   display: 'flex',
                   flexDirection: 'column',
-                  justifyContent: 'space-between',
-                  gap: '0.5rem',
-                  width: '100%'
+                  gap: '0.25rem'
                 }}
               >
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ 
-                      fontSize: '0.65rem', 
-                      background: 'rgba(255,255,255,0.05)', 
-                      padding: '2px 6px', 
-                      borderRadius: '4px',
-                      color: 'var(--text-secondary)',
-                      fontWeight: 700,
-                      textTransform: 'uppercase'
-                    }}>
-                      {loc.type}
-                    </span>
-                    {loc.name !== 'Unsorted Pile' && (
-                      <button 
-                        className="btn btn-danger btn-icon-only" 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteLocation(loc.id, loc.name);
-                        }}
-                        style={{ padding: '2px', border: 'none', background: 'transparent' }}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    )}
-                  </div>
-                  <h4 style={{ color: '#fff', fontSize: '0.95rem', marginTop: '0.5rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', margin: 0 }}>{loc.name}</h4>
-                  <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', margin: '0.2rem 0 0 0' }}>{loc.description || 'No description'}</p>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', fontWeight: 700, textTransform: 'uppercase' }}>{loc.type}</span>
+                  {loc.name !== 'Unsorted Pile' && (
+                    <button 
+                      className="btn btn-danger btn-icon-only" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteLocation(loc.id, loc.name);
+                      }}
+                      style={{ padding: '2px', border: 'none', background: 'transparent', width: '16px', height: '16px' }}
+                    >
+                      <Trash2 size={10} />
+                    </button>
+                  )}
                 </div>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent-yellow)', borderTop: '1px solid var(--border-glass)', paddingTop: '0.5rem' }}>
-                  {loc.total_cards || 0} Card(s) stored
-                </div>
+                <div style={{ color: '#fff', fontSize: '0.85rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{loc.name}</div>
+                <div style={{ fontSize: '0.65rem', color: 'var(--accent-yellow)', fontWeight: 600 }}>{loc.total_cards || 0} card(s)</div>
               </div>
             );
           })}
         </div>
+      </div>
 
-        {/* Right Side: Container Contents */}
+      {/* Column 2: visual Container contents (Center) */}
+      <div className="location-main-content-col" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', minWidth: 0 }}>
         {selectedLoc && (
-          <div className="glass-panel" style={{ flex: 1, minWidth: 0 }}>
+          <div className="glass-panel" style={{ flex: 1, padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem', minHeight: 0, overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                <h3 style={{ color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
-                  {selectedLoc.type === 'Binder' ? <BookOpen size={18} /> : selectedLoc.type === 'Box' ? <Archive size={18} /> : <Layers size={18} />}
-                  {selectedLoc.name} Contents
+              <div>
+                <h3 style={{ color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0, fontSize: '1rem' }}>
+                  {selectedLoc.type === 'Binder' ? <BookOpen size={16} /> : selectedLoc.type === 'Box' ? <Archive size={16} /> : <Layers size={16} />}
+                  {selectedLoc.name}
                 </h3>
-                
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  Total Value: ${locationCards.reduce((acc, curr) => acc + (curr.quantity * (curr.price_trend || 0)), 0).toFixed(2)}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <select 
+                  className="select-control" 
+                  value="" 
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      autoSortContainerCards(e.target.value);
+                      e.target.value = "";
+                    }
+                  }}
+                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem', width: '120px' }}
+                >
+                  <option value="" disabled>Auto-Sort...</option>
+                  <option value="name-asc">Sort Name A-Z</option>
+                  <option value="price-desc">Sort Value (High-Low)</option>
+                  <option value="set-number">Sort Set & Number</option>
+                  <option value="type-name">Sort Energy Type</option>
+                </select>
+
                 {selectedLoc.type === 'Binder' && (
                   <div style={{ display: 'flex', background: 'rgba(0,0,0,0.25)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
                     <button 
-                      type="button"
+                      type="button" 
                       className={`btn ${viewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
                       onClick={() => setViewMode('list')}
-                      style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
+                      style={{ fontSize: '0.65rem', padding: '0.2rem 0.4rem', borderRadius: 'var(--radius-sm)' }}
                     >
-                      Table List
+                      List
                     </button>
                     <button 
-                      type="button"
+                      type="button" 
                       className={`btn ${viewMode === 'grid' ? 'btn-primary' : 'btn-secondary'}`}
                       onClick={() => setViewMode('grid')}
-                      style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
+                      style={{ fontSize: '0.65rem', padding: '0.2rem 0.4rem', borderRadius: 'var(--radius-sm)' }}
                     >
-                      Visual 3x3 Page
+                      Pages
                     </button>
                   </div>
                 )}
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>TOTAL CONTAINER VALUE</div>
-                <div style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>
-                  ${locationCards.reduce((acc, curr) => acc + (curr.quantity * (curr.price_trend || 0)), 0).toFixed(2)}
-                </div>
               </div>
             </div>
 
@@ -532,7 +785,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
               </div>
             )}
 
-            {locationCards.length === 0 && viewMode === 'list' ? (
+            {locationCards.length === 0 && viewMode === 'list' && selectedLoc.type !== 'Box' ? (
               <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem' }}>
                 <p>This container is currently empty. Go to Search or Scanner to add cards to this location!</p>
               </div>
@@ -741,6 +994,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
                   </div>
                 );
               })()
+            ) : selectedLoc.type === 'Box' ? (
+              renderBoxVisualizer()
             ) : (
               /* Traditional coordinates Table List */
               <div className="collection-table-wrapper">
@@ -756,7 +1011,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
                   </thead>
                   <tbody>
                     {locationCards.map((card) => (
-                      <tr key={card.entry_id}>
+                      <tr 
+                        key={card.entry_id}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, card)}
+                        style={{ cursor: 'grab' }}
+                        title="Drag back to Unsorted to unassign location"
+                      >
                         <td style={{ fontWeight: 700, color: 'var(--accent-red)' }}>
                           {selectedLoc.type === 'Binder' ? (
                             <span>{card.sub_location_1 || 'Unassigned Page'} • {card.sub_location_2 || 'Unassigned Slot'}</span>
@@ -792,6 +1053,136 @@ function LocationManager({ statsTrigger, onUpdate, showToast }) {
                 </table>
               </div>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* Column 3: Unsorted Cards Sidebar Panel (Right) */}
+      <div 
+        className="location-unsorted-col"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => handleDrop(e, null)}
+        style={{ 
+          display: 'flex', 
+          flexDirection: 'column', 
+          gap: '1rem', 
+          height: '100%', 
+          overflowY: 'auto',
+          borderLeft: '1px solid var(--border-glass)',
+          paddingLeft: '0.75rem',
+          background: 'rgba(0,0,0,0.1)',
+          borderRadius: 'var(--radius-sm)',
+          padding: '0.5rem'
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.75rem', fontWeight: 850, color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>UNSORTED CARDS</span>
+            <span style={{ fontSize: '0.65rem', background: 'var(--accent-red)', color: '#fff', padding: '1px 6px', borderRadius: '10px', fontWeight: 700 }}>
+              {unsortedCards.length} left
+            </span>
+          </div>
+          <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Drag cards here from storage to unsort them</span>
+        </div>
+
+        {unsortedCards.length > 0 ? (
+          <>
+            {/* Sorting & Search */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              <input 
+                type="text" 
+                className="input-control" 
+                placeholder="Search unsorted..." 
+                value={unsortedSearch}
+                onChange={(e) => setUnsortedSearch(e.target.value)}
+                style={{ padding: '0.3rem 0.5rem', fontSize: '0.75rem' }}
+              />
+              <select 
+                className="select-control" 
+                value={unsortedSortOrder}
+                onChange={(e) => setUnsortedSortOrder(e.target.value)}
+                style={{ padding: '0.3rem 0.5rem', fontSize: '0.75rem' }}
+              >
+                <option value="name-asc">Alphabetical A-Z</option>
+                <option value="price-desc">Value (High-Low)</option>
+                <option value="set-number">Set & Number</option>
+                <option value="type-name">Energy Type</option>
+              </select>
+            </div>
+
+            {/* Unsorted scroll list */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto', flex: 1 }}>
+              {(() => {
+                const filteredUnsorted = [...unsortedCards].filter(c => 
+                  c.name.toLowerCase().includes(unsortedSearch.toLowerCase()) || 
+                  (c.set_name || '').toLowerCase().includes(unsortedSearch.toLowerCase())
+                ).sort((a, b) => {
+                  if (unsortedSortOrder === 'name-asc') {
+                    return a.name.localeCompare(b.name);
+                  } else if (unsortedSortOrder === 'price-desc') {
+                    return (b.price_trend || 0) - (a.price_trend || 0);
+                  } else if (unsortedSortOrder === 'set-number') {
+                    const cmp = (a.set_name || '').localeCompare(b.set_name || '');
+                    if (cmp !== 0) return cmp;
+                    return (parseInt(a.number || '0') || 0) - (parseInt(b.number || '0') || 0);
+                  } else if (unsortedSortOrder === 'type-name') {
+                    const typeA = (a.types && a.types[0]) || 'Unknown';
+                    const typeB = (b.types && b.types[0]) || 'Unknown';
+                    const cmp = typeA.localeCompare(typeB);
+                    if (cmp !== 0) return cmp;
+                    return a.name.localeCompare(b.name);
+                  }
+                  return 0;
+                });
+
+                if (filteredUnsorted.length === 0) {
+                  return (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', marginTop: '1rem', fontStyle: 'italic' }}>
+                      No matches found.
+                    </div>
+                  );
+                }
+
+                return filteredUnsorted.map((card) => (
+                  <div 
+                    key={card.entry_id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, card)}
+                    style={{ 
+                      display: 'flex', 
+                      gap: '0.5rem', 
+                      alignItems: 'center', 
+                      background: 'rgba(255,255,255,0.02)', 
+                      padding: '0.4rem', 
+                      borderRadius: 'var(--radius-sm)', 
+                      border: '1px solid var(--border-glass)',
+                      cursor: 'grab'
+                    }}
+                    title={`${card.name} - Drag onto Page slot or Box row`}
+                  >
+                    <img src={card.image_url} alt={card.name} style={{ width: '36px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '3px' }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ color: '#fff', fontSize: '0.75rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {getCardDisplayName(card.name, card.language)}
+                      </div>
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {card.set_name} • #{card.number}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--accent-yellow)', fontWeight: 700 }}>x{card.quantity}</div>
+                      <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>${(card.price_trend || 0).toFixed(2)}</div>
+                    </div>
+                  </div>
+                ));
+              })()}
+            </div>
+          </>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', flex: 1, color: 'var(--text-secondary)', textAlign: 'center', padding: '1rem' }}>
+            <span style={{ fontSize: '2rem' }}>🎉</span>
+            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#fff' }}>All Sorted!</span>
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Every card in your collection has been successfully assigned to a location.</span>
           </div>
         )}
       </div>
