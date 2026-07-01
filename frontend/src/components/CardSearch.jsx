@@ -75,7 +75,7 @@ function CardSearch({ onAddSuccess, showToast }) {
 
   const openQuickAdd = (card) => {
     setSelectedCard(card);
-    setPurchasePrice(card.price_trend || 0); // Pre-fill with market price
+    setPurchasePrice(0); // Default to 0 purchase spend
     // Guess printing based on rarity
     const rarity = (card.rarity || '').toLowerCase();
     if (rarity.includes('holo') || rarity.includes('secret') || rarity.includes('ultra') || rarity.includes('shining')) {

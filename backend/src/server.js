@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 const db = require('./db');
 const tcgApi = require('./tcgApi');
 
@@ -28,13 +29,483 @@ db.initDb()
     console.error('Failed to initialize database:', err);
   });
 
+// --- AUTHENTICATION HELPERS & MIDDLEWARE ---
+
+function verifyPassword(password, storedHash) {
+  if (!storedHash) return false;
+  const parts = storedHash.split(':');
+  if (parts.length !== 2) return false;
+  const [salt, hash] = parts;
+  const verifyHash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+  return hash === verifyHash;
+}
+
+async function generateSession(userId) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiration
+  const expiresAtStr = expiresAt.toISOString().slice(0, 19).replace('T', ' '); // YYYY-MM-DD HH:MM:SS
+  await db.run(`
+    INSERT INTO sessions (token, user_id, expires_at)
+    VALUES (?, ?, ?)
+  `, [token, userId, expiresAtStr]);
+  return token;
+}
+
+async function authenticateToken(req, res, next) {
+  let token = null;
+  const authHeader = req.headers['authorization'];
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  } else if (req.query && req.query.token) {
+    // Support token in query parameter for downloading files
+    token = req.query.token;
+  }
+
+  if (!token) {
+    return res.status(401).json({ error: 'Access denied. No token provided.' });
+  }
+
+  try {
+    const session = await db.get(`
+      SELECT s.user_id, u.username, u.role, u.share_token, u.share_enabled, u.tcg_api_key
+      FROM sessions s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.token = ? AND s.expires_at > DATETIME('now')
+    `, [token]);
+
+    if (!session) {
+      return res.status(401).json({ error: 'Invalid or expired session token.' });
+    }
+
+    req.user = {
+      id: session.user_id,
+      username: session.username,
+      role: session.role,
+      share_token: session.share_token,
+      share_enabled: session.share_enabled,
+      tcg_api_key: session.tcg_api_key || ''
+    };
+    next();
+  } catch (error) {
+    res.status(500).json({ error: 'Authentication error', message: error.message });
+  }
+}
+
 // --- API ROUTES ---
 
+// --- USER AUTHENTICATION & PROFILE ENDPOINTS ---
+
+// Register a new user
+app.post('/api/auth/register', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+
+  const cleanUsername = username.trim().toLowerCase();
+  if (cleanUsername.length < 3) {
+    return res.status(400).json({ error: 'Username must be at least 3 characters' });
+  }
+  if (password.length < 5) {
+    return res.status(400).json({ error: 'Password must be at least 5 characters' });
+  }
+
+  try {
+    const existingUser = await db.get(`SELECT id FROM users WHERE username = ?`, [cleanUsername]);
+    if (existingUser) {
+      return res.status(400).json({ error: 'Username is already taken' });
+    }
+
+    const passwordHash = db.hashPassword(password);
+    const shareToken = crypto.randomBytes(16).toString('hex');
+
+    const result = await db.run(`
+      INSERT INTO users (username, password_hash, role, share_token, share_enabled)
+      VALUES (?, ?, ?, ?, ?)
+    `, [cleanUsername, passwordHash, 'member', shareToken, 0]);
+
+    const token = await generateSession(result.lastID);
+
+    res.status(201).json({
+      message: 'Registration successful',
+      token,
+      user: {
+        username: cleanUsername,
+        role: 'member',
+        share_token: shareToken,
+        share_enabled: 0
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to register', message: error.message });
+  }
+});
+
+// Login user
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+
+  const cleanUsername = username.trim().toLowerCase();
+
+  try {
+    const user = await db.get(`SELECT * FROM users WHERE username = ?`, [cleanUsername]);
+    if (!user || !verifyPassword(password, user.password_hash)) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    const token = await generateSession(user.id);
+
+    res.json({
+      message: 'Login successful',
+      token,
+      user: {
+        username: user.username,
+        role: user.role,
+        share_token: user.share_token,
+        share_enabled: user.share_enabled,
+        tcg_api_key: user.tcg_api_key || ''
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Login failed', message: error.message });
+  }
+});
+
+// Logout user
+app.post('/api/auth/logout', authenticateToken, async (req, res) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  try {
+    if (token) {
+      await db.run(`DELETE FROM sessions WHERE token = ?`, [token]);
+    }
+    res.json({ message: 'Logged out successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Logout failed', message: error.message });
+  }
+});
+
+// Get current user profile
+app.get('/api/auth/me', authenticateToken, (req, res) => {
+  res.json({ user: req.user });
+});
+
+// Update settings (password, sharing)
+app.put('/api/auth/settings', authenticateToken, async (req, res) => {
+  const { password, share_enabled, regenerate_share_token, tcg_api_key } = req.body;
+  
+  try {
+    if (password !== undefined) {
+      if (password.length < 5) {
+        return res.status(400).json({ error: 'Password must be at least 5 characters' });
+      }
+      const newHash = db.hashPassword(password);
+      await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, req.user.id]);
+    }
+
+    if (share_enabled !== undefined) {
+      await db.run(`UPDATE users SET share_enabled = ? WHERE id = ?`, [share_enabled ? 1 : 0, req.user.id]);
+    }
+
+    if (tcg_api_key !== undefined) {
+      await db.run(`UPDATE users SET tcg_api_key = ? WHERE id = ?`, [tcg_api_key.trim(), req.user.id]);
+    }
+
+    let newShareToken = req.user.share_token;
+    if (regenerate_share_token) {
+      newShareToken = crypto.randomBytes(16).toString('hex');
+      await db.run(`UPDATE users SET share_token = ? WHERE id = ?`, [newShareToken, req.user.id]);
+    }
+
+    // Retrieve updated info
+    const updatedUser = await db.get(`SELECT username, role, share_token, share_enabled, tcg_api_key FROM users WHERE id = ?`, [req.user.id]);
+    res.json({
+      message: 'Settings updated successfully',
+      user: {
+        username: updatedUser.username,
+        role: updatedUser.role,
+        share_token: updatedUser.share_token,
+        share_enabled: updatedUser.share_enabled,
+        tcg_api_key: updatedUser.tcg_api_key || ''
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update settings', message: error.message });
+  }
+});
+
+// --- PUBLIC SHARING ENDPOINT ---
+
+// Retrieve a shared collection by share token
+app.get('/api/shared/:share_token', async (req, res) => {
+  const { share_token } = req.params;
+  const listType = req.query.list || 'collection';
+
+  try {
+    const owner = await db.get(`SELECT id, username, share_enabled FROM users WHERE share_token = ?`, [share_token]);
+    if (!owner || owner.share_enabled === 0) {
+      return res.status(404).json({ error: 'This card collection is private or does not exist.' });
+    }
+
+    let filterSql = `WHERE c.user_id = ?`;
+    let filterParams = [owner.id];
+
+    if (listType === 'wishlist') {
+      filterSql += ` AND c.list_type = 'wishlist'`;
+    } else if (listType === 'trade') {
+      filterSql += ` AND c.is_trade = 1 AND c.list_type = 'collection'`;
+    } else {
+      filterSql += ` AND c.list_type = 'collection'`;
+    }
+
+    // Retrieve their collection without private fields (locations, purchase price, ROI)
+    const query = `
+      SELECT 
+        c.id as entry_id,
+        c.card_id,
+        c.quantity,
+        c.condition,
+        c.printing,
+        c.language,
+        c.added_at,
+        c.is_trade,
+        c.list_type,
+        cc.name,
+        cc.supertype,
+        cc.subtypes,
+        cc.types,
+        cc.rarity,
+        cc.set_id,
+        cc.set_name,
+        cc.number,
+        cc.image_url,
+        cc.price_trend
+      FROM collection c
+      JOIN card_cache cc ON c.card_id = cc.id
+      ${filterSql}
+      ORDER BY c.added_at DESC
+    `;
+    const rows = await db.all(query, filterParams);
+
+    const formatted = rows.map(row => ({
+      ...row,
+      subtypes: JSON.parse(row.subtypes || '[]'),
+      types: JSON.parse(row.types || '[]'),
+    }));
+
+    // Calculate public stats
+    let totalCards = 0;
+    let uniqueCards = formatted.length;
+    let totalValue = 0;
+
+    const typeCounts = {};
+    const rarityCounts = {};
+    const setCounts = {};
+
+    formatted.forEach(row => {
+      const qty = row.quantity || 1;
+      const price = row.price_trend || 0;
+
+      totalCards += qty;
+      totalValue += qty * price;
+
+      row.types.forEach(t => {
+        typeCounts[t] = (typeCounts[t] || 0) + qty;
+      });
+      if (row.types.length === 0) {
+        typeCounts['Colorless'] = (typeCounts['Colorless'] || 0) + qty;
+      }
+
+      const rarity = row.rarity || 'Unknown';
+      rarityCounts[rarity] = (rarityCounts[rarity] || 0) + qty;
+
+      if (!setCounts[row.set_id]) {
+        setCounts[row.set_id] = { name: row.set_name, count: 0, value: 0 };
+      }
+      setCounts[row.set_id].count += qty;
+      setCounts[row.set_id].value += qty * price;
+    });
+
+    res.json({
+      owner: owner.username,
+      collection: formatted,
+      stats: {
+        summary: {
+          totalCards,
+          uniqueCards,
+          totalValue: parseFloat(totalValue.toFixed(2))
+        },
+        types: Object.keys(typeCounts).map(name => ({ name, value: typeCounts[name] })),
+        rarities: Object.keys(rarityCounts).map(name => ({ name, value: rarityCounts[name] })),
+        sets: Object.keys(setCounts).map(id => ({ 
+          id, 
+          name: setCounts[id].name, 
+          count: setCounts[id].count, 
+          value: parseFloat(setCounts[id].value.toFixed(2)) 
+        })).sort((a,b) => b.value - a.value).slice(0, 8)
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to retrieve shared collection', message: error.message });
+  }
+});
+
+// --- ADMIN ENDPOINTS (Only accessible by users with role 'admin') ---
+
+// Helper middleware to restrict to admin
+function requireAdmin(req, res, next) {
+  if (req.user && req.user.role === 'admin') {
+    next();
+  } else {
+    res.status(403).json({ error: 'Access denied. Administrator privileges required.' });
+  }
+}
+
+// Get all users with their statistics
+app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const users = await db.all(`
+      SELECT id, username, role, share_enabled, created_at
+      FROM users
+      ORDER BY username ASC
+    `);
+
+    // Fetch stats for each user
+    const usersWithStats = [];
+    for (const u of users) {
+      const stats = await db.get(`
+        SELECT COUNT(c.id) as unique_cards, SUM(c.quantity) as total_cards, SUM(c.quantity * cc.price_trend) as total_value
+        FROM collection c
+        JOIN card_cache cc ON c.card_id = cc.id
+        WHERE c.user_id = ?
+      `, [u.id]);
+
+      usersWithStats.push({
+        ...u,
+        total_cards: stats.total_cards || 0,
+        unique_cards: stats.unique_cards || 0,
+        total_value: parseFloat((stats.total_value || 0).toFixed(2))
+      });
+    }
+
+    res.json(usersWithStats);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to retrieve users list', message: error.message });
+  }
+});
+
+// Create a new user from Admin Panel
+app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+  const { username, password, role = 'member' } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+
+  const cleanUsername = username.trim().toLowerCase();
+  if (cleanUsername.length < 3) {
+    return res.status(400).json({ error: 'Username must be at least 3 characters' });
+  }
+  if (password.length < 5) {
+    return res.status(400).json({ error: 'Password must be at least 5 characters' });
+  }
+  if (role !== 'member' && role !== 'admin') {
+    return res.status(400).json({ error: 'Invalid role specification' });
+  }
+
+  try {
+    const existingUser = await db.get(`SELECT id FROM users WHERE username = ?`, [cleanUsername]);
+    if (existingUser) {
+      return res.status(400).json({ error: 'Username is already taken' });
+    }
+
+    const passwordHash = db.hashPassword(password);
+    const shareToken = crypto.randomBytes(16).toString('hex');
+
+    await db.run(`
+      INSERT INTO users (username, password_hash, role, share_token, share_enabled)
+      VALUES (?, ?, ?, ?, ?)
+    `, [cleanUsername, passwordHash, role, shareToken, 0]);
+
+    res.status(201).json({ message: `User "${cleanUsername}" created successfully.` });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create user', message: error.message });
+  }
+});
+
+// Update a user (Change password or Role) from Admin Panel
+app.put('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { password, role } = req.body;
+
+  try {
+    const targetUser = await db.get(`SELECT id, username, role FROM users WHERE id = ?`, [id]);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (password !== undefined) {
+      if (password.length < 5) {
+        return res.status(400).json({ error: 'Password must be at least 5 characters' });
+      }
+      const newHash = db.hashPassword(password);
+      await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, id]);
+    }
+
+    if (role !== undefined) {
+      if (role !== 'member' && role !== 'admin') {
+        return res.status(400).json({ error: 'Invalid role' });
+      }
+      // Block admin demoting themselves
+      if (parseInt(id, 10) === req.user.id && role !== 'admin') {
+        return res.status(400).json({ error: 'You cannot demote yourself from Administrator role.' });
+      }
+      await db.run(`UPDATE users SET role = ? WHERE id = ?`, [role, id]);
+    }
+
+    res.json({ message: 'User updated successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update user', message: error.message });
+  }
+});
+
+// Delete user from Admin Panel
+app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+
+  if (parseInt(id, 10) === req.user.id) {
+    return res.status(400).json({ error: 'You cannot delete your own Administrator account.' });
+  }
+
+  try {
+    const targetUser = await db.get(`SELECT id, username FROM users WHERE id = ?`, [id]);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    await db.run(`DELETE FROM sessions WHERE user_id = ?`, [id]);
+    await db.run(`DELETE FROM collection WHERE user_id = ?`, [id]);
+    await db.run(`DELETE FROM locations WHERE user_id = ?`, [id]);
+    await db.run(`DELETE FROM users WHERE id = ?`, [id]);
+
+    res.json({ message: `User "${targetUser.username}" and all their card collections/locations have been permanently deleted.` });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete user', message: error.message });
+  }
+});
+
+// --- CARD MANAGEMENT ENDPOINTS ---
+
 // 1. Search Pokémon TCG cards (proxies to Pokemon TCG API and database cache)
-app.get('/api/search', async (req, res) => {
+app.get('/api/search', authenticateToken, async (req, res) => {
   const { name, number, set } = req.query;
   try {
-    const results = await tcgApi.searchCards(name, number, set);
+    const results = await tcgApi.searchCards(name, number, set, req.user.tcg_api_key);
     res.json(results);
   } catch (error) {
     res.status(500).json({ error: 'Search failed', message: error.message });
@@ -42,8 +513,19 @@ app.get('/api/search', async (req, res) => {
 });
 
 // 2. Get User's Collection
-app.get('/api/collection', async (req, res) => {
+app.get('/api/collection', authenticateToken, async (req, res) => {
   try {
+    const listType = req.query.list_type || 'collection';
+    const isTrade = req.query.is_trade;
+
+    let filterSql = `WHERE c.user_id = ? AND c.list_type = ?`;
+    let filterParams = [req.user.id, listType];
+
+    if (isTrade !== undefined) {
+      filterSql += ` AND c.is_trade = ?`;
+      filterParams.push(isTrade === 'true' || isTrade === '1' ? 1 : 0);
+    }
+
     const query = `
       SELECT 
         c.id as entry_id,
@@ -56,6 +538,8 @@ app.get('/api/collection', async (req, res) => {
         c.sub_location_1,
         c.sub_location_2,
         c.added_at,
+        c.is_trade,
+        c.list_type,
         cc.name,
         cc.supertype,
         cc.subtypes,
@@ -72,9 +556,10 @@ app.get('/api/collection', async (req, res) => {
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       LEFT JOIN locations l ON c.location_id = l.id
+      ${filterSql}
       ORDER BY c.added_at DESC
     `;
-    const rows = await db.all(query);
+    const rows = await db.all(query, filterParams);
     
     // Parse JSON fields
     const formatted = rows.map(row => ({
@@ -90,7 +575,7 @@ app.get('/api/collection', async (req, res) => {
 });
 
 // 3. Add Card to Collection
-app.post('/api/collection', async (req, res) => {
+app.post('/api/collection', authenticateToken, async (req, res) => {
   const {
     card_id,
     quantity = 1,
@@ -100,7 +585,9 @@ app.post('/api/collection', async (req, res) => {
     purchase_price = 0,
     location_id = null,
     sub_location_1 = '',
-    sub_location_2 = ''
+    sub_location_2 = '',
+    list_type = 'collection',
+    is_trade = 0
   } = req.body;
 
   if (!card_id) {
@@ -108,11 +595,19 @@ app.post('/api/collection', async (req, res) => {
   }
 
   try {
+    // Ensure location_id belongs to the user if provided
+    if (location_id) {
+      const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [location_id, req.user.id]);
+      if (!loc) {
+        return res.status(400).json({ error: 'Invalid location ID' });
+      }
+    }
+
     // Ensure card is in the local metadata cache
     let card = await db.get(`SELECT id FROM card_cache WHERE id = ?`, [card_id]);
     if (!card) {
       console.log(`Card ${card_id} not found in cache. Fetching from API first...`);
-      const apiCard = await tcgApi.getCardById(card_id);
+      const apiCard = await tcgApi.getCardById(card_id, req.user.tcg_api_key);
       if (!apiCard) {
         return res.status(404).json({ error: `Card ID ${card_id} not found on Pokémon TCG API.` });
       }
@@ -121,8 +616,8 @@ app.post('/api/collection', async (req, res) => {
     // Insert into collection
     const result = await db.run(`
       INSERT INTO collection 
-      (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, user_id, list_type, is_trade)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       card_id,
       quantity,
@@ -132,8 +627,17 @@ app.post('/api/collection', async (req, res) => {
       purchase_price || 0,
       location_id,
       sub_location_1,
-      sub_location_2
+      sub_location_2,
+      req.user.id,
+      list_type,
+      is_trade ? 1 : 0
     ]);
+
+    // Record initial price history trend
+    const cacheCard = await db.get(`SELECT price_trend FROM card_cache WHERE id = ?`, [card_id]);
+    if (cacheCard && cacheCard.price_trend > 0) {
+      await db.run(`INSERT OR IGNORE INTO price_history (card_id, price) VALUES (?, ?)`, [card_id, cacheCard.price_trend]);
+    }
 
     res.status(201).json({ message: 'Card added to collection', id: result.lastID });
   } catch (error) {
@@ -142,7 +646,7 @@ app.post('/api/collection', async (req, res) => {
 });
 
 // 4. Update Card in Collection
-app.put('/api/collection/:id', async (req, res) => {
+app.put('/api/collection/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const {
     quantity,
@@ -152,10 +656,26 @@ app.put('/api/collection/:id', async (req, res) => {
     purchase_price,
     location_id,
     sub_location_1,
-    sub_location_2
+    sub_location_2,
+    list_type,
+    is_trade
   } = req.body;
 
   try {
+    // Ensure entry exists and belongs to the user
+    const entry = await db.get(`SELECT id FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!entry) {
+      return res.status(404).json({ error: 'Collection entry not found' });
+    }
+
+    // Ensure location_id belongs to the user if updated
+    if (location_id) {
+      const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [location_id, req.user.id]);
+      if (!loc) {
+        return res.status(400).json({ error: 'Invalid location ID' });
+      }
+    }
+
     // Build dynamic UPDATE query based on passed values
     const fields = [];
     const params = [];
@@ -168,13 +688,16 @@ app.put('/api/collection/:id', async (req, res) => {
     if (location_id !== undefined) { fields.push('location_id = ?'); params.push(location_id); }
     if (sub_location_1 !== undefined) { fields.push('sub_location_1 = ?'); params.push(sub_location_1); }
     if (sub_location_2 !== undefined) { fields.push('sub_location_2 = ?'); params.push(sub_location_2); }
+    if (list_type !== undefined) { fields.push('list_type = ?'); params.push(list_type); }
+    if (is_trade !== undefined) { fields.push('is_trade = ?'); params.push(is_trade ? 1 : 0); }
 
     if (fields.length === 0) {
       return res.status(400).json({ error: 'No fields provided for update' });
     }
 
     params.push(id);
-    await db.run(`UPDATE collection SET ${fields.join(', ')} WHERE id = ?`, params);
+    params.push(req.user.id);
+    await db.run(`UPDATE collection SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, params);
     
     res.json({ message: 'Collection entry updated successfully' });
   } catch (error) {
@@ -183,10 +706,10 @@ app.put('/api/collection/:id', async (req, res) => {
 });
 
 // 5. Delete Card from Collection
-app.delete('/api/collection/:id', async (req, res) => {
+app.delete('/api/collection/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   try {
-    const result = await db.run(`DELETE FROM collection WHERE id = ?`, [id]);
+    const result = await db.run(`DELETE FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Collection entry not found' });
     }
@@ -197,62 +720,82 @@ app.delete('/api/collection/:id', async (req, res) => {
 });
 
 // 6. Manage Locations (Physical Storage)
-app.get('/api/locations', async (req, res) => {
+app.get('/api/locations', authenticateToken, async (req, res) => {
   try {
     const locations = await db.all(`
       SELECT l.*, COUNT(c.id) as card_count, SUM(c.quantity) as total_cards 
       FROM locations l
-      LEFT JOIN collection c ON l.id = c.location_id
+      LEFT JOIN collection c ON l.id = c.location_id AND c.user_id = l.user_id
+      WHERE l.user_id = ?
       GROUP BY l.id
-    `);
+    `, [req.user.id]);
     res.json(locations);
   } catch (error) {
     res.status(500).json({ error: 'Failed to retrieve locations', message: error.message });
   }
 });
 
-app.post('/api/locations', async (req, res) => {
+app.post('/api/locations', authenticateToken, async (req, res) => {
   const { name, type, description = '' } = req.body;
   if (!name || !type) {
     return res.status(400).json({ error: 'name and type are required' });
   }
   try {
+    // Check for duplicates for this user
+    const existing = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [name, req.user.id]);
+    if (existing) {
+      return res.status(400).json({ error: 'A location with this name already exists' });
+    }
+
     const result = await db.run(`
-      INSERT INTO locations (name, type, description)
-      VALUES (?, ?, ?)
-    `, [name, type, description]);
+      INSERT INTO locations (name, type, description, user_id)
+      VALUES (?, ?, ?, ?)
+    `, [name, type, description, req.user.id]);
     res.status(201).json({ message: 'Location created', id: result.lastID });
   } catch (error) {
     res.status(500).json({ error: 'Failed to create location', message: error.message });
   }
 });
 
-app.put('/api/locations/:id', async (req, res) => {
+app.put('/api/locations/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { name, type, description } = req.body;
   try {
+    const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!loc) {
+      return res.status(404).json({ error: 'Location not found' });
+    }
+
+    if (name) {
+      const dup = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ? AND id != ?`, [name, req.user.id, id]);
+      if (dup) {
+        return res.status(400).json({ error: 'A location with this name already exists' });
+      }
+    }
+
     await db.run(`
       UPDATE locations 
       SET name = COALESCE(?, name), type = COALESCE(?, type), description = COALESCE(?, description)
-      WHERE id = ?
-    `, [name, type, description, id]);
+      WHERE id = ? AND user_id = ?
+    `, [name, type, description, id, req.user.id]);
     res.json({ message: 'Location updated successfully' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to update location', message: error.message });
   }
 });
 
-app.delete('/api/locations/:id', async (req, res) => {
+app.delete('/api/locations/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   try {
-    // Check if location is in use
-    const cards = await db.all(`SELECT id FROM collection WHERE location_id = ?`, [id]);
-    if (cards.length > 0) {
-      // Disassociate cards from this location instead of blocking delete
-      await db.run(`UPDATE collection SET location_id = NULL, sub_location_1 = NULL, sub_location_2 = NULL WHERE location_id = ?`, [id]);
+    const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!loc) {
+      return res.status(404).json({ error: 'Location not found' });
     }
+
+    // Disassociate cards from this location instead of blocking delete (scoped to user)
+    await db.run(`UPDATE collection SET location_id = NULL, sub_location_1 = NULL, sub_location_2 = NULL WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
     
-    await db.run(`DELETE FROM locations WHERE id = ?`, [id]);
+    await db.run(`DELETE FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     res.json({ message: 'Location deleted successfully (any stored cards moved to Unsorted)' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete location', message: error.message });
@@ -260,24 +803,34 @@ app.delete('/api/locations/:id', async (req, res) => {
 });
 
 // 7. Get Collection Statistics & Analytics
-app.get('/api/stats', async (req, res) => {
+app.get('/api/stats', authenticateToken, async (req, res) => {
   try {
     // Retrieve all collection items to compute statistics
     const query = `
       SELECT 
-        c.quantity, c.purchase_price,
+        c.quantity, c.purchase_price, c.added_at, c.printing,
         cc.types, cc.rarity, cc.set_name, cc.set_id, cc.price_trend,
         l.name as location_name
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       LEFT JOIN locations l ON c.location_id = l.id
+      WHERE c.user_id = ?
     `;
-    const rows = await db.all(query);
+    const rows = await db.all(query, [req.user.id]);
 
     let totalCards = 0;
     let uniqueCards = rows.length;
     let totalValue = 0;
-    let totalSpent = 0;
+    let holoCardsCount = 0;
+
+    const now = Date.now();
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const sevenDaysMs = 7 * oneDayMs;
+    const thirtyDaysMs = 30 * oneDayMs;
+
+    let value24hAgo = 0;
+    let value7dAgo = 0;
+    let value30dAgo = 0;
 
     const typeCounts = {};
     const rarityCounts = {};
@@ -287,11 +840,25 @@ app.get('/api/stats', async (req, res) => {
     rows.forEach(row => {
       const qty = row.quantity || 1;
       const price = row.price_trend || 0;
-      const spent = row.purchase_price || 0;
+      const addedTime = row.added_at ? new Date(row.added_at).getTime() : now;
 
       totalCards += qty;
       totalValue += qty * price;
-      totalSpent += qty * spent;
+
+      if (row.printing && row.printing !== 'Normal') {
+        holoCardsCount += qty;
+      }
+
+      // Past values for net worth trend calculation
+      if (addedTime <= now - oneDayMs) {
+        value24hAgo += qty * price;
+      }
+      if (addedTime <= now - sevenDaysMs) {
+        value7dAgo += qty * price;
+      }
+      if (addedTime <= now - thirtyDaysMs) {
+        value30dAgo += qty * price;
+      }
 
       // Parse types
       const types = JSON.parse(row.types || '[]');
@@ -319,20 +886,20 @@ app.get('/api/stats', async (req, res) => {
       locationCounts[loc] = (locationCounts[loc] || 0) + qty;
     });
 
-    // Get top most valuable cards (limit 5)
+    // Get top most valuable cards (limit 5) (scoped to user)
     const topValuableQuery = `
       SELECT 
         c.quantity, c.condition, c.printing,
         cc.name, cc.rarity, cc.set_name, cc.image_url, cc.price_trend
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
+      WHERE c.user_id = ?
       ORDER BY cc.price_trend DESC
       LIMIT 6
     `;
-    const topValuable = await db.all(topValuableQuery);
+    const topValuable = await db.all(topValuableQuery, [req.user.id]);
 
     // Compute progress for top 4 sets in database (estimate set total)
-    // To make it look real and beautiful, we will list some major sets with standard card counts
     const setSizes = {
       'base1': 102,  // Base Set
       'base2': 64,   // Jungle
@@ -355,8 +922,8 @@ app.get('/api/stats', async (req, res) => {
         SELECT COUNT(DISTINCT card_id) as count 
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
-        WHERE cc.set_id = ?
-      `, [setId]);
+        WHERE cc.set_id = ? AND c.user_id = ?
+      `, [setId, req.user.id]);
 
       const size = setSizes[setId] || 150; // default estimate if set not in database
       const count = userUniqueInSet.count;
@@ -372,13 +939,28 @@ app.get('/api/stats', async (req, res) => {
     // Sort set progress by completion percentage descending
     setProgress.sort((a, b) => b.percent - a.percent);
 
+    const avgCardValue = totalCards > 0 ? parseFloat((totalValue / totalCards).toFixed(2)) : 0.0;
+    const holoDensity = totalCards > 0 ? parseFloat(((holoCardsCount / totalCards) * 100).toFixed(1)) : 0.0;
+
     res.json({
       summary: {
         totalCards,
         uniqueCards,
         totalValue: parseFloat(totalValue.toFixed(2)),
-        totalSpent: parseFloat(totalSpent.toFixed(2)),
-        roi: totalSpent > 0 ? parseFloat((((totalValue - totalSpent) / totalSpent) * 100).toFixed(1)) : 0
+        avgCardValue,
+        holoDensity,
+        change24h: {
+          abs: parseFloat((totalValue - value24hAgo).toFixed(2)),
+          pct: value24hAgo > 0 ? parseFloat((((totalValue - value24hAgo) / value24hAgo) * 100).toFixed(1)) : 100.0
+        },
+        change7d: {
+          abs: parseFloat((totalValue - value7dAgo).toFixed(2)),
+          pct: value7dAgo > 0 ? parseFloat((((totalValue - value7dAgo) / value7dAgo) * 100).toFixed(1)) : 100.0
+        },
+        change30d: {
+          abs: parseFloat((totalValue - value30dAgo).toFixed(2)),
+          pct: value30dAgo > 0 ? parseFloat((((totalValue - value30dAgo) / value30dAgo) * 100).toFixed(1)) : 100.0
+        }
       },
       types: Object.keys(typeCounts).map(name => ({ name, value: typeCounts[name] })),
       rarities: Object.keys(rarityCounts).map(name => ({ name, value: rarityCounts[name] })),
@@ -398,7 +980,7 @@ app.get('/api/stats', async (req, res) => {
 });
 
 // 8. Export Database
-app.get('/api/export', async (req, res) => {
+app.get('/api/export', authenticateToken, async (req, res) => {
   const { format = 'csv' } = req.query;
   try {
     const query = `
@@ -423,8 +1005,9 @@ app.get('/api/export', async (req, res) => {
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       LEFT JOIN locations l ON c.location_id = l.id
+      WHERE c.user_id = ?
     `;
-    const rows = await db.all(query);
+    const rows = await db.all(query, [req.user.id]);
 
     if (format.toLowerCase() === 'json') {
       res.setHeader('Content-Type', 'application/json');
@@ -470,6 +1053,244 @@ app.get('/api/export', async (req, res) => {
     res.send(csvContent);
   } catch (error) {
     res.status(500).json({ error: 'Export failed', message: error.message });
+  }
+});
+
+
+// --- ADVANCED COLLECTOR ENDPOINTS (DEX FEATURES) ---
+
+// 1. Get Card Price History
+app.get('/api/cards/:id/price-history', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    let history = await db.all(`
+      SELECT price, recorded_at 
+      FROM price_history 
+      WHERE card_id = ? 
+      ORDER BY recorded_at ASC
+    `, [id]);
+
+    const cacheCard = await db.get(`SELECT price_trend FROM card_cache WHERE id = ?`, [id]);
+    const currentPrice = (cacheCard && cacheCard.price_trend) || 1.00;
+
+    // Seed mock price points if less than 5 records exist, so charts display immediately
+    if (history.length < 5) {
+      history = [];
+      const now = new Date();
+      for (let i = 9; i >= 0; i--) { // 10 price points
+        const date = new Date(now);
+        date.setDate(now.getDate() - i * 3); // 3 day intervals
+        const fluctuation = (Math.random() - 0.5) * 0.15 * currentPrice; // +/- 15%
+        const price = parseFloat(Math.max(0.10, currentPrice + fluctuation).toFixed(2));
+        history.push({
+          price,
+          recorded_at: date.toISOString()
+        });
+      }
+    } else {
+      // Map to standardized format
+      history = history.map(h => ({
+        price: h.price,
+        recorded_at: h.recorded_at
+      }));
+    }
+
+    res.json(history);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to retrieve price history', message: error.message });
+  }
+});
+
+// 2. Get User Decks
+app.get('/api/decks', authenticateToken, async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        d.id,
+        d.name,
+        d.description,
+        d.created_at,
+        COUNT(dc.card_id) as total_card_types,
+        COALESCE(SUM(dc.quantity), 0) as total_cards
+      FROM decks d
+      LEFT JOIN deck_cards dc ON d.id = dc.deck_id
+      WHERE d.user_id = ?
+      GROUP BY d.id
+      ORDER BY d.created_at DESC
+    `;
+    const rows = await db.all(query, [req.user.id]);
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to retrieve decks', message: error.message });
+  }
+});
+
+// 3. Create Deck
+app.post('/api/decks', authenticateToken, async (req, res) => {
+  const { name, description = '' } = req.body;
+  if (!name) {
+    return res.status(400).json({ error: 'Deck name is required' });
+  }
+
+  try {
+    const result = await db.run(
+      `INSERT INTO decks (name, description, user_id) VALUES (?, ?, ?)`,
+      [name, description, req.user.id]
+    );
+    res.status(201).json({ message: 'Deck created successfully', id: result.lastID });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create deck', message: error.message });
+  }
+});
+
+// 4. Get Deck Details (with Cards)
+app.get('/api/decks/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const deck = await db.get(`SELECT * FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!deck) {
+      return res.status(404).json({ error: 'Deck not found' });
+    }
+
+    const cardsQuery = `
+      SELECT 
+        dc.quantity,
+        cc.id,
+        cc.name,
+        cc.supertype,
+        cc.subtypes,
+        cc.types,
+        cc.rarity,
+        cc.set_id,
+        cc.set_name,
+        cc.number,
+        cc.image_url,
+        cc.price_trend
+      FROM deck_cards dc
+      JOIN card_cache cc ON dc.card_id = cc.id
+      WHERE dc.deck_id = ?
+    `;
+    const cards = await db.all(cardsQuery, [id]);
+
+    const formatted = cards.map(c => ({
+      ...c,
+      subtypes: JSON.parse(c.subtypes || '[]'),
+      types: JSON.parse(c.types || '[]')
+    }));
+
+    res.json({
+      ...deck,
+      cards: formatted
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to retrieve deck details', message: error.message });
+  }
+});
+
+// 5. Update Deck Metadata
+app.put('/api/decks/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { name, description } = req.body;
+
+  if (!name) {
+    return res.status(400).json({ error: 'Deck name is required' });
+  }
+
+  try {
+    const result = await db.run(
+      `UPDATE decks SET name = ?, description = ? WHERE id = ? AND user_id = ?`,
+      [name, description || '', id, req.user.id]
+    );
+
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Deck not found or unauthorized' });
+    }
+
+    res.json({ message: 'Deck updated successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update deck', message: error.message });
+  }
+});
+
+// 6. Delete Deck
+app.delete('/api/decks/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    // Verify ownership
+    const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!deck) {
+      return res.status(404).json({ error: 'Deck not found or unauthorized' });
+    }
+
+    // Manual cascade deletion
+    await db.run(`DELETE FROM deck_cards WHERE deck_id = ?`, [id]);
+    await db.run(`DELETE FROM decks WHERE id = ?`, [id]);
+
+    res.json({ message: 'Deck deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete deck', message: error.message });
+  }
+});
+
+// 7. Add/Update Card in Deck
+app.post('/api/decks/:id/cards', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { card_id, quantity = 1 } = req.body;
+
+  if (!card_id) {
+    return res.status(400).json({ error: 'card_id is required' });
+  }
+
+  try {
+    // Verify deck ownership
+    const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!deck) {
+      return res.status(404).json({ error: 'Deck not found or unauthorized' });
+    }
+
+    // Ensure card metadata exists in cache
+    let card = await db.get(`SELECT id FROM card_cache WHERE id = ?`, [card_id]);
+    if (!card) {
+      console.log(`Card ${card_id} not in cache. Fetching...`);
+      const apiCard = await tcgApi.getCardById(card_id, req.user.tcg_api_key);
+      if (!apiCard) {
+        return res.status(404).json({ error: 'Card not found on Pokémon TCG API.' });
+      }
+    }
+
+    // Insert or update quantities
+    await db.run(`
+      INSERT INTO deck_cards (deck_id, card_id, quantity)
+      VALUES (?, ?, ?)
+      ON CONFLICT(deck_id, card_id) DO UPDATE SET quantity = ?
+    `, [id, card_id, parseInt(quantity, 10), parseInt(quantity, 10)]);
+
+    // Record initial price history trend if card is added
+    const cacheCard = await db.get(`SELECT price_trend FROM card_cache WHERE id = ?`, [card_id]);
+    if (cacheCard && cacheCard.price_trend > 0) {
+      await db.run(`INSERT OR IGNORE INTO price_history (card_id, price) VALUES (?, ?)`, [card_id, cacheCard.price_trend]);
+    }
+
+    res.json({ message: 'Card added/updated in deck successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to add card to deck', message: error.message });
+  }
+});
+
+// 8. Remove Card from Deck
+app.delete('/api/decks/:id/cards/:card_id', authenticateToken, async (req, res) => {
+  const { id, card_id } = req.params;
+  try {
+    // Verify deck ownership
+    const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!deck) {
+      return res.status(404).json({ error: 'Deck not found or unauthorized' });
+    }
+
+    await db.run(`DELETE FROM deck_cards WHERE deck_id = ? AND card_id = ?`, [id, card_id]);
+    res.json({ message: 'Card removed from deck successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to remove card from deck', message: error.message });
   }
 });
 

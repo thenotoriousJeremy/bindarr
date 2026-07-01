@@ -1,6 +1,7 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 // Ensure database directory exists
 const dbPath = process.env.DB_PATH || path.join(__dirname, '../database/pokemon_cards.db');
@@ -46,13 +47,43 @@ function all(sql, params = []) {
   });
 }
 
+// Password hashing utility for seeding
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+  return `${salt}:${hash}`;
+}
+
 // Initialize tables
 async function initDb() {
+  // Create users table
+  await run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT CHECK(role IN ('admin', 'member')) NOT NULL DEFAULT 'member',
+      share_token TEXT UNIQUE NOT NULL,
+      share_enabled INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Create sessions table
+  await run(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      token TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      expires_at DATETIME NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
   // Create locations table
   await run(`
     CREATE TABLE IF NOT EXISTS locations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
       type TEXT CHECK(type IN ('Binder', 'Box', 'Other')) NOT NULL,
       description TEXT
     )
@@ -95,18 +126,117 @@ async function initDb() {
     )
   `);
 
-  // Insert default locations if empty
+  // Create price_history table
+  await run(`
+    CREATE TABLE IF NOT EXISTS price_history (
+      card_id TEXT NOT NULL,
+      price REAL NOT NULL,
+      recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(card_id, recorded_at)
+    )
+  `);
+
+  // Create decks table
+  await run(`
+    CREATE TABLE IF NOT EXISTS decks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  // Create deck_cards table
+  await run(`
+    CREATE TABLE IF NOT EXISTS deck_cards (
+      deck_id INTEGER NOT NULL,
+      card_id TEXT NOT NULL,
+      quantity INTEGER DEFAULT 1,
+      PRIMARY KEY(deck_id, card_id),
+      FOREIGN KEY(deck_id) REFERENCES decks(id) ON DELETE CASCADE
+    )
+  `);
+
+  // --- MIGRATIONS ---
+  // 1. Add user_id to collection table if missing
+  const collectionCols = await all(`PRAGMA table_info(collection)`);
+  if (!collectionCols.some(c => c.name === 'user_id')) {
+    console.log('Adding user_id column to collection table...');
+    await run(`ALTER TABLE collection ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`);
+  }
+
+  // Add is_trade to collection table if missing
+  if (!collectionCols.some(c => c.name === 'is_trade')) {
+    console.log('Adding is_trade column to collection table...');
+    await run(`ALTER TABLE collection ADD COLUMN is_trade INTEGER DEFAULT 0`);
+  }
+
+  // Add list_type to collection table if missing
+  if (!collectionCols.some(c => c.name === 'list_type')) {
+    console.log('Adding list_type column to collection table...');
+    await run(`ALTER TABLE collection ADD COLUMN list_type TEXT DEFAULT 'collection'`);
+  }
+
+  // 2. Add user_id to locations table if missing
+  const locationsCols = await all(`PRAGMA table_info(locations)`);
+  if (!locationsCols.some(c => c.name === 'user_id')) {
+    console.log('Adding user_id column to locations table...');
+    await run(`ALTER TABLE locations ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`);
+  }
+
+  // 3. Remove UNIQUE constraint on locations name per user (optional, but let's make sure it's not unique across users)
+  // SQLite doesn't easily support dropping constraints, but we can manage name checking in routes.
+
+  // 4. Add tcg_api_key column to users table if missing
+  const usersCols = await all(`PRAGMA table_info(users)`);
+  if (!usersCols.some(c => c.name === 'tcg_api_key')) {
+    console.log('Adding tcg_api_key column to users table...');
+    await run(`ALTER TABLE users ADD COLUMN tcg_api_key TEXT DEFAULT ''`);
+  }
+
+  // --- SEED DATA & MIGRATION TO DEFAULT ADMIN ---
+  const userCount = await get(`SELECT COUNT(*) as count FROM users`);
+  let adminId = null;
+  if (userCount.count === 0) {
+    console.log('Creating default admin user...');
+    const defaultPassHash = hashPassword('admin');
+    const defaultShareToken = crypto.randomBytes(16).toString('hex');
+    const result = await run(`
+      INSERT INTO users (username, password_hash, role, share_token, share_enabled)
+      VALUES (?, ?, ?, ?, ?)
+    `, ['admin', defaultPassHash, 'admin', defaultShareToken, 0]);
+    adminId = result.lastID;
+    console.log(`Seeded default admin user with ID: ${adminId}`);
+  } else {
+    const adminUser = await get(`SELECT id FROM users WHERE username = ?`, ['admin']);
+    if (adminUser) {
+      adminId = adminUser.id;
+    }
+  }
+
+  // Assign existing orphan rows (with NULL user_id) to default admin
+  if (adminId) {
+    const collectionMigrated = await run(`UPDATE collection SET user_id = ? WHERE user_id IS NULL`, [adminId]);
+    const locationsMigrated = await run(`UPDATE locations SET user_id = ? WHERE user_id IS NULL`, [adminId]);
+    if (collectionMigrated.changes > 0 || locationsMigrated.changes > 0) {
+      console.log(`Migrated ${collectionMigrated.changes} collection items and ${locationsMigrated.changes} locations to admin user.`);
+    }
+  }
+
+  // Insert default locations if locations table is empty
   const locCount = await get(`SELECT COUNT(*) as count FROM locations`);
-  if (locCount.count === 0) {
-    console.log('Populating default locations...');
-    await run(`INSERT INTO locations (name, type, description) VALUES (?, ?, ?)`, [
-      'Main Binder', 'Binder', 'For ultra rares, holos and favorites.'
+  if (locCount.count === 0 && adminId) {
+    console.log('Populating default locations for admin user...');
+    await run(`INSERT INTO locations (name, type, description, user_id) VALUES (?, ?, ?, ?)`, [
+      'Main Binder', 'Binder', 'For ultra rares, holos and favorites.', adminId
     ]);
-    await run(`INSERT INTO locations (name, type, description) VALUES (?, ?, ?)`, [
-      'Bulk Storage Box 1', 'Box', 'Standard cardboard row box for bulk/common cards.'
+    await run(`INSERT INTO locations (name, type, description, user_id) VALUES (?, ?, ?, ?)`, [
+      'Bulk Storage Box 1', 'Box', 'Standard cardboard row box for bulk/common cards.', adminId
     ]);
-    await run(`INSERT INTO locations (name, type, description) VALUES (?, ?, ?)`, [
-      'Unsorted Pile', 'Other', 'Temporary staging area for newly scanned cards.'
+    await run(`INSERT INTO locations (name, type, description, user_id) VALUES (?, ?, ?, ?)`, [
+      'Unsorted Pile', 'Other', 'Temporary staging area for newly scanned cards.', adminId
     ]);
   }
 }
@@ -116,5 +246,7 @@ module.exports = {
   run,
   get,
   all,
-  initDb
+  initDb,
+  hashPassword // Export for server.js usage
 };
+

@@ -96,21 +96,29 @@ function getStringSimilarity(str1, str2) {
 }
 
 // Search cards locally first, then hit API if not found or empty
-async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
-  // Sanitize name query by removing short noise words (like single-letter OCR errors)
+async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiKey = '') {
+  // Sanitize name query by keeping only Title Case words or allowed uppercase tags (like EX, GX, V)
   let cleanName = '';
   if (nameQuery) {
+    const ALLOWED_UPPER = new Set(['EX', 'GX', 'V', 'VMAX', 'VSTAR', 'BREAK', 'PROMO', 'V-UNION']);
     const words = nameQuery.split(/\s+/);
     const filtered = words.filter(w => {
-      const upper = w.toUpperCase();
-      if (upper === 'EX' || upper === 'GX' || upper === 'V') return true;
-      return w.length > 2; // skip short noise (like 'i', 'VL', 'Vy')
+      const cleanWord = w.replace(/[^A-Za-z\-]/g, ''); // keep only letters and hyphens for formatting checks
+      if (!cleanWord) return false;
+      
+      const upper = cleanWord.toUpperCase();
+      if (ALLOWED_UPPER.has(upper)) return true;
+      
+      // Keep Title Case: starts with uppercase letter and contains at least one lowercase letter
+      const isTitleCase = /^[A-Z]/.test(cleanWord) && /[a-z]/.test(cleanWord);
+      return isTitleCase;
     });
     cleanName = filtered.join(' ');
   }
 
-  // Sanitize number query: strip leading zeroes since database/API stores them as raw numbers (e.g. '021' -> '21')
-  const cleanNumber = numberQuery ? numberQuery.trim().replace(/^0+/, '') : '';
+  // Preserve leading zeroes while keeping a stripped version for fallback matching
+  const cleanNumber = numberQuery ? numberQuery.trim() : '';
+  const strippedNumber = cleanNumber.replace(/^0+/, '');
 
   // 1. Try local search first
   let localSql = `SELECT * FROM card_cache WHERE 1=1`;
@@ -121,8 +129,13 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
     localParams.push(`%${cleanName}%`);
   }
   if (cleanNumber) {
-    localSql += ` AND number = ?`;
-    localParams.push(cleanNumber);
+    if (cleanNumber !== strippedNumber && strippedNumber !== '') {
+      localSql += ` AND (number = ? OR number = ? OR CAST(number AS INTEGER) = CAST(? AS INTEGER))`;
+      localParams.push(cleanNumber, strippedNumber, cleanNumber);
+    } else {
+      localSql += ` AND (number = ? OR CAST(number AS INTEGER) = CAST(? AS INTEGER))`;
+      localParams.push(cleanNumber, cleanNumber);
+    }
   }
   if (setQuery) {
     localSql += ` AND (set_name LIKE ? OR set_id = ?)`;
@@ -145,90 +158,48 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
   }
 
   // 2. Fetch from external API
-  try {
-    let apiQuery = [];
-    if (cleanName) {
-      // Escape spaces for API search
-      apiQuery.push(`name:"*${cleanName}*"`);
-    }
-    if (cleanNumber) {
-      apiQuery.push(`number:"${cleanNumber}"`);
-    }
-    if (setQuery) {
-      apiQuery.push(`(set.name:"*${setQuery}*" OR set.id:"${setQuery}")`);
-    }
-
-    const q = apiQuery.join(' ');
-    console.log(`Querying Pokémon TCG API: q='${q}'`);
-    
-    let response;
+  const fetchCardsFromAPI = async (queryStr) => {
     try {
-      response = await tcgClient.get('/cards', {
+      const response = await tcgClient.get('/cards', {
         params: {
-          q: q || undefined,
+          q: queryStr || undefined,
           pageSize: 50,
           orderBy: 'releaseDate'
-        }
+        },
+        headers: apiKey ? { 'X-Api-Key': apiKey } : {}
       });
+      return response.data.data || [];
     } catch (err) {
-      console.error('Initial API query failed:', err.message);
-      response = { data: { data: [] } };
-    }
-
-    let cards = response.data.data || [];
-
-    // Fallback 1: If name + number query returned nothing, retry search with number only (numbers are highly specific)
-    if (cards.length === 0 && cleanName && cleanNumber) {
-      const fallbackQ = `number:"${cleanNumber}"`;
-      console.log(`No results for '${q}'. Retrying fallback search: ${fallbackQ}`);
-      try {
-        const fallbackResponse = await tcgClient.get('/cards', {
-          params: {
-            q: fallbackQ,
-            pageSize: 50,
-            orderBy: 'releaseDate'
-          }
-        });
-        cards = fallbackResponse.data.data || [];
-      } catch (err) {
-        console.error('Fallback 1 query failed:', err.message);
+      if (err.response && err.response.status === 429) {
+        throw new Error('RATE_LIMIT_EXCEEDED');
       }
+      console.error(`API query failed for q='${queryStr}':`, err.message);
+      return [];
     }
+  };
 
-    // Fallback 2: If query still empty, retry online search for each word of the card name individually
-    // (This prevents garbage OCR words at the start like 'asicadiy' from blocking the actual card name 'Numel' later in the string)
-    if (cards.length === 0 && cleanName) {
-      const words = cleanName.split(/\s+/).filter(w => w.length > 2);
-      console.log(`No results. Retrying word-level fallback searches:`, words);
+  try {
+    let cards = [];
+
+    // 1. Name-first query: fetch by name tokens to make API requests extremely fast and simple.
+    // We format multiple words as top-level OR (e.g. name:"BASICude" OR name:"Numel") to avoid Lucene query syntax errors.
+    const words = cleanName ? cleanName.split(/\s+/).filter(w => w.length > 2) : [];
+    if (words.length > 0) {
+      let queryStr = words.map(w => `name:"${w}"`).join(' OR ');
+      if (setQuery) {
+        queryStr = `(${queryStr}) AND (set.name:"${setQuery}" OR set.id:"${setQuery}")`;
+      }
       
-      try {
-        const promises = words.map(async (word) => {
-          try {
-            const queryStr = `name:"*${word}*" ${cleanNumber ? `number:"${cleanNumber}"` : ''}`.trim();
-            const fallbackResponse = await tcgClient.get('/cards', {
-              params: {
-                q: queryStr,
-                pageSize: 20
-              }
-            });
-            return fallbackResponse.data.data || [];
-          } catch (err) {
-            console.error(`Word fallback failed for '${word}':`, err.message);
-            return [];
-          }
-        });
-        
-        const resultsLists = await Promise.all(promises);
-        const mergedMap = new Map();
-        for (const list of resultsLists) {
-          for (const card of list) {
-            mergedMap.set(card.id, card);
-          }
-        }
-        cards = Array.from(mergedMap.values());
-      } catch (err) {
-        console.error('Word-level fallback search failed:', err.message);
-      }
+      console.log(`Querying Pokémon TCG API (Name-first): q='${queryStr}'`);
+      cards = await fetchCardsFromAPI(queryStr);
+    }
+
+    // 2. Number-only query: fallback if name was completely garbled or not provided
+    const isNumNoise = !cleanNumber || cleanNumber === '0' || cleanNumber === '00' || cleanNumber === '000';
+    if (cards.length === 0 && cleanNumber && !isNumNoise) {
+      const queryStr = `number:"${cleanNumber}"`;
+      console.log(`No name results. Querying TCG API (Number-only): q='${queryStr}'`);
+      cards = await fetchCardsFromAPI(queryStr);
     }
     
     // Save to cache in background
@@ -236,19 +207,32 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
       await cacheCards(cards);
     }
 
-    // Fuzzy rank cards by similarity to name and number
+    // Fuzzy rank cards by similarity to name and number in memory
     const scoredCards = cards.map(c => {
       const nameSim = getStringSimilarity(c.name, cleanName);
       const numberSim = getStringSimilarity(c.number, cleanNumber);
-      // Prioritize name match, but give number some weight too
-      const score = nameSim * 0.75 + numberSim * 0.25;
+      
+      // Add exact/numeric value match bonus for numbers (handles '017' vs '17')
+      const cleanNumInt = parseInt(cleanNumber, 10);
+      const cardNumInt = parseInt(c.number, 10);
+      const numberMatchBonus = (!isNaN(cleanNumInt) && !isNaN(cardNumInt) && cleanNumInt === cardNumInt) ? 0.35 : 0.0;
+      
+      const score = nameSim * 0.65 + numberSim * 0.35 + numberMatchBonus;
       return { card: c, score };
     });
     scoredCards.sort((a, b) => b.score - a.score);
-    const sortedCards = scoredCards.map(sc => sc.card);
+
+    // Apply Confidence Filter:
+    // If we have a single very high confidence match and others are low,
+    // narrow results down so the scanner auto-adds/selects it instantly.
+    let finalCards = scoredCards.map(sc => sc.card);
+    if (scoredCards.length > 1 && scoredCards[0].score >= 0.7 && (scoredCards[0].score - scoredCards[1].score) >= 0.3) {
+      console.log(`High confidence match: ${scoredCards[0].card.name} (score: ${scoredCards[0].score.toFixed(2)} vs next: ${scoredCards[1].score.toFixed(2)})`);
+      finalCards = [scoredCards[0].card];
+    }
 
     // Return the fetched cards formatted
-    return sortedCards.map(c => ({
+    return finalCards.map(c => ({
       id: c.id,
       name: c.name,
       supertype: c.supertype,
@@ -273,7 +257,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
 }
 
 // Fetch single card by ID (with caching)
-async function getCardById(id) {
+async function getCardById(id, apiKey = '') {
   const cached = await db.get(`SELECT * FROM card_cache WHERE id = ?`, [id]);
   
   // If cached and fresh (e.g. within 3 days), return it
@@ -288,7 +272,9 @@ async function getCardById(id) {
 
   try {
     console.log(`Querying Pokémon TCG API for card ID: ${id}`);
-    const response = await tcgClient.get(`/cards/${id}`);
+    const response = await tcgClient.get(`/cards/${id}`, {
+      headers: apiKey ? { 'X-Api-Key': apiKey } : {}
+    });
     const card = response.data.data;
     
     if (card) {
@@ -325,14 +311,21 @@ async function getCardById(id) {
 // Periodic function to update pricing for all cards in the collection
 async function updateCollectionPrices() {
   try {
-    const cardsInCollection = await db.all(`
+    // Select unique card IDs from both collections (owned and wishlist) and decks
+    const cardsInUse = await db.all(`
       SELECT DISTINCT card_id FROM collection
+      UNION
+      SELECT DISTINCT card_id FROM deck_cards
     `);
     
-    console.log(`Starting background price update for ${cardsInCollection.length} unique cards...`);
-    for (const item of cardsInCollection) {
+    console.log(`Starting background price update for ${cardsInUse.length} unique cards...`);
+    for (const item of cardsInUse) {
       // Fetching will force update the cache and price
-      await getCardById(item.card_id);
+      const updatedCard = await getCardById(item.card_id);
+      if (updatedCard && updatedCard.price_trend > 0) {
+        // Record the new price in history
+        await db.run(`INSERT INTO price_history (card_id, price) VALUES (?, ?)`, [item.card_id, updatedCard.price_trend]);
+      }
       // Wait 1 second between requests to respect API rate limits
       await new Promise(r => setTimeout(r, 1000));
     }

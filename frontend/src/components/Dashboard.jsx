@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
-import { TrendingUp, Coins, Library, Compass, Trophy, Plus, ArrowUpRight } from 'lucide-react';
+import { TrendingUp, Coins, Library, Compass, Trophy, Plus, ArrowUpRight, Sparkles } from 'lucide-react';
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
@@ -22,10 +22,11 @@ const TYPE_COLORS = {
   'Colorless': '#cbd5e1'
 };
 
-function Dashboard({ statsTrigger }) {
+function Dashboard({ statsTrigger, onNavigate }) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [timePeriod, setTimePeriod] = useState('7d');
 
   useEffect(() => {
     fetchStats();
@@ -72,7 +73,7 @@ function Dashboard({ statsTrigger }) {
         <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
           <div style={{ display: 'inline-block' }}>
             <span style={{ fontSize: '0.85rem', display: 'block', marginBottom: '0.25rem' }}>Scan with Camera</span>
-            <button className="btn btn-primary" onClick={() => window.location.reload()}>Go to Scanner</button>
+            <button className="btn btn-primary" onClick={() => onNavigate && onNavigate('scanner')}>Go to Scanner</button>
           </div>
         </div>
       </div>
@@ -92,42 +93,78 @@ function Dashboard({ statsTrigger }) {
     <div>
       {/* Metrics Summary Grid */}
       <div className="metrics-grid">
+        {/* Net Worth Card with historical switcher */}
         <div className="glass-panel metric-card">
-          <div className="metric-header">
+          <div className="metric-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span>Net Worth</span>
-            <TrendingUp size={18} />
+            <div style={{ display: 'flex', gap: '4px', background: 'rgba(255,255,255,0.05)', padding: '2px', borderRadius: '4px' }}>
+              {['24h', '7d', '30d'].map(p => (
+                <button 
+                  key={p} 
+                  type="button" 
+                  onClick={() => setTimePeriod(p)}
+                  style={{
+                    padding: '2px 6px',
+                    fontSize: '0.65rem',
+                    border: 'none',
+                    borderRadius: '3px',
+                    background: timePeriod === p ? 'var(--accent-red)' : 'transparent',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    fontWeight: 700,
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  {p.toUpperCase()}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="metric-value">${summary.totalValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-          <div className={`metric-footer ${summary.roi >= 0 ? 'positive' : 'negative'}`}>
-            {summary.roi >= 0 ? '+' : ''}{summary.roi}% Return on Spend
-          </div>
+          {(() => {
+            const change = timePeriod === '24h' ? summary.change24h : timePeriod === '30d' ? summary.change30d : summary.change7d;
+            const isPositive = change.abs >= 0;
+            return (
+              <div className={`metric-footer ${isPositive ? 'positive' : 'negative'}`} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <TrendingUp size={12} style={{ transform: isPositive ? 'none' : 'rotate(180deg)' }} />
+                <span>
+                  {isPositive ? '+' : ''}${change.abs.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} ({isPositive ? '+' : ''}{change.pct}%)
+                </span>
+              </div>
+            );
+          })()}
         </div>
 
+        {/* Average Card Value */}
         <div className="glass-panel metric-card">
           <div className="metric-header">
-            <span>Investment Spend</span>
+            <span>Avg. Card Value</span>
             <Coins size={18} />
           </div>
-          <div className="metric-value">${summary.totalSpent.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-          <div className="metric-footer">Total purchase value</div>
+          <div className="metric-value">${(summary.avgCardValue || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+          <div className="metric-footer">Collection density value</div>
         </div>
 
+        {/* Holo Print Density */}
+        <div className="glass-panel metric-card">
+          <div className="metric-header">
+            <span>Holo Print Rate</span>
+            <Sparkles size={18} style={{ color: 'var(--accent-yellow)' }} />
+          </div>
+          <div className="metric-value">{summary.holoDensity || 0}%</div>
+          <div className="metric-footer">Holographic printing ratio</div>
+        </div>
+
+        {/* Total Cards count & Unique style split */}
         <div className="glass-panel metric-card">
           <div className="metric-header">
             <span>Total Cards Owned</span>
             <Library size={18} />
           </div>
           <div className="metric-value">{summary.totalCards}</div>
-          <div className="metric-footer">Across all locations</div>
-        </div>
-
-        <div className="glass-panel metric-card">
-          <div className="metric-header">
-            <span>Unique Cards</span>
-            <Compass size={18} />
+          <div className="metric-footer">
+            <span>{summary.uniqueCards} unique card styles</span>
           </div>
-          <div className="metric-value">{summary.uniqueCards}</div>
-          <div className="metric-footer">Distinct card catalog IDs</div>
         </div>
       </div>
 

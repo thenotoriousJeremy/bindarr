@@ -1,13 +1,122 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, RefreshCw, AlertTriangle, Plus, X, Search, Sparkles, Settings } from 'lucide-react';
+import { Camera, RefreshCw, AlertTriangle, Plus, X, Search, Sparkles, Settings, ChevronLeft, ChevronRight } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import confetti from 'canvas-confetti';
+import { getCardDisplayName } from '../utils/langHelper';
+
+const POKEMON_JP_TO_EN = {
+  'カイリュー': 'Dragonite',
+  'ハクリュー': 'Dragonair',
+  'ミニリュウ': 'Dratini',
+  'リザードン': 'Charizard',
+  'カメックス': 'Blastoise',
+  'フシギバナ': 'Venusaur',
+  'ピカチュウ': 'Pikachu',
+  'ライチュウ': 'Raichu',
+  'ギャラドス': 'Gyarados',
+  'フーディン': 'Alakazam',
+  'カイリキー': 'Machamp',
+  'ゲンガー': 'Gengar',
+  'ミュウツー': 'Mewtwo',
+  'ミュウ': 'Mew',
+  'ルギア': 'Lugia',
+  'ホウオウ': 'Ho-Oh',
+  'セレビィ': 'Celebi',
+  'ドンメル': 'Numel',
+  'バクーダ': 'Camerupt',
+  'コダック': 'Psyduck',
+  'メタモン': 'Ditto',
+  'ニャース': 'Meowth',
+  'カビゴン': 'Snorlax',
+  'ルカリオ': 'Lucario',
+  'ゲッコウガ': 'Greninja',
+  'ヒトカゲ': 'Charmander',
+  'フシギダネ': 'Bulbasaur',
+  'ゼニガメ': 'Squirtle',
+  'イーブイ': 'Eevee',
+  'シャワーズ': 'Vaporeon',
+  'サンダース': 'Jolteon',
+  'ブースター': 'Flareon',
+  'エーフィ': 'Espeon',
+  'ブラッキー': 'Umbreon',
+  'トゲピー': 'Togepi',
+  'クロバット': 'Crobat',
+  'デンリュウ': 'Ampharos',
+  'ハッサム': 'Scizor',
+  'ヘラクロス': 'Heracross',
+  'サナギラス': 'Pupitar',
+  'バンギラス': 'Tyranitar',
+  'スイクン': 'Suicune',
+  'ライコウ': 'Raikou',
+  'エンテイ': 'Entei',
+  'ニャオハ': 'Sprigatito',
+  'ホゲータ': 'Fuecoco',
+  'クワッス': 'Quaxly'
+};
+
+const translateJapaneseName = (rawJpName) => {
+  let jp = rawJpName.replace(/[^\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\uFF00-\uFFEF\u4E00-\u9FAF]/g, '').trim();
+  if (!jp) return '';
+
+  let prefix = '';
+  if (jp.startsWith('わるい')) {
+    prefix = 'Dark ';
+    jp = jp.substring(3);
+  } else if (jp.startsWith('やさしい')) {
+    prefix = 'Light ';
+    jp = jp.substring(4);
+  } else if (jp.startsWith('ひかる')) {
+    prefix = 'Shining ';
+    jp = jp.substring(3);
+  } else if (jp.startsWith('サカキの')) {
+    prefix = "Giovanni's ";
+    jp = jp.substring(4);
+  } else if (jp.startsWith('タケシの')) {
+    prefix = "Brock's ";
+    jp = jp.substring(4);
+  } else if (jp.startsWith('カスミの')) {
+    prefix = "Misty's ";
+    jp = jp.substring(4);
+  } else if (jp.startsWith('マチスの')) {
+    prefix = "Lt. Surge's ";
+    jp = jp.substring(4);
+  } else if (jp.startsWith('エリカの')) {
+    prefix = "Erika's ";
+    jp = jp.substring(4);
+  } else if (jp.startsWith('ナツメの')) {
+    prefix = "Sabrina's ";
+    jp = jp.substring(4);
+  } else if (jp.startsWith('キョウの')) {
+    prefix = "Koga's ";
+    jp = jp.substring(4);
+  } else if (jp.startsWith('カツラの')) {
+    prefix = "Blaine's ";
+    jp = jp.substring(4);
+  }
+
+  let baseName = POKEMON_JP_TO_EN[jp];
+  if (!baseName) {
+    const foundKey = Object.keys(POKEMON_JP_TO_EN).find(k => jp.includes(k) || k.includes(jp));
+    if (foundKey) {
+      baseName = POKEMON_JP_TO_EN[foundKey];
+    }
+  }
+
+  if (baseName) {
+    return prefix + baseName;
+  }
+  return '';
+};
 
 function CameraScanner({ onAddSuccess, showToast }) {
   const [stream, setStream] = useState(null);
   const [loading, setLoading] = useState(false);
   const [scanStatus, setScanStatus] = useState('');
   const [scanMatches, setScanMatches] = useState([]);
+  
+  // UX scan history & effects states
+  const [recentScans, setRecentScans] = useState([]);
+  const [scanFlash, setScanFlash] = useState(null); // 'success', 'error', or null
   
   // Camera active states
   const [cameraActive, setCameraActive] = useState(false);
@@ -35,6 +144,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [selectedCard, setSelectedCard] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [locations, setLocations] = useState([]);
+  const [drawerTouchStart, setDrawerTouchStart] = useState(null);
+  const [drawerTouchEnd, setDrawerTouchEnd] = useState(null);
   
   // Form states
   const [quantity, setQuantity] = useState(1);
@@ -203,6 +314,11 @@ function CameraScanner({ onAddSuccess, showToast }) {
       if (response.ok) {
         showToast(`Auto-Added: ${card.name} (${card.set_name})`);
         
+        // Append to recent scans history log
+        setRecentScans(prev => [card, ...prev].slice(0, 10));
+        setScanFlash('success');
+        setTimeout(() => setScanFlash(null), 1500);
+
         // Brief confetti blast for ultra-rares
         const rarity = (card.rarity || '').toLowerCase();
         if (rarity.includes('secret') || rarity.includes('ultra') || (card.price_trend || 0) > 15) {
@@ -212,10 +328,14 @@ function CameraScanner({ onAddSuccess, showToast }) {
         onAddSuccess(); // Refresh stats
       } else {
         showToast(`Failed to auto-add ${card.name}`);
+        setScanFlash('error');
+        setTimeout(() => setScanFlash(null), 1500);
       }
     } catch (err) {
       console.error('Auto-add error:', err);
       showToast('Error auto-adding card.');
+      setScanFlash('error');
+      setTimeout(() => setScanFlash(null), 1500);
     }
   };
 
@@ -354,20 +474,20 @@ function CameraScanner({ onAddSuccess, showToast }) {
     if (cardLayout === 'modern' || cardLayout === 'trainer' || cardLayout === 'japanese') {
       // Left bottom number (Japanese Modern starts closer to left border at 4%)
       numLeftCropScreen = {
-        x: (guideRect.left - videoRect.left) + guideRect.width * (cardLayout === 'japanese' ? 0.04 : 0.12),
-        y: (guideRect.top - videoRect.top) + guideRect.height * (1.0 - 0.015 - 0.05), // 93.5%
-        w: guideRect.width * 0.20,
-        h: guideRect.height * 0.05
+        x: (guideRect.left - videoRect.left) + guideRect.width * (cardLayout === 'japanese' ? 0.04 : 0.10),
+        y: (guideRect.top - videoRect.top) + guideRect.height * 0.90, // Starts at 90% Y instead of 93.5%
+        w: guideRect.width * 0.22, // Taller and wider box
+        h: guideRect.height * 0.065
       };
     }
 
     if (cardLayout === 'vintage' || cardLayout === 'trainer' || cardLayout === 'japanese') {
       // Right bottom number (Vintage, Japanese Vintage)
       numRightCropScreen = {
-        x: (guideRect.left - videoRect.left) + guideRect.width * 0.68,
-        y: (guideRect.top - videoRect.top) + guideRect.height * (1.0 - 0.015 - 0.05), // 93.5%
-        w: guideRect.width * 0.20,
-        h: guideRect.height * 0.05
+        x: (guideRect.left - videoRect.left) + guideRect.width * 0.66,
+        y: (guideRect.top - videoRect.top) + guideRect.height * 0.90, // Starts at 90% Y instead of 93.5%
+        w: guideRect.width * 0.22, // Taller and wider box
+        h: guideRect.height * 0.065
       };
     }
 
@@ -416,34 +536,39 @@ function CameraScanner({ onAddSuccess, showToast }) {
 
       // 3. Perform OCR on Card Name (PSM 7: Treat image as a single text line)
       setScanStatus('Reading Card Name...');
-      const nameResult = await Tesseract.recognize(nameDataUrl, 'eng', {
+      const nameOcrLang = cardLayout === 'japanese' ? 'jpn' : 'eng';
+      const nameResult = await Tesseract.recognize(nameDataUrl, nameOcrLang, {
         parameters: {
           tessedit_pageseg_mode: '7'
         }
       });
       const nameRaw = nameResult.data.text.trim();
       
-      // Clean name (strip extra characters and common template tags like 'HP' or 'Stage')
-      const cleanNameParts = nameRaw.replace(/[^a-zA-Z0-9\s\-]/g, ' ').replace(/\s+/g, ' ').trim().split(' ');
-      const stopwords = ['HP', 'STAGE', 'BASIC', 'EVOLVES', 'FROM', 'LV', 'LEVEL', 'NO', 'PROMO', 'TRAINER', 'ENERGY', 'ITEM', 'STADIUM', 'SUPPORTER', 'POKEMON', 'POKÉMON', 'STAGE1', 'STAGE2', 'MEGA', 'VMAX', 'VSTAR'];
-      const filteredNameParts = cleanNameParts.filter(w => {
-        const upper = w.toUpperCase();
-        if (stopwords.includes(upper)) return false;
-        if (/^\d+$/.test(w)) return false; // skip pure numbers like HP values (e.g. 120)
-        // Skip single-letter words unless it's 'V'
-        if (w.length === 1 && upper !== 'V') return false;
-        return true;
-      });
-      const detectedName = filteredNameParts.slice(0, 3).join(' ').trim(); // Take first 3 valid words (e.g. "Charizard", "Dark Raichu", "Mewtwo EX")
+      let detectedName = '';
+      if (cardLayout === 'japanese') {
+        detectedName = translateJapaneseName(nameRaw);
+        console.log(`Japanese OCR Read: "${nameRaw}" -> Translated: "${detectedName}"`);
+      } else {
+        // Clean name (strip extra characters and common template tags like 'HP' or 'Stage')
+        const cleanNameParts = nameRaw.replace(/[^a-zA-Z0-9\s\-]/g, ' ').replace(/\s+/g, ' ').trim().split(' ');
+        const stopwords = ['HP', 'STAGE', 'BASIC', 'EVOLVES', 'FROM', 'LV', 'LEVEL', 'NO', 'PROMO', 'TRAINER', 'ENERGY', 'ITEM', 'STADIUM', 'SUPPORTER', 'POKEMON', 'POKÉMON', 'STAGE1', 'STAGE2', 'MEGA', 'VMAX', 'VSTAR'];
+        const filteredNameParts = cleanNameParts.filter(w => {
+          const upper = w.toUpperCase();
+          if (stopwords.includes(upper)) return false;
+          if (/^\d+$/.test(w)) return false; // skip pure numbers like HP values (e.g. 120)
+          if (w.length === 1 && upper !== 'V') return false;
+          return true;
+        });
+        detectedName = filteredNameParts.slice(0, 3).join(' ').trim();
+      }
 
-      // 4. Perform OCR on Card Numbers in parallel depending on layout (whitelisting digits and forcing PSM 7 text line)
+      // 4. Perform OCR on Card Numbers in parallel depending on layout (forcing PSM 7 text line)
       setScanStatus('Reading Card Number...');
       const ocrPromises = [];
       if (numLeftDataUrl) {
         ocrPromises.push(
           Tesseract.recognize(numLeftDataUrl, 'eng', {
             parameters: {
-              tessedit_char_whitelist: '0123456789/',
               tessedit_pageseg_mode: '7'
             }
           }).then(res => ({ side: 'left', text: res.data.text.trim() }))
@@ -453,7 +578,6 @@ function CameraScanner({ onAddSuccess, showToast }) {
         ocrPromises.push(
           Tesseract.recognize(numRightDataUrl, 'eng', {
             parameters: {
-              tessedit_char_whitelist: '0123456789/',
               tessedit_pageseg_mode: '7'
             }
           }).then(res => ({ side: 'right', text: res.data.text.trim() }))
@@ -516,6 +640,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
 
       if (!detectedName && !detectedNumber) {
         setScanStatus('OCR failed. Could not read card. Please align card clearly in the guide boxes.');
+        setScanFlash('error');
+        setTimeout(() => setScanFlash(null), 1500);
         setLoading(false);
         return;
       }
@@ -533,8 +659,12 @@ function CameraScanner({ onAddSuccess, showToast }) {
         
         if (matches.length === 0) {
           setScanStatus(`Could not find cards matching "${detectedName}" (${detectedNumber}). Try again or search manually.`);
+          setScanFlash('error');
+          setTimeout(() => setScanFlash(null), 1500);
         } else {
           setScanStatus(`Found ${matches.length} matching card(s)!`);
+          setScanFlash('success');
+          setTimeout(() => setScanFlash(null), 1500);
           
           // Auto-open drawer if exactly one perfect match is found, or auto-add in bulk mode
           if (matches.length === 1) {
@@ -549,6 +679,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
         }
       } else {
         setScanStatus('Search failed. Server error.');
+        setScanFlash('error');
+        setTimeout(() => setScanFlash(null), 1500);
       }
     } catch (err) {
       console.error('OCR Process failed:', err);
@@ -560,12 +692,17 @@ function CameraScanner({ onAddSuccess, showToast }) {
 
   const openQuickAdd = (card) => {
     setSelectedCard(card);
-    setPurchasePrice(card.price_trend || 0);
+    setPurchasePrice(0);
     const rarity = (card.rarity || '').toLowerCase();
     if (rarity.includes('holo') || rarity.includes('secret') || rarity.includes('ultra') || rarity.includes('shining')) {
       setPrinting('Holofoil');
     } else {
       setPrinting('Normal');
+    }
+    if (cardLayout === 'japanese') {
+      setLanguage('Japanese');
+    } else {
+      setLanguage('English');
     }
     setSubLocation1('');
     setSubLocation2('');
@@ -610,6 +747,9 @@ function CameraScanner({ onAddSuccess, showToast }) {
       if (response.ok) {
         showToast(`${selectedCard.name} added to collection!`);
         
+        // Append to recent scans history
+        setRecentScans(prev => [selectedCard, ...prev].slice(0, 10));
+
         const rarity = (selectedCard.rarity || '').toLowerCase();
         const price = selectedCard.price_trend || 0;
         if (rarity.includes('holo') || rarity.includes('secret') || rarity.includes('ultra') || price > 10) {
@@ -637,12 +777,6 @@ function CameraScanner({ onAddSuccess, showToast }) {
 
   return (
     <div className="scanner-container">
-      <div className="glass-panel" style={{ width: '100%', textAlign: 'center' }}>
-        <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', color: '#fff' }}>Camera Card Scanner</h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-          Align your card inside the guidelines, then press Capture. The client-side OCR will read the card name and collector number.
-        </p>
-      </div>
 
       {/* Camera Window */}
       {!cameraActive ? (
@@ -698,7 +832,23 @@ function CameraScanner({ onAddSuccess, showToast }) {
             />
             {/* Outline Box Guides */}
             <div className="camera-overlay">
-              <div className="scan-card-guide" style={{ width: `${guideScale * 100}%` }}>
+              <style>{`
+                @keyframes border-flash-success {
+                  0%, 100% { border-color: rgba(255, 255, 255, 0.4); box-shadow: none; }
+                  30%, 70% { border-color: var(--type-grass); box-shadow: 0 0 25px rgba(74, 222, 128, 0.6); }
+                }
+                @keyframes border-flash-error {
+                  0%, 100% { border-color: rgba(255, 255, 255, 0.4); box-shadow: none; }
+                  30%, 70% { border-color: var(--accent-red); box-shadow: 0 0 25px var(--accent-red-glow); }
+                }
+              `}</style>
+              <div 
+                className="scan-card-guide" 
+                style={{ 
+                  width: `${guideScale * 100}%`,
+                  animation: scanFlash === 'success' ? 'border-flash-success 1.5s ease-in-out' : scanFlash === 'error' ? 'border-flash-error 1.5s ease-in-out' : 'none'
+                }}
+              >
                 {/* Name Guide: shift lower and widen if trainer layout */}
                 <div 
                   className="scan-region-title" 
@@ -810,33 +960,33 @@ function CameraScanner({ onAddSuccess, showToast }) {
             </div>
           )}
 
-          {/* Manual OCR Correction panel - Only visible after a scan has occurred */}
-          {(debugNameImg || scannedName || scannedNumber) && (
+          {/* Manual OCR Correction / Quick Search panel - Always visible when camera is active */}
+          {cameraActive && (
             <div className="glass-panel" style={{ width: '100%', padding: '0.75rem 1rem', background: 'rgba(0,0,0,0.3)', border: '1px dashed var(--border-glass-hover)', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.25rem' }}>
               <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Scanned Card Text Review
+                Quick Identify (Scan or Type below)
               </div>
               <form onSubmit={handleManualSearch} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
                 <div style={{ flex: 2, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Name</span>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Card Name</span>
                   <input 
                     type="text" 
                     className="input-control" 
                     style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }} 
                     value={scannedName}
                     onChange={(e) => setScannedName(e.target.value)}
-                    placeholder="Scanned name..."
+                    placeholder="e.g. Charizard..."
                   />
                 </div>
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Number</span>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Collector No.</span>
                   <input 
                     type="text" 
                     className="input-control" 
                     style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }} 
                     value={scannedNumber}
                     onChange={(e) => setScannedNumber(e.target.value)}
-                    placeholder="Scanned number..."
+                    placeholder="e.g. 4/102..."
                   />
                 </div>
                 <button 
@@ -894,20 +1044,104 @@ function CameraScanner({ onAddSuccess, showToast }) {
         </div>
       )}
 
-      {/* Scan Results Suggestions List */}
+      {/* Scan Results Suggestions Popup Modal */}
       {scanMatches.length > 0 && (
-        <div className="glass-panel" style={{ width: '100%' }}>
-          <h3 style={{ fontSize: '1rem', color: '#fff', marginBottom: '1rem', borderLeft: '3px solid var(--accent-yellow)', paddingLeft: '0.5rem' }}>Select matching card:</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '0.75rem' }}>
-            {scanMatches.map(card => (
-              <div key={card.id} className="tcg-card" onClick={() => openQuickAdd(card)}>
-                <div className="tcg-card-inner" style={{ border: '1px solid var(--border-glass-hover)' }}>
-                  <img src={card.image_url} alt={card.name} className="tcg-card-image" />
+        <div style={{
+          position: 'fixed',
+          top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.85)',
+          backdropFilter: 'blur(5px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '1rem'
+        }}>
+          <div className="glass-panel" style={{ maxWidth: '560px', width: '100%', padding: '1.75rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
+              <h3 style={{ fontSize: '1.1rem', color: '#fff', margin: 0 }}>Identified Cards Found</h3>
+              <button 
+                className="btn btn-secondary btn-icon-only" 
+                onClick={() => {
+                  setScanMatches([]);
+                  setScanStatus('');
+                  startCamera();
+                }} 
+                style={{ borderRadius: '50%' }}
+                title="Close and Rescan"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0 }}>
+              Select the correct card to add to your collection, or click <strong>Rescan</strong> to try capturing again.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '1rem', maxHeight: '350px', overflowY: 'auto', padding: '0.25rem' }}>
+              {scanMatches.map(card => (
+                <div key={card.id} className="tcg-card" onClick={() => openQuickAdd(card)} style={{ cursor: 'pointer' }}>
+                  <div className="tcg-card-inner" style={{ border: '1px solid var(--border-glass-hover)' }}>
+                    <img src={card.image_url} alt={card.name} className="tcg-card-image" />
+                  </div>
+                  <div className="tcg-card-info" style={{ textAlign: 'center', marginTop: '0.5rem' }}>
+                    <div className="tcg-card-name" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#fff' }}>{card.name}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{card.set_name} • #{card.number}</div>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-yellow)', marginTop: '0.2rem' }}>${card.price_trend ? card.price_trend.toFixed(2) : '0.00'}</div>
+                  </div>
                 </div>
-                <div className="tcg-card-info" style={{ textAlign: 'center' }}>
-                  <div className="tcg-card-name" style={{ fontSize: '0.75rem' }}>{card.name}</div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{card.set_name} • #{card.number}</div>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-yellow)' }}>${card.price_trend ? card.price_trend.toFixed(2) : '0.00'}</div>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', borderTop: '1px solid var(--border-glass)', paddingTop: '1rem' }}>
+              <button 
+                className="btn btn-primary" 
+                onClick={() => {
+                  setScanMatches([]);
+                  setScanStatus('');
+                  startCamera();
+                }} 
+                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+              >
+                <RefreshCw size={14} />
+                <span>Rescan / Try Again</span>
+              </button>
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => {
+                  setScanMatches([]);
+                  setScanStatus('');
+                  startCamera();
+                }} 
+                style={{ flex: 1 }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Recent Scans History Panel */}
+      {recentScans.length > 0 && (
+        <div className="glass-panel" style={{ width: '100%', marginTop: '1rem' }}>
+          <h3 style={{ fontSize: '1rem', color: '#fff', marginBottom: '0.85rem', borderLeft: '3px solid var(--accent-red)', paddingLeft: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>Recent Scans</span>
+            <button className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={() => setRecentScans([])}>Clear History</button>
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {recentScans.map((item, idx) => (
+              <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <img src={item.image_url} alt={item.name} style={{ width: '36px', height: '50px', objectFit: 'cover', borderRadius: '2px', boxShadow: '0 2px 5px rgba(0,0,0,0.3)' }} />
+                  <div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#fff' }}>{item.name}</div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{item.set_name} • #{item.number} • {item.rarity}</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent-yellow)' }}>${item.price_trend ? item.price_trend.toFixed(2) : '0.00'}</div>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--type-grass)', background: 'rgba(74, 222, 128, 0.1)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>Added</span>
                 </div>
               </div>
             ))}
@@ -920,131 +1154,241 @@ function CameraScanner({ onAddSuccess, showToast }) {
       <div className={`quick-add-drawer ${isDrawerOpen ? 'open' : ''}`}>
         {selectedCard && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            <div style={{ display: 'flex', justifycontent: 'space-between', alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
               <div>
-                <h3 style={{ color: '#fff', fontSize: '1.25rem' }}>Add Scanned Card</h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{selectedCard.name} ({selectedCard.set_name} • #{selectedCard.number})</p>
+                <h3 style={{ color: '#fff', fontSize: '1.25rem', margin: 0 }}>Add Scanned Card</h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0 }}>{getCardDisplayName(selectedCard.name, language)} ({selectedCard.set_name} • #{selectedCard.number})</p>
               </div>
               <button className="btn btn-secondary btn-icon-only" onClick={closeDrawer} style={{ borderRadius: '50%' }}>
                 <X size={18} />
               </button>
             </div>
 
-            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-              <img src={selectedCard.image_url} alt={selectedCard.name} style={{ width: '80px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: 'var(--radius-sm)', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }} />
-              <div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>TCG MARKET PRICE</div>
-                <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>${selectedCard.price_trend ? selectedCard.price_trend.toFixed(2) : '0.00'}</div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Rarity: <span style={{ color: '#fff', fontWeight: 600 }}>{selectedCard.rarity}</span></div>
-              </div>
-            </div>
-
-            <form onSubmit={handleSubmit}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-                <div className="form-group">
-                  <label>Quantity</label>
-                  <input 
-                    type="number" 
-                    className="input-control" 
-                    min="1" 
-                    value={quantity}
-                    onChange={(e) => setQuantity(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Purchase Price ($)</label>
-                  <input 
-                    type="number" 
-                    step="0.01" 
-                    className="input-control" 
-                    value={purchasePrice}
-                    onChange={(e) => setPurchasePrice(e.target.value)}
-                    placeholder="0.00"
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
-                <div className="form-group">
-                  <label>Condition</label>
-                  <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)}>
-                    <option value="Near Mint">Near Mint</option>
-                    <option value="Lightly Played">Lightly Played</option>
-                    <option value="Moderately Played">Moderately Played</option>
-                    <option value="Heavily Played">Heavily Played</option>
-                    <option value="Damaged">Damaged</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Printing</label>
-                  <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)}>
-                    <option value="Normal">Normal</option>
-                    <option value="Holofoil">Holofoil</option>
-                    <option value="Reverse Holofoil">Reverse Holofoil</option>
-                    <option value="1st Edition">1st Edition</option>
-                    <option value="Promo">Promo</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Language</label>
-                  <select className="select-control" value={language} onChange={(e) => setLanguage(e.target.value)}>
-                    <option value="English">English</option>
-                    <option value="Japanese">Japanese</option>
-                    <option value="German">German</option>
-                    <option value="French">French</option>
-                    <option value="Spanish">Spanish</option>
-                    <option value="Italian">Italian</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Physical Location mapping inputs */}
-              <div className="glass-panel" style={{ padding: '1rem', marginTop: '0.5rem', marginBottom: '1.25rem', background: 'rgba(0,0,0,0.2)' }}>
-                <h4 style={{ fontSize: '0.8rem', color: 'var(--text-primary)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Real-World Location Assignment</h4>
+            {/* Three Column Layout (No vertical scroll) */}
+            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <div className="quick-add-grid">
                 
-                <div className="form-group">
-                  <label>Storage Container</label>
-                  <select className="select-control" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-                    <option value="">Unassigned Pile</option>
-                    {locations.map((loc) => (
-                      <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
-                    ))}
-                  </select>
-                </div>
-
-                {locationId && (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem', marginTop: '0.75rem' }}>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>{isBinder ? 'Page Number' : isBox ? 'Row Number / Letter' : 'Sub-Location 1'}</label>
-                      <input 
-                        type="text" 
-                        className="input-control" 
-                        placeholder={isBinder ? 'e.g. Page 12' : isBox ? 'e.g. Row 2' : 'e.g. Top shelf'} 
-                        value={subLocation1}
-                        onChange={(e) => setSubLocation1(e.target.value)}
-                      />
+                {/* Column 1: Card Preview (Smaller card: width 150px) */}
+                <div className="quick-add-preview">
+                  <img 
+                    src={selectedCard.image_url} 
+                    alt={selectedCard.name} 
+                    className="quick-add-preview-img"
+                  />
+                  <div className="quick-add-preview-info">
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>TCG Market</div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--accent-yellow)', margin: '0.1rem 0' }}>
+                      ${selectedCard.price_trend ? selectedCard.price_trend.toFixed(2) : '0.00'}
                     </div>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>{isBinder ? 'Slot Number (1-9)' : isBox ? 'Divider / Section' : 'Sub-Location 2'}</label>
-                      <input 
-                        type="text" 
-                        className="input-control" 
-                        placeholder={isBinder ? 'e.g. Slot 4' : isBox ? 'e.g. Behind Grass Divider' : 'e.g. Box A'} 
-                        value={subLocation2}
-                        onChange={(e) => setSubLocation2(e.target.value)}
-                      />
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                      Rarity: <span style={{ color: '#fff', fontWeight: 600 }}>{selectedCard.rarity || 'Common'}</span>
                     </div>
                   </div>
-                )}
+                </div>
+
+                {/* Column 2: Card Properties Form */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                  <div className="quick-add-section-title">Card Properties</div>
+                  
+                  <div className="quick-add-fields-group">
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label>Quantity</label>
+                      <input 
+                        type="number" 
+                        className="input-control" 
+                        min="1" 
+                        value={quantity}
+                        onChange={(e) => setQuantity(e.target.value)}
+                        required
+                      />
+                    </div>
+
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label>Purchase Price ($)</label>
+                      <input 
+                        type="number" 
+                        step="0.01" 
+                        className="input-control" 
+                        value={purchasePrice}
+                        onChange={(e) => setPurchasePrice(e.target.value)}
+                        placeholder="0.00"
+                      />
+                    </div>
+
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label>Condition</label>
+                      <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)}>
+                        <option value="Near Mint">Near Mint</option>
+                        <option value="Lightly Played">Lightly Played</option>
+                        <option value="Moderately Played">Moderately Played</option>
+                        <option value="Heavily Played">Heavily Played</option>
+                        <option value="Damaged">Damaged</option>
+                      </select>
+                    </div>
+
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label>Printing</label>
+                      <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)}>
+                        <option value="Normal">Normal</option>
+                        <option value="Holofoil">Holofoil</option>
+                        <option value="Reverse Holofoil">Reverse Holofoil</option>
+                        <option value="1st Edition">1st Edition</option>
+                        <option value="Promo">Promo</option>
+                      </select>
+                    </div>
+
+                    <div className="form-group quick-add-full-width" style={{ marginBottom: 0 }}>
+                      <label>Language</label>
+                      <select className="select-control" value={language} onChange={(e) => setLanguage(e.target.value)}>
+                        <option value="English">English</option>
+                        <option value="Japanese">Japanese</option>
+                        <option value="German">German</option>
+                        <option value="French">French</option>
+                        <option value="Spanish">Spanish</option>
+                        <option value="Italian">Italian</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Column 3: Location Assignment Form */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                  <div className="quick-add-section-title">Location Assignment</div>
+                  
+                  <div className="quick-add-fields-group">
+                    <div className="form-group quick-add-full-width" style={{ marginBottom: 0 }}>
+                      <label>Storage Container</label>
+                      <select className="select-control" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                        <option value="">Unassigned Pile</option>
+                        {locations.map((loc) => (
+                          <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {locationId && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.4rem' }}>
+                      <div className="quick-add-fields-group">
+                        <div className="form-group" style={{ marginBottom: 0 }}>
+                          <label style={{ fontSize: '0.7rem' }}>{isBinder ? 'Page' : isBox ? 'Row' : 'Sub-Loc 1'}</label>
+                          <input 
+                            type="text" 
+                            className="input-control" 
+                            placeholder={isBinder ? 'Page No.' : isBox ? 'Row No.' : 'Sub 1'} 
+                            value={subLocation1}
+                            onChange={(e) => setSubLocation1(e.target.value)}
+                            style={{ padding: '0.3rem 0.5rem', fontSize: '0.8rem' }}
+                          />
+                        </div>
+                        <div className="form-group" style={{ marginBottom: 0 }}>
+                          <label style={{ fontSize: '0.7rem' }}>{isBinder ? 'Slot' : isBox ? 'Divider' : 'Sub-Loc 2'}</label>
+                          <input 
+                            type="text" 
+                            className="input-control" 
+                            placeholder={isBinder ? 'Slot No.' : isBox ? 'Section' : 'Sub 2'} 
+                            value={subLocation2}
+                            onChange={(e) => setSubLocation2(e.target.value)}
+                            style={{ padding: '0.3rem 0.5rem', fontSize: '0.8rem' }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Visual 3x3 Binder slot selector */}
+                      {isBinder && (() => {
+                        const pageNum = parseInt((subLocation1 || '').replace(/\D/g, ''), 10) || 1;
+                        const handleSetPage = (p) => {
+                          setSubLocation1(`Page ${p}`);
+                        };
+                        const handleDrawerTouchStart = (e) => {
+                          setDrawerTouchStart(e.targetTouches[0].clientX);
+                        };
+                        const handleDrawerTouchMove = (e) => {
+                          setDrawerTouchEnd(e.targetTouches[0].clientX);
+                        };
+                        const handleDrawerTouchEnd = () => {
+                          if (!drawerTouchStart || !drawerTouchEnd) return;
+                          const distance = drawerTouchStart - drawerTouchEnd;
+                          if (distance > 50) {
+                            handleSetPage(Math.min(pageNum + 1, 30));
+                          } else if (distance < -50) {
+                            handleSetPage(Math.max(pageNum - 1, 1));
+                          }
+                          setDrawerTouchStart(null);
+                          setDrawerTouchEnd(null);
+                        };
+
+                        return (
+                          <div 
+                            style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', marginTop: '0.15rem' }}
+                            onTouchStart={handleDrawerTouchStart}
+                            onTouchMove={handleDrawerTouchMove}
+                            onTouchEnd={handleDrawerTouchEnd}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '2px', userSelect: 'none' }}>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-icon-only"
+                                onClick={() => handleSetPage(Math.max(pageNum - 1, 1))}
+                                disabled={pageNum === 1}
+                                style={{ padding: 0, width: '22px', height: '22px', minHeight: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: pageNum === 1 ? 0.3 : 1 }}
+                              >
+                                <ChevronLeft size={10} />
+                              </button>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>Page {pageNum}</span>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-icon-only"
+                                onClick={() => handleSetPage(Math.min(pageNum + 1, 30))}
+                                disabled={pageNum === 30}
+                                style={{ padding: 0, width: '22px', height: '22px', minHeight: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: pageNum === 30 ? 0.3 : 1 }}
+                              >
+                                <ChevronRight size={10} />
+                              </button>
+                            </div>
+                            <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Visual Slot (Swipe/Tap)</label>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.35rem', width: '150px', background: 'rgba(0,0,0,0.3)', padding: '0.4rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => {
+                                const slotLabel = `Slot ${num}`;
+                                const isSelected = subLocation2 === slotLabel || subLocation2 === String(num);
+                                return (
+                                  <button
+                                    key={num}
+                                    type="button"
+                                    onClick={() => setSubLocation2(slotLabel)}
+                                    style={{
+                                      aspectRatio: 0.718,
+                                      background: isSelected ? 'var(--accent-red)' : 'rgba(255,255,255,0.03)',
+                                      border: isSelected ? '1px solid var(--accent-red)' : '1px solid var(--border-glass)',
+                                      borderRadius: 'var(--radius-xs)',
+                                      color: isSelected ? '#fff' : 'var(--text-secondary)',
+                                      fontSize: '0.7rem',
+                                      fontWeight: '700',
+                                      cursor: 'pointer',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      boxShadow: isSelected ? '0 0 8px rgba(255, 71, 71, 0.4)' : 'none',
+                                      transition: 'all 0.15s ease'
+                                    }}
+                                  >
+                                    {num}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
-                <button type="button" className="btn btn-secondary" onClick={closeDrawer} style={{ flex: 1 }}>Cancel</button>
-                <button type="submit" className="btn btn-primary" style={{ flex: 2 }}>Add to Collection</button>
+              {/* Submit Buttons */}
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', borderTop: '1px solid var(--border-glass)', paddingTop: '1rem', marginTop: '0.5rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={closeDrawer} style={{ padding: '0.5rem 1.5rem' }}>Cancel</button>
+                <button type="submit" className="btn btn-primary" style={{ padding: '0.5rem 2rem' }}>Add to Collection</button>
               </div>
             </form>
           </div>
