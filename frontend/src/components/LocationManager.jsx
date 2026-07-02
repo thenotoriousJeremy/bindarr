@@ -1554,6 +1554,52 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             }
           }
         }
+        else if (sortingPref === 'set-number-printing') {
+          // Same logic as set-number: group by set, then within the set
+          // the slot order will be by number then printing variant
+          const sameSetCards = locationCards.filter(c => c.set_name === card.set_name);
+          if (sameSetCards.length > 0) {
+            const pages = sameSetCards.map(c => getPageNum(c.sub_location_1)).filter(p => p > 0);
+            if (pages.length > 0) {
+              targetStartPage = Math.min(...pages);
+              targetEndPage = Math.max(...pages);
+            }
+          } else {
+            // Find first empty page for a new set
+            const pageOccupancies = {};
+            locationCards.forEach(c => {
+              const p = getPageNum(c.sub_location_1);
+              if (p > 0) {
+                pageOccupancies[p] = (pageOccupancies[p] || 0) + 1;
+              }
+            });
+            for (let p = 1; p <= maxP; p++) {
+              if (!pageOccupancies[p]) {
+                targetStartPage = p;
+                targetEndPage = p;
+                break;
+              }
+            }
+          }
+
+          // Within the target pages, try to place the card next to its numeric neighbor
+          // by finding where this card's number would slot in
+          if (sameSetCards.length > 0) {
+            const cardNum = parseInt(card.number || '0', 10) || 0;
+            // Find the card with the closest number that's <= this card
+            const sorted = sameSetCards
+              .map(c => ({ page: getPageNum(c.sub_location_1), slot: getSlotNum(c.sub_location_2), num: parseInt(c.number || '0', 10) || 0 }))
+              .filter(c => c.page > 0)
+              .sort((a, b) => a.num - b.num);
+            
+            // Try to place on the same page as the closest numbered card
+            const closest = sorted.filter(c => c.num <= cardNum).pop() || sorted[0];
+            if (closest) {
+              targetStartPage = closest.page;
+              targetEndPage = closest.page;
+            }
+          }
+        }
       }
 
       for (let p = targetStartPage; p <= targetEndPage; p++) {
@@ -1623,6 +1669,21 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           }
         }
         else if (sortingPref === 'set-number') {
+          const sameSetCards = locationCards.filter(c => c.set_name === card.set_name);
+          if (sameSetCards.length > 0 && sameSetCards[0].sub_location_1) {
+            recommendedRow = sameSetCards[0].sub_location_1;
+          } else {
+            const existingRows = Array.from(new Set([
+              ...locationCards.map(c => c.sub_location_1)
+            ])).filter(Boolean);
+            const matchedRow = existingRows.find(r => r.toLowerCase().includes((card.set_name || '').toLowerCase()));
+            if (matchedRow) {
+              recommendedRow = matchedRow;
+            }
+          }
+        }
+        else if (sortingPref === 'set-number-printing') {
+          // Same as set-number: group by set into same row
           const sameSetCards = locationCards.filter(c => c.set_name === card.set_name);
           if (sameSetCards.length > 0 && sameSetCards[0].sub_location_1) {
             recommendedRow = sameSetCards[0].sub_location_1;
@@ -2199,9 +2260,12 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         <div>Value: <strong style={{ color: 'var(--accent-yellow)' }}>${(card.price_trend || 0).toFixed(2)}</strong></div>
                       </div>
 
-                      {recommended ? (
+                      {recommended ? (() => {
+                        const sortLabels = { 'custom': 'Custom', 'name-asc': 'A-Z', 'price-desc': 'Value', 'set-number': 'Set & Number', 'set-number-printing': 'Set/Number/Printing', 'type-name': 'Energy Type' };
+                        const sortScheme = sortLabels[selectedLoc?.sort_order] || 'Default';
+                        return (
                         <div style={{ background: 'rgba(255, 71, 71, 0.05)', border: '1px solid rgba(255, 71, 71, 0.15)', padding: '0.4rem', borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'center' }}>
-                          <span style={{ fontSize: '0.55rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Recommended Target</span>
+                          <span style={{ fontSize: '0.55rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Recommended Target ({sortScheme})</span>
                           <strong style={{ fontSize: '0.75rem', color: 'var(--accent-red)' }}>{recommended.label}</strong>
                           
                           <button 
@@ -2219,7 +2283,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                             Place Card Here
                           </button>
                         </div>
-                      ) : (
+                        );
+                      })() : (
                         <div style={{ fontSize: '0.65rem', color: 'var(--accent-red)', fontStyle: 'italic' }}>
                           Container full / none active.
                         </div>
