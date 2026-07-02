@@ -37,8 +37,8 @@ function CardSearch({ onAddSuccess, showToast }) {
         const data = await response.json();
         setLocations(data);
         if (data.length > 0) {
-          // Default to the first location
-          setLocationId(data[0].id);
+          // Default to Unassigned Pile
+          setLocationId('');
         }
       }
     } catch (err) {

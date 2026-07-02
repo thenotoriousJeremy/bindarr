@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, RefreshCw, AlertTriangle, Plus, X, Search, Sparkles, Settings, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Camera, RefreshCw, AlertTriangle, Plus, X, Search, Sparkles, Settings, ChevronLeft, ChevronRight, Library } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
@@ -108,7 +108,13 @@ const translateJapaneseName = (rawJpName) => {
   return '';
 };
 
-function CameraScanner({ onAddSuccess, showToast }) {
+function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
+  const formatPrice = (p) => {
+    if (p === null || p === undefined) return '0.00';
+    const num = parseFloat(p);
+    return isNaN(num) ? '0.00' : num.toFixed(2);
+  };
+
   const [stream, setStream] = useState(null);
   const [loading, setLoading] = useState(false);
   const [scanStatus, setScanStatus] = useState('');
@@ -144,6 +150,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [selectedCard, setSelectedCard] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [locations, setLocations] = useState([]);
+  const [autoAddCountdown, setAutoAddCountdown] = useState(null);
+  const [autoAddTargetCard, setAutoAddTargetCard] = useState(null);
   const [drawerTouchStart, setDrawerTouchStart] = useState(null);
   const [drawerTouchEnd, setDrawerTouchEnd] = useState(null);
   
@@ -172,7 +180,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
         const data = await response.json();
         setLocations(data);
         if (data.length > 0) {
-          setLocationId(data[0].id);
+          setLocationId('');
         }
       }
     } catch (err) {
@@ -191,10 +199,28 @@ function CameraScanner({ onAddSuccess, showToast }) {
     }
   }, [cameraActive, stream]);
 
+  // Auto-Add Countdown Effect
+  useEffect(() => {
+    let intervalId;
+    if (autoAddCountdown !== null && autoAddCountdown > 0) {
+      intervalId = setInterval(() => {
+        setAutoAddCountdown(prev => prev - 1);
+      }, 1000);
+    } else if (autoAddCountdown === 0 && autoAddTargetCard) {
+      const cardToTrigger = autoAddTargetCard;
+      setAutoAddTargetCard(null);
+      setAutoAddCountdown(null);
+      autoAddCard(cardToTrigger);
+    }
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [autoAddCountdown, autoAddTargetCard]);
+
   // Auto-capture scheduler: capture frame 3s after previous capture completes
   useEffect(() => {
     let timerId;
-    if (cameraActive && autoScan && !isDrawerOpen && !loading && scanMatches.length === 0) {
+    if (cameraActive && autoScan && !isDrawerOpen && !loading && scanMatches.length === 0 && !autoAddTargetCard) {
       timerId = setTimeout(() => {
         handleCapture();
       }, 3000);
@@ -202,7 +228,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
     return () => {
       if (timerId) clearTimeout(timerId);
     };
-  }, [cameraActive, autoScan, isDrawerOpen, loading, scanMatches]);
+  }, [cameraActive, autoScan, isDrawerOpen, loading, scanMatches, autoAddTargetCard]);
 
   const startCamera = async () => {
     setHasCameraError(false);
@@ -273,9 +299,13 @@ function CameraScanner({ onAddSuccess, showToast }) {
         } else {
           setScanStatus(`Found ${matches.length} matching card(s)!`);
           if (matches.length === 1) {
-            if (bulkMode) {
+            if (autoScan) {
+              setAutoAddTargetCard(matches[0]);
+              setAutoAddCountdown(2);
+              setScanMatches([]);
+            } else if (bulkMode) {
               await autoAddCard(matches[0]);
-              setScanMatches([]); // Clear results so auto-scan loop continues
+              setScanMatches([]);
             } else {
               stopCamera();
               openQuickAdd(matches[0]);
@@ -668,7 +698,11 @@ function CameraScanner({ onAddSuccess, showToast }) {
           
           // Auto-open drawer if exactly one perfect match is found, or auto-add in bulk mode
           if (matches.length === 1) {
-            if (bulkMode) {
+            if (autoScan) {
+              setAutoAddTargetCard(matches[0]);
+              setAutoAddCountdown(2);
+              setScanMatches([]);
+            } else if (bulkMode) {
               await autoAddCard(matches[0]);
               setScanMatches([]); // Clear results so auto-scan loop triggers again
             } else {
@@ -712,6 +746,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const closeDrawer = () => {
     setIsDrawerOpen(false);
     setSelectedCard(null);
+    setScanMatches([]);
     setQuantity(1);
     setCondition('Near Mint');
     setPrinting('Normal');
@@ -1044,6 +1079,86 @@ function CameraScanner({ onAddSuccess, showToast }) {
         </div>
       )}
 
+      {/* Auto Add Countdown Overlay */}
+      {autoAddTargetCard && autoAddCountdown !== null && (
+        <div 
+          className="modal-backdrop" 
+          style={{
+            position: 'fixed',
+            top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.85)',
+            backdropFilter: 'blur(5px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1100,
+            padding: '1rem'
+          }}
+        >
+          <div className="glass-panel animate-fade-in" style={{ maxWidth: '420px', width: '100%', padding: '1.75rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', alignItems: 'center', textAlign: 'center', border: '1px solid var(--accent-red)' }}>
+            <div>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 800 }}>Exact Match Identified!</span>
+              <h3 style={{ fontSize: '1.25rem', color: '#fff', margin: '0.25rem 0 0.5rem 0' }}>{autoAddTargetCard.name}</h3>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: 0 }}>{autoAddTargetCard.set_name} • #{autoAddTargetCard.number}</p>
+            </div>
+
+            <div style={{ position: 'relative', width: '115px', aspectRatio: 0.718, margin: '0.5rem 0' }}>
+              <img src={autoAddTargetCard.image_url} alt={autoAddTargetCard.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '6px', boxShadow: 'var(--shadow-glow)' }} />
+              <div style={{
+                position: 'absolute',
+                top: '-10px',
+                right: '-10px',
+                width: '32px',
+                height: '32px',
+                borderRadius: '50%',
+                backgroundColor: 'var(--accent-red)',
+                border: '2px solid #fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#fff',
+                fontWeight: 900,
+                fontSize: '1rem',
+                boxShadow: '0 4px 10px rgba(0,0,0,0.5)'
+              }}>
+                {autoAddCountdown}
+              </div>
+            </div>
+
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Auto-adding to collection in {autoAddCountdown}s...</span>
+              <div style={{ display: 'flex', gap: '0.5rem', width: '100%', marginTop: '0.5rem' }}>
+                <button 
+                  type="button"
+                  className="btn btn-primary" 
+                  onClick={() => {
+                    const card = autoAddTargetCard;
+                    setAutoAddTargetCard(null);
+                    setAutoAddCountdown(null);
+                    autoAddCard(card);
+                  }}
+                  style={{ flex: 1.5, fontSize: '0.75rem', padding: '0.45rem 0' }}
+                >
+                  Add Now
+                </button>
+                <button 
+                  type="button"
+                  className="btn btn-secondary" 
+                  onClick={() => {
+                    setAutoAddTargetCard(null);
+                    setAutoAddCountdown(null);
+                    showToast('Auto-add cancelled.');
+                  }}
+                  style={{ flex: 1, fontSize: '0.75rem', padding: '0.45rem 0' }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Scan Results Suggestions Popup Modal */}
       {scanMatches.length > 0 && (
         <div style={{
@@ -1087,7 +1202,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                   <div className="tcg-card-info" style={{ textAlign: 'center', marginTop: '0.5rem' }}>
                     <div className="tcg-card-name" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#fff' }}>{card.name}</div>
                     <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{card.set_name} • #{card.number}</div>
-                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-yellow)', marginTop: '0.2rem' }}>${card.price_trend ? card.price_trend.toFixed(2) : '0.00'}</div>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-yellow)', marginTop: '0.2rem' }}>${formatPrice(card.price_trend)}</div>
                   </div>
                 </div>
               ))}
@@ -1140,12 +1255,24 @@ function CameraScanner({ onAddSuccess, showToast }) {
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent-yellow)' }}>${item.price_trend ? item.price_trend.toFixed(2) : '0.00'}</div>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent-yellow)' }}>${formatPrice(item.price_trend)}</div>
                   <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--type-grass)', background: 'rgba(74, 222, 128, 0.1)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>Added</span>
                 </div>
               </div>
             ))}
           </div>
+
+          <button 
+            type="button" 
+            className="btn btn-primary" 
+            style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', width: '100%', marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }} 
+            onClick={() => {
+              if (setActiveTab) setActiveTab('storage');
+            }}
+          >
+            <Library size={16} />
+            Start Sorting Coordinator ({recentScans.length} card(s))
+          </button>
         </div>
       )}
 
@@ -1178,7 +1305,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                   <div className="quick-add-preview-info">
                     <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>TCG Market</div>
                     <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--accent-yellow)', margin: '0.1rem 0' }}>
-                      ${selectedCard.price_trend ? selectedCard.price_trend.toFixed(2) : '0.00'}
+                      ${formatPrice(selectedCard.price_trend)}
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
                       Rarity: <span style={{ color: '#fff', fontWeight: 600 }}>{selectedCard.rarity || 'Common'}</span>
