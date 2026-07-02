@@ -7,6 +7,7 @@ const API_KEY = process.env.POKEMON_TCG_API_KEY || ''; // Optional user key
 // Axios instance with rate limit handling headers if key is available
 const tcgClient = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 6000,
   headers: API_KEY ? { 'X-Api-Key': API_KEY } : {}
 });
 
@@ -146,10 +147,24 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
   
   let localResults = await db.all(localSql, localParams);
   
-  // If we found local results and they are not empty, return them
-  // (We'll also query online if they want a fresh search, but for instant UI response, this is perfect)
-  if (localResults.length > 0 && !cleanNumber) {
-    // Return local cache parsed back
+  // If we found local results and they are not empty, return them instantly.
+  // Stale prices (older than 3 days) are updated asynchronously in the background.
+  if (localResults.length > 0) {
+    const cacheAgeLimit = 1000 * 60 * 60 * 24 * 3; // 3 days
+    const staleCards = localResults.filter(r => (new Date() - new Date(r.last_updated) > cacheAgeLimit));
+    if (staleCards.length > 0) {
+      (async () => {
+        try {
+          for (const card of staleCards) {
+            await getCardById(card.id);
+            await new Promise(r => setTimeout(r, 1000)); // Respect rate limits
+          }
+        } catch (e) {
+          console.error('Background price refresh failed:', e.message);
+        }
+      })();
+    }
+
     return localResults.map(r => ({
       ...r,
       subtypes: JSON.parse(r.subtypes || '[]'),
