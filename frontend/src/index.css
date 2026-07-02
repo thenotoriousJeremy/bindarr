@@ -1464,3 +1464,152 @@ button, input, select, textarea {
   opacity: 0.9;
 }
 
+/* 3D Card Hover Tilt Effects */
+.tilt-card-wrapper {
+  position: relative;
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.tilt-card-wrapper:hover {
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5), 0 0 25px rgba(239, 83, 80, 0.25);
+  z-index: 15;
+}
+
+/* Holographic overlays matching shine reflections */
+.holo-shine-overlay,
+.reverse-holo-shine-overlay {
+  transition: opacity 0.3s ease, background-position 0.05s ease-out;
+}
+
+/* Dimming/Blur effect for visualizer search filtering */
+.visualizer-slot-dimmed {
+  opacity: 0.15 !important;
+  filter: blur(1.5px) grayscale(60%) !important;
+  pointer-events: none;
+  transition: opacity 0.4s ease, filter 0.4s ease;
+}
+
+.visualizer-slot-highlighted {
+  transform: scale(1.05);
+  box-shadow: 0 0 20px var(--accent-red), 0 0 40px rgba(239, 83, 80, 0.4) !important;
+  border-color: var(--accent-red) !important;
+  z-index: 10;
+  transition: transform 0.4s ease, box-shadow 0.4s ease, border-color 0.4s ease;
+}
+
+/* Tactile 3D page flip turning effects */
+.page-flip-left {
+  animation: pageTurnLeft 0.5s cubic-bezier(0.645, 0.045, 0.355, 1) forwards;
+  transform-origin: left center;
+}
+
+.page-flip-right {
+  animation: pageTurnRight 0.5s cubic-bezier(0.645, 0.045, 0.355, 1) forwards;
+  transform-origin: right center;
+}
+
+@keyframes pageTurnLeft {
+  0% {
+    transform: rotateY(0deg);
+    filter: brightness(1);
+    z-index: 10;
+  }
+  50% {
+    transform: rotateY(-90deg);
+    filter: brightness(0.5);
+  }
+  100% {
+    transform: rotateY(-180deg);
+    filter: brightness(1);
+    z-index: 1;
+  }
+}
+
+@keyframes pageTurnRight {
+  0% {
+    transform: rotateY(0deg);
+    filter: brightness(1);
+    z-index: 10;
+  }
+  50% {
+    transform: rotateY(90deg);
+    filter: brightness(0.5);
+  }
+  100% {
+    transform: rotateY(180deg);
+    filter: brightness(1);
+    z-index: 1;
+  }
+}
+
+/* Stack Inspector Drawer Styles */
+.stack-inspector-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  z-index: 999;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  animation: fadeIn 0.25s ease-out;
+}
+
+.stack-inspector-drawer {
+  width: 100%;
+  max-width: 680px;
+  background: var(--bg-primary);
+  border-top: 3px solid var(--accent-red);
+  border-left: 1px solid var(--border-glass);
+  border-right: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  padding: 1.5rem;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.6);
+  transform: translateY(0);
+  animation: slideUp 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.stack-inspector-list {
+  overflow-y: auto;
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-right: 0.25rem;
+}
+
+.stack-inspector-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.stack-inspector-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--border-glass-hover);
+}
+
+
