@@ -34,18 +34,47 @@ function extractPrice(card) {
   return 0;
 }
 
+function extractDetailedPrices(card) {
+  let normal = null;
+  let holofoil = null;
+  let reverseHolofoil = null;
+  
+  if (card.tcgplayer && card.tcgplayer.prices) {
+    const prices = card.tcgplayer.prices;
+    if (prices.normal && (prices.normal.market || prices.normal.mid)) {
+      normal = prices.normal.market || prices.normal.mid;
+    }
+    if (prices['1stEditionNormal'] && !normal) {
+      normal = prices['1stEditionNormal'].market || prices['1stEditionNormal'].mid;
+    }
+    
+    if (prices.holofoil && (prices.holofoil.market || prices.holofoil.mid)) {
+      holofoil = prices.holofoil.market || prices.holofoil.mid;
+    }
+    if (prices['1stEditionHolofoil'] && !holofoil) {
+      holofoil = prices['1stEditionHolofoil'].market || prices['1stEditionHolofoil'].mid;
+    }
+    
+    if (prices.reverseHolofoil && (prices.reverseHolofoil.market || prices.reverseHolofoil.mid)) {
+      reverseHolofoil = prices.reverseHolofoil.market || prices.reverseHolofoil.mid;
+    }
+  }
+  return { normal, holofoil, reverseHolofoil };
+}
+
 // Save a list of cards to SQLite cache
 async function cacheCards(cards) {
   for (const card of cards) {
     const price = extractPrice(card);
+    const detailed = extractDetailedPrices(card);
     const subtypes = JSON.stringify(card.subtypes || []);
     const types = JSON.stringify(card.types || []);
     const imageUrl = card.images ? (card.images.small || card.images.large) : '';
 
     await db.run(
       `INSERT OR REPLACE INTO card_cache 
-       (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend, last_updated)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+       (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend, price_normal, price_holofoil, price_reverse_holofoil, last_updated)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
       [
         card.id,
         card.name,
@@ -57,7 +86,10 @@ async function cacheCards(cards) {
         card.set ? card.set.name : '',
         card.number || '',
         imageUrl,
-        price
+        price,
+        detailed.normal,
+        detailed.holofoil,
+        detailed.reverseHolofoil
       ]
     );
   }
@@ -247,19 +279,25 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
     }
 
     // Return the fetched cards formatted
-    return finalCards.map(c => ({
-      id: c.id,
-      name: c.name,
-      supertype: c.supertype,
-      subtypes: c.subtypes || [],
-      types: c.types || [],
-      rarity: c.rarity,
-      set_id: c.set ? c.set.id : '',
-      set_name: c.set ? c.set.name : '',
-      number: c.number,
-      image_url: c.images ? (c.images.small || c.images.large) : '',
-      price_trend: extractPrice(c)
-    }));
+    return finalCards.map(c => {
+      const detailed = extractDetailedPrices(c);
+      return {
+        id: c.id,
+        name: c.name,
+        supertype: c.supertype,
+        subtypes: c.subtypes || [],
+        types: c.types || [],
+        rarity: c.rarity,
+        set_id: c.set ? c.set.id : '',
+        set_name: c.set ? c.set.name : '',
+        number: c.number,
+        image_url: c.images ? (c.images.small || c.images.large) : '',
+        price_trend: extractPrice(c),
+        price_normal: detailed.normal,
+        price_holofoil: detailed.holofoil,
+        price_reverse_holofoil: detailed.reverseHolofoil
+      };
+    });
   } catch (error) {
     console.error('Error fetching cards from Pokémon TCG API:', error.message);
     // Return whatever local matches we have if API fails
@@ -294,6 +332,7 @@ async function getCardById(id, apiKey = '') {
     
     if (card) {
       await cacheCards([card]);
+      const detailed = extractDetailedPrices(card);
       return {
         id: card.id,
         name: card.name,
@@ -305,7 +344,10 @@ async function getCardById(id, apiKey = '') {
         set_name: card.set ? card.set.name : '',
         number: card.number,
         image_url: card.images ? (card.images.small || card.images.large) : '',
-        price_trend: extractPrice(card)
+        price_trend: extractPrice(card),
+        price_normal: detailed.normal,
+        price_holofoil: detailed.holofoil,
+        price_reverse_holofoil: detailed.reverseHolofoil
       };
     }
   } catch (error) {

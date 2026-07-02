@@ -40,6 +40,20 @@ function verifyPassword(password, storedHash) {
   return hash === verifyHash;
 }
 
+function resolveCardPrice(card) {
+  if (!card) return 0;
+  if (card.printing === 'Holofoil' && card.price_holofoil !== null && card.price_holofoil > 0) {
+    return card.price_holofoil;
+  }
+  if (card.printing === 'Reverse Holofoil' && card.price_reverse_holofoil !== null && card.price_reverse_holofoil > 0) {
+    return card.price_reverse_holofoil;
+  }
+  if (card.printing === 'Normal' && card.price_normal !== null && card.price_normal > 0) {
+    return card.price_normal;
+  }
+  return card.price_trend || 0;
+}
+
 async function generateSession(userId) {
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date();
@@ -71,7 +85,7 @@ async function getSortedPositionForCard(db, locationId, userId, cardMetadata) {
   const sortOrder = loc.sort_order;
 
   const query = `
-    SELECT c.id as entry_id, c.position, c.printing, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number, cc.price_trend
+    SELECT c.id as entry_id, c.position, c.printing, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
     FROM collection c
     JOIN card_cache cc ON c.card_id = cc.id
     WHERE c.location_id = ? AND c.user_id = ?
@@ -84,6 +98,7 @@ async function getSortedPositionForCard(db, locationId, userId, cardMetadata) {
     } catch {
       c.types = [];
     }
+    c.price_trend = resolveCardPrice(c);
   });
 
   const newCard = {
@@ -95,7 +110,7 @@ async function getSortedPositionForCard(db, locationId, userId, cardMetadata) {
     rarity: cardMetadata.rarity || '',
     set_name: cardMetadata.set_name || '',
     number: cardMetadata.number || '0',
-    price_trend: parseFloat(cardMetadata.price_trend) || 0
+    price_trend: resolveCardPrice(cardMetadata)
   };
   existing.push(newCard);
 
@@ -400,7 +415,10 @@ app.get('/api/shared/:share_token', async (req, res) => {
         cc.set_name,
         cc.number,
         cc.image_url,
-        cc.price_trend
+        cc.price_trend,
+        cc.price_normal,
+        cc.price_holofoil,
+        cc.price_reverse_holofoil
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       ${filterSql}
@@ -410,6 +428,7 @@ app.get('/api/shared/:share_token', async (req, res) => {
 
     const formatted = rows.map(row => ({
       ...row,
+      price_trend: resolveCardPrice(row),
       subtypes: JSON.parse(row.subtypes || '[]'),
       types: JSON.parse(row.types || '[]'),
     }));
@@ -496,7 +515,13 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =>
     const usersWithStats = [];
     for (const u of users) {
       const stats = await db.get(`
-        SELECT COUNT(c.id) as unique_cards, SUM(c.quantity) as total_cards, SUM(c.quantity * cc.price_trend) as total_value
+        SELECT COUNT(c.id) as unique_cards, SUM(c.quantity) as total_cards, 
+          SUM(c.quantity * CASE 
+            WHEN c.printing = 'Holofoil' AND cc.price_holofoil IS NOT NULL AND cc.price_holofoil > 0 THEN cc.price_holofoil
+            WHEN c.printing = 'Reverse Holofoil' AND cc.price_reverse_holofoil IS NOT NULL AND cc.price_reverse_holofoil > 0 THEN cc.price_reverse_holofoil
+            WHEN c.printing = 'Normal' AND cc.price_normal IS NOT NULL AND cc.price_normal > 0 THEN cc.price_normal
+            ELSE cc.price_trend
+          END) as total_value
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
         WHERE c.user_id = ?
@@ -667,6 +692,9 @@ app.get('/api/collection', authenticateToken, async (req, res) => {
         cc.number,
         cc.image_url,
         cc.price_trend,
+        cc.price_normal,
+        cc.price_holofoil,
+        cc.price_reverse_holofoil,
         l.id as location_id,
         l.name as location_name,
         l.type as location_type
@@ -681,6 +709,7 @@ app.get('/api/collection', authenticateToken, async (req, res) => {
     // Parse JSON fields
     const formatted = rows.map(row => ({
       ...row,
+      price_trend: resolveCardPrice(row),
       subtypes: JSON.parse(row.subtypes || '[]'),
       types: JSON.parse(row.types || '[]'),
     }));
@@ -1130,7 +1159,7 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
     const query = `
       SELECT 
         c.quantity, c.purchase_price, c.added_at, c.printing, c.condition, c.card_id,
-        cc.types, cc.rarity, cc.set_name, cc.set_id, cc.price_trend,
+        cc.types, cc.rarity, cc.set_name, cc.set_id, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil,
         l.name as location_name
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
@@ -1164,7 +1193,7 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
 
     rows.forEach(row => {
       const qty = row.quantity || 1;
-      const price = row.price_trend || 0;
+      const price = resolveCardPrice(row);
       const addedTime = row.added_at ? new Date(row.added_at).getTime() : now;
 
       totalCards += qty;
@@ -1222,14 +1251,24 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
     const topValuableQuery = `
       SELECT 
         c.quantity, c.condition, c.printing, c.language, c.purchase_price,
-        cc.id as card_id, cc.name, cc.rarity, cc.set_name, cc.image_url, cc.price_trend
+        cc.id as card_id, cc.name, cc.rarity, cc.set_name, cc.image_url, cc.price_trend,
+        cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       WHERE c.user_id = ?
-      ORDER BY cc.price_trend DESC
+      ORDER BY CASE 
+        WHEN c.printing = 'Holofoil' AND cc.price_holofoil IS NOT NULL AND cc.price_holofoil > 0 THEN cc.price_holofoil
+        WHEN c.printing = 'Reverse Holofoil' AND cc.price_reverse_holofoil IS NOT NULL AND cc.price_reverse_holofoil > 0 THEN cc.price_reverse_holofoil
+        WHEN c.printing = 'Normal' AND cc.price_normal IS NOT NULL AND cc.price_normal > 0 THEN cc.price_normal
+        ELSE cc.price_trend
+      END DESC
       LIMIT 6
     `;
-    const topValuable = await db.all(topValuableQuery, [req.user.id]);
+    const topValuableRows = await db.all(topValuableQuery, [req.user.id]);
+    const topValuable = topValuableRows.map(row => ({
+      ...row,
+      price_trend: resolveCardPrice(row)
+    }));
 
     // Compute progress for top 4 sets in database (estimate set total)
     const setSizes = {
@@ -1322,7 +1361,7 @@ app.get('/api/stats/history', authenticateToken, async (req, res) => {
     
     // Retrieve all collection items to compute history
     const query = `
-      SELECT c.quantity, c.added_at, cc.id as card_id, cc.price_trend
+      SELECT c.quantity, c.added_at, c.printing, cc.id as card_id, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       WHERE c.user_id = ?
@@ -1366,7 +1405,7 @@ app.get('/api/stats/history', authenticateToken, async (req, res) => {
       items.forEach(item => {
         const addedTime = new Date(item.added_at).getTime();
         if (addedTime <= targetTime) {
-          const currentPrice = item.price_trend || 0;
+          const currentPrice = resolveCardPrice(item);
           const simulatedPrice = getSimulatedPriceAt(item.card_id, currentPrice, targetTime, now);
           totalValue += item.quantity * simulatedPrice;
         }
@@ -1407,14 +1446,24 @@ app.get('/api/export', authenticateToken, async (req, res) => {
         cc.set_name,
         cc.number as card_number,
         cc.image_url,
-        cc.price_trend as market_price,
+        cc.price_trend,
+        cc.price_normal,
+        cc.price_holofoil,
+        cc.price_reverse_holofoil,
         l.name as location_name
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       LEFT JOIN locations l ON c.location_id = l.id
       WHERE c.user_id = ?
     `;
-    const rows = await db.all(query, [req.user.id]);
+    const dbRows = await db.all(query, [req.user.id]);
+    const rows = dbRows.map(row => {
+      const resolvedPrice = resolveCardPrice(row);
+      return {
+        ...row,
+        market_price: resolvedPrice
+      };
+    });
 
     if (format.toLowerCase() === 'json') {
       res.setHeader('Content-Type', 'application/json');

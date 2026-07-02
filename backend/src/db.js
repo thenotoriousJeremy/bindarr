@@ -108,6 +108,9 @@ async function initDb() {
       number TEXT,
       image_url TEXT,
       price_trend REAL,
+      price_normal REAL,
+      price_holofoil REAL,
+      price_reverse_holofoil REAL,
       last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -259,6 +262,21 @@ async function initDb() {
   if (!usersCols.some(c => c.name === 'tcg_api_key')) {
     console.log('Adding tcg_api_key column to users table...');
     await run(`ALTER TABLE users ADD COLUMN tcg_api_key TEXT DEFAULT ''`);
+  }
+
+  // 5. Add price_normal, price_holofoil, price_reverse_holofoil columns to card_cache table if missing
+  const cardCacheCols = await all(`PRAGMA table_info(card_cache)`);
+  if (!cardCacheCols.some(c => c.name === 'price_normal')) {
+    console.log('Adding price_normal column to card_cache table...');
+    await run(`ALTER TABLE card_cache ADD COLUMN price_normal REAL`);
+  }
+  if (!cardCacheCols.some(c => c.name === 'price_holofoil')) {
+    console.log('Adding price_holofoil column to card_cache table...');
+    await run(`ALTER TABLE card_cache ADD COLUMN price_holofoil REAL`);
+  }
+  if (!cardCacheCols.some(c => c.name === 'price_reverse_holofoil')) {
+    console.log('Adding price_reverse_holofoil column to card_cache table...');
+    await run(`ALTER TABLE card_cache ADD COLUMN price_reverse_holofoil REAL`);
   }
 
   // --- SEED DATA & MIGRATION TO DEFAULT ADMIN ---
