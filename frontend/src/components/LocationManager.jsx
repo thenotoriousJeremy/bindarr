@@ -96,6 +96,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [targetSlot, setTargetSlot] = useState(null);
   const [inspectedSlot, setInspectedSlot] = useState(null);
   const [isFlipping, setIsFlipping] = useState(false);
+  const [visualizerSearch, setVisualizerSearch] = useState('');
+  const [inspectorStackSlot, setInspectorStackSlot] = useState(null);
   
   // Unsorted Cards states
   const [unsortedCards, setUnsortedCards] = useState([]);
