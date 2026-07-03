@@ -3124,8 +3124,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 onChange={(e) => setFoilSorting(e.target.value)}
                 style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
               >
-                <option value="normals_first">Normals First (Normal -> Rev Holo -> Holo)</option>
-                <option value="foils_first">Foils First (Rev Holo -> Holo -> Normal)</option>
+                <option value="normals_first">Normals First (Normal -&gt; Rev Holo -&gt; Holo)</option>
+                <option value="foils_first">Foils First (Rev Holo -&gt; Holo -&gt; Normal)</option>
               </select>
             </div>
 
@@ -3299,8 +3299,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 onChange={(e) => setEditFoilSorting(e.target.value)}
                 style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
               >
-                <option value="normals_first">Normals First (Normal -> Rev Holo -> Holo)</option>
-                <option value="foils_first">Foils First (Rev Holo -> Holo -> Normal)</option>
+                <option value="normals_first">Normals First (Normal -&gt; Rev Holo -&gt; Holo)</option>
+                <option value="foils_first">Foils First (Rev Holo -&gt; Holo -&gt; Normal)</option>
               </select>
             </div>
 
