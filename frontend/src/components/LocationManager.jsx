@@ -88,6 +88,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [description, setDescription] = useState('');
   const [isAdding, setIsAdding] = useState(false);
   const [sortOrder, setSortOrder] = useState('custom');
+  const [foilSorting, setFoilSorting] = useState('normals_first');
   const [maxPages, setMaxPages] = useState(30);
   const [pageStyle, setPageStyle] = useState('3x3');
   const [maxRows, setMaxRows] = useState(3);
@@ -1528,7 +1529,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           max_pages: (type === 'Binder' || type === 'Toploader Binder') ? parseInt(maxPages, 10) : 30,
           page_style: (type === 'Binder' || type === 'Toploader Binder') ? pageStyle : '3x3',
           max_rows: (type === 'Box' || type === 'Toploader Box' || type === 'Graded Slab Box' || type === 'Display Shelf / Stand') ? parseInt(maxRows, 10) : 3,
-          max_capacity: (type !== 'Binder' && type !== 'Toploader Binder' && type !== 'Box' && type !== 'Toploader Box' && type !== 'Graded Slab Box' && type !== 'Display Shelf / Stand') ? parseInt(maxCapacity, 10) : 1000
+          max_capacity: (type !== 'Binder' && type !== 'Toploader Binder' && type !== 'Box' && type !== 'Toploader Box' && type !== 'Graded Slab Box' && type !== 'Display Shelf / Stand') ? parseInt(maxCapacity, 10) : 1000,
+          foil_sorting: foilSorting
         })
       });
 
@@ -2024,6 +2026,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                 <div 
                                   draggable={!isMobile}
                                   onDragStart={(e) => handleDragStart(e, card)}
+                                  onMouseMove={handleCardMouseMove}
+                                  onMouseLeave={handleCardMouseLeave}
+                                  className="tilt-card-wrapper"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     if (activeMoveCard) {
@@ -3110,6 +3115,20 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </select>
             </div>
 
+            {/* Foil Sorting Preference settings */}
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Foil Sorting Priority</label>
+              <select 
+                className="select-control" 
+                value={foilSorting} 
+                onChange={(e) => setFoilSorting(e.target.value)}
+                style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
+              >
+                <option value="normals_first">Normals First (Normal -> Rev Holo -> Holo)</option>
+                <option value="foils_first">Foils First (Rev Holo -> Holo -> Normal)</option>
+              </select>
+            </div>
+
             {/* Advanced configurations accordion during creation */}
             {renderAdvancedConfigAccordion(true, createAdvancedConfig, setCreateAdvancedConfig)}
 
@@ -3284,6 +3303,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 <option value="foils_first">Foils First (Rev Holo -> Holo -> Normal)</option>
               </select>
             </div>
+
+            {/* Advanced configurations accordion during editing */}
+            {renderAdvancedConfigAccordion(false)}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.5rem' }}>
               <button 
