@@ -43,24 +43,24 @@ const getCardRarityBorder = (rarity) => {
   const r = (rarity || '').toLowerCase();
   if (r.includes('secret') || r.includes('ultra') || r.includes('hyper') || r.includes('illustration') || r.includes('double rare') || r.includes('shiny rare') || r.includes('classic collection')) {
     return {
-      border: '2px solid rgba(245, 158, 11, 0.95)',
-      boxShadow: '0 0 10px rgba(245, 158, 11, 0.6), inset 0 0 4px rgba(245, 158, 11, 0.4)'
+      border: '2.5px solid #f59e0b',
+      boxShadow: '0 0 12px rgba(245, 158, 11, 0.95), inset 0 0 6px rgba(245, 158, 11, 0.5)'
     };
   }
   if (r.includes('rare') || r.includes('promo')) {
     return {
-      border: '1.5px solid rgba(255, 255, 255, 0.85)',
-      boxShadow: '0 0 7px rgba(255, 255, 255, 0.55)'
+      border: '2px solid #e2e8f0',
+      boxShadow: '0 0 8px rgba(255, 255, 255, 0.85), inset 0 0 4px rgba(255, 255, 255, 0.4)'
     };
   }
   if (r.includes('uncommon')) {
     return {
-      border: '1px solid rgba(59, 130, 246, 0.75)',
-      boxShadow: '0 0 4px rgba(59, 130, 246, 0.3)'
+      border: '1.5px solid #3b82f6',
+      boxShadow: '0 0 6px rgba(59, 130, 246, 0.8)'
     };
   }
   return {
-    border: '1px solid rgba(255, 255, 255, 0.15)',
+    border: '1px solid rgba(255, 255, 255, 0.3)',
     boxShadow: 'none'
   };
 };
@@ -1992,7 +1992,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                 position: 'relative',
                                 overflow: 'hidden',
                                 cursor: (card || isTargetable) ? 'pointer' : 'default',
-                                padding: '1px',
+                                padding: '0px',
                                 boxShadow: card ? `0 5px 12px rgba(0,0,0,0.45), ${rarityStyle.boxShadow}` : 'none',
                                 transition: 'all 0.2s ease'
                               }}
@@ -2072,9 +2072,58 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                       borderRadius: '3px',
                                       zIndex: 10,
                                       boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                                      textTransform: 'uppercase'
                                     }}>Rev Holo</span>
                                   )}
+                                  
+                                  {/* Card Rarity Indicator Badge */}
+                                  <span style={{
+                                    position: 'absolute',
+                                    bottom: '22px',
+                                    left: '4px',
+                                    background: card.rarity && (
+                                      card.rarity.toLowerCase().includes('secret') || 
+                                      card.rarity.toLowerCase().includes('ultra') || 
+                                      card.rarity.toLowerCase().includes('hyper') || 
+                                      card.rarity.toLowerCase().includes('illustration') || 
+                                      card.rarity.toLowerCase().includes('double rare') || 
+                                      card.rarity.toLowerCase().includes('shiny rare') ||
+                                      card.rarity.toLowerCase().includes('classic collection')
+                                    ) ? '#f59e0b' 
+                                      : (card.rarity && (card.rarity.toLowerCase().includes('rare') || card.rarity.toLowerCase().includes('promo'))) 
+                                      ? '#e2e8f0' 
+                                      : (card.rarity && card.rarity.toLowerCase().includes('uncommon')) 
+                                      ? '#3b82f6' 
+                                      : 'rgba(156, 163, 175, 0.75)',
+                                    color: card.rarity && (card.rarity.toLowerCase().includes('rare') || card.rarity.toLowerCase().includes('promo')) && !(
+                                      card.rarity.toLowerCase().includes('secret') || 
+                                      card.rarity.toLowerCase().includes('ultra') || 
+                                      card.rarity.toLowerCase().includes('hyper') || 
+                                      card.rarity.toLowerCase().includes('illustration') || 
+                                      card.rarity.toLowerCase().includes('double rare') || 
+                                      card.rarity.toLowerCase().includes('shiny rare') ||
+                                      card.rarity.toLowerCase().includes('classic collection')
+                                    ) ? '#000' : '#fff',
+                                    fontSize: '0.55rem',
+                                    fontWeight: 900,
+                                    padding: '1px 3px',
+                                    borderRadius: '3px',
+                                    zIndex: 10,
+                                    boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.5px'
+                                  }}>
+                                    {(() => {
+                                      const r = (card.rarity || '').toLowerCase();
+                                      if (r.includes('secret') || r.includes('ultra') || r.includes('hyper') || r.includes('illustration')) return 'ULTRA';
+                                      if (r.includes('double rare')) return 'DR';
+                                      if (r.includes('shiny rare')) return 'SR';
+                                      if (r.includes('rare')) return 'RARE';
+                                      if (r.includes('promo')) return 'PROMO';
+                                      if (r.includes('uncommon')) return 'UNC';
+                                      return 'COM';
+                                    })()}
+                                  </span>
+
                                   <div style={{
                                     position: 'absolute',
                                     bottom: 0, left: 0, right: 0,
