@@ -1060,6 +1060,32 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     }
   };
 
+  const handleCardMouseMove = (e) => {
+    const card = e.currentTarget;
+    const rect = card.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const xc = rect.width / 2;
+    const yc = rect.height / 2;
+    const angleX = (yc - y) / 10;
+    const angleY = (x - xc) / 10;
+    card.style.transform = `perspective(600px) rotateX(${angleX}deg) rotateY(${angleY}deg) scale(1.05)`;
+    
+    const shine = card.querySelector('.holo-shine-overlay, .reverse-holo-shine-overlay');
+    if (shine) {
+      shine.style.backgroundPosition = `${(x / rect.width) * 100}% ${(y / rect.height) * 100}%`;
+    }
+  };
+
+  const handleCardMouseLeave = (e) => {
+    const card = e.currentTarget;
+    card.style.transform = 'perspective(600px) rotateX(0deg) rotateY(0deg) scale(1)';
+    const shine = card.querySelector('.holo-shine-overlay, .reverse-holo-shine-overlay');
+    if (shine) {
+      shine.style.backgroundPosition = '50% 50%';
+    }
+  };
+
   // Double page flip helper
   const handleTurnPage = (newPage) => {
     setIsFlipping(true);
