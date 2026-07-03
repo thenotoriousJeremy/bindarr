@@ -1770,7 +1770,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     <div style={{ display: 'grid', gridTemplateColumns: `1fr ${isRightSidebarOpen ? '320px' : '0px'}`, gap: isRightSidebarOpen ? '1.25rem' : '0', height: 'calc(100vh - 120px)', minHeight: '650px', transition: 'grid-template-columns 0.3s ease' }} className="storage-workspace-grid">
       {/* Column 2: visual Container contents (Center) */}
       <div className="location-main-content-col" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', minWidth: 0 }}>
-        {selectedLoc && (
+        {selectedLoc ? (
           <div className="glass-panel" style={{ flex: 1, padding: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', minHeight: 0, overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.4rem', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
               <div>
@@ -2156,6 +2156,22 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               /* Cover Flow cards visualizer for all other containers */
               renderCardCoverFlow()
             )}
+          </div>
+        ) : (
+          <div className="glass-panel" style={{ flex: 1, padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center', justifyContent: 'center', textAlign: 'center', minHeight: 0 }}>
+            <div style={{ fontSize: '3rem' }}>📂</div>
+            <h3 style={{ fontSize: '1.1rem', color: '#fff', fontWeight: 800, margin: 0 }}>No Storage Containers Found</h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', maxWidth: '320px', margin: 0 }}>
+              Storage containers let you organize your cards in virtual Binders (with grid pages) or boxes (with rows and slots).
+            </p>
+            <button 
+              type="button" 
+              className="btn btn-primary" 
+              onClick={() => setIsAdding(true)}
+              style={{ marginTop: '0.5rem', padding: '0.5rem 1.5rem' }}
+            >
+              + Create Storage Container
+            </button>
           </div>
         )}
       </div>
