@@ -3179,6 +3179,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 Delete Container
               </button>
             </div>
+          </div>
         </div>
       )}
 
