@@ -1,69 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { MapPin, Plus, Trash2, Library, BookOpen, Layers, Archive, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
-
-const POKEMON_TYPE_ORDER = {
-  'Grass': 1,
-  'Fire': 2,
-  'Water': 3,
-  'Lightning': 4,
-  'Psychic': 5,
-  'Fighting': 6,
-  'Darkness': 7,
-  'Metal': 8,
-  'Fairy': 9,
-  'Dragon': 10,
-  'Colorless': 11,
-  'Unknown': 100
-};
-
-const getPrintingRank = (printing, foilSorting) => {
-  const isFoilsFirst = foilSorting === 'foils_first';
-  if (isFoilsFirst) {
-    const MAP = {
-      'Reverse Holofoil': 1,
-      'Holofoil': 2,
-      'Normal': 3,
-      '1st Edition': 4,
-      'Promo': 5
-    };
-    return MAP[printing] || 10;
-  }
-  const MAP = {
-    'Normal': 1,
-    'Reverse Holofoil': 2,
-    'Holofoil': 3,
-    '1st Edition': 4,
-    'Promo': 5
-  };
-  return MAP[printing] || 10;
-};
-
-const getCardRarityBorder = (rarity) => {
-  const r = (rarity || '').toLowerCase();
-  if (r.includes('secret') || r.includes('ultra') || r.includes('hyper') || r.includes('illustration') || r.includes('double rare') || r.includes('shiny rare') || r.includes('classic collection')) {
-    return {
-      border: '2.5px solid #f59e0b',
-      boxShadow: '0 0 12px rgba(245, 158, 11, 0.95), inset 0 0 6px rgba(245, 158, 11, 0.5)'
-    };
-  }
-  if (r.includes('rare') || r.includes('promo')) {
-    return {
-      border: '2px solid #e2e8f0',
-      boxShadow: '0 0 8px rgba(255, 255, 255, 0.85), inset 0 0 4px rgba(255, 255, 255, 0.4)'
-    };
-  }
-  if (r.includes('uncommon')) {
-    return {
-      border: '1.5px solid #3b82f6',
-      boxShadow: '0 0 6px rgba(59, 130, 246, 0.8)'
-    };
-  }
-  return {
-    border: '1px solid rgba(255, 255, 255, 0.3)',
-    boxShadow: 'none'
-  };
-};
+import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
+import { sortCardsByOrder } from '../utils/cardSort';
+import { getPageNum, getSlotNum } from '../utils/locationCoords';
 
 function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, setSelectedCardFilter, setActiveTab }) {
   const isMobile = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
@@ -212,8 +152,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     if (!activeMoveCard) return;
 
     const sourceCard = activeMoveCard;
-    const getPageNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
-    const getSlotNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
     const targetCard = locationCards.find(c => getPageNum(c.sub_location_1) === pageNum && getSlotNum(c.sub_location_2) === slotNum);
 
     if (targetCard) {
@@ -1462,51 +1400,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
     try {
       showToast('Sorting container...');
-      const sorted = [...locationCards];
-      if (orderMode === 'name-asc') {
-        sorted.sort((a, b) => a.name.localeCompare(b.name));
-      } else if (orderMode === 'price-desc') {
-        sorted.sort((a, b) => (b.price_trend || 0) - (a.price_trend || 0));
-      } else if (orderMode === 'set-number') {
-        sorted.sort((a, b) => {
-          const setA = a.set_name || '';
-          const setB = b.set_name || '';
-          const cmp = setA.localeCompare(setB);
-          if (cmp !== 0) return cmp;
-          const numA = parseInt(a.number || '0', 10) || 0;
-          const numB = parseInt(b.number || '0', 10) || 0;
-          return numA - numB;
-        });
-      } else if (orderMode === 'type-name') {
-        sorted.sort((a, b) => {
-          const typeA = (a.types && a.types[0]) || 'Unknown';
-          const typeB = (b.types && b.types[0]) || 'Unknown';
-          const orderA = POKEMON_TYPE_ORDER[typeA] || 50;
-          const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
-          if (orderA !== orderB) return orderA - orderB;
-          return a.name.localeCompare(b.name);
-        });
-      } else if (orderMode === 'set-number-printing') {
-        sorted.sort((a, b) => {
-          const setA = a.set_name || '';
-          const setB = b.set_name || '';
-          const cmpSet = setA.localeCompare(setB);
-          if (cmpSet !== 0) return cmpSet;
-
-          const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
-          const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
-          if (printA !== printB) return printA - printB;
-
-          const numA = parseInt(a.number || '0', 10) || 0;
-          const numB = parseInt(b.number || '0', 10) || 0;
-          if (numA !== numB) return numA - numB;
-
-          const cmpNum = (a.number || '').localeCompare(b.number || '');
-          if (cmpNum !== 0) return cmpNum;
-
-          return a.name.localeCompare(b.name);
-        });
-      }
+      const sorted = sortCardsByOrder([...locationCards], orderMode, selectedLoc?.foil_sorting);
 
       const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
       const maxPages = selectedLoc.max_pages || 30;
@@ -1598,8 +1492,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                        unsortedCards.find(c => c.entry_id === entryId);
     if (!sourceCard) return;
 
-    const getPageNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
-    const getSlotNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
     const targetCard = locationCards.find(c => getPageNum(c.sub_location_1) === targetPageNum && getSlotNum(c.sub_location_2) === targetSlot);
 
     if (targetCard) {
@@ -1907,8 +1799,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     const config = parseAdvancedConfig(selectedLoc);
     const sortingPref = selectedLoc.sort_order || 'name-asc';
 
-    const getPageNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
-    const getSlotNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
 
     if (sortingPref !== 'custom') {
       const combined = [...locationCards];
@@ -1917,49 +1807,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         combined.push(card);
       }
 
-      if (sortingPref === 'name-asc') {
-        combined.sort((a, b) => a.name.localeCompare(b.name));
-      } else if (sortingPref === 'price-desc') {
-        combined.sort((a, b) => (b.price_trend || 0) - (a.price_trend || 0));
-      } else if (sortingPref === 'set-number') {
-        combined.sort((a, b) => {
-          const cmpSet = (a.set_name || '').localeCompare(b.set_name || '');
-          if (cmpSet !== 0) return cmpSet;
-          const numA = parseInt(a.number || '0', 10) || 0;
-          const numB = parseInt(b.number || '0', 10) || 0;
-          if (numA !== numB) return numA - numB;
-          return (a.number || '').localeCompare(b.number || '');
-        });
-      } else if (sortingPref === 'set-number-printing') {
-        combined.sort((a, b) => {
-          const setA = a.set_name || '';
-          const setB = b.set_name || '';
-          const cmpSet = setA.localeCompare(setB);
-          if (cmpSet !== 0) return cmpSet;
-
-          const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
-          const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
-          if (printA !== printB) return printA - printB;
-
-          const numA = parseInt(a.number || '0', 10) || 0;
-          const numB = parseInt(b.number || '0', 10) || 0;
-          if (numA !== numB) return numA - numB;
-
-          const cmpNum = (a.number || '').localeCompare(b.number || '');
-          if (cmpNum !== 0) return cmpNum;
-
-          return a.name.localeCompare(b.name);
-        });
-      } else if (sortingPref === 'type-name') {
-        combined.sort((a, b) => {
-          const typeA = (a.types && a.types[0]) || 'Unknown';
-          const typeB = (b.types && b.types[0]) || 'Unknown';
-          const orderA = POKEMON_TYPE_ORDER[typeA] || 50;
-          const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
-          if (orderA !== orderB) return orderA - orderB;
-          return a.name.localeCompare(b.name);
-        });
-      }
+      sortCardsByOrder(combined, sortingPref, selectedLoc?.foil_sorting);
 
       const targetIndex = combined.findIndex(c => c.entry_id === card.entry_id);
       if (targetIndex !== -1) {
@@ -2080,59 +1928,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       return true;
     });
 
-    queue.sort((a, b) => {
-      if (unsortedSortOrder === 'scanned-desc') {
-        const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
-        const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
-        if (timeA !== timeB) return timeB - timeA;
-        return b.entry_id - a.entry_id;
-      }
-      if (unsortedSortOrder === 'scanned-asc') {
-        const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
-        const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
-        if (timeA !== timeB) return timeA - timeB;
-        return a.entry_id - b.entry_id;
-      }
-      if (unsortedSortOrder === 'name-asc') {
-        return a.name.localeCompare(b.name);
-      }
-      if (unsortedSortOrder === 'price-desc') {
-        return (b.price_trend || 0) - (a.price_trend || 0);
-      }
-      if (unsortedSortOrder === 'set-number') {
-        const cmp = (a.set_name || '').localeCompare(b.set_name || '');
-        if (cmp !== 0) return cmp;
-        return (parseInt(a.number || '0') || 0) - (parseInt(b.number || '0') || 0);
-      }
-      if (unsortedSortOrder === 'type-name') {
-        const typeA = (a.types && a.types[0]) || 'Unknown';
-        const typeB = (b.types && b.types[0]) || 'Unknown';
-        const orderA = POKEMON_TYPE_ORDER[typeA] || 50;
-        const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
-        if (orderA !== orderB) return orderA - orderB;
-        return a.name.localeCompare(b.name);
-      }
-      if (unsortedSortOrder === 'set-number-printing') {
-        const setA = a.set_name || '';
-        const setB = b.set_name || '';
-        const cmpSet = setA.localeCompare(setB);
-        if (cmpSet !== 0) return cmpSet;
-
-        const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
-        const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
-        if (printA !== printB) return printA - printB;
-
-        const numA = parseInt(a.number || '0', 10) || 0;
-        const numB = parseInt(b.number || '0', 10) || 0;
-        if (numA !== numB) return numA - numB;
-
-        const cmpNum = (a.number || '').localeCompare(b.number || '');
-        if (cmpNum !== 0) return cmpNum;
-
-        return a.name.localeCompare(b.name);
-      }
-      return 0;
-    });
+    sortCardsByOrder(queue, unsortedSortOrder, selectedLoc?.foil_sorting);
 
     if (unsortedDateFilter === 'batch10') {
       queue = queue.slice(0, 10);
@@ -2543,29 +2339,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                     position: 'absolute',
                                     bottom: '22px',
                                     left: '4px',
-                                    background: card.rarity && (
-                                      card.rarity.toLowerCase().includes('secret') || 
-                                      card.rarity.toLowerCase().includes('ultra') || 
-                                      card.rarity.toLowerCase().includes('hyper') || 
-                                      card.rarity.toLowerCase().includes('illustration') || 
-                                      card.rarity.toLowerCase().includes('double rare') || 
-                                      card.rarity.toLowerCase().includes('shiny rare') ||
-                                      card.rarity.toLowerCase().includes('classic collection')
-                                    ) ? '#f59e0b' 
-                                      : (card.rarity && (card.rarity.toLowerCase().includes('rare') || card.rarity.toLowerCase().includes('promo'))) 
-                                      ? '#e2e8f0' 
-                                      : (card.rarity && card.rarity.toLowerCase().includes('uncommon')) 
-                                      ? '#3b82f6' 
-                                      : 'rgba(156, 163, 175, 0.75)',
-                                    color: card.rarity && (card.rarity.toLowerCase().includes('rare') || card.rarity.toLowerCase().includes('promo')) && !(
-                                      card.rarity.toLowerCase().includes('secret') || 
-                                      card.rarity.toLowerCase().includes('ultra') || 
-                                      card.rarity.toLowerCase().includes('hyper') || 
-                                      card.rarity.toLowerCase().includes('illustration') || 
-                                      card.rarity.toLowerCase().includes('double rare') || 
-                                      card.rarity.toLowerCase().includes('shiny rare') ||
-                                      card.rarity.toLowerCase().includes('classic collection')
-                                    ) ? '#000' : '#fff',
+                                    ...getRarityBadgeStyle(card.rarity),
                                     fontSize: '0.55rem',
                                     fontWeight: 900,
                                     padding: '1px 3px',
@@ -2575,16 +2349,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                     textTransform: 'uppercase',
                                     letterSpacing: '0.5px'
                                   }}>
-                                    {(() => {
-                                      const r = (card.rarity || '').toLowerCase();
-                                      if (r.includes('secret') || r.includes('ultra') || r.includes('hyper') || r.includes('illustration')) return 'ULTRA';
-                                      if (r.includes('double rare')) return 'DR';
-                                      if (r.includes('shiny rare')) return 'SR';
-                                      if (r.includes('rare')) return 'RARE';
-                                      if (r.includes('promo')) return 'PROMO';
-                                      if (r.includes('uncommon')) return 'UNC';
-                                      return 'COM';
-                                    })()}
+                                    {getRarityBadgeLabel(card.rarity)}
                                   </span>
 
                                   <div style={{
@@ -2632,8 +2397,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   );
                 };
 
-                const getPageNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
-                const getSlotNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
 
                 return (
                   <div 
@@ -2959,59 +2722,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   return true;
                 });
 
-                filteredUnsorted.sort((a, b) => {
-                  if (unsortedSortOrder === 'scanned-desc') {
-                    const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
-                    const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
-                    if (timeA !== timeB) return timeB - timeA;
-                    return b.entry_id - a.entry_id;
-                  }
-                  if (unsortedSortOrder === 'scanned-asc') {
-                    const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
-                    const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
-                    if (timeA !== timeB) return timeA - timeB;
-                    return a.entry_id - b.entry_id;
-                  }
-                  if (unsortedSortOrder === 'name-asc') {
-                    return a.name.localeCompare(b.name);
-                  }
-                  if (unsortedSortOrder === 'price-desc') {
-                    return (b.price_trend || 0) - (a.price_trend || 0);
-                  }
-                  if (unsortedSortOrder === 'set-number') {
-                    const cmp = (a.set_name || '').localeCompare(b.set_name || '');
-                    if (cmp !== 0) return cmp;
-                    return (parseInt(a.number || '0') || 0) - (parseInt(b.number || '0') || 0);
-                  }
-                  if (unsortedSortOrder === 'type-name') {
-                    const typeA = (a.types && a.types[0]) || 'Unknown';
-                    const typeB = (b.types && b.types[0]) || 'Unknown';
-                    const orderA = POKEMON_TYPE_ORDER[typeA] || 50;
-                    const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
-                    if (orderA !== orderB) return orderA - orderB;
-                    return a.name.localeCompare(b.name);
-                  }
-                  if (unsortedSortOrder === 'set-number-printing') {
-                    const setA = a.set_name || '';
-                    const setB = b.set_name || '';
-                    const cmpSet = setA.localeCompare(setB);
-                    if (cmpSet !== 0) return cmpSet;
-
-                    const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
-                    const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
-                    if (printA !== printB) return printA - printB;
-
-                    const numA = parseInt(a.number || '0', 10) || 0;
-                    const numB = parseInt(b.number || '0', 10) || 0;
-                    if (numA !== numB) return numA - numB;
-
-                    const cmpNum = (a.number || '').localeCompare(b.number || '');
-                    if (cmpNum !== 0) return cmpNum;
-
-                    return a.name.localeCompare(b.name);
-                  }
-                  return 0;
-                });
+                sortCardsByOrder(filteredUnsorted, unsortedSortOrder, selectedLoc?.foil_sorting);
 
                 if (unsortedDateFilter === 'batch10') {
                   filteredUnsorted = filteredUnsorted.slice(0, 10);
