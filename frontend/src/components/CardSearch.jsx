@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, X, Info, HelpCircle } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { formatPrice } from '../utils/formatPrice';
+import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 
 function CardSearch({ onAddSuccess, showToast }) {
   const [query, setQuery] = useState('');
@@ -238,7 +240,7 @@ function CardSearch({ onAddSuccess, showToast }) {
                   <div className="tcg-card-name">{card.name}</div>
                   <div className="tcg-card-meta">
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>{card.set_name}</span>
-                    <span className="tcg-card-price">${card.price_trend ? card.price_trend.toFixed(2) : '0.00'}</span>
+                    <span className="tcg-card-price">${formatPrice(card.price_trend)}</span>
                   </div>
                 </div>
               </div>
@@ -275,7 +277,7 @@ function CardSearch({ onAddSuccess, showToast }) {
               <img src={selectedCard.image_url} alt={selectedCard.name} style={{ width: '80px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: 'var(--radius-sm)', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }} />
               <div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>TCG MARKET PRICE</div>
-                <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>${selectedCard.price_trend ? selectedCard.price_trend.toFixed(2) : '0.00'}</div>
+                <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>${formatPrice(selectedCard.price_trend)}</div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Rarity: <span style={{ color: '#fff', fontWeight: 600 }}>{selectedCard.rarity}</span></div>
               </div>
             </div>
@@ -311,34 +313,21 @@ function CardSearch({ onAddSuccess, showToast }) {
                 <div className="form-group">
                   <label>Condition</label>
                   <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)}>
-                    <option value="Near Mint">Near Mint</option>
-                    <option value="Lightly Played">Lightly Played</option>
-                    <option value="Moderately Played">Moderately Played</option>
-                    <option value="Heavily Played">Heavily Played</option>
-                    <option value="Damaged">Damaged</option>
+                    {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
 
                 <div className="form-group">
                   <label>Printing</label>
                   <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)}>
-                    <option value="Normal">Normal</option>
-                    <option value="Holofoil">Holofoil</option>
-                    <option value="Reverse Holofoil">Reverse Holofoil</option>
-                    <option value="1st Edition">1st Edition</option>
-                    <option value="Promo">Promo</option>
+                    {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
                   </select>
                 </div>
 
                 <div className="form-group">
                   <label>Language</label>
                   <select className="select-control" value={language} onChange={(e) => setLanguage(e.target.value)}>
-                    <option value="English">English</option>
-                    <option value="Japanese">Japanese</option>
-                    <option value="German">German</option>
-                    <option value="French">French</option>
-                    <option value="Spanish">Spanish</option>
-                    <option value="Italian">Italian</option>
+                    {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
                   </select>
                 </div>
               </div>

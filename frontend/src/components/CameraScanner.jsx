@@ -5,6 +5,7 @@ import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
 import { translateJapaneseName } from '../utils/pokemonTranslation';
 import { formatPrice } from '../utils/formatPrice';
+import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 
 function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
@@ -1245,34 +1246,21 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label>Condition</label>
                       <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)}>
-                        <option value="Near Mint">Near Mint</option>
-                        <option value="Lightly Played">Lightly Played</option>
-                        <option value="Moderately Played">Moderately Played</option>
-                        <option value="Heavily Played">Heavily Played</option>
-                        <option value="Damaged">Damaged</option>
+                        {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
 
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label>Printing</label>
                       <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)}>
-                        <option value="Normal">Normal</option>
-                        <option value="Holofoil">Holofoil</option>
-                        <option value="Reverse Holofoil">Reverse Holofoil</option>
-                        <option value="1st Edition">1st Edition</option>
-                        <option value="Promo">Promo</option>
+                        {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
                       </select>
                     </div>
 
                     <div className="form-group quick-add-full-width" style={{ marginBottom: 0 }}>
                       <label>Language</label>
                       <select className="select-control" value={language} onChange={(e) => setLanguage(e.target.value)}>
-                        <option value="English">English</option>
-                        <option value="Japanese">Japanese</option>
-                        <option value="German">German</option>
-                        <option value="French">French</option>
-                        <option value="Spanish">Spanish</option>
-                        <option value="Italian">Italian</option>
+                        {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
                       </select>
                     </div>
                   </div>

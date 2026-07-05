@@ -26,13 +26,7 @@ function AdminPanel({ showToast }) {
       return;
     }
     try {
-      const token = localStorage.getItem('pokedexrr_token');
-      const res = await fetch('/api/admin/seed-cards', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const res = await fetch('/api/admin/seed-cards', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         showToast(data.message);

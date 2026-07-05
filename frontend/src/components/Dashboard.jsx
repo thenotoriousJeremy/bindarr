@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, AreaChart, Area } from 'recharts';
 import { TrendingUp, Coins, Library, Compass, Trophy, Plus, ArrowUpRight, Sparkles, X } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
+import { formatPrice } from '../utils/formatPrice';
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
@@ -56,12 +57,7 @@ function Dashboard({ statsTrigger, onNavigate }) {
   const fetchStats = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('pokedexrr_token');
-      const response = await fetch('/api/stats', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const response = await fetch('/api/stats');
       if (!response.ok) {
         throw new Error('Failed to load stats');
       }
@@ -78,12 +74,7 @@ function Dashboard({ statsTrigger, onNavigate }) {
   const fetchTimelineHistory = async () => {
     try {
       setLoadingHistory(true);
-      const token = localStorage.getItem('pokedexrr_token');
-      const response = await fetch(`/api/stats/history?period=${timePeriod}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const response = await fetch(`/api/stats/history?period=${timePeriod}`);
       if (response.ok) {
         const data = await response.json();
         setHistoryData(data);
@@ -98,12 +89,7 @@ function Dashboard({ statsTrigger, onNavigate }) {
   const fetchCardPriceHistory = async (cardId) => {
     try {
       setLoadingCardHistory(true);
-      const token = localStorage.getItem('pokedexrr_token');
-      const response = await fetch(`/api/cards/${cardId}/price-history`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const response = await fetch(`/api/cards/${cardId}/price-history`);
       if (response.ok) {
         const data = await response.json();
         setCardHistory(data);
@@ -400,7 +386,7 @@ function Dashboard({ statsTrigger, onNavigate }) {
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{card.set_name} • {card.rarity}</div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontWeight: 800, color: 'var(--accent-yellow)', fontSize: '0.95rem' }}>${card.price_trend.toFixed(2)}</div>
+                    <div style={{ fontWeight: 800, color: 'var(--accent-yellow)', fontSize: '0.95rem' }}>${formatPrice(card.price_trend)}</div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Qty: {card.quantity}</div>
                   </div>
                 </div>
@@ -507,13 +493,13 @@ function Dashboard({ statsTrigger, onNavigate }) {
                 <div>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>TCG MARKET</div>
                   <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>
-                    ${inspectorCard.price_trend ? inspectorCard.price_trend.toFixed(2) : '0.00'}
+                    ${formatPrice(inspectorCard.price_trend)}
                   </div>
                 </div>
                 <div>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>PURCHASE PRICE</div>
                   <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>
-                    ${inspectorCard.purchase_price ? inspectorCard.purchase_price.toFixed(2) : '0.00'}
+                    ${formatPrice(inspectorCard.purchase_price)}
                   </div>
                 </div>
                 <div>

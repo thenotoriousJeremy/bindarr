@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend } from 'recharts';
 import { Search, Trophy, Compass, Library, ShieldAlert, Sparkles, X } from 'lucide-react';
+import { formatPrice } from '../utils/formatPrice';
+import { PRINTINGS } from '../utils/cardOptions';
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
@@ -313,11 +315,7 @@ function SharedCollection({ shareToken }) {
               <label>Printing</label>
               <select className="select-control" value={printingFilter} onChange={(e) => setPrintingFilter(e.target.value)}>
                 <option value="">All Printings</option>
-                <option value="Normal">Normal</option>
-                <option value="Holofoil">Holofoil</option>
-                <option value="Reverse Holofoil">Reverse Holofoil</option>
-                <option value="1st Edition">1st Edition</option>
-                <option value="Promo">Promo</option>
+                {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
           </div>
@@ -346,7 +344,7 @@ function SharedCollection({ shareToken }) {
                   <div className="tcg-card-name">{card.name}</div>
                   <div className="tcg-card-meta">
                     <span style={{ fontSize: '0.7rem' }}>{card.set_name} • #{card.number}</span>
-                    <span className="tcg-card-price">${card.price_trend ? card.price_trend.toFixed(2) : '0.00'}</span>
+                    <span className="tcg-card-price">${formatPrice(card.price_trend)}</span>
                   </div>
                 </div>
               </div>
@@ -428,7 +426,7 @@ function SharedCollection({ shareToken }) {
                 <div>
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>EST. MARKET PRICE</div>
                   <div style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>
-                    ${activeCard.price_trend ? activeCard.price_trend.toFixed(2) : '0.00'}
+                    ${formatPrice(activeCard.price_trend)}
                   </div>
                 </div>
                 <div>

@@ -13,7 +13,6 @@ function Settings({ user, onUpdateUser, showToast }) {
 
   const [tcgApiKey, setTcgApiKey] = useState(user?.tcg_api_key || '');
   const [apiKeyLoading, setApiKeyLoading] = useState(false);
-  const token = localStorage.getItem('pokedexrr_token');
 
   const handleImportFile = async (e) => {
     const file = e.target.files[0];
@@ -29,10 +28,7 @@ function Settings({ user, onUpdateUser, showToast }) {
         showToast('Importing collection...');
         const response = await fetch('/api/import', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             format,
             data: fileData

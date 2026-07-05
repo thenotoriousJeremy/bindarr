@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, X, ChevronLeft, Play, BarChart2, Search, ArrowRight, Eye, LogOut, LogIn, PackageCheck } from 'lucide-react';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
+import { shuffleArray } from '../utils/shuffle';
 
 function DeckBuilder({ showToast }) {
   const [decks, setDecks] = useState([]);
@@ -250,17 +251,7 @@ function DeckBuilder({ showToast }) {
       }
     });
 
-    // Shuffle helper (Fisher-Yates)
-    const shuffle = (array) => {
-      const copy = [...array];
-      for (let i = copy.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [copy[i], copy[j]] = [copy[j], copy[i]];
-      }
-      return copy;
-    };
-
-    const shuffled = shuffle(fullDeck);
+    const shuffled = shuffleArray(fullDeck);
     setSimulatorDeck(shuffled);
     setHand(shuffled.slice(0, 7));
     setMulliganCount(0);
@@ -268,11 +259,7 @@ function DeckBuilder({ showToast }) {
   };
 
   const handleMulligan = () => {
-    const shuffled = [...simulatorDeck];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
+    const shuffled = shuffleArray(simulatorDeck);
 
     const nextMulligan = mulliganCount + 1;
     const drawCount = Math.max(1, 7 - nextMulligan);

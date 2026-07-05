@@ -4,6 +4,7 @@ import { getCardDisplayName } from '../utils/langHelper';
 import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { getPageNum, getSlotNum } from '../utils/locationCoords';
+import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 
 function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, setSelectedCardFilter, setActiveTab }) {
   const isMobile = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
@@ -2898,32 +2899,19 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   <div className="form-group">
                     <label>Condition</label>
                     <select className="select-control" value={quickCond} onChange={(e) => setQuickCond(e.target.value)}>
-                      <option value="Near Mint">Near Mint</option>
-                      <option value="Lightly Played">Lightly Played</option>
-                      <option value="Moderately Played">Moderately Played</option>
-                      <option value="Heavily Played">Heavily Played</option>
-                      <option value="Damaged">Damaged</option>
+                      {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
                   <div className="form-group">
                     <label>Printing</label>
                     <select className="select-control" value={quickPrint} onChange={(e) => setQuickPrint(e.target.value)}>
-                      <option value="Normal">Normal</option>
-                      <option value="Holofoil">Holofoil</option>
-                      <option value="Reverse Holofoil">Reverse Holofoil</option>
-                      <option value="1st Edition">1st Edition</option>
-                      <option value="Promo">Promo</option>
+                      {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
                     </select>
                   </div>
                   <div className="form-group">
                     <label>Language</label>
                     <select className="select-control" value={quickLang} onChange={(e) => setQuickLang(e.target.value)}>
-                      <option value="English">English</option>
-                      <option value="Japanese">Japanese</option>
-                      <option value="German">German</option>
-                      <option value="French">French</option>
-                      <option value="Spanish">Spanish</option>
-                      <option value="Italian">Italian</option>
+                      {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
                     </select>
                   </div>
                 </div>
