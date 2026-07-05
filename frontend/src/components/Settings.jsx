@@ -51,6 +51,10 @@ function Settings({ user, onUpdateUser, showToast }) {
       }
     };
 
+    reader.onerror = () => {
+      showToast('Failed to read the selected file.');
+    };
+
     reader.readAsText(file);
     e.target.value = null;
   };

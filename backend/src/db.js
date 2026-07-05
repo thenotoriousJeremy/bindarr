@@ -16,6 +16,8 @@ const dbConnection = new sqlite3.Database(dbPath, (err) => {
     console.error('Error opening database:', err.message);
   } else {
     console.log('Database connection established successfully.');
+    // sqlite3 does not enforce FOREIGN KEY constraints unless explicitly enabled per-connection.
+    dbConnection.run('PRAGMA foreign_keys = ON');
   }
 });
 

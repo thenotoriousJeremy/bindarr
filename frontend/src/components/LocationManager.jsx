@@ -427,7 +427,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     const lastCard = existingInRow[existingInRow.length - 1];
     const newPos = lastCard ? lastCard.position + 1000 : 1000;
 
-    await moveCardToLocation(entryId, activeLocationId, rowName, `Section ${targetSeq}`, newPos);
+    await moveCardToLocation(entryId, activeLocationId, rowName, String(targetSeq), newPos);
     setActiveMoveCard(null);
   };
 
@@ -1733,7 +1733,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     const lastCard = existingInRow[existingInRow.length - 1];
     const newPos = lastCard ? lastCard.position + 1000 : 1000;
     
-    await moveCardToLocation(entryId, selectedLoc.id, rowName, `Section ${targetSeq}`, newPos);
+    await moveCardToLocation(entryId, selectedLoc.id, rowName, String(targetSeq), newPos);
   };
 
 
@@ -2054,6 +2054,115 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   };
 
   const selectedLoc = locations.find(l => l.id === activeLocationId);
+
+  const getAssistantQueue = () => {
+    let queue = [...unsortedCards].filter(c => {
+      const matchesSearch = c.name.toLowerCase().includes(unsortedSearch.toLowerCase()) ||
+                           (c.set_name || '').toLowerCase().includes(unsortedSearch.toLowerCase());
+      if (!matchesSearch) return false;
+
+      if (unsortedDateFilter === 'today') {
+        const todayMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
+        const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
+        return addedTime >= todayMidnight;
+      }
+      if (unsortedDateFilter === 'yesterday') {
+        const todayMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
+        const yesterdayMidnight = todayMidnight - 24 * 60 * 60 * 1000;
+        const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
+        return addedTime >= yesterdayMidnight && addedTime < todayMidnight;
+      }
+      if (unsortedDateFilter === 'week') {
+        const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
+        return addedTime >= sevenDaysAgo;
+      }
+      return true;
+    });
+
+    queue.sort((a, b) => {
+      if (unsortedSortOrder === 'scanned-desc') {
+        const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
+        const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
+        if (timeA !== timeB) return timeB - timeA;
+        return b.entry_id - a.entry_id;
+      }
+      if (unsortedSortOrder === 'scanned-asc') {
+        const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
+        const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
+        if (timeA !== timeB) return timeA - timeB;
+        return a.entry_id - b.entry_id;
+      }
+      if (unsortedSortOrder === 'name-asc') {
+        return a.name.localeCompare(b.name);
+      }
+      if (unsortedSortOrder === 'price-desc') {
+        return (b.price_trend || 0) - (a.price_trend || 0);
+      }
+      if (unsortedSortOrder === 'set-number') {
+        const cmp = (a.set_name || '').localeCompare(b.set_name || '');
+        if (cmp !== 0) return cmp;
+        return (parseInt(a.number || '0') || 0) - (parseInt(b.number || '0') || 0);
+      }
+      if (unsortedSortOrder === 'type-name') {
+        const typeA = (a.types && a.types[0]) || 'Unknown';
+        const typeB = (b.types && b.types[0]) || 'Unknown';
+        const orderA = POKEMON_TYPE_ORDER[typeA] || 50;
+        const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
+        if (orderA !== orderB) return orderA - orderB;
+        return a.name.localeCompare(b.name);
+      }
+      if (unsortedSortOrder === 'set-number-printing') {
+        const setA = a.set_name || '';
+        const setB = b.set_name || '';
+        const cmpSet = setA.localeCompare(setB);
+        if (cmpSet !== 0) return cmpSet;
+
+        const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
+        const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
+        if (printA !== printB) return printA - printB;
+
+        const numA = parseInt(a.number || '0', 10) || 0;
+        const numB = parseInt(b.number || '0', 10) || 0;
+        if (numA !== numB) return numA - numB;
+
+        const cmpNum = (a.number || '').localeCompare(b.number || '');
+        if (cmpNum !== 0) return cmpNum;
+
+        return a.name.localeCompare(b.name);
+      }
+      return 0;
+    });
+
+    if (unsortedDateFilter === 'batch10') {
+      queue = queue.slice(0, 10);
+    } else if (unsortedDateFilter === 'batch50') {
+      queue = queue.slice(0, 50);
+    }
+
+    let idx = assistantIndex;
+    if (idx >= queue.length) {
+      idx = Math.max(0, queue.length - 1);
+    }
+    const card = queue[idx];
+    return { queue, idx, card };
+  };
+
+  // Keep the box-row highlight in sync with the current assistant card as a proper
+  // effect instead of scheduling setState from inside render (which used to flicker
+  // under StrictMode's double-render).
+  useEffect(() => {
+    if (unsortedViewMode !== 'assistant') return;
+    const { card } = getAssistantQueue();
+    if (!card) {
+      setAssistantHighlightRow(null);
+      return;
+    }
+    const recommended = findNextRecommendedSlot(card);
+    const isBoxContainer = selectedLoc && (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand');
+    setAssistantHighlightRow(isBoxContainer && recommended ? recommended.sub1 : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unsortedViewMode, unsortedCards, unsortedSearch, unsortedDateFilter, unsortedSortOrder, assistantIndex, selectedLoc, locationCards]);
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: `1fr ${isRightSidebarOpen ? '320px' : '0px'}`, gap: isRightSidebarOpen ? '1.25rem' : '0', height: 'calc(100vh - 120px)', minHeight: '650px', transition: 'grid-template-columns 0.3s ease' }} className="storage-workspace-grid">
@@ -2640,95 +2749,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         {unsortedCards.length > 0 ? (
           unsortedViewMode === 'assistant' ? (
             (() => {
-              let queue = [...unsortedCards].filter(c => {
-                const matchesSearch = c.name.toLowerCase().includes(unsortedSearch.toLowerCase()) || 
-                                     (c.set_name || '').toLowerCase().includes(unsortedSearch.toLowerCase());
-                if (!matchesSearch) return false;
-
-                if (unsortedDateFilter === 'today') {
-                  const todayMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
-                  const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
-                  return addedTime >= todayMidnight;
-                }
-                if (unsortedDateFilter === 'yesterday') {
-                  const todayMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
-                  const yesterdayMidnight = todayMidnight - 24 * 60 * 60 * 1000;
-                  const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
-                  return addedTime >= yesterdayMidnight && addedTime < todayMidnight;
-                }
-                if (unsortedDateFilter === 'week') {
-                  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-                  const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
-                  return addedTime >= sevenDaysAgo;
-                }
-                return true;
-              });
-
-              queue.sort((a, b) => {
-                if (unsortedSortOrder === 'scanned-desc') {
-                  const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
-                  const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
-                  if (timeA !== timeB) return timeB - timeA;
-                  return b.entry_id - a.entry_id;
-                }
-                if (unsortedSortOrder === 'scanned-asc') {
-                  const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
-                  const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
-                  if (timeA !== timeB) return timeA - timeB;
-                  return a.entry_id - b.entry_id;
-                }
-                if (unsortedSortOrder === 'name-asc') {
-                  return a.name.localeCompare(b.name);
-                }
-                if (unsortedSortOrder === 'price-desc') {
-                  return (b.price_trend || 0) - (a.price_trend || 0);
-                }
-                if (unsortedSortOrder === 'set-number') {
-                  const cmp = (a.set_name || '').localeCompare(b.set_name || '');
-                  if (cmp !== 0) return cmp;
-                  return (parseInt(a.number || '0') || 0) - (parseInt(b.number || '0') || 0);
-                }
-                if (unsortedSortOrder === 'type-name') {
-                  const typeA = (a.types && a.types[0]) || 'Unknown';
-                  const typeB = (b.types && b.types[0]) || 'Unknown';
-                  const orderA = POKEMON_TYPE_ORDER[typeA] || 50;
-                  const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
-                  if (orderA !== orderB) return orderA - orderB;
-                  return a.name.localeCompare(b.name);
-                }
-                if (unsortedSortOrder === 'set-number-printing') {
-                  const setA = a.set_name || '';
-                  const setB = b.set_name || '';
-                  const cmpSet = setA.localeCompare(setB);
-                  if (cmpSet !== 0) return cmpSet;
-
-                  const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
-                  const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
-                  if (printA !== printB) return printA - printB;
-
-                  const numA = parseInt(a.number || '0', 10) || 0;
-                  const numB = parseInt(b.number || '0', 10) || 0;
-                  if (numA !== numB) return numA - numB;
-
-                  const cmpNum = (a.number || '').localeCompare(b.number || '');
-                  if (cmpNum !== 0) return cmpNum;
-
-                  return a.name.localeCompare(b.name);
-                }
-                return 0;
-              });
-
-              if (unsortedDateFilter === 'batch10') {
-                queue = queue.slice(0, 10);
-              } else if (unsortedDateFilter === 'batch50') {
-                queue = queue.slice(0, 50);
-              }
-
-              let idx = assistantIndex;
-              if (idx >= queue.length) {
-                idx = Math.max(0, queue.length - 1);
-              }
-              const card = queue[idx];
+              const { queue, idx, card } = getAssistantQueue();
               if (!card) {
                 return (
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', marginTop: '1rem', fontStyle: 'italic' }}>
@@ -2807,17 +2828,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         const sortLabels = { 'custom': 'Custom', 'name-asc': 'A-Z', 'price-desc': 'Value', 'set-number': 'Set & Number', 'set-number-printing': 'Set/Number/Printing', 'type-name': 'Energy Type' };
                         const sortScheme = sortLabels[selectedLoc?.sort_order] || 'Default';
                         
-                        // Auto-highlight the recommended row for box containers
+                        // Row highlight is kept in sync by the useEffect above, not here.
                         const isBoxContainer = selectedLoc && (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand');
-                        const recommendedRowName = isBoxContainer ? recommended.sub1 : null;
-                        
-                        // Set the highlight whenever we show this card (effect-like, inline)
-                        if (recommendedRowName && assistantHighlightRow !== recommendedRowName) {
-                          setTimeout(() => setAssistantHighlightRow(recommendedRowName), 0);
-                        } else if (!isBoxContainer && assistantHighlightRow) {
-                          setTimeout(() => setAssistantHighlightRow(null), 0);
-                        }
-                        
+
                         return (
                         <div style={{ background: 'rgba(255, 71, 71, 0.05)', border: '1px solid rgba(255, 71, 71, 0.15)', padding: '0.4rem', borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'center' }}>
                           <span style={{ fontSize: '0.55rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Recommended Target ({sortScheme})</span>

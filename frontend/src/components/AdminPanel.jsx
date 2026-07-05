@@ -192,9 +192,9 @@ function AdminPanel({ showToast }) {
     }
   };
 
-  const filteredUsers = users.filter(u => 
-    u.username.toLowerCase().includes(filterText.toLowerCase()) || 
-    u.role.toLowerCase().includes(filterText.toLowerCase())
+  const filteredUsers = users.filter(u =>
+    (u.username || '').toLowerCase().includes(filterText.toLowerCase()) ||
+    (u.role || '').toLowerCase().includes(filterText.toLowerCase())
   );
 
   return (

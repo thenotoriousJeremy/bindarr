@@ -39,16 +39,21 @@ class ErrorBoundary extends React.Component {
 
 // Global fetch interceptor to append authorization headers and handle 401s
 const originalFetch = window.fetch;
-window.fetch = function (url, options = {}) {
+window.fetch = function (input, options = {}) {
+  // `input` may be a string, a URL, or a Request object — normalize before using string methods.
+  const url = typeof input === 'string' ? input : (input && input.url) || '';
+  const isPublicOrAuthRoute = url.includes('/api/shared/') || url.includes('/api/auth/login') || url.includes('/api/auth/register');
+
   const token = localStorage.getItem('pokedexrr_token');
-  if (token && url.startsWith('/api/') && !url.includes('/api/shared/')) {
-    options.headers = {
-      ...options.headers,
+  const finalOptions = { ...options };
+  if (token && url.startsWith('/api/') && !isPublicOrAuthRoute) {
+    finalOptions.headers = {
+      ...finalOptions.headers,
       'Authorization': `Bearer ${token}`
     };
   }
-  return originalFetch(url, options).then(response => {
-    if (response.status === 401 && !url.includes('/api/shared/')) {
+  return originalFetch(input, finalOptions).then(response => {
+    if (response.status === 401 && !isPublicOrAuthRoute) {
       // Dispatch custom event to trigger logout without page refresh
       window.dispatchEvent(new Event('pokedexrr_logout'));
     }

@@ -684,7 +684,11 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                 
                 <div className="form-group">
                   <label>Storage Container</label>
-                  <select className="select-control" value={editLocationId} onChange={(e) => setEditLocationId(e.target.value)}>
+                  <select className="select-control" value={editLocationId} onChange={(e) => {
+                    setEditLocationId(e.target.value);
+                    setEditSubLocation1('');
+                    setEditSubLocation2('');
+                  }}>
                     <option value="">Unassigned Pile</option>
                     {locations.map((loc) => (
                       <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>

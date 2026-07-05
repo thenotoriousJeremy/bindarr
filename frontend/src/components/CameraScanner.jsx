@@ -145,6 +145,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  const streamRef = useRef(null);
 
   // Drawer states
   const [selectedCard, setSelectedCard] = useState(null);
@@ -165,11 +166,17 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [subLocation1, setSubLocation1] = useState('');
   const [subLocation2, setSubLocation2] = useState('');
 
+  // Keep a ref mirroring the latest stream so the unmount cleanup below (whose
+  // closure is fixed from the first render) can always stop the live tracks.
+  useEffect(() => {
+    streamRef.current = stream;
+  }, [stream]);
+
   // Clean up camera stream on unmount
   useEffect(() => {
     fetchLocations();
     return () => {
-      stopCamera();
+      streamRef.current?.getTracks().forEach(track => track.stop());
     };
   }, []);
 
