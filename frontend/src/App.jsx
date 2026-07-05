@@ -1,15 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { LayoutDashboard, Camera, Search, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Layers } from 'lucide-react';
-import Dashboard from './components/Dashboard';
-import CameraScanner from './components/CameraScanner';
-import CardSearch from './components/CardSearch';
-import CollectionList from './components/CollectionList';
-import LocationManager from './components/LocationManager';
 import Login from './components/Login';
-import Settings from './components/Settings';
-import AdminPanel from './components/AdminPanel';
-import SharedCollection from './components/SharedCollection';
-import DeckBuilder from './components/DeckBuilder';
+
+// View components are code-split so heavy deps (tesseract.js OCR in the scanner,
+// recharts in the chart views) load on demand instead of in the initial bundle.
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const CameraScanner = lazy(() => import('./components/CameraScanner'));
+const CardSearch = lazy(() => import('./components/CardSearch'));
+const CollectionList = lazy(() => import('./components/CollectionList'));
+const LocationManager = lazy(() => import('./components/LocationManager'));
+const Settings = lazy(() => import('./components/Settings'));
+const AdminPanel = lazy(() => import('./components/AdminPanel'));
+const SharedCollection = lazy(() => import('./components/SharedCollection'));
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -35,6 +37,15 @@ class ErrorBoundary extends React.Component {
     }
     return this.props.children;
   }
+}
+
+// Fallback shown while a lazily-loaded view chunk is fetched.
+function ChunkFallback() {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '4rem', color: 'var(--text-secondary)' }}>
+      <div className="spinner" aria-label="Loading" />
+    </div>
+  );
 }
 
 // Global fetch interceptor to append authorization headers and handle 401s
@@ -142,7 +153,11 @@ function App() {
 
   // Render shared collection view if URL matches /share/:token
   if (shareToken) {
-    return <SharedCollection shareToken={shareToken} />;
+    return (
+      <Suspense fallback={<ChunkFallback />}>
+        <SharedCollection shareToken={shareToken} />
+      </Suspense>
+    );
   }
 
   // Render login screen if unauthenticated
@@ -278,7 +293,9 @@ function App() {
           {/* key on activeTab replays the mount animation for a smooth
               transition instead of a hard swap between views */}
           <div key={activeTab} className="view-transition">
-            {renderContent()}
+            <Suspense fallback={<ChunkFallback />}>
+              {renderContent()}
+            </Suspense>
           </div>
         </ErrorBoundary>
       </main>
