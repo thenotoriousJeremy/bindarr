@@ -30,6 +30,9 @@ lerna-debug.log*
 logs/
 *.log
 
+# Agent instructions
+CLAUDE.md
+
 # IDE files
 .vscode/
 .idea/
