@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload } from 'lucide-react';
+import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload, Eye, EyeOff } from 'lucide-react';
 
 function Settings({ user, onUpdateUser, showToast }) {
+  const [showApiKey, setShowApiKey] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -16,6 +17,11 @@ function Settings({ user, onUpdateUser, showToast }) {
   const handleImportFile = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+
+    if (!window.confirm(`Import "${file.name}"? Cards from this file will be merged into your existing collection. This cannot be undone.`)) {
+      e.target.value = '';
+      return;
+    }
 
     const reader = new FileReader();
     const isJson = file.name.endsWith('.json');
@@ -417,28 +423,39 @@ function Settings({ user, onUpdateUser, showToast }) {
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
             <KeyRound size={20} style={{ color: 'var(--accent-red)' }} />
-            <h3 style={{ color: '#fff', fontSize: '1.1rem' }}>Developer API Key</h3>
+            <h3 style={{ color: '#fff', fontSize: '1.1rem' }}>Pokémon TCG API Key</h3>
           </div>
 
           <form onSubmit={handleApiKeyChange} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div style={{ background: 'rgba(255, 71, 71, 0.03)', border: '1px solid var(--border-glass)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-              Avoid rate-limit delay tarpits by registering for a free key at <a href="https://dev.pokemontcg.io" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-yellow)', fontWeight: 600 }}>dev.pokemontcg.io</a> and entering it below.
+              Card searches use the free Pokémon TCG API. Adding your own key raises your rate limit so searches stay fast during bulk scanning. Grab a free key at <a href="https://dev.pokemontcg.io" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-yellow)', fontWeight: 600 }}>dev.pokemontcg.io</a> and paste it below. It's optional.
             </div>
 
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label htmlFor="settings-tcg-api-key">X-Api-Key Header Value</label>
-              <input
-                id="settings-tcg-api-key"
-                type="text"
-                name="tcg-api-key"
-                autoComplete="off"
-                className="input-control"
-                placeholder="e.g. xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                value={tcgApiKey}
-                onChange={(e) => setTcgApiKey(e.target.value)}
-                disabled={apiKeyLoading}
-                style={{ fontFamily: 'monospace' }}
-              />
+              <label htmlFor="settings-tcg-api-key">API Key</label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  id="settings-tcg-api-key"
+                  type={showApiKey ? 'text' : 'password'}
+                  name="tcg-api-key"
+                  autoComplete="off"
+                  className="input-control"
+                  placeholder="e.g. xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  value={tcgApiKey}
+                  onChange={(e) => setTcgApiKey(e.target.value)}
+                  disabled={apiKeyLoading}
+                  style={{ fontFamily: 'monospace', paddingRight: '2.4rem', width: '100%' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey((v) => !v)}
+                  aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
+                  title={showApiKey ? 'Hide API key' : 'Show API key'}
+                  style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
+                >
+                  {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </div>
 
             <button 
