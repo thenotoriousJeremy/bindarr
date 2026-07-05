@@ -3,6 +3,7 @@ import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend } from 'recha
 import { Search, Trophy, Compass, Library, ShieldAlert, Sparkles, X } from 'lucide-react';
 import { formatPrice } from '../utils/formatPrice';
 import { PRINTINGS } from '../utils/cardOptions';
+import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
@@ -335,9 +336,17 @@ function SharedCollection({ shareToken }) {
             const glowClass = isUltra ? 'rarity-glow-ultra' : '';
 
             return (
-              <div key={card.entry_id} className="tcg-card" onClick={() => setActiveCard(card)}>
+              <div key={card.entry_id} className="tcg-card tilt-card-wrapper" onClick={() => setActiveCard(card)}>
                 <div className={`tcg-card-inner ${glowClass}`}>
                   <img src={card.image_url} alt={card.name} className="tcg-card-image" loading="lazy" />
+                  {getFoilOverlayClass(card.printing) && (
+                    <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
+                  )}
+                  {getPrintingBadgeLabel(card.printing) && (
+                    <span style={{ position: 'absolute', top: '6px', left: '6px', fontSize: '0.6rem', fontWeight: 800, padding: '2px 5px', borderRadius: '3px', zIndex: 6, ...getPrintingBadgeStyle(card.printing) }}>
+                      {getPrintingBadgeLabel(card.printing)}
+                    </span>
+                  )}
                   <div className="tcg-card-quantity-tag">x{card.quantity}</div>
                 </div>
                 <div className="tcg-card-info">
