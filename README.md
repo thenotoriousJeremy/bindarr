@@ -66,6 +66,30 @@ If you prefer not to use self-signed HTTPS in development:
 
 ---
 
+## 🔑 First-Time Sign In
+
+On its **first startup**, Pokedexrr creates a default administrator account and prints the credentials to the server console (the terminal running `npm run dev` / `npm start`, or `docker-compose logs`).
+
+Look for these lines in the startup logs:
+```text
+Created default admin user. ID: 1
+  username: admin
+  password: <generated-password>
+Log in and change this password immediately via Settings.
+```
+
+- **Username**: `admin`
+- **Password**:
+  - If you set the `DEFAULT_ADMIN_PASSWORD` environment variable before first startup, that value is used.
+  - Otherwise a random password is generated and printed **once** in the logs above. Copy it before clearing your terminal.
+
+> [!IMPORTANT]
+> The password is only printed on the run that creates the account (when the database is first initialized). If you miss it and did not set `DEFAULT_ADMIN_PASSWORD`, delete the SQLite database file so it is recreated on the next startup, or set `DEFAULT_ADMIN_PASSWORD` and recreate the database.
+
+After logging in, open **Settings** and change the password. Additional users can self-register from the login screen (they are created with the `member` role); an `admin` can manage users and roles from the **Admin** panel.
+
+---
+
 ## 🐳 Docker Deployment (Production)
 
 Pokedexrr is packaged as a single-container multi-stage Docker build, serving the compiled frontend directly from the Node server.
@@ -83,6 +107,8 @@ You can configure Pokedexrr by passing these environment variables in your conta
 - `PORT` (Default: `3001`) - The port the server runs on.
 - `DB_PATH` (Default: `/app/database/pokemon_cards.db`) - Location of the SQLite database.
 - `POKEMON_TCG_API_KEY` (Optional) - Your API key from [pokemontcg.io](https://pokemontcg.io). While Pokedexrr works without one, adding a free key increases TCG API rate limits (from 20k to 50k requests/day).
+- `DEFAULT_ADMIN_PASSWORD` (Optional) - Sets a known password for the auto-created `admin` account on first startup. If unset, a random password is generated and printed once to the server logs (see [First-Time Sign In](#-first-time-sign-in)).
+- `CORS_ORIGIN` (Optional) - Comma-separated list of origins allowed to call the API. Defaults to the Vite dev server + same-origin. Set to your real domain when deploying.
 
 ---
 
