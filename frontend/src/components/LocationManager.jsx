@@ -5,6 +5,24 @@ import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '.
 import { sortCardsByOrder } from '../utils/cardSort';
 import { getPageNum, getSlotNum } from '../utils/locationCoords';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
+import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
+import { buildLocationProfiles, suggestBestContainer } from '../utils/containerSuggest';
+
+// Shared corner badge for a card's finish (Holo / Rev / 1st / Promo). Colors and
+// label come from the single source of truth so Storage matches Collection.
+function PrintingBadge({ printing, style }) {
+  const label = getPrintingBadgeLabel(printing);
+  if (!label) return null;
+  return (
+    <span style={{
+      position: 'absolute', top: '4px', right: '4px',
+      fontSize: '0.55rem', fontWeight: 900, letterSpacing: '0.05em',
+      padding: '1px 5px', borderRadius: '3px', zIndex: 10,
+      boxShadow: '0 1px 3px rgba(0,0,0,0.5)', textTransform: 'uppercase',
+      ...getPrintingBadgeStyle(printing), ...style
+    }}>{label}</span>
+  );
+}
 
 function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, setSelectedCardFilter, setActiveTab }) {
   const isMobile = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
@@ -62,6 +80,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   
   // Unsorted Cards states
   const [unsortedCards, setUnsortedCards] = useState([]);
+  const [allCards, setAllCards] = useState([]); // full collection, for cross-location suggestions
+  const locationProfiles = useMemo(() => buildLocationProfiles(allCards), [allCards]);
   const [unsortedSearch, setUnsortedSearch] = useState('');
   const [unsortedSortOrder, setUnsortedSortOrder] = useState('name-asc');
   const [unsortedViewMode, setUnsortedViewMode] = useState('list'); // 'list' or 'assistant'
@@ -1037,41 +1057,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   {/* Shiny holo overlay */}
                   {card.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '8px' }} />}
                   {card.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '8px' }} />}
-                  {/* Holo / Rev Holo text badge indicators */}
-                  {card.printing === 'Holofoil' && (
-                    <span style={{
-                      position: 'absolute',
-                      top: '4px',
-                      right: '4px',
-                      background: 'rgba(217, 119, 6, 0.95)',
-                      color: '#fff',
-                      fontSize: '0.55rem',
-                      fontWeight: 900,
-                      letterSpacing: '0.05em',
-                      padding: '1px 4px',
-                      borderRadius: '3px',
-                      zIndex: 10,
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                      textTransform: 'uppercase'
-                    }}>Holo</span>
-                  )}
-                  {card.printing === 'Reverse Holofoil' && (
-                    <span style={{
-                      position: 'absolute',
-                      top: '4px',
-                      right: '4px',
-                      background: 'rgba(75, 85, 99, 0.95)',
-                      color: '#fff',
-                      fontSize: '0.55rem',
-                      fontWeight: 900,
-                      letterSpacing: '0.05em',
-                      padding: '1px 4px',
-                      borderRadius: '3px',
-                      zIndex: 10,
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                      textTransform: 'uppercase'
-                    }}>Rev Holo</span>
-                  )}
+                  {/* Finish badge (shared style) */}
+                  <PrintingBadge printing={card.printing} />
                   <div style={{
                     position: 'absolute',
                     bottom: 0, left: 0, right: 0,
@@ -1242,7 +1229,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       const response = await fetch('/api/collection');
       if (response.ok) {
         const allCards = await response.json();
-        
+        setAllCards(allCards);
+
         // Unsorted cards: location_id is null or empty
         const unsorted = allCards.filter(c => !c.location_id);
         setUnsortedCards(unsorted);
@@ -2342,40 +2330,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                   {/* Shiny holo overlay */}
                                   {card.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '8px' }} />}
                                   {card.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '8px' }} />}
-                                  {/* Holo / Rev Holo text badge indicators */}
-                                  {card.printing === 'Holofoil' && (
-                                    <span style={{
-                                      position: 'absolute',
-                                      top: '4px',
-                                      right: '4px',
-                                      background: 'rgba(217, 119, 6, 0.95)',
-                                      color: '#fff',
-                                      fontSize: '0.55rem',
-                                      fontWeight: 900,
-                                      letterSpacing: '0.05em',
-                                      padding: '1px 4px',
-                                      borderRadius: '3px',
-                                      zIndex: 10,
-                                      boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                                      textTransform: 'uppercase'
-                                    }}>Holo</span>
-                                  )}
-                                  {card.printing === 'Reverse Holofoil' && (
-                                    <span style={{
-                                      position: 'absolute',
-                                      top: '4px',
-                                      right: '4px',
-                                      background: 'rgba(75, 85, 99, 0.95)',
-                                      color: '#fff',
-                                      fontSize: '0.55rem',
-                                      fontWeight: 900,
-                                      letterSpacing: '0.05em',
-                                      padding: '1px 4px',
-                                      borderRadius: '3px',
-                                      zIndex: 10,
-                                      boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                                    }}>Rev Holo</span>
-                                  )}
+                                  {/* Finish badge (shared style) */}
+                                  <PrintingBadge printing={card.printing} />
                                   
                                   {/* Card Rarity Indicator Badge */}
                                   <span style={{
@@ -2565,6 +2521,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               }
 
               const recommended = findNextRecommendedSlot(card);
+              const bestContainer = suggestBestContainer(card, locations, locationProfiles);
+              const suggestsElsewhere = bestContainer && bestContainer.location.id !== selectedLoc?.id;
 
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -2629,6 +2587,24 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         <div>Cond: <strong style={{ color: '#fff' }}>{card.condition}</strong></div>
                         <div>Value: <strong style={{ color: 'var(--accent-yellow)' }}>${(card.price_trend || 0).toFixed(2)}</strong></div>
                       </div>
+
+                      {suggestsElsewhere && (
+                        <div style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.25)', padding: '0.4rem 0.5rem', borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                          <span style={{ fontSize: '0.55rem', color: 'var(--accent-blue)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>💡 Best fit: {bestContainer.location.name}</span>
+                          <span style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>{bestContainer.reason} • {bestContainer.free} free</span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={async () => {
+                              await handleRelocateCardToContainer(card.entry_id, bestContainer.location);
+                              if (idx >= queue.length - 1) setAssistantIndex(0);
+                            }}
+                            style={{ width: '100%', marginTop: '2px', fontSize: '0.62rem', padding: '0.22rem', height: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                          >
+                            Send to {bestContainer.location.name}
+                          </button>
+                        </div>
+                      )}
 
                       {recommended ? (() => {
                         const sortLabels = { 'custom': 'Custom', 'name-asc': 'A-Z', 'price-desc': 'Value', 'set-number': 'Set & Number', 'set-number-printing': 'Set/Number/Printing', 'type-name': 'Energy Type' };
@@ -3515,9 +3491,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         </span>
                         <span style={{
                           fontSize: '0.55rem',
-                          background: c.printing === 'Holofoil' ? 'rgba(217, 119, 6, 0.95)' : c.printing === 'Reverse Holofoil' ? 'rgba(75, 85, 99, 0.95)' : 'rgba(255,255,255,0.05)',
-                          color: '#fff',
-                          padding: '1px 4px',
+                          ...getPrintingBadgeStyle(c.printing),
+                          padding: '1px 5px',
                           borderRadius: '3px',
                           fontWeight: 700,
                           textTransform: 'uppercase'
