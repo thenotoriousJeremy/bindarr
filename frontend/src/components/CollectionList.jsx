@@ -3,7 +3,7 @@ import { Search, Download, Trash2, Edit2, X, MapPin, LayoutGrid, List, Database,
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
-import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
+import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import PriceHistoryChart from './PriceHistoryChart';
 import DeckBuilder from './DeckBuilder';
 
@@ -457,9 +457,12 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
             const glowClass = isUltra ? 'rarity-glow-ultra' : '';
 
             return (
-              <div key={item.entry_id} className="tcg-card" onClick={() => setInspectorCard(item)}>
+              <div key={item.entry_id} className="tcg-card tilt-card-wrapper" onClick={() => setInspectorCard(item)}>
                 <div className={`tcg-card-inner ${glowClass}`}>
                   <img src={item.image_url} alt={item.name} className="tcg-card-image" loading="lazy" />
+                  {getFoilOverlayClass(item.printing) && (
+                    <div className={getFoilOverlayClass(item.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
+                  )}
                   <div className="tcg-card-quantity-tag">x{item.quantity}</div>
                   
                   {/* Overlay Tags */}
@@ -529,14 +532,10 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                   <tr key={item.entry_id}>
                     <td>
                       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                        <div style={{ position: 'relative', width: '36px', height: '50px', flexShrink: 0 }}>
+                        <div style={{ position: 'relative', width: '36px', height: '50px', flexShrink: 0, overflow: 'hidden', borderRadius: '4px' }}>
                           <img src={item.image_url} alt={item.name} className="collection-row-thumbnail" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px' }} />
-                          {((item.printing || '').toLowerCase().includes('holo') || (item.printing || '').toLowerCase().includes('foil')) && (
-                            <div style={{
-                              position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-                              background: 'linear-gradient(135deg, rgba(255,255,255,0.25) 0%, transparent 50%, rgba(255,255,255,0.15) 100%)',
-                              pointerEvents: 'none', zIndex: 2, mixBlendMode: 'overlay', borderRadius: '4px'
-                            }} />
+                          {getFoilOverlayClass(item.printing) && (
+                            <div className={getFoilOverlayClass(item.printing)} style={{ borderRadius: '4px' }} />
                           )}
                         </div>
                         <div style={{ minWidth: 0, flex: 1 }}>

@@ -275,7 +275,11 @@ function App() {
       {/* Main Content Area */}
       <main style={{ flex: 1, marginTop: '1rem' }}>
         <ErrorBoundary>
-          {renderContent()}
+          {/* key on activeTab replays the mount animation for a smooth
+              transition instead of a hard swap between views */}
+          <div key={activeTab} className="view-transition">
+            {renderContent()}
+          </div>
         </ErrorBoundary>
       </main>
 

@@ -1421,6 +1421,18 @@ button, input, select, textarea {
   font-size: 0.7rem;
 }
 
+/* Smooth view transition when switching top-level tabs */
+@keyframes viewFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.view-transition {
+  animation: viewFadeIn 0.28s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .view-transition { animation: none; }
+}
+
 /* ==========================================================================
    FOIL FINISHES — Holofoil vs Reverse Holofoil are intentionally distinct.
    Holofoil  = full rainbow prism that drifts continuously (screen blend).
