@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, AreaChart, Area } from 'recharts';
-import { TrendingUp, Coins, Library, Compass, Trophy, Plus, ArrowUpRight, Sparkles, X } from 'lucide-react';
+import { TrendingUp, Coins, Library, Trophy, Plus, ArrowUpRight, X } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import PriceHistoryChart from './PriceHistoryChart';
@@ -133,7 +133,7 @@ function Dashboard({ statsTrigger, onNavigate }) {
     );
   }
 
-  const { summary, types, rarities, sets, locations, topValuable, setProgress } = stats;
+  const { summary, types, rarities, sets, topValuable, recentAdditions = [], setProgress } = stats;
 
   const typeChartData = types.map(t => ({
     name: t.name,
@@ -189,25 +189,37 @@ function Dashboard({ statsTrigger, onNavigate }) {
           })()}
         </div>
 
-        {/* Mint Rate */}
+        {/* Total Invested (cost basis) */}
         <div className="glass-panel metric-card">
           <div className="metric-header">
-            <span>Mint Rate</span>
-            <Sparkles size={18} style={{ color: 'var(--accent-yellow)' }} />
+            <span>Total Invested</span>
+            <Coins size={18} style={{ color: 'var(--accent-yellow)' }} />
           </div>
-          <div className="metric-value">{summary.mintRate || 0}%</div>
-          <div className="metric-footer">Near Mint condition ratio</div>
+          <div className="metric-value">${(summary.totalSpent || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+          <div className="metric-footer">
+            <span>Avg ${formatPrice(summary.avgCardValue)} / card</span>
+          </div>
         </div>
 
-        {/* Vintage Ratio */}
-        <div className="glass-panel metric-card">
-          <div className="metric-header">
-            <span>Vintage Ratio</span>
-            <Coins size={18} />
-          </div>
-          <div className="metric-value">{summary.vintageRatio || 0}%</div>
-          <div className="metric-footer">Classic vintage set ratio</div>
-        </div>
+        {/* Unrealized Gain / ROI */}
+        {(() => {
+          const roi = summary.roi || { abs: 0, pct: null };
+          const isPositive = (roi.abs || 0) >= 0;
+          return (
+            <div className="glass-panel metric-card">
+              <div className="metric-header">
+                <span>Unrealized Gain</span>
+                <ArrowUpRight size={18} style={{ color: isPositive ? '#22c55e' : '#ef4444', transform: isPositive ? 'none' : 'rotate(90deg)' }} />
+              </div>
+              <div className="metric-value" style={{ color: isPositive ? '#22c55e' : '#ef4444' }}>
+                {isPositive ? '+' : '−'}${Math.abs(roi.abs || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+              </div>
+              <div className="metric-footer">
+                <span>{roi.pct === null ? 'Set purchase prices to track ROI' : `${isPositive ? '+' : ''}${roi.pct}% vs cost basis`}</span>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Total Cards count */}
         <div className="glass-panel metric-card">
@@ -217,7 +229,7 @@ function Dashboard({ statsTrigger, onNavigate }) {
           </div>
           <div className="metric-value">{summary.totalCards}</div>
           <div className="metric-footer">
-            <span>{summary.uniqueCards} unique card styles</span>
+            <span>{summary.uniqueCards} unique{summary.unsortedCount > 0 ? ` • ${summary.unsortedCount} unsorted` : ''}</span>
           </div>
         </div>
       </div>
@@ -394,6 +406,38 @@ function Dashboard({ statsTrigger, onNavigate }) {
               ))}
             </div>
           </div>
+
+          {/* Recent Additions */}
+          {recentAdditions.length > 0 && (
+            <div className="glass-panel" style={{ flex: 1 }}>
+              <h3 className="chart-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Plus size={18} style={{ color: 'var(--accent-blue)' }} />
+                Recent Additions
+              </h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginTop: '1.25rem' }}>
+                {recentAdditions.map((card, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => setInspectorCard(card)}
+                    style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', cursor: 'pointer', transition: 'all 0.2s ease' }}
+                    className="dashboard-card-clickable"
+                  >
+                    <img src={card.image_url} alt={card.name} style={{ width: '34px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '4px' }} />
+                    <div style={{ flex: 1, overflow: 'hidden' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {getCardDisplayName(card.name, card.language)}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{card.set_name} • #{card.number}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontWeight: 700, color: 'var(--accent-yellow)', fontSize: '0.8rem' }}>${formatPrice(card.price_trend)}</div>
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{card.added_at ? new Date(card.added_at).toLocaleDateString() : ''}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Set Completion progress tracker */}
           {setProgress.length > 0 && (

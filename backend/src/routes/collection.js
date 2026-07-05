@@ -529,6 +529,8 @@ router.get('/stats', async (req, res) => {
     let totalCards = 0;
     let uniqueCards = rows.length;
     let totalValue = 0;
+    let totalSpent = 0;
+    let unsortedCount = 0;
     let nearMintCount = 0;
     let vintageCount = 0;
 
@@ -556,6 +558,8 @@ router.get('/stats', async (req, res) => {
 
       totalCards += qty;
       totalValue += qty * price;
+      totalSpent += qty * (row.purchase_price || 0);
+      if (!row.location_name) unsortedCount += qty;
 
       if (row.condition === 'Near Mint') {
         nearMintCount += qty;
@@ -671,11 +675,36 @@ router.get('/stats', async (req, res) => {
     const mintRate = totalCards > 0 ? parseFloat(((nearMintCount / totalCards) * 100).toFixed(1)) : 0.0;
     const vintageRatio = totalCards > 0 ? parseFloat(((vintageCount / totalCards) * 100).toFixed(1)) : 0.0;
 
+    // Recently added cards (most useful "what did I just add" glance)
+    const recentRows = await db.all(`
+      SELECT c.quantity, c.condition, c.printing, c.language, c.added_at,
+             cc.id as card_id, cc.name, cc.rarity, cc.set_name, cc.number, cc.image_url,
+             cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
+      FROM collection c
+      JOIN card_cache cc ON c.card_id = cc.id
+      WHERE c.user_id = ?
+      ORDER BY c.added_at DESC
+      LIMIT 6
+    `, [req.user.id]);
+    const recentAdditions = recentRows.map(row => ({ ...row, price_trend: resolveCardPrice(row) }));
+
+    const gainAbs = totalValue - totalSpent;
+    const roi = {
+      abs: parseFloat(gainAbs.toFixed(2)),
+      pct: totalSpent > 0 ? parseFloat(((gainAbs / totalSpent) * 100).toFixed(1)) : null
+    };
+    const avgCardValue = totalCards > 0 ? parseFloat((totalValue / totalCards).toFixed(2)) : 0.0;
+
     res.json({
       summary: {
         totalCards,
         uniqueCards,
         totalValue: parseFloat(totalValue.toFixed(2)),
+        totalSpent: parseFloat(totalSpent.toFixed(2)),
+        roi,
+        avgCardValue,
+        unsortedCount,
+        duplicateCopies: Math.max(totalCards - uniqueCards, 0),
         mintRate,
         vintageRatio,
         change7d: {
@@ -705,6 +734,7 @@ router.get('/stats', async (req, res) => {
       })).sort((a, b) => b.value - a.value).slice(0, 8),
       locations: Object.keys(locationCounts).map(name => ({ name, value: locationCounts[name] })),
       topValuable,
+      recentAdditions,
       setProgress: setProgress.slice(0, 4)
     });
   } catch (error) {
