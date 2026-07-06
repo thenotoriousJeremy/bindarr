@@ -38,7 +38,7 @@ function extractDetailedPrices(card) {
   let normal = null;
   let holofoil = null;
   let reverseHolofoil = null;
-  
+
   if (card.tcgplayer && card.tcgplayer.prices) {
     const prices = card.tcgplayer.prices;
     if (prices.normal && (prices.normal.market || prices.normal.mid)) {
@@ -47,19 +47,36 @@ function extractDetailedPrices(card) {
     if (prices['1stEditionNormal'] && !normal) {
       normal = prices['1stEditionNormal'].market || prices['1stEditionNormal'].mid;
     }
-    
+
     if (prices.holofoil && (prices.holofoil.market || prices.holofoil.mid)) {
       holofoil = prices.holofoil.market || prices.holofoil.mid;
     }
     if (prices['1stEditionHolofoil'] && !holofoil) {
       holofoil = prices['1stEditionHolofoil'].market || prices['1stEditionHolofoil'].mid;
     }
-    
+
     if (prices.reverseHolofoil && (prices.reverseHolofoil.market || prices.reverseHolofoil.mid)) {
       reverseHolofoil = prices.reverseHolofoil.market || prices.reverseHolofoil.mid;
     }
   }
-  return { normal, holofoil, reverseHolofoil };
+
+  // Cardmarket's avg1/avg7/avg30 are real rolling averages it computes from
+  // actual sales — the only genuine historical price data available anywhere
+  // in this API (no source here goes back further than 30 days). avg1 (its
+  // own "now") is kept so trend comparisons stay within Cardmarket instead of
+  // mixing in price_trend, which is usually sourced from TCGPlayer — a
+  // different marketplace with a structurally different price.
+  let avg1 = null;
+  let avg7 = null;
+  let avg30 = null;
+  if (card.cardmarket && card.cardmarket.prices) {
+    const cm = card.cardmarket.prices;
+    if (cm.avg1 > 0) avg1 = cm.avg1;
+    if (cm.avg7 > 0) avg7 = cm.avg7;
+    if (cm.avg30 > 0) avg30 = cm.avg30;
+  }
+
+  return { normal, holofoil, reverseHolofoil, avg1, avg7, avg30 };
 }
 
 // Save a list of cards to SQLite cache
@@ -72,9 +89,9 @@ async function cacheCards(cards) {
     const imageUrl = card.images ? (card.images.small || card.images.large) : '';
 
     await db.run(
-      `INSERT OR REPLACE INTO card_cache 
-       (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend, price_normal, price_holofoil, price_reverse_holofoil, last_updated)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+      `INSERT OR REPLACE INTO card_cache
+       (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend, price_normal, price_holofoil, price_reverse_holofoil, price_avg1, price_avg7, price_avg30, last_updated)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
       [
         card.id,
         card.name,
@@ -89,7 +106,10 @@ async function cacheCards(cards) {
         price,
         detailed.normal,
         detailed.holofoil,
-        detailed.reverseHolofoil
+        detailed.reverseHolofoil,
+        detailed.avg1,
+        detailed.avg7,
+        detailed.avg30
       ]
     );
   }
@@ -298,7 +318,10 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
         price_trend: extractPrice(c),
         price_normal: detailed.normal,
         price_holofoil: detailed.holofoil,
-        price_reverse_holofoil: detailed.reverseHolofoil
+        price_reverse_holofoil: detailed.reverseHolofoil,
+        price_avg1: detailed.avg1,
+        price_avg7: detailed.avg7,
+        price_avg30: detailed.avg30
       };
     });
   } catch (error) {
@@ -350,7 +373,10 @@ async function getCardById(id, apiKey = '') {
         price_trend: extractPrice(card),
         price_normal: detailed.normal,
         price_holofoil: detailed.holofoil,
-        price_reverse_holofoil: detailed.reverseHolofoil
+        price_reverse_holofoil: detailed.reverseHolofoil,
+        price_avg1: detailed.avg1,
+        price_avg7: detailed.avg7,
+        price_avg30: detailed.avg30
       };
     }
   } catch (error) {

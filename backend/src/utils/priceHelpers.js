@@ -1,3 +1,15 @@
+// SQLite's CURRENT_TIMESTAMP stores UTC but as a naive "YYYY-MM-DD HH:MM:SS"
+// string with no timezone marker. JS's Date parser treats a string like that
+// as LOCAL time, so on any server not running in UTC, a value that's really
+// "now" gets parsed as hours off — enough to misorder it against a properly
+// UTC-tagged timestamp (e.g. an ISO string with a trailing Z). Always read
+// SQLite datetimes through this so they compare correctly against Date.now()
+// or other real UTC timestamps.
+function parseSqliteUtc(str) {
+  if (!str) return new Date(NaN);
+  return /Z$|[+-]\d\d:\d\d$/.test(str) ? new Date(str) : new Date(str.replace(' ', 'T') + 'Z');
+}
+
 function resolveCardPrice(card) {
   if (!card) return 0;
   if (card.printing === 'Holofoil' && card.price_holofoil !== null && card.price_holofoil > 0) {
@@ -141,24 +153,6 @@ async function getSortedPositionForCard(db, locationId, userId, cardMetadata) {
   return (existing[targetIndex - 1].position + existing[targetIndex + 1].position) / 2;
 }
 
-// Deterministic price simulation over history, seeded from the card ID so the
-// same card always produces the same "historical" curve.
-const getSimulatedPriceAt = (cardId, currentPrice, t, now) => {
-  const timeDiff = now - t;
-  const yearsAgo = timeDiff / (365.25 * 24 * 60 * 60 * 1000);
-
-  let seed = 0;
-  for (let i = 0; i < cardId.length; i++) {
-    seed += cardId.charCodeAt(i);
-  }
-
-  const trend = 0.05 * Math.sin(seed * 0.1) * yearsAgo; // up or down trend
-  const noise = 0.03 * Math.sin(seed + yearsAgo * 12); // monthly waves
-  const factor = Math.max(0.1, 1.0 - (yearsAgo * 0.06) + trend + noise);
-
-  return parseFloat((currentPrice * factor).toFixed(2));
-};
-
 const isVintageSet = (setId) => {
   const id = (setId || '').toLowerCase();
   return id.startsWith('base') || id.startsWith('gym') || id.startsWith('neo') ||
@@ -168,9 +162,9 @@ const isVintageSet = (setId) => {
 };
 
 module.exports = {
+  parseSqliteUtc,
   resolveCardPrice,
   rebalanceLocationPositions,
   getSortedPositionForCard,
-  getSimulatedPriceAt,
   isVintageSet
 };

@@ -297,6 +297,24 @@ async function initDb() {
     console.log('Adding price_reverse_holofoil column to card_cache table...');
     await run(`ALTER TABLE card_cache ADD COLUMN price_reverse_holofoil REAL`);
   }
+  // Cardmarket's real 1-day/7-day/30-day rolling averages — the only genuine
+  // historical price data the API exposes (nothing older is available from
+  // any source). avg1 is kept alongside avg7/avg30 so "now vs. then" trend
+  // comparisons stay within the same marketplace instead of comparing
+  // against price_trend, which prioritizes TCGPlayer — a different
+  // marketplace with a structurally different price than Cardmarket's.
+  if (!cardCacheCols.some(c => c.name === 'price_avg1')) {
+    console.log('Adding price_avg1 column to card_cache table...');
+    await run(`ALTER TABLE card_cache ADD COLUMN price_avg1 REAL`);
+  }
+  if (!cardCacheCols.some(c => c.name === 'price_avg7')) {
+    console.log('Adding price_avg7 column to card_cache table...');
+    await run(`ALTER TABLE card_cache ADD COLUMN price_avg7 REAL`);
+  }
+  if (!cardCacheCols.some(c => c.name === 'price_avg30')) {
+    console.log('Adding price_avg30 column to card_cache table...');
+    await run(`ALTER TABLE card_cache ADD COLUMN price_avg30 REAL`);
+  }
 
   // 6. Add checked_out columns to decks table if missing
   const decksCols = await all(`PRAGMA table_info(decks)`);

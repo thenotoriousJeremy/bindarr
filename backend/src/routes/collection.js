@@ -6,8 +6,8 @@ const {
   resolveCardPrice,
   rebalanceLocationPositions,
   getSortedPositionForCard,
-  getSimulatedPriceAt,
-  isVintageSet
+  isVintageSet,
+  parseSqliteUtc
 } = require('../utils/priceHelpers');
 
 const router = express.Router();
@@ -518,6 +518,7 @@ router.get('/stats', async (req, res) => {
       SELECT
         c.quantity, c.purchase_price, c.added_at, c.printing, c.condition, c.card_id,
         cc.types, cc.rarity, cc.set_name, cc.set_id, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil,
+        cc.price_avg1, cc.price_avg7, cc.price_avg30,
         l.name as location_name
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
@@ -538,13 +539,14 @@ router.get('/stats', async (req, res) => {
     const oneDayMs = 24 * 60 * 60 * 1000;
     const sevenDaysMs = 7 * oneDayMs;
     const thirtyDaysMs = 30 * oneDayMs;
-    const oneYearMs = 365 * oneDayMs;
-    const fiveYearsMs = 5 * oneYearMs;
 
-    let value7dAgo = 0;
-    let value30dAgo = 0;
-    let value1yAgo = 0;
-    let value5yAgo = 0;
+    // Cardmarket's avg7/avg30 are the only genuine historical price data this
+    // app can get (nothing goes back further than 30 days from any source).
+    // Both the "now" and "then" totals below are summed over the SAME subset
+    // of cards that actually have that real data, so the percentage change
+    // isn't skewed by cards silently missing from one side of the comparison.
+    let value7dAgo = 0, valueNowFor7d = 0;
+    let value30dAgo = 0, valueNowFor30d = 0;
 
     const typeCounts = {};
     const rarityCounts = {};
@@ -554,7 +556,7 @@ router.get('/stats', async (req, res) => {
     rows.forEach(row => {
       const qty = row.quantity || 1;
       const price = resolveCardPrice(row);
-      const addedTime = row.added_at ? new Date(row.added_at).getTime() : now;
+      const addedTime = row.added_at ? parseSqliteUtc(row.added_at).getTime() : now;
 
       totalCards += qty;
       totalValue += qty * price;
@@ -569,18 +571,19 @@ router.get('/stats', async (req, res) => {
         vintageCount += qty;
       }
 
-      // Check if the card was in the collection at those times
-      if (addedTime <= now - sevenDaysMs) {
-        value7dAgo += qty * getSimulatedPriceAt(row.card_id, price, now - sevenDaysMs, now);
+      // Only count a card toward the historical comparison if it was owned
+      // that long ago AND has real Cardmarket data for both ends of the
+      // window. Comparing avg7/avg30 against price_trend (usually TCGPlayer)
+      // would mix two different marketplaces' pricing and produce a "change"
+      // that's really just the static US/EU price gap, not real movement —
+      // avg1 keeps both sides of the comparison on Cardmarket.
+      if (addedTime <= now - sevenDaysMs && row.price_avg7 > 0 && row.price_avg1 > 0) {
+        value7dAgo += qty * row.price_avg7;
+        valueNowFor7d += qty * row.price_avg1;
       }
-      if (addedTime <= now - thirtyDaysMs) {
-        value30dAgo += qty * getSimulatedPriceAt(row.card_id, price, now - thirtyDaysMs, now);
-      }
-      if (addedTime <= now - oneYearMs) {
-        value1yAgo += qty * getSimulatedPriceAt(row.card_id, price, now - oneYearMs, now);
-      }
-      if (addedTime <= now - fiveYearsMs) {
-        value5yAgo += qty * getSimulatedPriceAt(row.card_id, price, now - fiveYearsMs, now);
+      if (addedTime <= now - thirtyDaysMs && row.price_avg30 > 0 && row.price_avg1 > 0) {
+        value30dAgo += qty * row.price_avg30;
+        valueNowFor30d += qty * row.price_avg1;
       }
 
       // Parse types
@@ -707,22 +710,23 @@ router.get('/stats', async (req, res) => {
         duplicateCopies: Math.max(totalCards - uniqueCards, 0),
         mintRate,
         vintageRatio,
-        change7d: {
-          abs: parseFloat((totalValue - value7dAgo).toFixed(2)),
-          pct: value7dAgo > 0 ? parseFloat((((totalValue - value7dAgo) / value7dAgo) * 100).toFixed(1)) : 100.0
-        },
-        change30d: {
-          abs: parseFloat((totalValue - value30dAgo).toFixed(2)),
-          pct: value30dAgo > 0 ? parseFloat((((totalValue - value30dAgo) / value30dAgo) * 100).toFixed(1)) : 100.0
-        },
-        change1y: {
-          abs: parseFloat((totalValue - value1yAgo).toFixed(2)),
-          pct: value1yAgo > 0 ? parseFloat((((totalValue - value1yAgo) / value1yAgo) * 100).toFixed(1)) : 100.0
-        },
-        change5y: {
-          abs: parseFloat((totalValue - value5yAgo).toFixed(2)),
-          pct: value5yAgo > 0 ? parseFloat((((totalValue - value5yAgo) / value5yAgo) * 100).toFixed(1)) : 100.0
-        }
+        // change7d/change30d compare current vs. real Cardmarket avg7/avg30
+        // over the same subset of cards that have that data — never
+        // simulated. change1y/change5y have no real data source anywhere
+        // (no API here provides pricing history beyond 30 days), so they're
+        // marked unavailable instead of faked.
+        change7d: value7dAgo > 0 ? {
+          available: true,
+          abs: parseFloat((valueNowFor7d - value7dAgo).toFixed(2)),
+          pct: parseFloat((((valueNowFor7d - value7dAgo) / value7dAgo) * 100).toFixed(1))
+        } : { available: false, abs: null, pct: null },
+        change30d: value30dAgo > 0 ? {
+          available: true,
+          abs: parseFloat((valueNowFor30d - value30dAgo).toFixed(2)),
+          pct: parseFloat((((valueNowFor30d - value30dAgo) / value30dAgo) * 100).toFixed(1))
+        } : { available: false, abs: null, pct: null },
+        change1y: { available: false, abs: null, pct: null },
+        change5y: { available: false, abs: null, pct: null }
       },
       types: Object.keys(typeCounts).map(name => ({ name, value: typeCounts[name] })),
       rarities: Object.keys(rarityCounts).map(name => ({ name, value: rarityCounts[name] })),
@@ -756,6 +760,41 @@ router.get('/stats/history', async (req, res) => {
       WHERE c.user_id = ?
     `;
     const items = await db.all(query, [req.user.id]);
+
+    // Real recorded price snapshots for every card this user owns, oldest
+    // first, so each item's price at any past point can be looked up without
+    // per-item queries. No source anywhere provides price history beyond
+    // what this table accumulates over the app's actual real lifetime.
+    const cardIds = [...new Set(items.map(i => i.card_id))];
+    let historyByCard = {};
+    if (cardIds.length > 0) {
+      const placeholders = cardIds.map(() => '?').join(',');
+      const historyRows = await db.all(
+        `SELECT card_id, price, recorded_at FROM price_history WHERE card_id IN (${placeholders}) ORDER BY recorded_at ASC`,
+        cardIds
+      );
+      historyRows.forEach(r => {
+        if (!historyByCard[r.card_id]) historyByCard[r.card_id] = [];
+        historyByCard[r.card_id].push({ price: r.price, time: parseSqliteUtc(r.recorded_at).getTime() });
+      });
+    }
+
+    // Real price for a card at a point in time: the latest recorded snapshot
+    // at or before that time; if history only starts later, carry the
+    // earliest real snapshot backward rather than guess; if the card has no
+    // history at all, fall back to its current real price_trend. Every value
+    // used here was actually recorded or is the actual current price — never
+    // a fabricated curve.
+    const realPriceAt = (item, targetTime) => {
+      const hist = historyByCard[item.card_id];
+      if (!hist || hist.length === 0) return resolveCardPrice(item);
+      let best = null;
+      for (const h of hist) {
+        if (h.time <= targetTime) best = h;
+        else break;
+      }
+      return (best || hist[0]).price;
+    };
 
     const now = Date.now();
     let step = 0;
@@ -791,11 +830,9 @@ router.get('/stats/history', async (req, res) => {
 
       let totalValue = 0;
       items.forEach(item => {
-        const addedTime = new Date(item.added_at).getTime();
+        const addedTime = parseSqliteUtc(item.added_at).getTime();
         if (addedTime <= targetTime) {
-          const currentPrice = resolveCardPrice(item);
-          const simulatedPrice = getSimulatedPriceAt(item.card_id, currentPrice, targetTime, now);
-          totalValue += item.quantity * simulatedPrice;
+          totalValue += item.quantity * realPriceAt(item, targetTime);
         }
       });
 
@@ -1090,34 +1127,35 @@ router.get('/cards/:id/price-history', async (req, res) => {
           ORDER BY recorded_at ASC
         `, [id]);
 
-    const cacheCard = await db.get(`SELECT price_trend FROM card_cache WHERE id = ?`, [id]);
-    const currentPrice = (cacheCard && cacheCard.price_trend) || 1.00;
+    history = history.map(h => ({ price: h.price, recorded_at: h.recorded_at }));
 
-    // Seed mock price points if too few real records exist for the requested
-    // window, so charts show a meaningful trend immediately. Points span the
-    // whole window and follow a directional drift ending near the current
-    // price, so longer ranges actually show change instead of a flat line.
-    if (history.length < 5) {
-      const spanDays = days || 365;
-      const points = 30;
-      const totalMove = Math.random() * 0.4 + 0.1;   // 10-50% total change
-      const goingUp = Math.random() > 0.4;           // bias slightly upward
-      const startPrice = goingUp
-        ? currentPrice / (1 + totalMove)
-        : currentPrice * (1 + totalMove);
-      const now = new Date();
-      history = [];
-      for (let i = 0; i < points; i++) {
-        const t = i / (points - 1);                  // 0 -> 1 (oldest -> now)
-        const date = new Date(now.getTime() - (1 - t) * spanDays * 86400000);
-        const base = startPrice + (currentPrice - startPrice) * t;
-        const noise = (Math.random() - 0.5) * 0.06 * currentPrice;
-        const price = parseFloat(Math.max(0.10, base + noise).toFixed(2));
-        history.push({ price, recorded_at: date.toISOString() });
+    // Fill in with real anchor points instead of fabricating a curve: the
+    // current price, plus Cardmarket's real avg7/avg30 when they fall inside
+    // the requested window. This app's own price_history only goes back as
+    // far as it's actually been running, so this is often the only
+    // historical signal available for a given card right now. Prefer avg1 for
+    // "now" so all three anchors are the same marketplace (Cardmarket) —
+    // pairing avg7/avg30 with price_trend (usually TCGPlayer) would plot a
+    // jump that's really just the US/EU price gap, not a real move.
+    const cacheCard = await db.get(`SELECT price_trend, price_avg1, price_avg7, price_avg30 FROM card_cache WHERE id = ?`, [id]);
+    if (cacheCard) {
+      const now = Date.now();
+      const nowPrice = cacheCard.price_avg1 > 0 ? cacheCard.price_avg1 : cacheCard.price_trend;
+      const anchors = [{ price: nowPrice, time: now }];
+      if (cacheCard.price_avg30 > 0 && (!days || days >= 30)) {
+        anchors.push({ price: cacheCard.price_avg30, time: now - 30 * 86400000 });
       }
-    } else {
-      history = history.map(h => ({ price: h.price, recorded_at: h.recorded_at }));
+      if (cacheCard.price_avg7 > 0 && (!days || days >= 7)) {
+        anchors.push({ price: cacheCard.price_avg7, time: now - 7 * 86400000 });
+      }
+      for (const a of anchors) {
+        if (a.price > 0) {
+          history.push({ price: a.price, recorded_at: new Date(a.time).toISOString() });
+        }
+      }
     }
+
+    history.sort((a, b) => parseSqliteUtc(a.recorded_at) - parseSqliteUtc(b.recorded_at));
 
     res.json(history);
   } catch (error) {

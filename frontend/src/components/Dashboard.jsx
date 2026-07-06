@@ -152,9 +152,19 @@ function Dashboard({ statsTrigger, onNavigate }) {
           </div>
           <div className="metric-value">${summary.totalValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
           {(() => {
-            const change = timePeriod === '7d' ? summary.change7d : 
-                           timePeriod === '30d' ? summary.change30d : 
+            const change = timePeriod === '7d' ? summary.change7d :
+                           timePeriod === '30d' ? summary.change30d :
                            timePeriod === '1y' ? summary.change1y : summary.change5y;
+            // change7d/30d use Cardmarket's real avg7/avg30 (only real source
+            // available); change1y/5y have no real historical price source
+            // anywhere, so they're marked unavailable rather than faked.
+            if (!change || !change.available) {
+              return (
+                <div className="metric-footer" style={{ color: 'var(--text-muted)' }}>
+                  <span>Not enough price history yet for this range</span>
+                </div>
+              );
+            }
             const isPositive = change.abs >= 0;
             return (
               <div className={`metric-footer ${isPositive ? 'positive' : 'negative'}`} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
