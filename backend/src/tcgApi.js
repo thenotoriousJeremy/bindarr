@@ -130,23 +130,26 @@ function getStringSimilarity(str1, str2) {
 
 // Search cards locally first, then hit API if not found or empty
 async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiKey = '') {
-  // Sanitize name query by keeping only Title Case words or allowed uppercase tags (like EX, GX, V)
+  // Sanitize the name query: drop pure-noise tokens (OCR garbage with no letters)
+  // and normalize everything else to Title Case, so typed-lowercase input like
+  // "pikachu" is treated the same as "Pikachu" instead of being silently dropped.
   let cleanName = '';
   if (nameQuery) {
     const ALLOWED_UPPER = new Set(['EX', 'GX', 'V', 'VMAX', 'VSTAR', 'BREAK', 'PROMO', 'V-UNION']);
     const words = nameQuery.split(/\s+/);
-    const filtered = words.filter(w => {
+    const normalized = words.map(w => {
       const cleanWord = w.replace(/[^A-Za-z\-]/g, ''); // keep only letters and hyphens for formatting checks
-      if (!cleanWord) return false;
-      
+      if (!cleanWord) return '';
+
       const upper = cleanWord.toUpperCase();
-      if (ALLOWED_UPPER.has(upper)) return true;
-      
-      // Keep Title Case: starts with uppercase letter and contains at least one lowercase letter
-      const isTitleCase = /^[A-Z]/.test(cleanWord) && /[a-z]/.test(cleanWord);
-      return isTitleCase;
-    });
-    cleanName = filtered.join(' ');
+      if (ALLOWED_UPPER.has(upper)) return upper;
+
+      // Normalize to Title Case per hyphen segment (e.g. "mr-mime" -> "Mr-Mime")
+      return cleanWord.split('-').map(seg =>
+        seg.charAt(0).toUpperCase() + seg.slice(1).toLowerCase()
+      ).join('-');
+    }).filter(Boolean);
+    cleanName = normalized.join(' ');
   }
 
   // Preserve leading zeroes while keeping a stripped version for fallback matching

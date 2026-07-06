@@ -18,6 +18,15 @@ const dbConnection = new sqlite3.Database(dbPath, (err) => {
     console.log('Database connection established successfully.');
     // sqlite3 does not enforce FOREIGN KEY constraints unless explicitly enabled per-connection.
     dbConnection.run('PRAGMA foreign_keys = ON');
+    // Default rollback-journal mode locks the whole file per writer and fails
+    // instantly (SQLITE_BUSY) on any concurrent write instead of waiting. This
+    // app has frequent background writers (price history recording, the
+    // startup/weekly price updater, session purging) that otherwise collide
+    // with user-triggered writes like adding a card or seeding test data.
+    // WAL lets readers and writers coexist; busy_timeout makes writers retry
+    // for a few seconds instead of failing immediately.
+    dbConnection.run('PRAGMA journal_mode = WAL');
+    dbConnection.run('PRAGMA busy_timeout = 5000');
   }
 });
 
@@ -298,6 +307,16 @@ async function initDb() {
   if (!decksCols.some(c => c.name === 'checked_out_at')) {
     console.log('Adding checked_out_at column to decks table...');
     await run(`ALTER TABLE decks ADD COLUMN checked_out_at DATETIME`);
+  }
+
+  // 7. One-time repair: the dev-only admin seed route used to build image_url
+  // with a typo'd "_hier.png" suffix instead of the real pokemontcg.io CDN
+  // path ("<number>.png"), so every seeded card showed a broken image. Fix
+  // any rows still carrying that bad suffix; they'll re-fetch correctly from
+  // the API on next lookup if the fix below doesn't already cover it.
+  const brokenSeedImages = await run(`UPDATE card_cache SET image_url = REPLACE(image_url, '_hier.png', '.png') WHERE image_url LIKE '%_hier.png'`);
+  if (brokenSeedImages.changes > 0) {
+    console.log(`Repaired ${brokenSeedImages.changes} card_cache row(s) with broken seed image URLs.`);
   }
 
   // --- SEED DATA & MIGRATION TO DEFAULT ADMIN ---

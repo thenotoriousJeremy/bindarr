@@ -1,6 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
+const tcgApi = require('../tcgApi');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
@@ -175,34 +176,37 @@ router.post('/seed-cards', async (req, res) => {
       box = { id: result.lastID };
     }
 
-    const MOCK_POOL = [
-      { id: 'base1-58', name: 'Pikachu', set_id: 'base1', set_name: 'Base Set', number: '58', rarity: 'Common', supertype: 'Pokémon', types: '["Lightning"]', img: 'https://images.pokemontcg.io/base1/58_hier.png' },
-      { id: 'base1-4', name: 'Charizard', set_id: 'base1', set_name: 'Base Set', number: '4', rarity: 'Rare Holo', supertype: 'Pokémon', types: '["Fire"]', img: 'https://images.pokemontcg.io/base1/4_hier.png' },
-      { id: 'base1-2', name: 'Blastoise', set_id: 'base1', set_name: 'Base Set', number: '2', rarity: 'Rare Holo', supertype: 'Pokémon', types: '["Water"]', img: 'https://images.pokemontcg.io/base1/2_hier.png' },
-      { id: 'base1-15', name: 'Venusaur', set_id: 'base1', set_name: 'Base Set', number: '15', rarity: 'Rare Holo', supertype: 'Pokémon', types: '["Grass"]', img: 'https://images.pokemontcg.io/base1/15_hier.png' },
-      { id: 'base1-10', name: 'Mewtwo', set_id: 'base1', set_name: 'Base Set', number: '10', rarity: 'Rare Holo', supertype: 'Pokémon', types: '["Psychic"]', img: 'https://images.pokemontcg.io/base1/10_hier.png' },
-      { id: 'fossil-20', name: 'Gengar', set_id: 'fossil', set_name: 'Fossil', number: '20', rarity: 'Rare', supertype: 'Pokémon', types: '["Psychic"]', img: 'https://images.pokemontcg.io/fossil/20_hier.png' },
-      { id: 'jungle-51', name: 'Eevee', set_id: 'jungle', set_name: 'Jungle', number: '51', rarity: 'Common', supertype: 'Pokémon', types: '["Colorless"]', img: 'https://images.pokemontcg.io/jungle/51_hier.png' },
-      { id: 'neo1-9', name: 'Lugia', set_id: 'neo1', set_name: 'Neo Genesis', number: '9', rarity: 'Rare Holo', supertype: 'Pokémon', types: '["Colorless"]', img: 'https://images.pokemontcg.io/neo1/9_hier.png' },
-      { id: 'ex3-102', name: 'Rayquaza', set_id: 'ex3', set_name: 'EX Deoxys', number: '102', rarity: 'Rare Holo Star', supertype: 'Pokémon', types: '["Colorless"]', img: 'https://images.pokemontcg.io/ex3/102_hier.png' },
-      { id: 'base1-6', name: 'Gyarados', set_id: 'base1', set_name: 'Base Set', number: '6', rarity: 'Rare Holo', supertype: 'Pokémon', types: '["Water"]', img: 'https://images.pokemontcg.io/base1/6_hier.png' }
+    // Real card IDs spanning vintage (Base Set/Fossil/Jungle/Neo) and modern
+    // (Scarlet & Violet) sets, so seeded data actually shows "old vs new" and
+    // mixed rarities. Fetched live via tcgApi.getCardById (same path real
+    // search/scan use) instead of hand-built image URLs, which previously had
+    // a typo and 404'd for every seeded card.
+    const MOCK_IDS = [
+      'base1-58', // Pikachu - Base Set (vintage, Common)
+      'base1-4',  // Charizard - Base Set (vintage, Rare Holo)
+      'base1-2',  // Blastoise - Base Set (vintage, Rare Holo)
+      'fossil-20', // Gengar - Fossil (vintage, Rare)
+      'jungle-51', // Eevee - Jungle (vintage, Common)
+      'neo1-9',   // Lugia - Neo Genesis (vintage, Rare Holo)
+      'sv1-13',   // Sprigatito - Scarlet & Violet (modern, Common)
+      'sv1-36',   // Fuecoco - Scarlet & Violet (modern, Common)
+      'sv1-52',   // Quaxly - Scarlet & Violet (modern, Common)
+      'sv1-227',  // Miraidon ex - Scarlet & Violet (modern, Ultra Rare)
     ];
 
-    // Seed mock cards into card_cache
-    for (const card of MOCK_POOL) {
-      const priceNormal = parseFloat((1.5 + Math.random() * 5).toFixed(2));
-      const priceHolo = parseFloat((10 + Math.random() * 60).toFixed(2));
-      const priceRev = parseFloat((5 + Math.random() * 30).toFixed(2));
-
-      await db.run(`
-        INSERT OR REPLACE INTO card_cache (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend, price_normal, price_holofoil, price_reverse_holofoil)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [card.id, card.name, card.supertype, '["Basic"]', card.types, card.rarity, card.set_id, card.set_name, card.number, card.img, priceHolo, priceNormal, priceHolo, priceRev]);
+    const MOCK_POOL = [];
+    for (const id of MOCK_IDS) {
+      const card = await tcgApi.getCardById(id);
+      if (card) MOCK_POOL.push(card);
+    }
+    if (MOCK_POOL.length === 0) {
+      return res.status(502).json({ error: 'Could not fetch seed card data from the Pokémon TCG API. Try again shortly.' });
     }
 
     // Insert random collection entries distributed across binder & box
     const prints = ['Normal', 'Holofoil', 'Reverse Holofoil'];
     const conditions = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played'];
+    const languages = ['English', 'English', 'English', 'Japanese']; // ~25% Japanese so both display modes are visible
 
     let addedCount = 0;
 
@@ -213,14 +217,15 @@ router.post('/seed-cards', async (req, res) => {
           const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
           const print = prints[Math.floor(Math.random() * prints.length)];
           const condition = conditions[Math.floor(Math.random() * conditions.length)];
+          const language = languages[Math.floor(Math.random() * languages.length)];
           const qty = Math.floor(Math.random() * 3) + 1; // 1-3 copies
           const purchasePrice = parseFloat((Math.random() * 10).toFixed(2));
           const pos = ((p - 1) * 9 + (s - 1)) * 1000;
 
           await db.run(`
             INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, position, user_id)
-            VALUES (?, ?, ?, ?, 'English', ?, ?, ?, ?, ?, ?)
-          `, [card.id, qty, condition, print, purchasePrice, binder.id, `Page ${p}`, `Slot ${s}`, pos, req.user.id]);
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [card.id, qty, condition, print, language, purchasePrice, binder.id, `Page ${p}`, `Slot ${s}`, pos, req.user.id]);
           addedCount += qty;
         }
       }
@@ -233,14 +238,15 @@ router.post('/seed-cards', async (req, res) => {
           const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
           const print = prints[Math.floor(Math.random() * prints.length)];
           const condition = conditions[Math.floor(Math.random() * conditions.length)];
+          const language = languages[Math.floor(Math.random() * languages.length)];
           const qty = Math.floor(Math.random() * 4) + 1; // 1-4 copies
           const purchasePrice = parseFloat((Math.random() * 5).toFixed(2));
           const pos = ((r - 1) * 40 + (s - 1)) * 1000;
 
           await db.run(`
             INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, position, user_id)
-            VALUES (?, ?, ?, ?, 'English', ?, ?, ?, ?, ?, ?)
-          `, [card.id, qty, condition, print, purchasePrice, box.id, `Row ${r}`, `Slot ${s}`, pos, req.user.id]);
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [card.id, qty, condition, print, language, purchasePrice, box.id, `Row ${r}`, `Slot ${s}`, pos, req.user.id]);
           addedCount += qty;
         }
       }
