@@ -1128,25 +1128,22 @@ router.get('/cards/:id/price-history', async (req, res) => {
         `, [id]);
 
     history = history.map(h => ({ price: h.price, recorded_at: h.recorded_at }));
+    const realCount = history.length;
 
     // Fill in with real anchor points instead of fabricating a curve: the
-    // current price, plus Cardmarket's real avg7/avg30 when they fall inside
-    // the requested window. This app's own price_history only goes back as
-    // far as it's actually been running, so this is often the only
-    // historical signal available for a given card right now. Prefer avg1 for
-    // "now" so all three anchors are the same marketplace (Cardmarket) —
-    // pairing avg7/avg30 with price_trend (usually TCGPlayer) would plot a
-    // jump that's really just the US/EU price gap, not a real move.
+    // current price, plus Cardmarket's real avg7/avg30. Only meaningful on
+    // the 1-month window — on a 1y/5y timeline, a point 7 or 30 days back
+    // sits right on top of "now" and previously got added for every range
+    // (the `days >= 7`/`days >= 30` guards were always true for all three
+    // defined ranges), which is why every window looked the same.
     const cacheCard = await db.get(`SELECT price_trend, price_avg1, price_avg7, price_avg30 FROM card_cache WHERE id = ?`, [id]);
     if (cacheCard) {
       const now = Date.now();
       const nowPrice = cacheCard.price_avg1 > 0 ? cacheCard.price_avg1 : cacheCard.price_trend;
       const anchors = [{ price: nowPrice, time: now }];
-      if (cacheCard.price_avg30 > 0 && (!days || days >= 30)) {
-        anchors.push({ price: cacheCard.price_avg30, time: now - 30 * 86400000 });
-      }
-      if (cacheCard.price_avg7 > 0 && (!days || days >= 7)) {
-        anchors.push({ price: cacheCard.price_avg7, time: now - 7 * 86400000 });
+      if (rangeKey === '1m') {
+        if (cacheCard.price_avg30 > 0) anchors.push({ price: cacheCard.price_avg30, time: now - 30 * 86400000 });
+        if (cacheCard.price_avg7 > 0) anchors.push({ price: cacheCard.price_avg7, time: now - 7 * 86400000 });
       }
       for (const a of anchors) {
         if (a.price > 0) {
@@ -1157,7 +1154,13 @@ router.get('/cards/:id/price-history', async (req, res) => {
 
     history.sort((a, b) => parseSqliteUtc(a.recorded_at) - parseSqliteUtc(b.recorded_at));
 
-    res.json(history);
+    // 1y/5y have no real historical price source beyond this app's own
+    // weekly-cadence price_history table (see Dashboard's change1y/5y, which
+    // is marked unavailable rather than faked for the same reason) — flag it
+    // instead of rendering a near-identical current-price-only line.
+    const insufficientHistory = (rangeKey === '1y' || rangeKey === '5y') && realCount < 2;
+
+    res.json({ data: history, insufficientHistory });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to retrieve price history' });
