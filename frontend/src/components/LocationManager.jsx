@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { MapPin, Plus, Trash2, Library, BookOpen, Layers, Archive, ChevronLeft, ChevronRight, X, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
-import { sortCardsByOrder } from '../utils/cardSort';
+import { sortCardsByOrder, POKEMON_TYPE_ORDER } from '../utils/cardSort';
 import { getPageNum, getSlotNum } from '../utils/locationCoords';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
@@ -1423,11 +1423,12 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
       const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
       const maxPages = selectedLoc.max_pages || 30;
-      const maxBinderCapacity = maxPages * pocketsCount;
 
       const maxRows = selectedLoc.max_rows || 3;
-      const rowCapacity = parseAdvancedConfig(selectedLoc).rowCapacity || 40;
+      const advConfig = parseAdvancedConfig(selectedLoc);
+      const rowCapacity = advConfig.rowCapacity || 40;
       const maxBoxCapacity = maxRows * rowCapacity;
+      const isBinderType = selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder';
 
       let excessCount = 0;
 
@@ -1436,10 +1437,21 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         let sub2 = card.sub_location_2;
         let locId = selectedLoc.id;
 
-        if (selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder') {
-          if (index < maxBinderCapacity) {
-            const page = Math.floor(index / pocketsCount) + 1;
-            const slot = (index % pocketsCount) + 1;
+        if (isBinderType) {
+          // Same category-anchored placement as the Assistant Mode one-by-one
+          // guide (getCategoryAnchor) — otherwise bulk sort and per-card
+          // recommendations would place the same card in different slots.
+          const anchor = getCategoryAnchor(orderMode, card, sorted, advConfig, maxPages);
+          let page, slot;
+          if (anchor) {
+            const localIndex = anchor.sameCategory.findIndex(c => c.entry_id === card.entry_id);
+            page = anchor.startPage + Math.floor(localIndex / pocketsCount);
+            slot = (localIndex % pocketsCount) + 1;
+          } else {
+            page = Math.floor(index / pocketsCount) + 1;
+            slot = (index % pocketsCount) + 1;
+          }
+          if (page <= maxPages) {
             sub1 = `Page ${page}`;
             sub2 = `Slot ${slot}`;
           } else {
@@ -1810,15 +1822,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const handleUpdateLocation = async () => {
     if (!editName) return;
 
-    // Merge existing config with new box-specific fields
+    // Merge existing config with new box/binder-specific fields
     const existingConfig = parseAdvancedConfig(selectedLoc);
     const isBoxType = (editType === 'Box' || editType === 'Toploader Box' || editType === 'Graded Slab Box' || editType === 'Display Shelf / Stand');
+    const isBinderType = (editType === 'Binder' || editType === 'Toploader Binder');
     let newDescription = selectedLoc.description || '';
-    if (isBoxType) {
+    if (isBoxType || isBinderType) {
       const assignedSetsArray = editAssignedSets.trim() ? editAssignedSets.split('\n').map(s => s.trim()).filter(Boolean) : [];
       const updatedConfig = {
         ...existingConfig,
-        rowCapacity: editRowCapacity || 40,
+        ...(isBoxType ? { rowCapacity: editRowCapacity || 40 } : {}),
         assignedSets: assignedSetsArray
       };
       newDescription = JSON.stringify(updatedConfig);
@@ -1858,9 +1871,68 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     }
   };
 
+  // Default anchors matching what the Advanced Sorting Customizations panel
+  // pre-fills, so a container that never touched Advanced Settings still
+  // gets the same category-anchored placement as one that did.
+  const DEFAULT_ENERGY_RANGES = { 'Grass': 1, 'Fire': 4, 'Water': 7, 'Lightning': 10, 'Psychic': 13, 'Fighting': 16, 'Darkness': 19, 'Metal': 22, 'Dragon': 25, 'Colorless': 27, 'Trainers': 29 };
+  const DEFAULT_ALPHABET_GROUPS = ["A-C", "D-F", "G-I", "J-L", "M-O", "P-R", "S-U", "V-Z"];
+
+  // For sort schemes with a category concept (energy type, alphabet bucket,
+  // price tier), returns which category `card` falls into among `sortedCards`
+  // (already ordered by sortCardsByOrder) plus that category's start page —
+  // so cards get anchored to the page range configured in Advanced Sorting
+  // Customizations instead of a flat sequential index. Returns null for
+  // schemes with no category concept (set/number, scanned date, etc.), which
+  // keep the plain sequential behavior below.
+  const getCategoryAnchor = (sortingPref, card, sortedCards, config, maxPages) => {
+    if (sortingPref === 'type-name') {
+      const ranges = config.energyRanges || DEFAULT_ENERGY_RANGES;
+      const primaryType = (c) => (c.types && c.types[0]) || 'Colorless';
+      const cardType = primaryType(card);
+      const startPage = ranges[cardType] || ranges['Colorless'] || 1;
+      const sameCategory = sortedCards.filter(c => primaryType(c) === cardType);
+      return { startPage, sameCategory };
+    }
+    if (sortingPref === 'name-asc') {
+      const groups = (config.alphabetGroups || DEFAULT_ALPHABET_GROUPS).filter(Boolean);
+      if (groups.length === 0) return null;
+      const firstLetter = (card.name || '?').trim().charAt(0).toUpperCase();
+      const groupIdx = groups.findIndex(g => {
+        const [lo, hi] = g.toUpperCase().split('-').map(s => s.trim());
+        if (!lo) return false;
+        return firstLetter >= lo && firstLetter <= (hi || lo);
+      });
+      const idx = groupIdx === -1 ? groups.length - 1 : groupIdx;
+      // Pages divided evenly across the configured buckets, in order.
+      const startPage = Math.floor((maxPages * idx) / groups.length) + 1;
+      const inGroup = (c) => {
+        const l = (c.name || '?').trim().charAt(0).toUpperCase();
+        const gi = groups.findIndex(g => {
+          const [lo, hi] = g.toUpperCase().split('-').map(s => s.trim());
+          if (!lo) return false;
+          return l >= lo && l <= (hi || lo);
+        });
+        return (gi === -1 ? groups.length - 1 : gi) === idx;
+      };
+      return { startPage, sameCategory: sortedCards.filter(inGroup) };
+    }
+    if (sortingPref === 'price-desc') {
+      const priceHigh = config.priceHigh !== undefined ? config.priceHigh : 20;
+      const priceMid = config.priceMid !== undefined ? config.priceMid : 5;
+      const tierOf = (c) => (c.price_trend || 0) >= priceHigh ? 0 : (c.price_trend || 0) >= priceMid ? 1 : 2;
+      const tier = tierOf(card);
+      // High-value tier gets the front third of the container, mid the
+      // middle third, low-value/bulk the rest — keeps expensive cards up
+      // front where they're easy to check on and protect.
+      const startPage = Math.floor((maxPages * tier) / 3) + 1;
+      return { startPage, sameCategory: sortedCards.filter(c => tierOf(c) === tier) };
+    }
+    return null;
+  };
+
   const findNextRecommendedSlot = (card) => {
     if (!selectedLoc) return null;
-    
+
     const config = parseAdvancedConfig(selectedLoc);
     const sortingPref = selectedLoc.sort_order || 'name-asc';
 
@@ -1873,6 +1945,32 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       }
 
       sortCardsByOrder(combined, sortingPref, selectedLoc?.foil_sorting);
+
+      const isBinderType = selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder';
+      const maxP = selectedLoc.max_pages || 30;
+      const anchor = isBinderType ? getCategoryAnchor(sortingPref, card, combined, config, maxP) : null;
+
+      if (anchor) {
+        const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
+        const localIndex = anchor.sameCategory.findIndex(c => c.entry_id === card.entry_id);
+        const page = anchor.startPage + Math.floor(localIndex / pocketsCount);
+        const slot = (localIndex % pocketsCount) + 1;
+        const globalIndex = combined.findIndex(c => c.entry_id === card.entry_id);
+        let targetPosition = 1000;
+        if (combined.length > 1) {
+          if (globalIndex === 0) targetPosition = combined[1].position / 2;
+          else if (globalIndex === combined.length - 1) targetPosition = combined[globalIndex - 1].position + 1000;
+          else targetPosition = (combined[globalIndex - 1].position + combined[globalIndex + 1].position) / 2;
+        }
+        if (page <= maxP) {
+          return {
+            sub1: `Page ${page}`,
+            sub2: `Slot ${slot}`,
+            label: `Page ${page}, Slot ${slot}`,
+            position: targetPosition
+          };
+        }
+      }
 
       const targetIndex = combined.findIndex(c => c.entry_id === card.entry_id);
       if (targetIndex !== -1) {
@@ -2122,9 +2220,19 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       setIsEditing(true);
                     }}
                     style={{ width: '36px', height: '36px', padding: 0, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem' }}
-                    title="Edit Container Settings (rename, resize, or delete this container)"
+                    title="Edit Container Settings (rename, resize, sort scheme)"
                   >
                     ⚙️
+                  </button>
+
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-icon-only"
+                    onClick={() => handleDeleteLocation(selectedLoc.id, selectedLoc.name)}
+                    style={{ width: '36px', height: '36px', padding: 0, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    title={`Delete "${selectedLoc.name}"`}
+                  >
+                    <Trash2 size={16} />
                   </button>
                 </div>
                 <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', marginTop: '0.3rem', flexWrap: 'wrap' }}>
@@ -3545,19 +3653,26 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   />
                   <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginTop: '2px', display: 'block' }}>How many cards physically fit in each row</span>
                 </div>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Assigned Sets (one per line)</label>
-                  <textarea
-                    className="input-control"
-                    value={editAssignedSets}
-                    onChange={(e) => setEditAssignedSets(e.target.value)}
-                    placeholder={"e.g.\nBase Set\nJungle\nFossil"}
-                    rows={4}
-                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.7rem', resize: 'vertical', minHeight: '70px', fontFamily: 'inherit', lineHeight: 1.4 }}
-                  />
-                  <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginTop: '2px', display: 'block' }}>The assistant uses these sets to recommend this box for matching cards</span>
-                </div>
               </>
+            )}
+
+            {/* Assigned Sets: works for both Binders and Boxes — a binder
+                dedicated to one set is just as common as a box for one. */}
+            {(editType === 'Binder' || editType === 'Toploader Binder' || editType === 'Box' || editType === 'Toploader Box' || editType === 'Graded Slab Box' || editType === 'Display Shelf / Stand') && (
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Assigned Sets (one per line)</label>
+                <textarea
+                  className="input-control"
+                  value={editAssignedSets}
+                  onChange={(e) => setEditAssignedSets(e.target.value)}
+                  placeholder={"e.g.\nBase Set\nJungle\nFossil"}
+                  rows={4}
+                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.7rem', resize: 'vertical', minHeight: '70px', fontFamily: 'inherit', lineHeight: 1.4 }}
+                />
+                <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginTop: '2px', display: 'block' }}>
+                  When Assistant Mode looks for the best container for an unsorted card, a container listing that card's set here scores highest — shown as "💡 Best fit" with the reason "assigned to [set]". Leave blank to let it recommend based on what's already in each container instead.
+                </span>
+              </div>
             )}
 
             {/* Capacity-specific fields */}
