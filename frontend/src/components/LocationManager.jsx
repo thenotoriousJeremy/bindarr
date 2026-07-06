@@ -2684,14 +2684,14 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     </div>
                   </div>
 
-                  {/* Bulk sort: place the whole filtered queue into this container at once,
-                      instead of clicking "Place Card Here" one card at a time. The container's
-                      own Sort Order decides where each card lands, so it's set here too — this
-                      is the single most common reason the assistant "doesn't organize by set":
-                      a container left on Custom order just fills the next empty slot. */}
-                  <div className="glass-panel" style={{ padding: '0.6rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', border: '1px solid rgba(234, 179, 8, 0.3)', background: 'rgba(234, 179, 8, 0.05)' }}>
+                  {/* How the container's slots are ordered — this is what "Recommended Target"
+                      below is based on. A container left on Custom order just fills the next
+                      empty slot, so this is the fix for "the assistant doesn't organize by set":
+                      the physical placement guide below reads this, card by card, as you scan a
+                      pile and walk each one to its slot. */}
+                  <div className="glass-panel" style={{ padding: '0.5rem 0.6rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', border: '1px solid rgba(234, 179, 8, 0.3)', background: 'rgba(234, 179, 8, 0.05)' }}>
                     <span style={{ fontSize: '0.6rem', color: 'var(--accent-yellow)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                      Bulk Sort Into "{selectedLoc?.name || '...'}"
+                      Place Into "{selectedLoc?.name || '...'}" Sorted By
                     </span>
                     <select
                       className="select-control"
@@ -2700,7 +2700,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       disabled={!selectedLoc}
                       style={{ padding: '0.3rem 0.5rem', fontSize: '0.7rem' }}
                     >
-                      <option value="custom">Custom (manual placement — bulk sort disabled)</option>
+                      <option value="custom">Custom (next empty slot, no grouping)</option>
                       <option value="set-number-printing">Set, Number &amp; Printing (foil-aware)</option>
                       <option value="set-number">Set &amp; Number</option>
                       <option value="name-asc">A-Z Alphabetical</option>
@@ -2721,20 +2721,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           </button>
                         ))}
                       </div>
-                    )}
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      disabled={!selectedLoc || selectedLoc.sort_order === 'custom' || queue.length === 0}
-                      onClick={() => autoSortContainerCards(selectedLoc.sort_order, queue)}
-                      style={{ fontSize: '0.7rem', padding: '0.4rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
-                    >
-                      Sort All {queue.length} Unsorted Into This Container
-                    </button>
-                    {selectedLoc?.sort_order === 'custom' && (
-                      <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                        Pick a sort scheme above to enable bulk placement.
-                      </span>
                     )}
                   </div>
 
@@ -2831,6 +2817,28 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       </div>
                     </div>
                   </div>
+
+                  {/* Separate from the physical placement guide above: this instantly
+                      reassigns every card in the queue in software, with nothing to walk
+                      over and place. Only useful if the pile is already physically sorted
+                      (or you're okay re-sorting it afterward to match) — not the normal
+                      "scan a pile, get told where each one goes" flow. */}
+                  {selectedLoc?.sort_order !== 'custom' && queue.length > 0 && (
+                    <details style={{ fontSize: '0.65rem' }}>
+                      <summary style={{ cursor: 'pointer', color: 'var(--text-muted)' }}>Instant software sort (no physical placement)</summary>
+                      <div style={{ marginTop: '0.4rem', color: 'var(--text-secondary)', fontStyle: 'italic', marginBottom: '0.4rem' }}>
+                        Assigns all {queue.length} cards to slots immediately without walking you through placing them — only use this if the pile is already physically in this container (or you're re-sorting it to match right after).
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => autoSortContainerCards(selectedLoc.sort_order, queue)}
+                        style={{ width: '100%', fontSize: '0.65rem', padding: '0.35rem' }}
+                      >
+                        Instantly Assign All {queue.length} to Slots
+                      </button>
+                    </details>
+                  )}
                 </div>
               );
             })()
