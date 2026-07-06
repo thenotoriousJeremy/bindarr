@@ -26,6 +26,16 @@ function PrintingBadge({ printing, style }) {
 
 function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, setSelectedCardFilter, setActiveTab }) {
   const isMobile = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+  // Below this width the binder's two-page spread renders each pocket too
+  // small to read (a 3x3 spread splits the viewport into 6 columns). Tracks
+  // actual viewport width rather than touch support, so a narrow desktop
+  // window gets the same single-page layout as a phone.
+  const [isNarrowViewport, setIsNarrowViewport] = useState(typeof window !== 'undefined' && window.innerWidth <= 768);
+  useEffect(() => {
+    const handleResize = () => setIsNarrowViewport(window.innerWidth <= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeLocationId, setActiveLocationId] = useState(null);
@@ -1299,9 +1309,19 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const handleTouchEnd = () => {
     if (!touchStart || !touchEnd) return;
     const distance = touchStart - touchEnd;
-    
-    const isFirstPageSolo = selectedLoc ? !!parseAdvancedConfig(selectedLoc).firstPageSolo : false;
     const maxPages = selectedLoc?.max_pages || 30;
+
+    // Narrow viewports show one page at a time (see isNarrowViewport), so a
+    // swipe steps by a single page instead of the two-page spread below.
+    if (isNarrowViewport) {
+      if (distance > 60 && selectedPage < maxPages) handleTurnPage(selectedPage + 1);
+      else if (distance < -60 && selectedPage > 1) handleTurnPage(selectedPage - 1);
+      setTouchStart(null);
+      setTouchEnd(null);
+      return;
+    }
+
+    const isFirstPageSolo = selectedLoc ? !!parseAdvancedConfig(selectedLoc).firstPageSolo : false;
 
     let leftPage;
     if (isFirstPageSolo) {
@@ -2197,7 +2217,32 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '0.35rem' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                               <span style={{ fontSize: '0.75rem', fontWeight: 850, color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>PAGE {pageNum}</span>
-                              {sideClass === 'binder-page-left' ? (
+                              {isNarrowViewport ? (
+                                // Single page shown at a time on narrow viewports, so both
+                                // directions live together instead of split across two sides.
+                                <>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-icon-only"
+                                    onClick={() => handleTurnPage(pageNum - 1)}
+                                    disabled={pageNum <= 1}
+                                    style={{ width: '32px', height: '32px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)' }}
+                                    title="Previous Page"
+                                  >
+                                    <ChevronLeft size={16} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-icon-only"
+                                    onClick={() => handleTurnPage(pageNum + 1)}
+                                    disabled={pageNum >= (selectedLoc.max_pages || 30)}
+                                    style={{ width: '32px', height: '32px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)' }}
+                                    title="Next Page"
+                                  >
+                                    <ChevronRight size={16} />
+                                  </button>
+                                </>
+                              ) : sideClass === 'binder-page-left' ? (
                                 <button
                                   type="button"
                                   className="btn btn-secondary btn-icon-only"
@@ -2227,8 +2272,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                       handleTurnPage(leftPageNum + 2);
                                     }
                                   }}
-                                  disabled={isFirstPageSolo ? 
-                                    (leftPageNum === null ? 2 > (selectedLoc.max_pages || 30) : (leftPageNum + 2 > (selectedLoc.max_pages || 30))) : 
+                                  disabled={isFirstPageSolo ?
+                                    (leftPageNum === null ? 2 > (selectedLoc.max_pages || 30) : (leftPageNum + 2 > (selectedLoc.max_pages || 30))) :
                                     (leftPageNum + 1 >= (selectedLoc.max_pages || 30))
                                   }
                                   style={{ width: '32px', height: '32px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)' }}
@@ -2421,16 +2466,22 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     onTouchMove={handleTouchMove}
                     onTouchEnd={handleTouchEnd}
                   >
-                    {/* Book Container displaying Left & Right Pages */}
-                    <div className={`binder-page-container ${isFlipping ? 'page-flip-effect' : ''}`} style={{ flex: 1, width: '100%' }}>
-                      {/* Left Page (Odd Page) */}
-                      {renderBinderPageGrid(leftPageNum, 'binder-page-left')}
+                    {/* Book Container: single page on narrow viewports, two-page spread otherwise */}
+                    <div className={`binder-page-container ${isNarrowViewport ? 'single-page' : ''} ${isFlipping ? 'page-flip-effect' : ''}`} style={{ flex: 1, width: '100%' }}>
+                      {isNarrowViewport ? (
+                        renderBinderPageGrid(Math.min(Math.max(selectedPage, 1), selectedLoc.max_pages || 30), 'binder-page-left')
+                      ) : (
+                        <>
+                          {/* Left Page (Odd Page) */}
+                          {renderBinderPageGrid(leftPageNum, 'binder-page-left')}
 
-                      {/* Binder Spine Metal Rings */}
-                      <div className="binder-spine"></div>
+                          {/* Binder Spine Metal Rings */}
+                          <div className="binder-spine"></div>
 
-                      {/* Right Page (Even Page) */}
-                      {rightPageNum <= (selectedLoc.max_pages || 30) && renderBinderPageGrid(rightPageNum, 'binder-page-right')}
+                          {/* Right Page (Even Page) */}
+                          {rightPageNum <= (selectedLoc.max_pages || 30) && renderBinderPageGrid(rightPageNum, 'binder-page-right')}
+                        </>
+                      )}
                     </div>
                   </div>
                 );
