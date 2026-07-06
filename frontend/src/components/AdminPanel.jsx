@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, UserPlus, Key, Trash2, ToggleLeft, ToggleRight, Search, Users } from 'lucide-react';
+import { Shield, UserPlus, Key, Trash2, ToggleLeft, ToggleRight, Search, Users, Globe } from 'lucide-react';
 
 function AdminPanel({ showToast }) {
   const [users, setUsers] = useState([]);
@@ -17,8 +17,13 @@ function AdminPanel({ showToast }) {
   const [updatePassword, setUpdatePassword] = useState('');
   const [pwdLoading, setPwdLoading] = useState(false);
 
+  // Instance Settings States
+  const [publicBaseUrl, setPublicBaseUrl] = useState('');
+  const [settingsLoading, setSettingsLoading] = useState(false);
+
   useEffect(() => {
     fetchUsers();
+    fetchSettings();
   }, []);
 
   const handleSeedDatabase = async () => {
@@ -55,6 +60,44 @@ function AdminPanel({ showToast }) {
       showToast('Error connecting to backend.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchSettings = async () => {
+    try {
+      const response = await fetch('/api/settings');
+      if (response.ok) {
+        const data = await response.json();
+        setPublicBaseUrl(data.public_base_url || '');
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSaveSettings = async (e) => {
+    e.preventDefault();
+    setSettingsLoading(true);
+    try {
+      const response = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ public_base_url: publicBaseUrl })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setPublicBaseUrl(data.public_base_url || '');
+        showToast('Instance settings updated.');
+      } else {
+        const data = await response.json();
+        showToast(data.error || 'Failed to update settings.');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error updating settings.');
+    } finally {
+      setSettingsLoading(false);
     }
   };
 
@@ -263,6 +306,36 @@ function AdminPanel({ showToast }) {
             </div>
             <button type="submit" className="btn btn-primary" style={{ padding: '0.6rem', fontWeight: 700 }} disabled={addLoading}>
               {addLoading ? <div className="spinner" style={{ width: '14px', height: '14px', margin: 0, borderWidth: '2px' }}></div> : 'Create Account'}
+            </button>
+          </form>
+        </div>
+
+        {/* Instance Settings Panel */}
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <h3 style={{ color: '#fff', fontSize: '1.1rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Globe size={18} style={{ color: 'var(--accent-red)' }} />
+            Instance Settings
+          </h3>
+          <form onSubmit={handleSaveSettings} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div style={{ background: 'rgba(255, 71, 71, 0.03)', border: '1px solid var(--border-glass)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+              If this app runs behind a reverse proxy, the browser's own address may not be the one others should use to reach a collection share link. Set the public URL here to override it. Leave blank to use the browser's address (or the <code>PUBLIC_BASE_URL</code> environment variable, if set).
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label htmlFor="admin-public-base-url">Public Base URL</label>
+              <input
+                id="admin-public-base-url"
+                type="text"
+                name="public-base-url"
+                autoComplete="off"
+                className="input-control"
+                placeholder="https://cards.example.com"
+                value={publicBaseUrl}
+                onChange={(e) => setPublicBaseUrl(e.target.value)}
+                disabled={settingsLoading}
+              />
+            </div>
+            <button type="submit" className="btn btn-primary" style={{ padding: '0.6rem', fontWeight: 700, alignSelf: 'flex-start' }} disabled={settingsLoading}>
+              {settingsLoading ? <div className="spinner" style={{ width: '14px', height: '14px', margin: 0, borderWidth: '2px' }}></div> : 'Save Settings'}
             </button>
           </form>
         </div>

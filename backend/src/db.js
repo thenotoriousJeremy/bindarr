@@ -93,6 +93,17 @@ async function initDb() {
     )
   `);
 
+  // Single-row instance-wide settings (currently just the public base URL
+  // used for collection share links behind a reverse proxy). id is pinned
+  // to 1 since there's only ever one row.
+  await run(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      public_base_url TEXT DEFAULT ''
+    )
+  `);
+  await run(`INSERT OR IGNORE INTO app_settings (id, public_base_url) VALUES (1, '')`);
+
   // Create locations table
   await run(`
     CREATE TABLE IF NOT EXISTS locations (

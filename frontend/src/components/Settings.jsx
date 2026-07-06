@@ -14,6 +14,17 @@ function Settings({ user, onUpdateUser, showToast }) {
   const [tcgApiKey, setTcgApiKey] = useState(user?.tcg_api_key || '');
   const [apiKeyLoading, setApiKeyLoading] = useState(false);
 
+  const [publicBaseUrl, setPublicBaseUrl] = useState('');
+
+  useEffect(() => {
+    fetch('/api/settings')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data) setPublicBaseUrl(data.public_base_url || '');
+      })
+      .catch(() => {});
+  }, []);
+
   const handleImportFile = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -210,9 +221,10 @@ function Settings({ user, onUpdateUser, showToast }) {
     }
   };
 
-  const shareUrl = `${window.location.protocol}//${window.location.host}/share/${user?.share_token}`;
-  const tradeUrl = `${window.location.protocol}//${window.location.host}/share/${user?.share_token}?list=trade`;
-  const wishlistUrl = `${window.location.protocol}//${window.location.host}/share/${user?.share_token}?list=wishlist`;
+  const origin = publicBaseUrl || `${window.location.protocol}//${window.location.host}`;
+  const shareUrl = `${origin}/share/${user?.share_token}`;
+  const tradeUrl = `${origin}/share/${user?.share_token}?list=trade`;
+  const wishlistUrl = `${origin}/share/${user?.share_token}?list=wishlist`;
 
   const [copiedType, setCopiedType] = useState(''); // 'collection', 'trade', 'wishlist'
 

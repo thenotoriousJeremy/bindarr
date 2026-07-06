@@ -14,6 +14,7 @@ services:
       - DB_PATH=/app/database/pokemon_cards.db
       - POKEMON_TCG_API_KEY= # Optional: Add your Pokemon TCG API Key here to increase rate limits
       - CORS_ORIGIN=http://localhost:3001 # Update if serving the frontend from a different origin
+      - PUBLIC_BASE_URL= # Optional: set the externally-reachable URL for share links when behind a reverse proxy, e.g. https://cards.example.com (also editable from the Admin Panel)
       - DEFAULT_ADMIN_PASSWORD= # Optional: pin the initial admin password instead of using the auto-generated one (see startup logs)
     volumes:
       - pokedexrr-data:/app/database
