@@ -26,6 +26,14 @@ function defaultCompartmentPlan(type) {
 // the exact same rule instead of drifting apart.
 async function resolveCompartmentAndPosition({ locationId, compartmentId, position, userId, cardId, printing }) {
   if (compartmentId !== undefined && compartmentId !== null) {
+    // A caller-supplied compartment can go stale (the location/compartment was
+    // deleted after the client picked it) — verify it still exists rather than
+    // trusting it into an INSERT and blowing up the compartment_id FK.
+    const compartment = await db.get(`
+      SELECT c.id FROM compartments c JOIN locations l ON c.location_id = l.id
+      WHERE c.id = ? AND l.user_id = ?
+    `, [compartmentId, userId]);
+    if (!compartment) return { compartment_id: null, position: position !== undefined ? position : 0 };
     if (position !== undefined) return { compartment_id: compartmentId, position };
     const countRow = await db.get(`SELECT COUNT(*) as cnt FROM collection WHERE compartment_id = ? AND user_id = ?`, [compartmentId, userId]);
     return { compartment_id: compartmentId, position: ((countRow?.cnt || 0) + 1) * 1000 };
@@ -176,7 +184,18 @@ router.post('/collection', async (req, res) => {
     let card = await db.get(`SELECT id FROM card_cache WHERE id = ?`, [card_id]);
     if (!card) {
       console.log(`Card ${card_id} not found in cache. Fetching from API first...`);
-      const apiCard = await tcgApi.getCardById(card_id, req.user.tcg_api_key);
+      let apiCard;
+      try {
+        apiCard = await tcgApi.getCardById(card_id, req.user.tcg_api_key);
+      } catch (fetchError) {
+        if (fetchError.message === 'INVALID_API_KEY') {
+          return res.status(403).json({ error: 'Invalid API Key' });
+        }
+        if (fetchError.message === 'RATE_LIMIT_EXCEEDED') {
+          return res.status(429).json({ error: 'Rate limit exceeded' });
+        }
+        throw fetchError;
+      }
       if (!apiCard) {
         return res.status(404).json({ error: `Card ID ${card_id} not found on Pokémon TCG API.` });
       }
