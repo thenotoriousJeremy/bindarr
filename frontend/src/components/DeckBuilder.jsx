@@ -29,6 +29,11 @@ function DeckBuilder({ showToast }) {
   // Checkout States
   const [checkingOut, setCheckingOut] = useState(false);
 
+  // True while an add/qty write is in flight. Blocks overlapping clicks that
+  // would otherwise each compute a new quantity from the same stale render and
+  // clobber one another (last-writer-wins on the server upsert).
+  const [savingCard, setSavingCard] = useState(false);
+
   useEffect(() => {
     fetchDecks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -96,12 +101,13 @@ function DeckBuilder({ showToast }) {
   };
 
   const handleAddCardToDeck = async (card) => {
-    if (!activeDeck) return;
-    
+    if (!activeDeck || savingCard) return;
+
     // Find if card already exists in deck
     const existing = activeDeck.cards.find(c => c.id === card.id);
     const newQty = existing ? existing.quantity + 1 : 1;
 
+    setSavingCard(true);
     try {
       const response = await fetch(`/api/decks/${activeDeck.id}/cards`, {
         method: 'POST',
@@ -112,18 +118,20 @@ function DeckBuilder({ showToast }) {
       if (response.ok) {
         showToast(`Added ${card.name} to deck`);
         // Refresh details locally
-        loadDeckDetails(activeDeck.id);
+        await loadDeckDetails(activeDeck.id);
       } else {
         showToast('Failed to add card.');
       }
     } catch (err) {
       console.error(err);
       showToast('Failed to add card.');
+    } finally {
+      setSavingCard(false);
     }
   };
 
   const handleUpdateCardQty = async (cardId, newQty) => {
-    if (!activeDeck) return;
+    if (!activeDeck || savingCard) return;
 
     // Guard against NaN/garbage from a manual quantity input before it reaches
     // the server as an invalid quantity.
@@ -134,6 +142,7 @@ function DeckBuilder({ showToast }) {
       return;
     }
 
+    setSavingCard(true);
     try {
       const response = await fetch(`/api/decks/${activeDeck.id}/cards`, {
         method: 'POST',
@@ -142,13 +151,15 @@ function DeckBuilder({ showToast }) {
       });
 
       if (response.ok) {
-        loadDeckDetails(activeDeck.id);
+        await loadDeckDetails(activeDeck.id);
       } else {
         showToast('Failed to update quantity.');
       }
     } catch (err) {
       console.error(err);
       showToast('Failed to update quantity.');
+    } finally {
+      setSavingCard(false);
     }
   };
 
@@ -564,7 +575,7 @@ function DeckBuilder({ showToast }) {
                             <img src={card.image_url} alt={card.name} style={{ width: '24px', height: '33px', objectFit: 'cover', borderRadius: '2px' }} />
                             <span style={{ fontSize: '0.8rem', color: '#fff' }}>{card.name} ({card.set_name} • #{card.number})</span>
                           </div>
-                          <button className="btn btn-primary btn-icon-only" style={{ padding: '0.2rem' }} onClick={() => handleAddCardToDeck(card)}>
+                          <button className="btn btn-primary btn-icon-only" style={{ padding: '0.2rem' }} disabled={savingCard} onClick={() => handleAddCardToDeck(card)}>
                             <Plus size={12} />
                           </button>
                         </div>
@@ -610,17 +621,19 @@ function DeckBuilder({ showToast }) {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                                   {/* Qty modifier buttons */}
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-glass)' }}>
-                                    <button 
-                                      className="btn btn-secondary btn-icon-only" 
+                                    <button
+                                      className="btn btn-secondary btn-icon-only"
                                       style={{ width: '22px', height: '22px', padding: 0 }}
+                                      disabled={savingCard}
                                       onClick={() => handleUpdateCardQty(card.id, card.quantity - 1)}
                                     >
                                       -
                                     </button>
                                     <span style={{ padding: '0 0.4rem', fontSize: '0.85rem', fontWeight: 700, minWidth: '18px', textAlign: 'center', color: '#fff' }}>{card.quantity}</span>
-                                    <button 
-                                      className="btn btn-secondary btn-icon-only" 
+                                    <button
+                                      className="btn btn-secondary btn-icon-only"
                                       style={{ width: '22px', height: '22px', padding: 0 }}
+                                      disabled={savingCard}
                                       onClick={() => handleUpdateCardQty(card.id, card.quantity + 1)}
                                     >
                                       +
