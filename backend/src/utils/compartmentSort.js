@@ -198,6 +198,13 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
   const compartments = overrideCompartments || await loadCompartments(db, location.id, location.user_id);
   if (compartments.length === 0) return null;
 
+  // Container-level rule first: a card this location doesn't accept must never
+  // "overflow" out of it (the full-container branch below would otherwise fire
+  // before any rule check and emit a misleading "overflowed from <this>" hop).
+  if (!locationAcceptsCard(location, cardMetadata)) {
+    return null;
+  }
+
   const cardSet = cardMetadata.set_name;
 
   // 1. Get all cards in this location to check which sets are currently in which compartments
@@ -258,11 +265,6 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
         }
       }
     }
-    return null;
-  }
-
-  // 1. Container-level strict filter
-  if (!locationAcceptsCard(location, cardMetadata)) {
     return null;
   }
 
