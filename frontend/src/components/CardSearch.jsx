@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Search, Plus, X, Info, HelpCircle, ShieldAlert } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Search, Plus, X, ShieldAlert } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { formatPrice } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
@@ -25,7 +25,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   // Drawer states
   const [selectedCard, setSelectedCard] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [locations, setLocations] = useState([]);
+  const [, setLocations] = useState([]);
   
   // Form states
   const [quantity, setQuantity] = useState(1);
@@ -184,11 +184,6 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
     setPrinting('Normal');
     setLanguage('English');
     setPurchasePrice(0);
-  };
-
-  const handleLocationChange = (e) => {
-    const val = e.target.value;
-    setLocationId(val);
   };
 
   const handleSubmit = async (e) => {
@@ -402,7 +397,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       {/* Empty State */}
       {!loading && searching && cards.length === 0 && (
         <div className="glass-panel" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem 1.5rem' }}>
-          <p>No cards matched your search queries. Try again with broader terms (e.g. searching "Charizard" without a card number).</p>
+          <p>No cards matched your search queries. Try again with broader terms (e.g. searching &quot;Charizard&quot; without a card number).</p>
         </div>
       )}
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload, Eye, EyeOff } from 'lucide-react';
 
 function Settings({ user, onUpdateUser, showToast }) {
@@ -431,7 +431,7 @@ function Settings({ user, onUpdateUser, showToast }) {
 
           <form onSubmit={handleApiKeyChange} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div style={{ background: 'rgba(255, 71, 71, 0.03)', border: '1px solid var(--border-glass)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-              Card searches use the free Pokémon TCG API. Adding your own key raises your rate limit so searches stay fast during bulk scanning. Grab a free key at <a href="https://dev.pokemontcg.io" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-yellow)', fontWeight: 600 }}>dev.pokemontcg.io</a> and paste it below. It's optional.
+              Card searches use the free Pokémon TCG API. Adding your own key raises your rate limit so searches stay fast during bulk scanning. Grab a free key at <a href="https://dev.pokemontcg.io" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-yellow)', fontWeight: 600 }}>dev.pokemontcg.io</a> and paste it below. It&apos;s optional.
             </div>
 
             <div className="form-group" style={{ marginBottom: 0 }}>

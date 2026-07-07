@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Search, Download, Trash2, Edit2, LayoutGrid, List, Database, Upload, ChevronDown } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Search, Trash2, Edit2, LayoutGrid, List } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
@@ -9,7 +9,7 @@ import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '.
 import DeckBuilder from './DeckBuilder';
 import CardInspectorModal from './CardInspectorModal';
 
-function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCardFilter, setSelectedCardFilter }) {
+function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter, setSelectedCardFilter }) {
   const [collection, setCollection] = useState([]);
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -20,6 +20,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
       // Reset after applying so they can clear search manually
       setSelectedCardFilter('');
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCardFilter]);
   
   // UX view state
@@ -43,53 +44,10 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
   const [stackByCondition, setStackByCondition] = useState(false);
   const [stackByPrinting, setStackByPrinting] = useState(false);
   
-  const [showDataMenu, setShowDataMenu] = useState(false);
-
-  const handleImportFile = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    const isJson = file.name.endsWith('.json');
-    const format = isJson ? 'json' : 'csv';
-
-    reader.onload = async (event) => {
-      try {
-        const fileData = event.target.result;
-        showToast('Importing collection...');
-        const response = await fetch('/api/import', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            format,
-            data: fileData
-          })
-        });
-
-        const result = await response.json();
-        if (response.ok) {
-          showToast(result.message || 'Import successful!');
-          fetchCollection();
-          if (onUpdate) onUpdate();
-        } else {
-          showToast(`Import failed: ${result.error || 'Unknown error'}`);
-        }
-      } catch (err) {
-        console.error(err);
-        showToast(`Import failed: ${err.message}`);
-      }
-    };
-
-    reader.readAsText(file);
-    e.target.value = null;
-  };
-
   useEffect(() => {
     fetchCollection();
     fetchLocations();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statsTrigger, subTab]);
 
   const fetchCollection = async () => {

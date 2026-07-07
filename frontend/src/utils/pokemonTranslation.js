@@ -51,7 +51,7 @@ const POKEMON_JP_TO_EN = {
 };
 
 export const translateJapaneseName = (rawJpName) => {
-  let jp = rawJpName.replace(/[^　-〿぀-ゟ゠-ヿ＀-￯一-龯]/g, '').trim();
+  let jp = rawJpName.replace(/[^\u3000-〿぀-ゟ゠-ヿ＀-￯一-龯]/g, '').trim();
   if (!jp) return '';
 
   let prefix = '';

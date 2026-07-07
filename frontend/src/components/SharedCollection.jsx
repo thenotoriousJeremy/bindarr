@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend } from 'recharts';
 import { Search, Trophy, Compass, Library, ShieldAlert, Sparkles, X } from 'lucide-react';
 import { formatPrice } from '../utils/formatPrice';
@@ -45,6 +45,7 @@ function SharedCollection({ shareToken }) {
 
   useEffect(() => {
     fetchSharedData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareToken, listType]);
 
   const fetchSharedData = async () => {
@@ -173,7 +174,7 @@ function SharedCollection({ shareToken }) {
       {/* Title block based on active share view */}
       <div className="glass-panel" style={{ marginBottom: '1.5rem' }}>
         <h2 style={{ fontSize: '1.25rem', color: '#fff', textTransform: 'capitalize' }}>
-          {owner}'s {listType === 'trade' ? 'Trade Binder' : listType === 'wishlist' ? 'Wanted Wishlist' : 'Pokémon Collection'}
+          {owner}&apos;s {listType === 'trade' ? 'Trade Binder' : listType === 'wishlist' ? 'Wanted Wishlist' : 'Pokémon Collection'}
         </h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
           {listType === 'trade' ? 'Browse cards this collector is willing to trade.' : listType === 'wishlist' ? 'View cards this collector is searching for.' : 'Browse this collector\'s catalog library.'}

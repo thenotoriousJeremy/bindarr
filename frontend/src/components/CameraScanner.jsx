@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Camera, RefreshCw, AlertTriangle, Plus, X, Search, Settings, Library, MapPin } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Camera, RefreshCw, AlertTriangle, X, Settings, Library, MapPin } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
@@ -42,8 +42,8 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [cardLayout, setCardLayout] = useState('modern');
   
   // Scanned card text review overrides
-  const [scannedName, setScannedName] = useState('');
-  const [scannedNumber, setScannedNumber] = useState('');
+  const [, setScannedName] = useState('');
+  const [, setScannedNumber] = useState('');
   
   // OCR Binarization debug images
   const [debugNameImg, setDebugNameImg] = useState('');
@@ -51,7 +51,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [debugNumRightImg, setDebugNumRightImg] = useState('');
   
   const videoRef = useRef(null);
-  const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const currentScanId = useRef(0);
 
@@ -196,6 +195,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     return () => {
       streamRef.current?.getTracks().forEach(track => track.stop());
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchLocations = async () => {
@@ -242,6 +242,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoAddCountdown, autoAddTargetCard]);
 
   // Auto-capture scheduler: capture frame 3s after previous capture completes
@@ -255,6 +256,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     return () => {
       if (timerId) clearTimeout(timerId);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraActive, autoScan, isDrawerOpen, loading, scanMatches, autoAddTargetCard]);
 
   const startCamera = async () => {
@@ -302,53 +304,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setDebugNumRightImg('');
     setShowSettings(false);
     setVideoRatio(null);
-  };
-
-  const handleManualSearch = async (e) => {
-    if (e) e.preventDefault();
-    if (!scannedName && !scannedNumber) return;
-    
-    setLoading(true);
-    setScanMatches([]);
-    setScanStatus(`Searching database for: ${scannedName} ${scannedNumber}...`);
-    
-    try {
-      const params = new URLSearchParams();
-      if (scannedName) params.append('name', scannedName);
-      if (scannedNumber) params.append('number', scannedNumber);
-      
-      const response = await fetch(`/api/search?${params.toString()}`);
-      if (response.ok) {
-        const matches = await response.json();
-        setScanMatches(matches);
-        if (matches.length === 0) {
-          setScanStatus(`Could not find cards matching "${scannedName}" (${scannedNumber}). Try again.`);
-        } else {
-          setScanStatus(`Found ${matches.length} matching card(s)!`);
-          if (matches.length === 1) {
-            if (autoScan) {
-              setAutoAddTargetCard(matches[0]);
-              setAutoAddCountdown(2);
-              setScanMatches([]);
-            } else if (bulkMode) {
-              await autoAddCard(matches[0]);
-              setScanMatches([]);
-            } else {
-              stopCamera();
-              openQuickAdd(matches[0]);
-            }
-          }
-        }
-      } else {
-        if (response.status === 429) setAutoScan(false); // stop the loop from hammering the API
-        setScanStatus(searchFailureMessage(response.status));
-      }
-    } catch (err) {
-      console.error(err);
-      setScanStatus('Search failed.');
-    } finally {
-      setLoading(false);
-    }
   };
 
   const autoAddCard = async (card) => {
@@ -512,7 +467,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       setScanStatus('Error: Guide box overlay not found.');
       return;
     }
-    const guideRect = guideElement.getBoundingClientRect();
 
     // 1. Capture and correctly orient the video frame onto a canvas
     const orientedCanvas = getOrientedVideoCanvas(video);
@@ -584,7 +538,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         console.log(`Japanese OCR Read: "${nameRaw}" -> Cleaned: "${cleanedJpName}" -> English: "${detectedName}"`);
       } else {
         // Clean name (strip extra characters and common template tags like 'HP' or 'Stage')
-        const cleanNameParts = nameRaw.replace(/[^a-zA-Z0-9\s\-]/g, ' ').replace(/\s+/g, ' ').trim().split(' ');
+        const cleanNameParts = nameRaw.replace(/[^a-zA-Z0-9\s-]/g, ' ').replace(/\s+/g, ' ').trim().split(' ');
         const stopwords = ['HP', 'STAGE', 'BASIC', 'EVOLVES', 'FROM', 'LV', 'LEVEL', 'NO', 'PROMO', 'TRAINER', 'ENERGY', 'ITEM', 'STADIUM', 'SUPPORTER', 'POKEMON', 'POKÉMON', 'STAGE1', 'STAGE2', 'MEGA', 'VMAX', 'VSTAR'];
         const filteredNameParts = cleanNameParts.filter(w => {
           const upper = w.toUpperCase();

@@ -31,14 +31,10 @@ jobs:
         run: npm ci
         working-directory: frontend
 
-      # Non-blocking for now: the frontend carries pre-existing lint debt
-      # (~60 no-unused-vars / exhaustive-deps issues). Surfaced in CI logs but
-      # not gating deploys until that debt is cleared (Phase 3), then drop
-      # continue-on-error to make it enforcing.
+      # Enforcing: the frontend lints clean (0 problems). Keep it that way.
       - name: Lint frontend
         run: npm run lint
         working-directory: frontend
-        continue-on-error: true
 
   build-and-push:
     needs: verify

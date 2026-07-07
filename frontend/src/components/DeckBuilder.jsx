@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, X, ChevronLeft, Play, BarChart2, Search, ArrowRight, Eye, LogOut, LogIn, PackageCheck, RefreshCw, Layers, Zap, MoreVertical, Activity } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Plus, Trash2, Edit2, X, ChevronLeft, Play, BarChart2, Search, LogOut, PackageCheck } from 'lucide-react';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { shuffleArray } from '../utils/shuffle';
 import { translateJapaneseName } from '../utils/pokemonTranslation';
 
-function DeckBuilder({ statsTrigger, onUpdate, showToast }) {
+function DeckBuilder({ showToast }) {
   const [decks, setDecks] = useState([]);
   const [activeDeck, setActiveDeck] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -31,6 +31,7 @@ function DeckBuilder({ statsTrigger, onUpdate, showToast }) {
 
   useEffect(() => {
     fetchDecks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchDecks = async () => {
@@ -352,7 +353,7 @@ function DeckBuilder({ statsTrigger, onUpdate, showToast }) {
             <div className="spinner"></div>
           ) : decks.length === 0 ? (
             <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem 1.5rem', color: 'var(--text-secondary)' }}>
-              <p>No decks created yet. Click "Create Deck" above to begin your first build!</p>
+              <p>No decks created yet. Click &quot;Create Deck&quot; above to begin your first build!</p>
             </div>
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.25rem' }}>
@@ -523,7 +524,7 @@ function DeckBuilder({ statsTrigger, onUpdate, showToast }) {
               <div>
                 <strong>This deck is currently checked out for play.</strong>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                  These cards are physically out of storage. Click "Return to Storage" when you're done playing to mark them as back in storage.
+                  These cards are physically out of storage. Click &quot;Return to Storage&quot; when you&apos;re done playing to mark them as back in storage.
                 </div>
               </div>
             </div>

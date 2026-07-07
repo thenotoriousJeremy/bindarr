@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Shield, UserPlus, Key, Trash2, ToggleLeft, ToggleRight, Search, Users } from 'lucide-react';
 
 function AdminPanel({ showToast }) {
@@ -19,6 +19,7 @@ function AdminPanel({ showToast }) {
 
   useEffect(() => {
     fetchUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSeedDatabase = async () => {

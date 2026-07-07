@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Sparkles, User, Lock, ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { useState } from 'react';
+import { User, Lock, ArrowRight, Eye, EyeOff } from 'lucide-react';
 
 function Login({ onLoginSuccess }) {
   const [isRegister, setIsRegister] = useState(false);

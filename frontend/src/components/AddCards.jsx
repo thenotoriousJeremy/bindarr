@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Camera, Search } from 'lucide-react';
 import CameraScanner from './CameraScanner';
 import CardSearch from './CardSearch';

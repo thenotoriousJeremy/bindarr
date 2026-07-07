@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, AreaChart, Area } from 'recharts';
 import { TrendingUp, Coins, Library, Trophy, Plus, ArrowUpRight } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
@@ -46,6 +46,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
     if (stats && stats.summary.totalCards > 0) {
       fetchTimelineHistory();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timePeriod, stats]);
 
   const fetchStats = async () => {

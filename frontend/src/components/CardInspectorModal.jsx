@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { X, MapPin } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
@@ -39,6 +39,7 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
     setLocationId(card.location_id || '');
     setIsTrade(card.is_trade || 0);
     setListType(card.list_type || 'collection');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card?.entry_id, startInEdit]);
 
   if (!card) return null;

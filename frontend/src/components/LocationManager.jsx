@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Plus, Trash2, X, MoreVertical, Settings, LayoutList, RefreshCw } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
@@ -86,7 +86,7 @@ function getSortCategory(card, sortOrder, setsList = []) {
       try {
         const t = typeof card.types === 'string' ? JSON.parse(card.types) : card.types;
         if (t && t.length > 0) typeStr = t[0];
-      } catch (e) {}
+      } catch (e) { /* no-op */ }
     }
     return typeStr;
   }
@@ -252,7 +252,7 @@ function BinderPageContent({ compartment, cards, sortOrder, availableFilters, se
   );
 }
 
-function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, focusEntryId, setFocusEntryId }) {
+function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, focusEntryId }) {
   const [locations, setLocations] = useState([]);
   const [activeLocationId, setActiveLocationId] = useState(null);
   const [compartments, setCompartments] = useState([]);
@@ -333,8 +333,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   const [activeCompartmentId, setActiveCompartmentId] = useState(null);
   const [coverflowActiveIndex, setCoverflowActiveIndex] = useState(0);
-  const [editingRowLabel, setEditingRowLabel] = useState(false);
-  const [rowLabelDraft, setRowLabelDraft] = useState('');
   const [showRowSets, setShowRowSets] = useState(false);
 
   const handleTouchStart = (e) => {

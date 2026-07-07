@@ -1,5 +1,5 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
-import { LayoutDashboard, Camera, Search, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus } from 'lucide-react';
+import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus } from 'lucide-react';
 import Login from './components/Login';
 
 // View components are code-split so heavy deps (tesseract.js OCR in the scanner,
@@ -89,7 +89,7 @@ function App() {
   const [statsTrigger, setStatsTrigger] = useState(0); 
 
   // Detect public share route on load
-  const [shareToken, setShareToken] = useState(() => {
+  const [shareToken] = useState(() => {
     const path = window.location.pathname;
     const match = path.match(/^\/share\/([a-zA-Z0-9_-]+)$/);
     return match ? match[1] : null;
