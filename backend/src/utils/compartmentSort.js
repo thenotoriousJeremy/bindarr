@@ -6,6 +6,40 @@
 // them instead of branching on location.type everywhere.
 const { resolveCardPrice, rebalanceCompartmentPositions } = require('./priceHelpers');
 
+let setsCache = [];
+async function loadSetsCache(db) {
+  try {
+    setsCache = await db.all('SELECT * FROM sets ORDER BY release_date ASC, id ASC');
+    console.log(`Loaded ${setsCache.length} sets into compartmentSort cache`);
+  } catch (e) {
+    console.error('Failed to load sets cache', e);
+  }
+}
+
+
+
+function locationAcceptsCard(location, cardMetadata) {
+  if (!location.rule_type || location.rule_type === 'any') return true;
+  
+  try {
+    const config = location.rule_config ? (typeof location.rule_config === 'string' ? JSON.parse(location.rule_config) : location.rule_config) : {};
+    if (location.rule_type === 'alphabetical_range') {
+      const start = (config.start || 'a').toLowerCase();
+      const end = (config.end || 'z').toLowerCase();
+      const firstLetter = (cardMetadata.name || '').charAt(0).toLowerCase();
+      if (!firstLetter) return false;
+      return firstLetter >= start && firstLetter <= end;
+    }
+    if (location.rule_type === 'specific_sets') {
+      const sets = config.sets || [];
+      return sets.includes(cardMetadata.set_name);
+    }
+  } catch (e) {
+    console.error('Failed to parse location rule_config', e);
+  }
+  return true;
+}
+
 const POKEMON_TYPE_ORDER = {
   'Grass': 1, 'Fire': 2, 'Water': 3, 'Lightning': 4, 'Psychic': 5,
   'Fighting': 6, 'Darkness': 7, 'Metal': 8, 'Dragon': 9, 'Colorless': 10, 'Trainer': 11, 'Energy': 12
@@ -23,6 +57,11 @@ function sortCards(cards, sortOrder, foilSorting) {
     sorted.sort((a, b) => (b.price_trend || 0) - (a.price_trend || 0));
   } else if (sortOrder === 'set-number') {
     sorted.sort((a, b) => {
+      const setAIndex = setsCache.findIndex(s => s.name === a.set_name);
+      const setBIndex = setsCache.findIndex(s => s.name === b.set_name);
+      const cmpSetChrono = (setAIndex >= 0 ? setAIndex : 999999) - (setBIndex >= 0 ? setBIndex : 999999);
+      if (cmpSetChrono !== 0) return cmpSetChrono;
+      
       const cmpSet = (a.set_name || '').localeCompare(b.set_name || '');
       if (cmpSet !== 0) return cmpSet;
       const numA = parseInt(a.number || '0', 10) || 0;
@@ -32,6 +71,11 @@ function sortCards(cards, sortOrder, foilSorting) {
     });
   } else if (sortOrder === 'set-number-printing') {
     sorted.sort((a, b) => {
+      const setAIndex = setsCache.findIndex(s => s.name === a.set_name);
+      const setBIndex = setsCache.findIndex(s => s.name === b.set_name);
+      const cmpSetChrono = (setAIndex >= 0 ? setAIndex : 999999) - (setBIndex >= 0 ? setBIndex : 999999);
+      if (cmpSetChrono !== 0) return cmpSetChrono;
+
       const cmpSet = (a.set_name || '').localeCompare(b.set_name || '');
       if (cmpSet !== 0) return cmpSet;
       const printA = printingOrder[a.printing] || 10;
@@ -66,7 +110,12 @@ function compartmentLabel(compartment, locationType) {
 function getSortCategory(card, sortOrder) {
   if (!card || !sortOrder || sortOrder === 'custom') return null;
   if (sortOrder.startsWith('name')) return card.name ? card.name.charAt(0).toUpperCase() : '?';
-  if (sortOrder.startsWith('set')) return card.set_name || 'Unknown Set';
+  if (sortOrder.startsWith('set')) {
+    if (!card.set_name) return 'Unknown Set';
+    if (!setsCache || setsCache.length === 0) return card.set_name;
+    const idx = setsCache.findIndex(s => s.name === card.set_name);
+    return idx >= 0 ? `${idx + 1}. ${card.set_name}` : card.set_name;
+  }
   if (sortOrder.startsWith('type')) {
     let typeStr = 'Colorless';
     if (card.types) {
@@ -104,13 +153,13 @@ async function loadCompartments(db, locationId, userId) {
   const placeholders = ids.map(() => '?').join(',');
 
   const assignmentRows = await db.all(
-    `SELECT compartment_id, set_name FROM compartment_set_assignments WHERE compartment_id IN (${placeholders})`,
+    `SELECT compartment_id, filter_value FROM compartment_assignments WHERE compartment_id IN (${placeholders})`,
     ids
   );
-  const setsByCompartment = new Map();
+  const filtersByCompartment = new Map();
   assignmentRows.forEach(r => {
-    if (!setsByCompartment.has(r.compartment_id)) setsByCompartment.set(r.compartment_id, []);
-    setsByCompartment.get(r.compartment_id).push(r.set_name);
+    if (!filtersByCompartment.has(r.compartment_id)) filtersByCompartment.set(r.compartment_id, []);
+    filtersByCompartment.get(r.compartment_id).push(r.filter_value);
   });
 
   const countRows = await db.all(
@@ -121,7 +170,7 @@ async function loadCompartments(db, locationId, userId) {
 
   return compartments.map(c => ({
     ...c,
-    assignedSets: setsByCompartment.get(c.id) || [],
+    assignedFilters: filtersByCompartment.get(c.id) || [],
     count: countByCompartment.get(c.id) || 0,
     free: c.capacity - (countByCompartment.get(c.id) || 0)
   }));
@@ -194,35 +243,57 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
     return null;
   }
 
+  // 1. Container-level strict filter
+  if (!locationAcceptsCard(location, cardMetadata)) {
+    return null;
+  }
+
   const cardCat = getSortCategory(cardMetadata, location.sort_order);
 
-  // Determine dynamic categories for each compartment based on sort_order
+  // 2. Compartment-level strict filters
+  // A compartment can ONLY accept a card if:
+  // - It has explicit assignedSets, AND the card matches one of them.
+  // - It has NO explicit assignedSets, BUT it has dynamic cards matching the category.
+  // - It has NO explicit assignedSets AND NO dynamic cards (it is completely empty/unassigned).
+  
   const dynamicCatsByCompId = new Map();
   compartments.forEach(c => {
     const compCards = cardsByCompId.get(c.id) || [];
     const cardCats = compCards.map(card => getSortCategory(card, location.sort_order)).filter(Boolean);
-    // Explicit assignedSets act as category overrides
-    const combinedCats = new Set([...(c.assignedSets || []), ...cardCats]);
-    dynamicCatsByCompId.set(c.id, Array.from(combinedCats));
+    dynamicCatsByCompId.set(c.id, Array.from(new Set(cardCats)));
   });
 
-  // Find compartments assigned to the card's category (explicitly or dynamically)
-  const assignedComps = compartments.filter(c => {
-    const cats = dynamicCatsByCompId.get(c.id) || [];
-    return cardCat && cats.includes(cardCat);
+  const validComps = compartments.filter(c => {
+    // If it has explicit filters, it MUST match
+    if (c.assignedFilters && c.assignedFilters.length > 0) {
+      return cardCat && c.assignedFilters.includes(cardCat);
+    }
+    
+    const dCats = dynamicCatsByCompId.get(c.id) || [];
+    // If it has NO explicit filters, but has cards, it only accepts matching dynamic category
+    if (dCats.length > 0) {
+      return cardCat && dCats.includes(cardCat);
+    }
+    
+    // If it has no explicit filters and no dynamic cards, it accepts anything
+    return true;
   });
 
-  // Find unassigned/empty compartments (no explicit assignments and no categorized cards)
-  const unassignedComps = compartments.filter(c => {
-    const cats = dynamicCatsByCompId.get(c.id) || [];
-    return cats.length === 0;
+  // Separate into preferred (assigned/matching) vs unassigned
+  const assignedComps = validComps.filter(c => {
+    if (c.assignedFilters && c.assignedFilters.length > 0) return true;
+    const dCats = dynamicCatsByCompId.get(c.id) || [];
+    return dCats.length > 0;
+  });
+  
+  const unassignedComps = validComps.filter(c => {
+    const dCats = dynamicCatsByCompId.get(c.id) || [];
+    return !(c.assignedFilters && c.assignedFilters.length > 0) && dCats.length === 0;
   });
 
-  // Build the eligible pool (assigned first, then unassigned as overflow)
-  let pool = [...assignedComps, ...unassignedComps];
-  pool.sort((a, b) => a.idx - b.idx);
-
-  // If the pool has no free space, fall back to all compartments in the location
+  let pool = [...assignedComps];
+  
+  // Check if assigned pool has space
   const poolHasFreeSpace = pool.some(c => {
     const count = overrideCompartments
       ? (overrideCompartments.find(oc => oc.id === c.id)?.count || 0)
@@ -230,8 +301,24 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
     return count < c.capacity;
   });
 
+  // If no assigned compartments have space (or none exist), fallback to unassigned
   if (pool.length === 0 || !poolHasFreeSpace) {
-    pool = [...compartments];
+    pool = [...pool, ...unassignedComps];
+  }
+  
+  pool.sort((a, b) => a.idx - b.idx);
+  
+  // Check if final pool has free space
+  const finalHasFreeSpace = pool.some(c => {
+    const count = overrideCompartments
+      ? (overrideCompartments.find(oc => oc.id === c.id)?.count || 0)
+      : (cardsByCompId.get(c.id) || []).length;
+    return count < c.capacity;
+  });
+
+  // We NO LONGER fallback to `[...compartments]`. If it's full, or doesn't match rules, it returns null!
+  if (pool.length === 0 || !finalHasFreeSpace) {
+    return null;
   }
 
   // Handle custom sort order recommendation
@@ -324,4 +411,4 @@ async function rebalanceCompartmentByScheme(db, compartmentId, userId, location)
   }
 }
 
-module.exports = { sortCards, compartmentLabel, loadCompartments, recommendSlot, rebalanceCompartmentByScheme };
+module.exports = { sortCards, compartmentLabel, loadCompartments, recommendSlot, rebalanceCompartmentByScheme, locationAcceptsCard, loadSetsCache, getSortCategory };

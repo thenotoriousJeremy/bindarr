@@ -141,10 +141,25 @@ async function initDb() {
   `);
 
   await run(`
-    CREATE TABLE IF NOT EXISTS compartment_set_assignments (
+    CREATE TABLE IF NOT EXISTS compartment_assignments (
       compartment_id INTEGER NOT NULL REFERENCES compartments(id) ON DELETE CASCADE,
-      set_name TEXT NOT NULL,
-      PRIMARY KEY(compartment_id, set_name)
+      filter_value TEXT NOT NULL,
+      PRIMARY KEY(compartment_id, filter_value)
+    )
+  `);
+
+  // Create sets table
+  await run(`
+    CREATE TABLE IF NOT EXISTS sets (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      series TEXT,
+      printed_total INTEGER,
+      total INTEGER,
+      release_date TEXT,
+      ptcgo_code TEXT,
+      symbol_url TEXT,
+      logo_url TEXT
     )
   `);
 

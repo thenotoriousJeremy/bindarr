@@ -7,7 +7,7 @@ const {
   isVintageSet,
   parseSqliteUtc
 } = require('../utils/priceHelpers');
-const { recommendSlot, compartmentLabel, loadCompartments, rebalanceCompartmentByScheme, sortCards } = require('../utils/compartmentSort');
+const { recommendSlot, compartmentLabel, loadCompartments, rebalanceCompartmentByScheme, sortCards, locationAcceptsCard } = require('../utils/compartmentSort');
 
 // Default compartment plan by container type — used when a caller doesn't
 // specify one at creation time (see POST /locations).
@@ -28,26 +28,37 @@ function defaultCompartmentPlan(type) {
 // location_id, the recommendation engine picks a compartment automatically;
 // given neither, the card is unsorted. Shared by add/update so both follow
 // the exact same rule instead of drifting apart.
-async function resolveCompartmentAndPosition({ locationId, compartmentId, position, userId, cardId, printing }) {
+async function resolveCompartmentAndPosition({ locationId, compartmentId, position, userId, cardId, printing, excludeEntryId }) {
   if (compartmentId !== undefined && compartmentId !== null) {
     // A caller-supplied compartment can go stale (the location/compartment was
     // deleted after the client picked it) — verify it still exists rather than
     // trusting it into an INSERT and blowing up the compartment_id FK.
     const compartment = await db.get(`
-      SELECT c.id, c.idx, c.label, l.type as loc_type, l.name as loc_name FROM compartments c JOIN locations l ON c.location_id = l.id
+      SELECT c.id, c.idx, c.label, c.capacity, l.type as loc_type, l.name as loc_name FROM compartments c JOIN locations l ON c.location_id = l.id
       WHERE c.id = ? AND l.user_id = ?
     `, [compartmentId, userId]);
     if (!compartment) return { compartment_id: null, position: position !== undefined ? position : 0 };
+    
+    let countQuery = `SELECT COUNT(*) as cnt FROM collection WHERE compartment_id = ? AND user_id = ?`;
+    let countParams = [compartmentId, userId];
+    if (excludeEntryId) {
+      countQuery += ` AND id != ?`;
+      countParams.push(excludeEntryId);
+    }
+    const countRow = await db.get(countQuery, countParams);
+    if (countRow.cnt >= compartment.capacity) {
+      throw new Error('COMPARTMENT_FULL');
+    }
+
     const label = `${compartmentLabel(compartment, compartment.loc_type)} (in ${compartment.loc_name})`;
     if (position !== undefined) return { compartment_id: compartmentId, position, label };
-    const countRow = await db.get(`SELECT COUNT(*) as cnt FROM collection WHERE compartment_id = ? AND user_id = ?`, [compartmentId, userId]);
     return { compartment_id: compartmentId, position: ((countRow?.cnt || 0) + 1) * 1000, label };
   }
   if (!locationId) {
     return { compartment_id: null, position: position !== undefined ? position : 0 };
   }
 
-  const location = await db.get(`SELECT id, name, type, sort_order, foil_sorting, user_id FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
+  const location = await db.get(`SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, user_id FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
   if (!location) return { compartment_id: null, position: 0 };
 
   const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity FROM card_cache WHERE id = ?`, [cardId]);
@@ -333,7 +344,8 @@ router.put('/collection/:id', async (req, res) => {
         position,
         userId: req.user.id,
         cardId: entry.card_id,
-        printing: printing !== undefined ? printing : entry.printing
+        printing: printing !== undefined ? printing : entry.printing,
+        excludeEntryId: id
       });
       finalLocId = resolved.location_id !== undefined && resolved.location_id !== null ? resolved.location_id : (location_id !== undefined ? location_id : entry.location_id);
       finalCompartmentId = resolved.compartment_id;
@@ -605,12 +617,11 @@ router.delete('/compartments/:id', async (req, res) => {
   }
 });
 
-// Replaces the full set of sets assigned to a compartment in one call —
-// the sort assistant then prefers this compartment for cards from those
-// sets (see compartmentSort.recommendSlot).
-router.put('/compartments/:id/sets', async (req, res) => {
+// Replaces the full set of categories assigned to a compartment in one call —
+// the sort assistant then prefers this compartment for matching cards.
+router.put('/compartments/:id/filters', async (req, res) => {
   const { id } = req.params;
-  const { sets = [] } = req.body;
+  const { filters = [] } = req.body;
   try {
     const compartment = await db.get(`
       SELECT cp.id FROM compartments cp
@@ -619,74 +630,85 @@ router.put('/compartments/:id/sets', async (req, res) => {
     `, [id, req.user.id]);
     if (!compartment) return res.status(404).json({ error: 'Compartment not found' });
 
-    await db.run(`DELETE FROM compartment_set_assignments WHERE compartment_id = ?`, [id]);
-    for (const setName of sets) {
-      await db.run(`INSERT OR IGNORE INTO compartment_set_assignments (compartment_id, set_name) VALUES (?, ?)`, [id, setName]);
+    await db.run(`DELETE FROM compartment_assignments WHERE compartment_id = ?`, [id]);
+    for (const filterValue of filters) {
+      await db.run(`INSERT OR IGNORE INTO compartment_assignments (compartment_id, filter_value) VALUES (?, ?)`, [id, filterValue]);
     }
-    res.json({ message: 'Set assignments updated', sets });
+    res.json({ message: 'Filter assignments updated', filters });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Failed to update set assignments' });
+    res.status(500).json({ error: 'Failed to update filter assignments' });
   }
 });
 
-// Distributes every owned set across a location's compartments automatically,
-// sizing each set to however many compartments it actually needs
-// (ceil(ownedCount / capacity)). Biggest sets are placed first so they get
-// first pick of consecutive compartments; anything that doesn't fit is
-// reported back instead of silently dropped.
-router.post('/locations/:id/auto-assign-sets', async (req, res) => {
+// Distributes every owned category (based on the location's sort_order)
+// across a location's compartments automatically, sizing each category to
+// however many compartments it actually needs.
+router.post('/locations/:id/auto-assign-categories', async (req, res) => {
   const { id } = req.params;
   try {
-    const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    const loc = await db.get(`SELECT id, sort_order FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) return res.status(404).json({ error: 'Location not found' });
 
     const compartments = await db.all(`SELECT id, idx, capacity FROM compartments WHERE location_id = ? ORDER BY idx ASC`, [id]);
     if (compartments.length === 0) return res.status(400).json({ error: 'This location has no compartments' });
 
-    const setCounts = await db.all(`
-      SELECT cc.set_name, SUM(c.quantity) as owned
+    const allCards = await db.all(`
+      SELECT c.quantity, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
-      WHERE c.user_id = ? AND cc.set_name IS NOT NULL
-      GROUP BY cc.set_name
+      WHERE c.user_id = ?
     `, [req.user.id]);
 
-    const setsBySize = setCounts
-      .map(s => ({ setName: s.set_name, compartmentsNeeded: Math.max(1, Math.ceil(s.owned / (compartments[0]?.capacity || 40))) }))
+    const { loadSetsCache, sortCards } = require('../utils/compartmentSort');
+    await loadSetsCache(db);
+    // Since getSortCategory is not exported, we need to export it, but wait! We can just fetch it from utils/compartmentSort.js!
+    const { getSortCategory } = require('../utils/compartmentSort');
+
+    const catCounts = new Map();
+    allCards.forEach(c => {
+      try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; }
+      const cat = getSortCategory(c, loc.sort_order);
+      if (cat) {
+        catCounts.set(cat, (catCounts.get(cat) || 0) + c.quantity);
+      }
+    });
+
+    const catsBySize = Array.from(catCounts.entries())
+      .map(([catName, owned]) => ({ catName, compartmentsNeeded: Math.max(1, Math.ceil(owned / (compartments[0]?.capacity || 40))) }))
       .sort((a, b) => b.compartmentsNeeded - a.compartmentsNeeded);
 
-    const plan = new Map(); // compartment id -> [set names]
+    const plan = new Map();
     let cursor = 0;
     const skipped = [];
-    for (const { setName, compartmentsNeeded } of setsBySize) {
+    for (const { catName, compartmentsNeeded } of catsBySize) {
       if (cursor + compartmentsNeeded > compartments.length) {
-        skipped.push(setName);
+        skipped.push(catName);
         continue;
       }
       for (let i = 0; i < compartmentsNeeded; i++) {
         const compartment = compartments[cursor + i];
         if (!plan.has(compartment.id)) plan.set(compartment.id, []);
-        plan.get(compartment.id).push(setName);
+        plan.get(compartment.id).push(catName);
       }
       cursor += compartmentsNeeded;
     }
 
     for (const compartment of compartments) {
-      await db.run(`DELETE FROM compartment_set_assignments WHERE compartment_id = ?`, [compartment.id]);
-      for (const setName of plan.get(compartment.id) || []) {
-        await db.run(`INSERT OR IGNORE INTO compartment_set_assignments (compartment_id, set_name) VALUES (?, ?)`, [compartment.id, setName]);
+      await db.run(`DELETE FROM compartment_assignments WHERE compartment_id = ?`, [compartment.id]);
+      for (const catName of plan.get(compartment.id) || []) {
+        await db.run(`INSERT OR IGNORE INTO compartment_assignments (compartment_id, filter_value) VALUES (?, ?)`, [compartment.id, catName]);
       }
     }
 
     res.json({
       message: 'Row assignments updated',
-      assigned: Array.from(plan.entries()).map(([compartment_id, sets]) => ({ compartment_id, sets })),
+      assigned: Array.from(plan.entries()).map(([compartment_id, filters]) => ({ compartment_id, filters })),
       skipped
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Failed to auto-assign sets' });
+    res.status(500).json({ error: 'Failed to auto-assign categories' });
   }
 });
 
@@ -713,27 +735,7 @@ router.get('/locations/:id/recommend', async (req, res) => {
   }
 });
 
-function locationAcceptsCard(location, cardMetadata) {
-  if (!location.rule_type || location.rule_type === 'any') return true;
-  
-  try {
-    const config = location.rule_config ? JSON.parse(location.rule_config) : {};
-    if (location.rule_type === 'alphabetical_range') {
-      const start = (config.start || 'a').toLowerCase();
-      const end = (config.end || 'z').toLowerCase();
-      const firstLetter = (cardMetadata.name || '').charAt(0).toLowerCase();
-      if (!firstLetter) return false;
-      return firstLetter >= start && firstLetter <= end;
-    }
-    if (location.rule_type === 'specific_sets') {
-      const sets = config.sets || [];
-      return sets.includes(cardMetadata.set_name);
-    }
-  } catch (e) {
-    console.error('Failed to parse location rule_config', e);
-  }
-  return true;
-}
+
 
 router.post('/smart-recommend-batch', async (req, res) => {
   const { entry_ids = [] } = req.body;

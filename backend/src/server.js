@@ -11,6 +11,7 @@ const authRoutes = require('./routes/auth');
 const sharedRoutes = require('./routes/shared');
 const adminRoutes = require('./routes/admin');
 const collectionRoutes = require('./routes/collection');
+const setsRoutes = require('./routes/sets');
 const decksRoutes = require('./routes/decks');
 
 const app = express();
@@ -44,8 +45,15 @@ app.use(express.json({ limit: '15mb' }));
 
 // Initialize Database on startup
 db.initDb()
-  .then(() => {
+  .then(async () => {
     console.log('Database tables verified/created successfully.');
+    // Sync sets on startup
+    await tcgApi.fetchAndCacheSets();
+    
+    // Load sets into compartmentSort memory cache
+    const { loadSetsCache } = require('./utils/compartmentSort');
+    await loadSetsCache(db);
+    
     // Schedule a weekly price update (every 7 days)
     setInterval(() => {
       tcgApi.updateCollectionPrices();
@@ -72,6 +80,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/shared', sharedRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api', collectionRoutes);
+app.use('/api/sets', setsRoutes);
 app.use('/api/decks', decksRoutes);
 
 // Serve production static assets from Frontend

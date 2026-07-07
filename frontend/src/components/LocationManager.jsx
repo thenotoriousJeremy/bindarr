@@ -50,7 +50,7 @@ function PrintingBadge({ printing }) {
 // interior) — real capacity/label/set-assignment lives on the compartment
 // itself, not inferred from location.type. One renderer covers every
 // container type instead of separate Box/Binder/CoverFlow implementations.
-function CompartmentCard({ compartment, cards, sortOrder, availableSets, onRename, onSetCapacity, onToggleSet, onRemove, onDeleteCard, onMoveCard, moveTargets, canRemove }) {
+function CompartmentCard({ compartment, cards, sortOrder, availableFilters, setsList = [], onRename, onSetCapacity, onToggleFilter, onRemove, onDeleteCard, onMoveCard, moveTargets, canRemove }) {
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState(compartment.display_label);
   const [showSets, setShowSets] = useState(false);
@@ -75,7 +75,7 @@ function CompartmentCard({ compartment, cards, sortOrder, availableSets, onRenam
           </strong>
         )}
         <button type="button" className="btn btn-secondary" onClick={() => setShowSets(s => !s)} style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem' }}>
-          {compartment.assignedSets.length === 0 ? 'Any set' : compartment.assignedSets.length === 1 ? compartment.assignedSets[0] : `${compartment.assignedSets.length} sets`}
+          {(compartment.assignedFilters || []).length === 0 ? 'Any category' : (compartment.assignedFilters || []).length === 1 ? compartment.assignedFilters[0] : `${compartment.assignedFilters.length} cats`}
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.1rem', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
           <span>{compartment.count} /</span>
@@ -102,18 +102,18 @@ function CompartmentCard({ compartment, cards, sortOrder, availableSets, onRenam
             onChange={(e) => { if (e.target.value) onToggleSet(e.target.value); }}
             style={{ fontSize: '0.75rem', padding: '0.2rem 0.4rem' }}
           >
-            <option value="">Choose set to toggle...</option>
+            <option value="">Choose category to toggle...</option>
             {availableSets.map(setName => (
-              <option key={setName} value={setName}>
-                {compartment.assignedSets.includes(setName) ? `✓ ${setName}` : setName}
+              <option key={filterVal} value={filterVal}>
+                {compartment.assignedFilters.includes(setName) ? `✓ ${filterVal}` : filterVal}
               </option>
             ))}
           </select>
-          {compartment.assignedSets.length > 0 && (
+          {compartment.assignedFilters.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
-              {compartment.assignedSets.map(setName => (
-                <span key={setName} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', padding: '0.15rem 0.35rem', background: 'var(--accent-red)', borderRadius: '3px' }}>
-                  {setName}
+              {compartment.assignedFilters.map(setName => (
+                <span key={filterVal} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', padding: '0.15rem 0.35rem', background: 'var(--accent-red)', borderRadius: '3px' }}>
+                  {filterVal}
                   <span style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => onToggleSet(setName)}>&times;</span>
                 </span>
               ))}
@@ -126,36 +126,50 @@ function CompartmentCard({ compartment, cards, sortOrder, availableSets, onRenam
         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic', padding: '0.25rem 0' }}>Empty</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-          {cards.map(card => (
-            <div key={card.entry_id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', padding: '0.25rem 0', borderBottom: '1px solid var(--border-glass)' }}>
-              <div style={{ position: 'relative', width: '32px', flexShrink: 0, overflow: 'hidden', borderRadius: '3px', ...getCardRarityBorder(card.rarity) }}>
-                <img src={card.image_url} alt={card.name} style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', display: 'block' }} />
-                {getFoilOverlayClass(card.printing) && (
-                  <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '3px' }} />
+          {cards.map((card, i) => {
+            const prev = i > 0 ? cards[i - 1] : null;
+            const cat = getSortCategory(card, sortOrder, setsList);
+            const prevCat = getSortCategory(prev, sortOrder, setsList);
+            const categoryStart = cat && (!prev || prevCat !== cat);
+            
+            return (
+              <React.Fragment key={card.entry_id}>
+                {categoryStart && (
+                  <div style={{ padding: '0.25rem 0.5rem', marginTop: i > 0 ? '0.5rem' : 0, background: 'var(--bg-card)', borderLeft: '3px solid var(--accent-red)', fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-primary)', borderRadius: '0 4px 4px 0' }}>
+                    {cat}
+                  </div>
                 )}
-                <PrintingBadge printing={card.printing} />
-              </div>
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {card.name}
-              </span>
-              {isCustom && moveTargets.length > 1 && (
-                <select
-                  className="select-control"
-                  value=""
-                  onChange={(e) => { if (e.target.value) onMoveCard(card.entry_id, parseInt(e.target.value, 10)); }}
-                  style={{ fontSize: '0.65rem', padding: '0.15rem 0.3rem', maxWidth: '110px' }}
-                >
-                  <option value="">Move to...</option>
-                  {moveTargets.filter(t => t.id !== compartment.id).map(t => (
-                    <option key={t.id} value={t.id}>{t.display_label}</option>
-                  ))}
-                </select>
-              )}
-              <button type="button" onClick={() => onDeleteCard(card.entry_id)} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }} title="Remove from collection">
-                <X size={14} />
-              </button>
-            </div>
-          ))}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', padding: '0.25rem 0', borderBottom: '1px solid var(--border-glass)' }}>
+                  <div style={{ position: 'relative', width: '32px', flexShrink: 0, overflow: 'hidden', borderRadius: '3px', ...getCardRarityBorder(card.rarity) }}>
+                    <img src={card.image_url} alt={card.name} style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', display: 'block' }} />
+                    {getFoilOverlayClass(card.printing) && (
+                      <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '3px' }} />
+                    )}
+                    <PrintingBadge printing={card.printing} />
+                  </div>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {card.name}
+                  </span>
+                  {isCustom && moveTargets.length > 1 && (
+                    <select
+                      className="select-control"
+                      value=""
+                      onChange={(e) => { if (e.target.value) onMoveCard(card.entry_id, parseInt(e.target.value, 10)); }}
+                      style={{ fontSize: '0.65rem', padding: '0.15rem 0.3rem', maxWidth: '110px' }}
+                    >
+                      <option value="">Move to...</option>
+                      {moveTargets.filter(t => t.id !== compartment.id).map(t => (
+                        <option key={t.id} value={t.id}>{t.display_label}</option>
+                      ))}
+                    </select>
+                  )}
+                  <button type="button" onClick={() => onDeleteCard(card.entry_id)} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }} title="Remove from collection">
+                    <X size={14} />
+                  </button>
+                </div>
+              </React.Fragment>
+            );
+          })}
         </div>
       )}
     </div>
@@ -164,10 +178,15 @@ function CompartmentCard({ compartment, cards, sortOrder, availableSets, onRenam
 
 // One binder page: a fixed pocket grid (capacity slots, empty ones shown as
 // dashed placeholders) instead of CompartmentCard's variable-length row list.
-function getSortCategory(card, sortOrder) {
+function getSortCategory(card, sortOrder, setsList = []) {
   if (!card) return null;
   if (sortOrder.startsWith('name')) return card.name ? card.name.charAt(0).toUpperCase() : '?';
-  if (sortOrder.startsWith('set')) return card.set_name || 'Unknown Set';
+  if (sortOrder.startsWith('set')) {
+    if (!card.set_name) return 'Unknown Set';
+    if (!setsList || setsList.length === 0) return card.set_name;
+    const idx = setsList.findIndex(s => s.name === card.set_name);
+    return idx >= 0 ? `${idx + 1}. ${card.set_name}` : card.set_name;
+  }
   if (sortOrder.startsWith('type')) {
     let typeStr = 'Colorless';
     if (card.types) {
@@ -191,7 +210,7 @@ function getSortCategory(card, sortOrder) {
   return null;
 }
 
-function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRename, onSetCapacity, onToggleSet, onRemove, onDeleteCard, onMoveCard, moveTargets, canRemove, recommendedSpot, focusEntryId }) {
+function BinderPageContent({ compartment, cards, sortOrder, availableFilters, setsList = [], onRename, onSetCapacity, onToggleFilter, onRemove, onDeleteCard, onMoveCard, moveTargets, canRemove, recommendedSpot, focusEntryId }) {
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState(compartment.display_label);
   const [showSets, setShowSets] = useState(false);
@@ -202,7 +221,8 @@ function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRen
   // so the page mirrors where the card physically goes and shifts the rest down.
   const rendered = [...cards];
   if (recIdx >= 0) {
-    rendered.splice(Math.min(recIdx, rendered.length), 0, {
+    while (rendered.length < recIdx) rendered.push(null);
+    rendered.splice(recIdx, 0, {
       __ghost: true,
       image_url: recommendedSpot.image_url,
       name: recommendedSpot.name,
@@ -231,7 +251,7 @@ function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRen
           </strong>
         )}
         <button type="button" className="btn btn-secondary" onClick={() => setShowSets(s => !s)} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem' }}>
-          {compartment.assignedSets.length === 0 ? 'Any set' : compartment.assignedSets.length === 1 ? compartment.assignedSets[0] : `${compartment.assignedSets.length} sets`}
+          {(compartment.assignedFilters || []).length === 0 ? 'Any category' : (compartment.assignedFilters || []).length === 1 ? compartment.assignedFilters[0] : `${compartment.assignedFilters.length} cats`}
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.1rem', fontSize: '0.6rem', color: 'var(--text-muted)' }}>
           <span>{compartment.count} /</span>
@@ -256,22 +276,22 @@ function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRen
           <select
             className="select-control"
             value=""
-            onChange={(e) => { if (e.target.value) onToggleSet(e.target.value); }}
+            onChange={(e) => { if (e.target.value) onToggleFilter(e.target.value); }}
             style={{ fontSize: '0.7rem', padding: '0.15rem 0.3rem' }}
           >
-            <option value="">Choose set to toggle...</option>
-            {availableSets.map(setName => (
-              <option key={setName} value={setName}>
-                {compartment.assignedSets.includes(setName) ? `✓ ${setName}` : setName}
+            <option value="">Choose category to toggle...</option>
+            {availableFilters.map(filterVal => (
+              <option key={filterVal} value={filterVal}>
+                {(compartment.assignedFilters || []).includes(filterVal) ? `✓ ${filterVal}` : filterVal}
               </option>
             ))}
           </select>
-          {compartment.assignedSets.length > 0 && (
+          {compartment.assignedFilters && compartment.assignedFilters.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-              {compartment.assignedSets.map(setName => (
-                <span key={setName} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.6rem', padding: '0.1rem 0.3rem', background: 'var(--accent-red)', borderRadius: '3px' }}>
-                  {setName}
-                  <span style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => onToggleSet(setName)}>&times;</span>
+              {compartment.assignedFilters.map(filterVal => (
+                <span key={filterVal} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.6rem', padding: '0.1rem 0.3rem', background: 'var(--accent-red)', borderRadius: '3px' }}>
+                  {filterVal}
+                  <span style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => onToggleFilter(filterVal)}>&times;</span>
                 </span>
               ))}
             </div>
@@ -283,15 +303,15 @@ function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRen
         {pockets.map((card, i) => {
           const prev = i > 0 ? pockets[i - 1] : null;
           
-          const cat = getSortCategory(card, sortOrder);
-          const prevCat = getSortCategory(prev, sortOrder);
+          const cat = getSortCategory(card, sortOrder, setsList);
+          const prevCat = getSortCategory(prev, sortOrder, setsList);
           const categoryStart = cat && (!prev || prevCat !== cat);
 
           if (card && card.__ghost) {
             return (
-              <div key="rec-ghost" className={`binder-pocket recommended-ghost ${categoryStart ? 'set-start' : ''}`}>
-                {card.image_url && <img src={card.image_url} alt={card.name} style={{ opacity: 0.45 }} />}
-                <div className="rec-ghost-label">PLACE HERE</div>
+              <div id="recommended-spot" key="rec-ghost" className={`binder-pocket recommended-ghost ${categoryStart ? 'set-start' : ''}`}>
+                {card.image_url && <img src={card.image_url} alt={card.name} style={{ opacity: 0.85 }} />}
+                <div className="rec-ghost-label">Slot {i + 1}</div>
                 {categoryStart && <div className="set-divider-label" title={cat}>{cat}</div>}
               </div>
             );
@@ -321,7 +341,7 @@ function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRen
                     ))}
                   </select>
                 )}
-                <button type="button" onClick={() => onDeleteCard(card.entry_id)} title="Remove from collection">
+                <button type="button" onClick={() => onDeleteCard(card.entry_id)} title="Remove from container">
                   <X size={12} />
                 </button>
               </div>
@@ -345,6 +365,14 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [compartments, setCompartments] = useState([]);
   const [allCards, setAllCards] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [setsList, setSetsList] = useState([]);
+
+  useEffect(() => {
+    fetch('/api/sets')
+      .then(res => res.json())
+      .then(data => setSetsList(data))
+      .catch(err => console.error(err));
+  }, []);
 
 
   const [showCreate, setShowCreate] = useState(false);
@@ -548,9 +576,14 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     return sortCardsByOrder([...cards], unsortedSort, selectedLoc?.foil_sorting);
   }, [allCards, unsortedSearch, unsortedSort, selectedLoc]);
 
-  const availableSetNames = useMemo(() =>
-    Array.from(new Set(allCards.map(c => c.set_name).filter(Boolean))).sort(),
-  [allCards]);
+  const availableCategories = useMemo(() => {
+    const cats = new Set();
+    allCards.forEach(c => {
+      const cat = getSortCategory(c, selectedLoc?.sort_order, setsList);
+      if (cat) cats.add(cat);
+    });
+    return Array.from(cats).sort();
+  }, [allCards, selectedLoc?.sort_order, setsList]);
 
   const cardsByCompartment = useMemo(() => {
     const map = new Map();
@@ -674,28 +707,28 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     } catch (err) { console.error(err); showToast('Error resizing compartment.'); }
   };
 
-  const handleToggleCompartmentSet = async (compartment, setName) => {
-    const current = compartment.assignedSets || [];
-    const next = current.includes(setName) ? current.filter(s => s !== setName) : [...current, setName];
+  const handleToggleCompartmentFilter = async (compartment, filterVal) => {
+    const current = compartment.assignedFilters || [];
+    const next = current.includes(filterVal) ? current.filter(s => s !== filterVal) : [...current, filterVal];
     try {
-      await fetch(`/api/compartments/${compartment.id}/sets`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sets: next }) });
+      await fetch(`/api/compartments/${compartment.id}/filters`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filters: next }) });
       await fetchCompartments(activeLocationId);
-    } catch (err) { console.error(err); showToast('Error updating set assignment.'); }
+    } catch (err) { console.error(err); showToast('Error updating filter assignment.'); }
   };
 
-  const handleAutoAssignSets = async () => {
+  const handleAutoAssignCategories = async () => {
     if (!selectedLoc) return;
-    if (!window.confirm(`Auto-distribute your owned sets across "${selectedLoc.name}"'s compartments by size? This replaces current set assignments.`)) return;
+    if (!window.confirm(`Auto-distribute your owned categories across "${selectedLoc.name}"'s compartments by size? This replaces current assignments.`)) return;
     try {
-      const res = await fetch(`/api/locations/${selectedLoc.id}/auto-assign-sets`, { method: 'POST' });
+      const res = await fetch(`/api/locations/${selectedLoc.id}/auto-assign-categories`, { method: 'POST' });
       const data = await res.json();
       if (res.ok) {
-        showToast(data.skipped.length ? `Assigned sets. Didn't fit: ${data.skipped.join(', ')}` : 'Sets auto-assigned.');
+        showToast(data.skipped.length ? `Assigned categories. Didn't fit: ${data.skipped.join(', ')}` : 'Categories auto-assigned.');
         await fetchCompartments(selectedLoc.id);
       } else {
-        showToast(data.error || 'Failed to auto-assign sets.');
+        showToast(data.error || 'Failed to auto-assign categories.');
       }
-    } catch (err) { console.error(err); showToast('Error auto-assigning sets.'); }
+    } catch (err) { console.error(err); showToast('Error auto-assigning categories.'); }
   };
 
   const handleMoveCard = async (entryId, compartmentId) => {
@@ -705,8 +738,25 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         body: JSON.stringify({ compartment_id: compartmentId })
       });
       if (res.ok) { showToast('Card moved.'); await refreshAll(); }
-      else showToast('Failed to move card.');
+      else {
+        const errData = await res.json().catch(()=>({}));
+        showToast(errData.error || 'Failed to move card.');
+      }
     } catch (err) { console.error(err); showToast('Error moving card.'); }
+  };
+
+  const handleRemoveFromContainer = async (entryId) => {
+    try {
+      const res = await fetch(`/api/collection/${entryId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: null, compartment_id: null })
+      });
+      if (res.ok) { showToast('Card removed from container.'); await refreshAll(); }
+      else {
+        const errData = await res.json().catch(()=>({}));
+        showToast(errData.error || 'Failed to remove card from container.');
+      }
+    } catch (err) { console.error(err); showToast('Error updating card.'); }
   };
 
   const handleDeleteCard = async (entryId) => {
@@ -949,6 +999,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   <button className="kebab-item" onClick={() => { setShowKebabMenu(false); handleAddCompartment(); }}>
                     <Plus size={14} /> {isBinderType ? 'Add Page' : 'Add Compartment'}
                   </button>
+                  <button className="kebab-item" 
+                          disabled={compartments.length <= 1 || (cardsByCompartment.get(compartments[compartments.length-1]?.id) || []).length > 0} 
+                          onClick={() => { setShowKebabMenu(false); handleRemoveCompartment(compartments[compartments.length-1].id); }}
+                          title="Only the last empty row/page can be removed"
+                  >
+                    <Trash2 size={14} /> {isBinderType ? 'Remove Last Page' : 'Remove Last Compartment'}
+                  </button>
                   <button className="kebab-item" onClick={() => { setShowKebabMenu(false); handleAutoAssignSets(); }}>
                     <LayoutList size={14} /> Auto-Assign Sets
                   </button>
@@ -1074,12 +1131,12 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   compartment: c,
                   cards: cardsByCompartment.get(c.id) || [],
                   sortOrder: selectedLoc.sort_order,
-                  availableSets: availableSetNames,
+                  availableFilters: availableCategories, setsList,
                   canRemove: idx === compartments.length - 1 && compartments.length > 1 && (cardsByCompartment.get(c.id) || []).length === 0,
                   moveTargets: compartments,
                   onRename: (label) => handleRenameCompartment(c.id, label),
                   onSetCapacity: (cap) => handleSetCapacity(c.id, cap),
-                  onToggleSet: (setName) => handleToggleCompartmentSet(c, setName),
+                  onToggleSet: (setName) => handleToggleCompartmentFilter(c, filterVal),
                   onRemove: () => handleRemoveCompartment(c.id),
                   onDeleteCard: handleDeleteCard,
                   onMoveCard: handleMoveCard,
@@ -1136,8 +1193,46 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 if (!activeComp) return null;
 
                 const activeCompCards = cardsByCompartment.get(activeComp.id) || [];
-                const activeCardIndex = Math.min(coverflowActiveIndex, Math.max(0, activeCompCards.length - 1));
-                const activeCard = activeCompCards[activeCardIndex];
+                const baseCards = [...activeCompCards];
+                if (currentRecSpot && currentRecSpot.compartment_id === activeComp.id) {
+                  const recIdx = Math.floor(currentRecSpot.position / 1000) - 1;
+                  while (baseCards.length < recIdx) baseCards.push(null);
+                  baseCards.splice(recIdx, 0, {
+                    __ghost: true,
+                    entry_id: 'rec-ghost',
+                    image_url: recCard?.image_url,
+                    name: recCard?.name,
+                    set_name: recCard?.set_name,
+                    printing: recCard?.printing || 'Normal'
+                  });
+                }
+
+                const renderedCards = [];
+                let currentCat = null;
+                let slotCounter = 1;
+                for (const card of baseCards) {
+                  if (card) {
+                    const cat = getSortCategory(card, selectedLoc.sort_order, setsList);
+                    if (cat && cat !== currentCat) {
+                      renderedCards.push({
+                        __divider: true,
+                        entry_id: `div-${cat}`,
+                        label: cat
+                      });
+                      currentCat = cat;
+                    }
+                    renderedCards.push({ ...card, __slotNumber: slotCounter });
+                  } else {
+                    renderedCards.push({
+                      __empty: true,
+                      __slotNumber: slotCounter,
+                      entry_id: `spacer-${slotCounter}`
+                    });
+                  }
+                  slotCounter++;
+                }
+                const activeCardIndex = Math.min(coverflowActiveIndex, Math.max(0, renderedCards.length - 1));
+                const activeCard = renderedCards[activeCardIndex];
 
                 const isCustom = selectedLoc.sort_order === 'custom';
                 const canRemoveActive = compartments.length > 1 && activeCompCards.length === 0;
@@ -1166,7 +1261,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <button type="button" className="btn btn-secondary" onClick={() => setShowRowSets(s => !s)} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem' }}>
-                          {activeComp.assignedSets.length === 0 ? 'Any set' : activeComp.assignedSets.length === 1 ? activeComp.assignedSets[0] : `${activeComp.assignedSets.length} sets`}
+                          {activeComp.assignedFilters.length === 0 ? 'Any category' : activeComp.assignedFilters.length === 1 ? activeComp.assignedFilters[0] : `${activeComp.assignedFilters.length} cats`}
                         </button>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.1rem', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
                           <span>{activeComp.count} /</span>
@@ -1198,22 +1293,22 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           <select
                             className="select-control"
                             value=""
-                            onChange={(e) => { if (e.target.value) handleToggleCompartmentSet(activeComp, e.target.value); }}
+                            onChange={(e) => { if (e.target.value) handleToggleCompartmentFilter(activeComp, e.target.value); }}
                             style={{ fontSize: '0.7rem', padding: '0.15rem 0.3rem' }}
                           >
-                            <option value="">Choose set to toggle...</option>
-                            {availableSetNames.map(setName => (
-                              <option key={setName} value={setName}>
-                                {activeComp.assignedSets.includes(setName) ? `✓ ${setName}` : setName}
+                            <option value="">Choose category to toggle...</option>
+                            {availableCategories.map(setName => (
+                              <option key={filterVal} value={filterVal}>
+                                {activeComp.assignedFilters.includes(filterVal) ? `✓ ${filterVal}` : filterVal}
                               </option>
                             ))}
                           </select>
-                          {activeComp.assignedSets.length > 0 && (
+                          {activeComp.assignedFilters.length > 0 && (
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-                              {activeComp.assignedSets.map(setName => (
-                                <span key={setName} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.6rem', padding: '0.1rem 0.3rem', background: 'var(--accent-red)', borderRadius: '3px' }}>
-                                  {setName}
-                                  <span style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => handleToggleCompartmentSet(activeComp, setName)}>&times;</span>
+                              {activeComp.assignedFilters.map(filterVal => (
+                                <span key={filterVal} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.6rem', padding: '0.1rem 0.3rem', background: 'var(--accent-red)', borderRadius: '3px' }}>
+                                  {filterVal}
+                                  <span style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => handleToggleCompartmentFilter(activeComp, setName)}>&times;</span>
                                 </span>
                               ))}
                             </div>
@@ -1230,7 +1325,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         <div
                           className="box-coverflow-container"
                           onTouchStart={handleCoverflowTouchStart}
-                          onTouchEnd={(e) => handleCoverflowTouchEnd(e, activeCompCards.length)}
+                          onTouchEnd={(e) => handleCoverflowTouchEnd(e, renderedCards.length)}
                         >
                           <button
                             type="button"
@@ -1243,31 +1338,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
                           <div className="box-coverflow-track">
                             {(() => {
-                              const renderedCards = [...activeCompCards];
-                              let recSpotIndex = -1;
-                              if (currentRecSpot && currentRecSpot.compartment_id === activeComp.id) {
-                                recSpotIndex = Math.floor(currentRecSpot.position / 1000) - 1;
-                                renderedCards.splice(Math.min(recSpotIndex, renderedCards.length), 0, {
-                                  __ghost: true,
-                                  entry_id: 'rec-ghost',
-                                  image_url: recCard?.image_url,
-                                  name: recCard?.name,
-                                  set_name: recCard?.set_name,
-                                  printing: recCard?.printing || 'Normal'
-                                });
-                              }
-
                               return renderedCards.map((card, i) => {
-                                const prev = i > 0 ? renderedCards[i - 1] : null;
-                                const cat = getSortCategory(card, selectedLoc.sort_order);
-                                const prevCat = getSortCategory(prev, selectedLoc.sort_order);
-                                const categoryStart = cat && (!prev || prevCat !== cat);
-
                                 const offset = i - activeCardIndex;
                                 const absOffset = Math.abs(offset);
-
-                                const isRecSpot = card.__ghost;
-
                                 let transform = '';
                                 let zIndex = 10 - absOffset;
                                 let opacity = 1;
@@ -1285,27 +1358,58 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                   filter = `brightness(${Math.max(0.35, 1 - absOffset * 0.18)})`;
                                 }
 
+                                if (card.__empty) {
+                                  return (
+                                    <div
+                                      key={card.entry_id}
+                                      className={`box-coverflow-card ${offset === 0 ? 'active' : ''}`}
+                                      style={{ transform, zIndex, opacity: opacity * 0.6, filter }}
+                                      onClick={() => setCoverflowActiveIndex(i)}
+                                    >
+                                      <div style={{ width: '100%', height: '100%', background: 'rgba(0,0,0,0.3)', border: '2px dashed rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '5px' }}>
+                                        <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem', fontWeight: 'bold' }}>Slot {card.__slotNumber}</span>
+                                      </div>
+                                    </div>
+                                  );
+                                }
+
+                                if (card.__divider) {
+                                  return (
+                                    <div
+                                      key={card.entry_id}
+                                      className={`box-coverflow-card ${offset === 0 ? 'active' : ''}`}
+                                      style={{ transform, zIndex, opacity, filter: 'none', background: 'linear-gradient(135deg, rgba(255, 71, 71, 0.8), rgba(150, 0, 0, 0.8))', border: '1px solid rgba(255, 71, 71, 0.5)', display: 'flex', flexDirection: 'column', overflow: 'visible' }}
+                                      onClick={() => setCoverflowActiveIndex(i)}
+                                    >
+                                      <div style={{ position: 'absolute', top: '-18px', left: '10px', background: 'var(--accent-red)', color: '#fff', padding: '2px 12px', borderRadius: '6px 6px 0 0', fontSize: '0.7rem', fontWeight: 'bold', boxShadow: '0 -2px 5px rgba(0,0,0,0.3)', whiteSpace: 'nowrap' }}>
+                                        {card.label}
+                                      </div>
+                                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '0.5rem', color: '#fff' }}>
+                                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', textAlign: 'center', padding: '0 1rem' }}>{card.label}</div>
+                                      </div>
+                                    </div>
+                                  );
+                                }
+
+                                const isRecSpot = card.__ghost;
+
                                 return (
                                   <div
+                                    id={isRecSpot ? "recommended-spot" : undefined}
                                     key={card.entry_id}
                                     className={`box-coverflow-card ${offset === 0 ? 'active' : ''} ${card.entry_id === focusEntryId ? 'focus-flash' : ''} ${isRecSpot ? 'recommended-ghost' : ''}`}
                                     style={{
                                       transform,
                                       zIndex,
-                                      opacity: isRecSpot ? opacity * 0.8 : opacity,
+                                      opacity: isRecSpot ? opacity : opacity,
                                       filter
                                     }}
                                     onClick={() => setCoverflowActiveIndex(i)}
                                   >
-                                  {categoryStart && (
-                                    <div style={{ position: 'absolute', top: '-24px', left: '50%', transform: 'translateX(-50%)', background: 'var(--bg-card)', border: '1px solid var(--border-glass)', borderBottom: 'none', padding: '2px 10px', borderRadius: '6px 6px 0 0', fontSize: '0.65rem', fontWeight: 'bold', whiteSpace: 'nowrap', zIndex: -1 }}>
-                                      {cat}
-                                    </div>
-                                  )}
                                   <img src={card.image_url} alt={card.name} />
                                   <PrintingBadge printing={card.printing} />
                                   {isRecSpot && (
-                                    <div style={{ position: 'absolute', top: '-10px', left: '50%', transform: 'translateX(-50%)', background: '#ffc107', color: '#000', fontSize: '0.5rem', fontWeight: 'bold', padding: '1px 4px', borderRadius: '3px', zIndex: 10 }}>REC SPOT</div>
+                                    <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: '#ffc107', color: '#000', fontSize: '0.75rem', fontWeight: 'bold', padding: '3px 8px', borderRadius: '4px', zIndex: 10, boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }}>Slot {card.__slotNumber}</div>
                                   )}
                                 </div>
                               );
@@ -1315,19 +1419,19 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           <button
                             type="button"
                             className="box-coverflow-nav right"
-                            disabled={activeCardIndex >= activeCompCards.length - 1}
-                            onClick={() => setCoverflowActiveIndex(prev => Math.min(activeCompCards.length - 1, prev + 1))}
+                            disabled={activeCardIndex >= renderedCards.length - 1}
+                            onClick={() => setCoverflowActiveIndex(prev => Math.min(renderedCards.length - 1, prev + 1))}
                           >
                             &rarr;
                           </button>
                         </div>
 
                         {/* Focused Card Actions */}
-                        {activeCard && !activeCard.__ghost && (
+                        {activeCard && !activeCard.__ghost && !activeCard.__divider && !activeCard.__empty && (
                           <div className="focused-card-info-panel">
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
                               <div>
-                                <strong style={{ fontSize: '0.85rem' }}>#{activeCardIndex + 1} | {activeCard.name}</strong>
+                                <strong style={{ fontSize: '0.85rem' }}>#{activeCard.__slotNumber} | {activeCard.name}</strong>
                                 <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
                                   {activeCard.set_name} • #{activeCard.number} • {activeCard.printing}
                                 </div>
@@ -1351,7 +1455,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                 <button
                                   type="button"
                                   className="btn btn-danger"
-                                  onClick={() => handleDeleteCard(activeCard.entry_id)}
+                                  onClick={() => handleRemoveFromContainer(activeCard.entry_id)}
                                   style={{ fontSize: '0.65rem', padding: '0.2rem 0.45rem' }}
                                 >
                                   Remove Card
@@ -1411,9 +1515,42 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   const targetLocName = locations.find(l => l.id === rec.location_id)?.name || 'Unknown Container';
                   const targetCompName = compartments.find(c => c.id === rec.compartment_id)?.display_label || 'Unknown Spot';
                   return (
-                    <div style={{ background: 'rgba(255, 193, 7, 0.15)', border: '1px solid #ffc107', borderRadius: 'var(--radius-sm)', padding: '0.75rem', width: '100%', textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.7rem', color: '#ffc107', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 'bold', marginBottom: '0.25rem' }}>Place Here</div>
-                      <strong style={{ fontSize: '0.9rem', color: '#fff' }}>{targetLocName} &rarr; {targetCompName}</strong>
+                    <div 
+                      style={{ background: 'rgba(255, 193, 7, 0.15)', border: '1px solid #ffc107', borderRadius: 'var(--radius-sm)', padding: '0.75rem', width: '100%', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255, 193, 7, 0.25)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255, 193, 7, 0.15)'; }}
+                      onClick={() => {
+                        if (rec.location_id !== activeLocationId) {
+                          setActiveLocationId(rec.location_id);
+                        }
+                        if (isBinderType) {
+                          const compIdx = compartments.findIndex(c => c.id === rec.compartment_id);
+                          if (compIdx !== -1) setActivePageIndex(compIdx);
+                        } else {
+                          setActiveCompartmentId(rec.compartment_id);
+                          const posIdx = Math.floor(rec.position / 1000) - 1;
+                          setCoverflowActiveIndex(Math.max(0, posIdx));
+                        }
+                        let attempts = 0;
+                        const tryScroll = () => {
+                          const el = document.getElementById('recommended-spot');
+                          if (el) {
+                            el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+                            el.classList.remove('flash-highlight');
+                            void el.offsetWidth;
+                            el.classList.add('flash-highlight');
+                          } else if (attempts < 10) {
+                            attempts++;
+                            setTimeout(tryScroll, 100);
+                          }
+                        };
+                        tryScroll();
+                      }}
+                      title="Click to snap to this slot in the container"
+                    >
+                      <div style={{ fontSize: '0.7rem', color: '#ffc107', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 'bold', marginBottom: '0.25rem' }}>Click to Locate</div>
+                      <strong style={{ fontSize: '0.9rem', color: '#fff', display: 'block' }}>{targetLocName} &rarr; {targetCompName}</strong>
+                      <strong style={{ fontSize: '1.2rem', color: '#ffc107', display: 'block', marginTop: '0.25rem' }}>Slot {Math.floor(rec.position / 1000)}</strong>
                     </div>
                   );
                 })()}
