@@ -1,7 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const tcgApi = require('../tcgApi');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, searchLimiter, importLimiter } = require('../middleware/auth');
 const {
   resolveCardPrice,
   isVintageSet,
@@ -103,7 +103,7 @@ const router = express.Router();
 router.use(authenticateToken);
 
 // 1. Search Pokémon TCG cards (proxies to Pokemon TCG API and database cache)
-router.get('/search', async (req, res) => {
+router.get('/search', searchLimiter, async (req, res) => {
   const { name, number, set, scope = 'database' } = req.query;
   try {
     const results = await tcgApi.searchCards(name, number, set, req.user.tcg_api_key, scope, req.user.id);
@@ -1493,7 +1493,7 @@ router.get('/export', async (req, res) => {
 });
 
 // 8b. Import Database
-router.post('/import', async (req, res) => {
+router.post('/import', importLimiter, async (req, res) => {
   try {
     const { format, data } = req.body;
     if (!data) {

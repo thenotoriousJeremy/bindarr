@@ -57,4 +57,25 @@ const authLimiter = rateLimit({
   message: { error: 'Too many attempts. Please try again later.' }
 });
 
-module.exports = { authenticateToken, requireAdmin, authLimiter };
+// The card search proxies to the external Pokémon TCG API. Bulk scanning fires
+// one search per card, so the ceiling is generous — it exists to stop a logged-
+// in client from hammering the upstream API, not to throttle normal use.
+const searchLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many searches. Please slow down and try again shortly.' }
+});
+
+// Import is heavy (up to 5000 rows, many serial writes each) and rare in normal
+// use, so it gets a tight ceiling.
+const importLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many imports. Please wait before importing again.' }
+});
+
+module.exports = { authenticateToken, requireAdmin, authLimiter, searchLimiter, importLimiter };
