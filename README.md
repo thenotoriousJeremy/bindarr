@@ -13,7 +13,7 @@ Pokedexrr is a self-hostable, mobile-friendly full-stack web application designe
   - **Storage Boxes**: Maps by Box Name, Row ID/Letter, and Divider Section.
 - **🇯🇵 Japanese Card Support**: OCR scans Japanese card names (hiragana, katakana, kanji), automatically translates them to English for API lookups, and displays them in their native Japanese names across the app.
 - **💾 Universal Database Exports**: One-click downloads of your complete database in CSV (TCGplayer format compatible) or JSON.
-- **🔐 Multi-User Auth**: JWT-based authentication with admin controls for managing users and roles.
+- **🔐 Multi-User Auth**: Session-token authentication (opaque random tokens stored in a server-side `sessions` table, sent as a `Bearer` header) with admin controls for managing users and roles.
 - **🐳 100% Self-Hostable & Portable**: Single-container Docker build with a local SQLite database that mounts to a persistent volume.
 - **⚡ CI/CD Automation**: GitHub Actions workflow to auto-build and publish the container image to GitHub Container Registry (GHCR).
 
@@ -22,7 +22,7 @@ Pokedexrr is a self-hostable, mobile-friendly full-stack web application designe
 ## 🛠️ Tech Stack
 
 - **Frontend**: React, Vite, Recharts, Lucide React, Tesseract.js, Canvas Confetti
-- **Backend**: Node.js, Express, SQLite (`sqlite3` module), Axios, JWT
+- **Backend**: Node.js, Express, SQLite (`sqlite3` module), Axios, Helmet, express-rate-limit
 - **Deployment**: Docker, Docker Compose, GitHub Actions
 
 ---
@@ -110,6 +110,21 @@ You can configure Pokedexrr by passing these environment variables in your conta
 - `DEFAULT_ADMIN_PASSWORD` (Optional) - Sets a known password for the auto-created `admin` account on first startup. If unset, a random password is generated and printed once to the server logs (see [First-Time Sign In](#-first-time-sign-in)).
 - `CORS_ORIGIN` (Optional) - Comma-separated list of origins allowed to call the API. Defaults to the Vite dev server + same-origin. Set to your real domain when deploying.
 
+### Health check
+The server exposes `GET /api/health` (no auth). It returns `200 {"status":"ok"}` when the app and database are reachable, `503` otherwise. The Docker image already wires this into a `HEALTHCHECK`.
+
+---
+
+## 💾 Backup, Restore & Recovery
+
+**Backup.** All state lives in the single SQLite file (the `pokedexrr-data` volume in Docker, or `DB_PATH` locally). Two options:
+- **File-level:** copy the DB file while the container is stopped, e.g. `docker run --rm -v pokedexrr-data:/data -v "$PWD":/backup alpine cp /data/pokemon_cards.db /backup/`. (The app runs in WAL mode; stop the container first so the `-wal`/`-shm` files are checkpointed.)
+- **Per-user data:** each user can also export their own collection from the app as CSV or JSON (Collection → Export). This is portable to other trackers but does not include other users or app settings.
+
+**Restore.** Stop the container, drop the backed-up `pokemon_cards.db` into the volume, start again. Or use the in-app Import (CSV/JSON) to restore a single user's collection.
+
+**Lost admin password.** The initial `admin` password is printed once, on the run that first creates the database. If you lose it and did not set `DEFAULT_ADMIN_PASSWORD`, either set that variable and recreate the database, or delete the DB file so a fresh admin is generated on next startup. There is no self-service password reset.
+
 ---
 
 ## 📂 Project Structure
@@ -118,22 +133,31 @@ You can configure Pokedexrr by passing these environment variables in your conta
 /pokedexrr
   ├── backend/
   │     ├── src/
-  │     │     ├── db.js          # SQLite Schema & DB connection
-  │     │     ├── server.js      # Express API Server
-  │     │     └── tcgApi.js      # Pokémon TCG API proxy & cache
+  │     │     ├── db.js              # SQLite schema, migrations & DB connection
+  │     │     ├── server.js          # Express app: middleware, routes, /api/health
+  │     │     ├── tcgApi.js          # Pokémon TCG API proxy, cache & price updates
+  │     │     ├── middleware/
+  │     │     │     └── auth.js       # Session-token auth, admin guard, rate limiters
+  │     │     ├── routes/            # auth, admin, collection, sets, decks, shared
+  │     │     └── utils/             # compartmentSort (filing engine), priceHelpers, authHelpers
+  │     ├── test/                    # Framework-free smoke tests (npm test)
   │     └── package.json
   ├── frontend/
   │     ├── src/
-  │     │     ├── components/    # Dashboard, Scanner, Search, Locations, Collection, Admin, Settings, DeckBuilder
-  │     │     ├── utils/         # Language translation helpers
-  │     │     ├── App.jsx        # Routing tab controller
-  │     │     ├── index.css      # Core premium dark styling
+  │     │     ├── components/        # Dashboard, CameraScanner, CardSearch, LocationManager,
+  │     │     │                      #   CollectionList, AdminPanel, Settings, DeckBuilder,
+  │     │     │                      #   SharedCollection, PriceHistoryChart, CardInspectorModal
+  │     │     ├── utils/             # sorting, pricing, translation & printing helpers
+  │     │     ├── App.jsx            # Routing tab controller + fetch/auth interceptor
+  │     │     ├── index.css          # Core premium dark styling
   │     │     └── main.jsx
+  │     ├── .eslintrc.cjs
   │     ├── package.json
   │     └── vite.config.js
-  ├── Dockerfile
+  ├── Dockerfile                     # Multi-stage build, runs as non-root, HEALTHCHECK
   ├── docker-compose.yml
+  ├── .dockerignore
   └── .github/
         └── workflows/
-              └── docker-build.yml
+              └── docker-build.yml   # verify (backend tests) -> build & push to GHCR
 ```
