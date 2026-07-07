@@ -7,7 +7,41 @@ on:
     branches: [ "main" ]
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      # Hard gate: backend tests must pass before an image is built/pushed.
+      - name: Backend tests
+        run: npm test
+        working-directory: backend
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      # Non-blocking for now: the frontend carries pre-existing lint debt
+      # (~60 no-unused-vars / exhaustive-deps issues). Surfaced in CI logs but
+      # not gating deploys until that debt is cleared (Phase 3), then drop
+      # continue-on-error to make it enforcing.
+      - name: Lint frontend
+        run: npm run lint
+        working-directory: frontend
+        continue-on-error: true
+
   build-and-push:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: read
