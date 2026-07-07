@@ -125,6 +125,21 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         const posIdx = Math.floor(rec.position / 1000) - 1;
         setCoverflowActiveIndex(Math.max(0, posIdx));
       }
+      
+      let attempts = 0;
+      const tryScroll = () => {
+        const el = document.getElementById('recommended-spot');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+          el.classList.remove('flash-highlight');
+          void el.offsetWidth;
+          el.classList.add('flash-highlight');
+        } else if (attempts < 10) {
+          attempts++;
+          setTimeout(tryScroll, 100);
+        }
+      };
+      tryScroll();
     }
   }, [filingMode, filingIndex, filingQueue, compartments, isBinderType, activeLocationId]);
   const touchStartRef = useRef(0);
@@ -247,6 +262,14 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLocationId]);
+
+  useEffect(() => {
+    // If the storage tab is opened without a specific container URL (selectedLocationId is falsy),
+    // and there are locations available, auto-select the first one.
+    if (!selectedLocationId && !activeLocationId && locations.length > 0) {
+      setActiveLocationId(locations[0].id);
+    }
+  }, [locations, selectedLocationId, activeLocationId]);
 
   const unsortedCards = useMemo(() => {
     let cards = allCards.filter(c => !c.location_id && (

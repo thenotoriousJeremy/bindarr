@@ -307,6 +307,11 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
       return cardCat && c.assignedFilters.includes(cardCat);
     }
     
+    // Boxes don't restrict rows based on dynamic contents. They are continuous.
+    if (location.type !== 'binder') {
+      return true;
+    }
+
     const dCats = dynamicCatsByCompId.get(c.id) || [];
     // If it has NO explicit filters, but has cards, it only accepts matching dynamic category
     if (dCats.length > 0) {
@@ -320,13 +325,16 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
   // Separate into preferred (assigned/matching) vs unassigned
   const assignedComps = validComps.filter(c => {
     if (c.assignedFilters && c.assignedFilters.length > 0) return true;
+    if (location.type !== 'binder') return false; // Boxes don't prefer rows dynamically
     const dCats = dynamicCatsByCompId.get(c.id) || [];
     return dCats.length > 0;
   });
   
   const unassignedComps = validComps.filter(c => {
+    if (c.assignedFilters && c.assignedFilters.length > 0) return false;
+    if (location.type !== 'binder') return true;
     const dCats = dynamicCatsByCompId.get(c.id) || [];
-    return !(c.assignedFilters && c.assignedFilters.length > 0) && dCats.length === 0;
+    return dCats.length === 0;
   });
 
   let pool = [...assignedComps];
