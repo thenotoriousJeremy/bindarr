@@ -434,12 +434,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       await Promise.all([fetchLocations(), fetchAllCards()]);
       setLoading(false);
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statsTrigger]);
 
   useEffect(() => {
     fetchCompartments(activeLocationId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLocationId, statsTrigger]);
 
   useEffect(() => {
