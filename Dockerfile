@@ -43,6 +43,12 @@ COPY backend/src/ ./src/
 # (../../frontend/dist relative to backend/src, i.e. /app/frontend/dist)
 COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 
+# Drop root: run as the built-in unprivileged `node` user. Ownership of the
+# database dir is set here so a fresh named volume mounted at /app/database
+# inherits node-writable permissions on first init.
+RUN chown -R node:node /app
+USER node
+
 # Expose port
 EXPOSE 3001
 
