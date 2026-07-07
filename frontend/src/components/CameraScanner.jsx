@@ -8,6 +8,15 @@ import { formatPrice } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 
+// Turn a failed /api/search response into a user-facing message. 429 (rate
+// limit) and 403 (bad API key) are called out distinctly so the user knows to
+// back off vs. fix their key, instead of seeing a generic "server error".
+function searchFailureMessage(status) {
+  if (status === 429) return 'Rate limit reached. Auto-scan paused — wait a moment before scanning again.';
+  if (status === 403) return 'Pokémon TCG API key was rejected. Check it in Settings.';
+  return 'Search failed. Server error.';
+}
+
 function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
   const [stream, setStream] = useState(null);
@@ -331,7 +340,8 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           }
         }
       } else {
-        setScanStatus('Search failed. Server error.');
+        if (response.status === 429) setAutoScan(false); // stop the loop from hammering the API
+        setScanStatus(searchFailureMessage(response.status));
       }
     } catch (err) {
       console.error(err);
@@ -708,7 +718,8 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           }
         }
       } else {
-        setScanStatus('Search failed. Server error.');
+        if (searchResponse.status === 429) setAutoScan(false); // stop the loop from hammering the API
+        setScanStatus(searchFailureMessage(searchResponse.status));
         setScanFlash('error');
         setTimeout(() => setScanFlash(null), 1500);
       }

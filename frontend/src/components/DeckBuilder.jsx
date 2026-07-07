@@ -66,6 +66,8 @@ function DeckBuilder({ statsTrigger, onUpdate, showToast }) {
         setNewDeckDesc('');
         setShowCreateModal(false);
         fetchDecks();
+      } else {
+        showToast('Failed to create deck.');
       }
     } catch (err) {
       console.error(err);
@@ -110,6 +112,8 @@ function DeckBuilder({ statsTrigger, onUpdate, showToast }) {
         showToast(`Added ${card.name} to deck`);
         // Refresh details locally
         loadDeckDetails(activeDeck.id);
+      } else {
+        showToast('Failed to add card.');
       }
     } catch (err) {
       console.error(err);
@@ -119,6 +123,10 @@ function DeckBuilder({ statsTrigger, onUpdate, showToast }) {
 
   const handleUpdateCardQty = async (cardId, newQty) => {
     if (!activeDeck) return;
+
+    // Guard against NaN/garbage from a manual quantity input before it reaches
+    // the server as an invalid quantity.
+    if (!Number.isFinite(newQty)) return;
 
     if (newQty <= 0) {
       handleRemoveCard(cardId);
@@ -134,6 +142,8 @@ function DeckBuilder({ statsTrigger, onUpdate, showToast }) {
 
       if (response.ok) {
         loadDeckDetails(activeDeck.id);
+      } else {
+        showToast('Failed to update quantity.');
       }
     } catch (err) {
       console.error(err);
@@ -152,6 +162,8 @@ function DeckBuilder({ statsTrigger, onUpdate, showToast }) {
       if (response.ok) {
         showToast('Card removed from deck');
         loadDeckDetails(activeDeck.id);
+      } else {
+        showToast('Failed to remove card.');
       }
     } catch (err) {
       console.error(err);
@@ -188,6 +200,8 @@ function DeckBuilder({ statsTrigger, onUpdate, showToast }) {
       if (response.ok) {
         const data = await response.json();
         setSearchResults(data);
+      } else {
+        showToast(response.status === 429 ? 'Rate limit reached. Try again shortly.' : 'Search failed.');
       }
     } catch (err) {
       console.error(err);
