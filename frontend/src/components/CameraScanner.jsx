@@ -291,6 +291,29 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraActive, autoScan, isDrawerOpen, loading, scanMatches, autoAddTargetCard]);
 
+  const updateAdvancedConstraints = (track, newAdvancedProps) => {
+    try {
+      const currentConstraints = track.getConstraints();
+      let advanced = currentConstraints.advanced ? [...currentConstraints.advanced] : [];
+      let advObj = advanced.length > 0 ? { ...advanced[0] } : {};
+      
+      for (const [key, value] of Object.entries(newAdvancedProps)) {
+        if (value === null || value === undefined) {
+          delete advObj[key];
+        } else {
+          advObj[key] = value;
+        }
+      }
+      
+      track.applyConstraints({
+        ...currentConstraints,
+        advanced: [advObj]
+      }).catch(err => console.warn('applyConstraints error:', err));
+    } catch (e) {
+      console.warn('updateAdvancedConstraints error:', e);
+    }
+  };
+
   const startCamera = async () => {
     setHasCameraError(false);
     setScanMatches([]);
@@ -348,7 +371,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     if (stream) {
       const track = stream.getVideoTracks()[0];
       if (track && isTorchOn) {
-        track.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {});
+        updateAdvancedConstraints(track, { torch: false });
       }
       stream.getTracks().forEach(track => track.stop());
       setStream(null);
@@ -931,7 +954,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   try {
                     const track = stream?.getVideoTracks()[0];
                     if (track) {
-                      track.applyConstraints({ advanced: [{ torch: nextState }] }).catch(() => {});
+                      updateAdvancedConstraints(track, { torch: nextState });
                     }
                   } catch (err) {
                     console.warn('Torch toggle failed:', err);
@@ -1094,9 +1117,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                           const track = stream?.getVideoTracks()[0];
                           if (track) {
                             if (next === 'manual') {
-                              track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: focusDistance }] });
+                              updateAdvancedConstraints(track, { focusMode: 'manual', focusDistance: focusDistance });
                             } else {
-                              track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+                              updateAdvancedConstraints(track, { focusMode: 'continuous' });
                             }
                           }
                         } catch (e) { console.warn('Focus toggle failed:', e); }
@@ -1126,7 +1149,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                         setFocusDistance(val);
                         try {
                           const track = stream?.getVideoTracks()[0];
-                          if (track) track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: val }] });
+                          if (track) updateAdvancedConstraints(track, { focusMode: 'manual', focusDistance: val });
                         } catch (err) { console.warn('Focus adjust failed:', err); }
                       }}
                       style={{ width: '100%', cursor: 'pointer' }}
