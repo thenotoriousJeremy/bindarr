@@ -316,6 +316,15 @@ async function initDb() {
     await run(`ALTER TABLE collection ADD COLUMN compartment_id INTEGER REFERENCES compartments(id) ON DELETE SET NULL`);
   }
 
+  // Per-compartment filing rules (same compound {rules:[...]} shape as
+  // locations.rule_config). Lets a single row/page accept only cards matching
+  // its own include/exclude rules, independent of the container-level rule.
+  const compartmentsCols = await all(`PRAGMA table_info(compartments)`);
+  if (!compartmentsCols.some(c => c.name === 'rule_config')) {
+    console.log('Adding rule_config column to compartments table...');
+    await run(`ALTER TABLE compartments ADD COLUMN rule_config TEXT`);
+  }
+
   // 3. Remove UNIQUE constraint on locations name per user (optional, but let's make sure it's not unique across users)
   // SQLite doesn't easily support dropping constraints, but we can manage name checking in routes.
 
@@ -452,12 +461,12 @@ async function initDb() {
     const binder = await run(`INSERT INTO locations (name, type, user_id) VALUES (?, ?, ?)`, [
       'Main Binder', 'Binder', adminId
     ]);
-    await createCompartments(binder.lastID, 30, 9); // 30 pages, 9 pockets each (3x3)
+    await createCompartments(binder.lastID, 10, 9); // 10 pages, 9 pockets each (3x3)
 
     const box = await run(`INSERT INTO locations (name, type, user_id) VALUES (?, ?, ?)`, [
       'Bulk Storage Box 1', 'Box', adminId
     ]);
-    await createCompartments(box.lastID, 3, 40); // 3 rows, 40 cards each
+    await createCompartments(box.lastID, 2, 100); // 2 rows, 100 cards each
   }
 }
 

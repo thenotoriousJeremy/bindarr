@@ -2,6 +2,8 @@ const express = require('express');
 const db = require('../db');
 const tcgApi = require('../tcgApi');
 const scryfallApi = require('../scryfallApi');
+const scanMatch = require('../scanMatch');
+const setIndex = require('../setIndex');
 const { authenticateToken, searchLimiter, importLimiter } = require('../middleware/auth');
 const {
   resolveCardPrice,
@@ -13,15 +15,15 @@ const { recommendSlot, compartmentLabel, loadCompartments, rebalanceCompartmentB
 // Default compartment plan by container type — used when a caller doesn't
 // specify one at creation time (see POST /locations).
 function defaultCompartmentPlan(type) {
-  if (type === 'Binder') return { count: 30, capacity: 9 };
-  if (type === 'Toploader Binder') return { count: 14, capacity: 4 };
-  if (type === 'Box') return { count: 3, capacity: 1000 };
+  if (type === 'Binder') return { count: 10, capacity: 9 };
+  if (type === 'Toploader Binder') return { count: 8, capacity: 4 };
+  if (type === 'Box') return { count: 2, capacity: 400 };
   if (type === 'Toploader Box') return { count: 1, capacity: 100 };
   if (type === 'Graded Slab Box') return { count: 1, capacity: 40 };
   if (type === 'Display Shelf / Stand') return { count: 1, capacity: 10 };
   if (type === 'Deck Box') return { count: 1, capacity: 60 };
   if (type === 'Tin / Case') return { count: 1, capacity: 200 };
-  return { count: 1, capacity: 1000 };
+  return { count: 1, capacity: 500 };
 }
 
 // Resolves where a card should actually land: an explicit compartment_id is
@@ -64,7 +66,7 @@ async function resolveCompartmentAndPosition({ locationId, compartmentId, positi
   const location = await db.get(`SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, game, user_id FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
   if (!location) return { compartment_id: null, position: 0 };
 
-  const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity, game, cmc, color_identity FROM card_cache WHERE id = ?`, [cardId]);
+  const cardMetadata = await db.get(`SELECT name, set_name, number, types, subtypes, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity, game, cmc, color_identity FROM card_cache WHERE id = ?`, [cardId]);
   if (!cardMetadata) return { compartment_id: null, position: 0 };
   cardMetadata.printing = printing || 'Normal';
   cardMetadata.language = language || 'English';
@@ -107,10 +109,10 @@ router.use(authenticateToken);
 // 1. Search cards (proxies to Pokémon TCG or Scryfall + database cache). The
 // `game` param routes to the right provider; both return the same card shape.
 router.get('/search', searchLimiter, async (req, res) => {
-  const { name, number, set, scope = 'database', game = 'pokemon', lang } = req.query;
+  const { name, number, set, scope = 'database', game = 'pokemon', lang, prints } = req.query;
   try {
     const results = game === 'mtg'
-      ? await scryfallApi.searchCards(name, number, set, scope, req.user.id, lang)
+      ? await scryfallApi.searchCards(name, number, set, scope, req.user.id, lang, prints === '1')
       : await tcgApi.searchCards(name, number, set, req.user.tcg_api_key, scope, req.user.id);
     res.json(results);
   } catch (error) {
@@ -122,6 +124,43 @@ router.get('/search', searchLimiter, async (req, res) => {
       return res.status(429).json({ error: 'Rate limit exceeded' });
     }
     res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// 1b. Identify a scanned card image by CLIP embedding similarity. The client
+// POSTs a cropped card photo (data URL or base64); we return the closest cards
+// from the prebuilt embedding DB. Empty candidates if the DB isn't built yet
+// (the scanner then falls back to OCR).
+router.post('/scan-match', searchLimiter, async (req, res) => {
+  try {
+    const { game = 'pokemon', image, set = '' } = req.body || {};
+    if (game !== 'mtg' && game !== 'pokemon') return res.status(400).json({ error: 'Invalid game' });
+    if (!image || typeof image !== 'string') return res.status(400).json({ error: 'Missing image' });
+    const base64 = image.includes(',') ? image.slice(image.indexOf(',') + 1) : image;
+    const buf = Buffer.from(base64, 'base64');
+    if (buf.length < 100) return res.status(400).json({ error: 'Invalid image data' });
+    const result = await scanMatch.match(buf, game, 8, set);
+    res.json(result); // { game, verified, candidates, crop, scoped? }
+  } catch (error) {
+    console.error('scan-match failed:', error.message);
+    res.status(500).json({ error: 'Scan match failed' });
+  }
+});
+
+// Build/verify a per-set ORB index so subsequent MTG scans of that set are an
+// accurate ~300-card match. First call for a set does the (cached) build; the
+// client polls until ready.
+router.post('/prepare-set', searchLimiter, async (req, res) => {
+  try {
+    const { game = 'mtg', set } = req.body || {};
+    if (game !== 'mtg' || !set) return res.json({ ready: false, supported: game === 'mtg' });
+    if (setIndex.isReady('mtg', set)) return res.json({ ready: true });
+    // Kick the build without blocking the request; client polls.
+    setIndex.ensureSet('mtg', set).catch(() => {});
+    res.json({ ready: false, building: true });
+  } catch (error) {
+    console.error('prepare-set failed:', error.message);
+    res.status(500).json({ error: 'Prepare set failed' });
   }
 });
 
@@ -712,7 +751,7 @@ router.post('/locations/:id/compartments', async (req, res) => {
 
 router.patch('/compartments/:id', async (req, res) => {
   const { id } = req.params;
-  const { label, capacity } = req.body;
+  const { label, capacity, rule_config } = req.body;
   try {
     const compartment = await db.get(`
       SELECT cp.id, cp.idx, cp.location_id FROM compartments cp
@@ -720,6 +759,12 @@ router.patch('/compartments/:id', async (req, res) => {
       WHERE cp.id = ? AND l.user_id = ?
     `, [id, req.user.id]);
     if (!compartment) return res.status(404).json({ error: 'Compartment not found' });
+
+    // Per-compartment filing rules. Passing null/empty clears them.
+    if (rule_config !== undefined) {
+      const hasRules = rule_config && (Array.isArray(rule_config) ? rule_config.length : (rule_config.rules || []).length);
+      await db.run(`UPDATE compartments SET rule_config = ? WHERE id = ?`, [hasRules ? JSON.stringify(rule_config) : null, id]);
+    }
 
     if (req.query.updateAll === 'true' && capacity !== undefined) {
       await db.run(`UPDATE compartments SET capacity = COALESCE(?, capacity) WHERE location_id = ?`, [
@@ -879,7 +924,7 @@ router.get('/locations/:id/recommend', async (req, res) => {
     const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!location) return res.status(404).json({ error: 'Location not found' });
 
-    const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity, game, cmc, color_identity FROM card_cache WHERE id = ?`, [card_id]);
+    const cardMetadata = await db.get(`SELECT name, set_name, number, types, subtypes, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity, game, cmc, color_identity FROM card_cache WHERE id = ?`, [card_id]);
     if (!cardMetadata) return res.status(404).json({ error: 'Card not found in cache' });
     cardMetadata.printing = printing || 'Normal';
     cardMetadata.language = language || 'English';
@@ -918,7 +963,7 @@ router.post('/smart-recommend-batch', async (req, res) => {
 
     for (const entryId of entry_ids) {
       const entry = await db.get(`
-        SELECT c.id as entry_id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url, cc.game
+        SELECT c.id as entry_id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url, cc.game
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
         WHERE c.id = ? AND c.user_id = ?
@@ -999,7 +1044,7 @@ router.post('/locations/:id/recommend-batch', async (req, res) => {
 
     for (const entryId of entry_ids) {
       const entry = await db.get(`
-        SELECT c.id as entry_id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url, cc.game
+        SELECT c.id as entry_id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url, cc.game
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
         WHERE c.id = ? AND c.user_id = ?
@@ -1071,7 +1116,7 @@ router.post('/locations/:id/apply-all', async (req, res) => {
 
     for (const entryId of entry_ids) {
       const entry = await db.get(`
-        SELECT c.id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.game
+        SELECT c.id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.game
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
         WHERE c.id = ? AND c.user_id = ?

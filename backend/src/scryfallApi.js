@@ -93,10 +93,29 @@ async function fetchFromScryfall(q, lang) {
 
 // Search MTG cards: local card_cache first (game='mtg'), then Scryfall. Mirrors
 // the Pokémon searchCards contract so the route can dispatch on `game` alone.
-async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scope = 'database', userId = null, lang = null) {
+async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scope = 'database', userId = null, lang = null, allPrints = false) {
   const cleanName = (nameQuery || '').trim();
   const cleanNumber = (numberQuery || '').trim();
   const cleanSet = (setQuery || '').trim();
+
+  // Scanner path: identify-by-image knows the card but not the printing, so it
+  // asks for every printing of an exact name (Scryfall collapses to one printing
+  // by default — `unique:prints` returns them all) and lets the user pick the set.
+  if (allPrints && cleanName && scope !== 'collection') {
+    try {
+      // A set code narrows to that printing (exact, usually one result -> fast
+      // path in the scanner); without it, return every printing to pick from.
+      const q = cleanSet ? `!"${cleanName}" set:${cleanSet} unique:prints` : `!"${cleanName}" unique:prints`;
+      const raw = await fetchFromScryfall(q, lang);
+      if (raw.length) {
+        const cards = raw.map(c => normalizeCard(c, lang)).slice(0, 60);
+        await cacheCards(cards);
+        return cards;
+      }
+    } catch (e) {
+      // No exact-name match / error — fall through to the normal search below.
+    }
+  }
   // A non-English request must bypass the cache: a cached English printing would
   // otherwise shadow the localized card the caller asked for.
   const isForeign = lang && !['en', 'english'].includes(lang.toLowerCase());

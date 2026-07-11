@@ -9,16 +9,18 @@
     "test": "node test/sort.test.js && node test/auth.test.js"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "axios": "^1.6.8",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.2.0",
+    "opencv-wasm": "^4.3.0-10",
+    "sharp": "^0.33.5",
     "sqlite3": "^6.0.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.0",
-    "sharp": "^0.33.5"
+    "nodemon": "^3.1.0"
   }
 }

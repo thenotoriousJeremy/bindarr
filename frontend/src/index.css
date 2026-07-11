@@ -58,6 +58,7 @@ body {
   font-family: var(--font-main);
   min-height: 100vh;
   overflow-x: hidden;
+  overscroll-behavior: none;
   line-height: 1.5;
 }
 
@@ -722,6 +723,15 @@ button, input, select, textarea {
   font-size: 6px;
   color: var(--accent-yellow);
   font-weight: 800;
+}
+
+/* OCR sub-region guides are kept in the DOM (the text-scan fallback reads their
+   positions) but hidden — image matching is primary, so the boxes/labels are
+   visual clutter. visibility:hidden keeps their layout for getBoundingClientRect. */
+.scan-region-title,
+.scan-region-number-left,
+.scan-region-number-right {
+  visibility: hidden;
 }
 
 /* Scanner Running Line Indicator animation */

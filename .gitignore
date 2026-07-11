@@ -55,3 +55,6 @@ patch*.py
 .gemini/
 .cursor/
 .aider/
+
+# Prebuilt scan-match data (embeddings, ORB indexes, per-set caches) — large, regenerable
+backend/data/

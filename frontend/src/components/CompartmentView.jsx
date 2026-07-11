@@ -60,34 +60,56 @@ function categoryForField(card, field, setsList = []) {
   }
 }
 
-// Divider label for a card under the container's sort scheme. For the dynamic
-// (JSON array) scheme, dividers come from the first rule with divider:true.
-// Legacy string schemes divide on their primary field (prior behavior).
-export function getSortCategory(card, sortOrder, setsList = []) {
-  if (!card || !sortOrder || sortOrder === 'custom') return null;
+function dividerFieldsOf(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return [];
+  const chosen = arr.filter(r => r && r.divider === true);
+  if (chosen.length > 0) return chosen.map(r => ({ field: r.by, color: r.dividerColor || '#ff4747' }));
+  if (arr.some(r => r && r.divider === false)) return [];
+  return [{ field: arr[0].by, color: '#ff4747' }];
+}
 
-  // A rule divides unless divider is explicitly false, so existing containers
-  // (whose stored rules predate this flag) show dividers again by default.
-  let dividerField = null;
+export function getSortCategories(card, sortOrder, setsList = []) {
+  if (!card || !sortOrder || sortOrder === 'custom') return [];
+
+  let dividerFields = [];
   if (Array.isArray(sortOrder)) {
-    const rule = sortOrder.find(r => r && r.divider !== false);
-    dividerField = rule ? rule.by : null;
+    dividerFields = dividerFieldsOf(sortOrder);
   } else if (typeof sortOrder === 'string' && sortOrder.startsWith('[')) {
-    try {
-      const arr = JSON.parse(sortOrder);
-      const rule = Array.isArray(arr) ? arr.find(r => r && r.divider !== false) : null;
-      dividerField = rule ? rule.by : null;
-    } catch (e) { dividerField = null; }
+    try { dividerFields = dividerFieldsOf(JSON.parse(sortOrder)); }
+    catch (e) { dividerFields = []; }
   } else if (typeof sortOrder === 'string') {
-    if (sortOrder.startsWith('name')) dividerField = 'name';
-    else if (sortOrder.startsWith('set')) dividerField = 'set';
-    else if (sortOrder.startsWith('type')) dividerField = 'type';
-    else if (sortOrder.startsWith('price')) dividerField = 'price';
-    else if (sortOrder.startsWith('language')) dividerField = 'language';
+    if (sortOrder.startsWith('name')) dividerFields = [{ field: 'name', color: '#ff4747' }];
+    else if (sortOrder.startsWith('set')) dividerFields = [{ field: 'set', color: '#ff4747' }];
+    else if (sortOrder.startsWith('type')) dividerFields = [{ field: 'type', color: '#ff4747' }];
+    else if (sortOrder.startsWith('price')) dividerFields = [{ field: 'price', color: '#ff4747' }];
+    else if (sortOrder.startsWith('language')) dividerFields = [{ field: 'language', color: '#ff4747' }];
   }
 
-  if (!dividerField) return null;
-  return categoryForField(card, dividerField, setsList);
+  return dividerFields.map(df => ({
+    field: df.field,
+    color: df.color,
+    label: categoryForField(card, df.field, setsList)
+  })).filter(c => c.label !== null);
+}
+
+// Category the container FILES by — the primary (first) sort field, matching
+// the backend's placement engine. Used by the Category-to-Page map, which must
+// track filing, not the (independent) visual divider choice.
+export function getPrimaryCategory(card, sortOrder, setsList = []) {
+  if (!card || !sortOrder || sortOrder === 'custom') return null;
+  let field = null;
+  if (Array.isArray(sortOrder)) field = sortOrder[0]?.by || null;
+  else if (typeof sortOrder === 'string' && sortOrder.startsWith('[')) {
+    try { field = JSON.parse(sortOrder)[0]?.by || null; } catch (e) { field = null; }
+  } else if (typeof sortOrder === 'string') {
+    if (sortOrder.startsWith('name')) field = 'name';
+    else if (sortOrder.startsWith('set')) field = 'set';
+    else if (sortOrder.startsWith('type')) field = 'type';
+    else if (sortOrder.startsWith('price')) field = 'price';
+    else if (sortOrder.startsWith('language')) field = 'language';
+  }
+  if (!field) return null;
+  return categoryForField(card, field, setsList);
 }
 
 function PrintingBadge({ printing }) {
@@ -105,6 +127,52 @@ function PrintingBadge({ printing }) {
   );
 }
 
+// Detail banner for the currently focused card. Shared by the box coverflow and
+// the binder grid so both surfaces describe a selection the same way.
+function FocusedCardInfo({ card, slotNumber, moveSelect = null }) {
+  return (
+    <div className="focused-card-info-panel" style={{ marginTop: '0.5rem' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.7rem', borderRadius: 'var(--radius-sm)' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0 }}>
+            <strong style={{ fontSize: '0.85rem' }}>#{slotNumber} | {card.name}</strong>
+            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+              {card.set_name} • #{card.number}
+            </div>
+          </div>
+          {moveSelect}
+        </div>
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
+          {card.rarity && (
+            <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.03em', ...getRarityBadgeStyle(card.rarity) }}>
+              {getRarityBadgeLabel(card.rarity)}
+            </span>
+          )}
+          {card.printing && card.printing !== 'Normal' && (
+            <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', ...getPrintingBadgeStyle(card.printing) }}>
+              {getPrintingBadgeLabel(card.printing)}
+            </span>
+          )}
+          {card.printing === 'Normal' && <span style={infoChipStyle}>Normal</span>}
+          {card.supertype && <span style={{ ...infoChipStyle, color: '#fff' }} title="Supertype">{card.supertype}</span>}
+          {(card.types || []).length > 0 && <span style={infoChipStyle} title="Types">{card.types.join(' / ')}</span>}
+          {(card.subtypes || []).length > 0 && <span style={infoChipStyle} title="Subtypes">{card.subtypes.join(' / ')}</span>}
+          {card.condition && <span style={infoChipStyle}>{card.condition}</span>}
+          {card.language && card.language !== 'English' && <span style={infoChipStyle}>{card.language}</span>}
+          {card.quantity > 1 && <span style={{ ...infoChipStyle, color: '#fff' }}>x{card.quantity}</span>}
+          {card.price_trend > 0 && (
+            <span style={{ ...infoChipStyle, color: 'var(--accent-yellow)', marginLeft: 'auto' }}>
+              Value ${formatPrice(card.price_trend)}
+            </span>
+          )}
+          {card.purchase_price > 0 && <span style={infoChipStyle}>Paid ${formatPrice(card.purchase_price)}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function CompartmentView({
   compartment,
   cards = [],
@@ -116,10 +184,8 @@ export default function CompartmentView({
   onCardClick = null,
   
   // Storage Management Props (can be omitted for read-only view)
-  availableFilters = [],
   onRename = null,
   onSetCapacity = null,
-  onToggleFilter = null,
   onRemove = null,
   onMoveCard = null,
   moveTargets = [],
@@ -131,7 +197,10 @@ export default function CompartmentView({
   selectMode = false,
   selectedIds = null,
   onCardLongPress = null,
-  onCardToggle = null
+  onCardToggle = null,
+
+  // Per-compartment filing rules editor (optional)
+  onEditRules = null
 }) {
   const isBinder = locationType === 'Binder' || locationType === 'Toploader Binder';
   const isSelected = (entryId) => !!(selectedIds && selectedIds.has(entryId));
@@ -176,6 +245,18 @@ export default function CompartmentView({
   };
   const selectedOutline = { outline: '3px solid var(--accent-red)', outlineOffset: '1px' };
 
+  // How many per-compartment filing rules are set (for the Accepts button label).
+  const compRuleCount = (() => {
+    const cfg = compartment && compartment.rule_config;
+    if (!cfg) return 0;
+    try {
+      const p = typeof cfg === 'string' ? JSON.parse(cfg) : cfg;
+      const rules = Array.isArray(p) ? p : (p.rules || []);
+      return rules.length;
+    } catch (e) { return 0; }
+  })();
+  const acceptsLabel = compRuleCount > 0 ? `Accepts (${compRuleCount})` : 'Accepts';
+
   // --- Box Coverflow State ---
   const slotCountBox = Math.max(compartment?.capacity || 1, cards.length);
   const filledCardsBox = Array.from({ length: slotCountBox }, (_, i) => cards[i] || null);
@@ -203,7 +284,7 @@ export default function CompartmentView({
   // --- Binder Grid State ---
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState(compartment?.display_label || '');
-  const [showSets, setShowSets] = useState(false);
+  const [binderActiveEntryId, setBinderActiveEntryId] = useState(null);
 
   if (!compartment) return null;
 
@@ -246,12 +327,18 @@ export default function CompartmentView({
               </strong>
             )}
             
-            {onToggleFilter && (
-              <button type="button" className="btn btn-secondary" onClick={() => setShowSets(s => !s)} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem' }}>
-                {(compartment.assignedFilters || []).length === 0 ? 'Any category' : (compartment.assignedFilters || []).length === 1 ? compartment.assignedFilters[0] : `${compartment.assignedFilters.length} cats`}
+            {(compartment.assignedFilters || []).length > 0 && (
+              <span title="Sorting categories filed to this page" style={{ fontSize: '0.55rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                {compartment.assignedFilters.length === 1 ? compartment.assignedFilters[0] : `${compartment.assignedFilters.length} cats`}
+              </span>
+            )}
+
+            {onEditRules && (
+              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title="Set which cards this page accepts" style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: '#fff' } : {}) }}>
+                {acceptsLabel}
               </button>
             )}
-            
+
             {onSetCapacity && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.1rem', fontSize: '0.6rem', color: 'var(--text-muted)' }}>
                 <span>{compartment.count} /</span>
@@ -273,41 +360,33 @@ export default function CompartmentView({
           </div>
         )}
         
-        {showSets && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.4rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
-            <select
-              className="select-control"
-              value=""
-              onChange={(e) => { if (e.target.value) onToggleFilter(e.target.value); }}
-              style={{ fontSize: '0.7rem', padding: '0.15rem 0.3rem' }}
-            >
-              <option value="">Choose category to toggle...</option>
-              {availableFilters.map(filterVal => (
-                <option key={filterVal} value={filterVal}>
-                  {(compartment.assignedFilters || []).includes(filterVal) ? `✓ ${filterVal}` : filterVal}
-                </option>
-              ))}
-            </select>
-            {compartment.assignedFilters && compartment.assignedFilters.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-                {compartment.assignedFilters.map(filterVal => (
-                  <span key={filterVal} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.6rem', padding: '0.1rem 0.3rem', background: 'var(--accent-red)', borderRadius: '3px' }}>
-                    {filterVal}
-                    <span style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => onToggleFilter(filterVal)}>&times;</span>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
         <div className="binder-pocket-grid" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
           {pockets.map((card, i) => {
             const pos = i + 1;
             const prev = i > 0 ? pockets[i - 1] : null;
-            const cat = getSortCategory(card, sortOrder, setsList);
-            const prevCat = getSortCategory(prev, sortOrder, setsList);
-            const categoryStart = cat && (!prev || prevCat !== cat);
+            const cats = getSortCategories(card, sortOrder, setsList);
+            const prevCats = getSortCategories(prev, sortOrder, setsList);
+            
+            const newDividers = [];
+            if (cats.length > 0) {
+              if (!prev || prevCats.length === 0) {
+                newDividers.push(...cats);
+              } else {
+                let diffIdx = -1;
+                for (let j = 0; j < cats.length; j++) {
+                  if (!prevCats[j] || cats[j].label !== prevCats[j].label) {
+                    diffIdx = j;
+                    break;
+                  }
+                }
+                if (diffIdx !== -1) {
+                  for (let j = diffIdx; j < cats.length; j++) {
+                    newDividers.push(cats[j]);
+                  }
+                }
+              }
+            }
+            const categoryStart = newDividers.length > 0;
             const isHighlighted = highlightPositions.includes(pos);
             const isTarget = isHighlighted;
 
@@ -316,52 +395,52 @@ export default function CompartmentView({
                 <div key={`ghost-${i}`} id="recommended-spot" className={`binder-pocket recommended-ghost ${categoryStart ? 'set-start' : ''}`}>
                   {card.image_url && <img src={card.image_url} alt={card.name} style={{ opacity: 0.85 }} />}
                   <div className="rec-ghost-label">Slot {pos}</div>
-                  {categoryStart && <div className="set-divider-label" title={cat}>{cat}</div>}
+                  {newDividers.length > 0 && (
+                    <div style={{ position: 'absolute', top: 0, left: 0, transform: 'translateY(-100%)', display: 'flex', flexDirection: 'column', gap: '2px', paddingBottom: '2px', zIndex: 20 }}>
+                      {newDividers.map((div, dIdx) => (
+                        <div key={dIdx} className="set-divider-label" title={div.label} style={{ position: 'relative', top: 'auto', left: 'auto', backgroundColor: div.color }}>{div.label}</div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             }
             return card ? (
-              <div key={card.entry_id || `slot-${i}`} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                <div
-                  className={`binder-pocket ${categoryStart ? 'set-start' : ''} ${card.entry_id === focusEntryId ? 'focus-flash' : ''}`}
-                  style={{
-                    ...getCardRarityBorder(card.rarity),
-                    ...(isTarget ? {
-                      borderColor: 'var(--accent-green)',
-                      boxShadow: '0 0 15px rgba(34,197,94,0.4), inset 0 0 20px rgba(34,197,94,0.3)'
-                    } : {}),
-                    ...(isSelected(card.entry_id) ? selectedOutline : {})
-                  }}
-                  {...pressHandlers(card.entry_id)}
-                  onClick={() => { if (handleSelectClick(card.entry_id)) return; onCardClick && onCardClick(card); }}
-                >
-                  <img src={card.image_url} alt={card.name} title={card.name} />
-                  {getFoilOverlayClass(card.printing) && <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4px' }} />}
-                  <PrintingBadge printing={card.printing} />
-                  {selectMode && (
-                    <div style={{ position: 'absolute', top: '3px', left: '3px', zIndex: 25, width: '18px', height: '18px', borderRadius: '50%', background: isSelected(card.entry_id) ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.65rem', fontWeight: 900 }}>{isSelected(card.entry_id) ? '✓' : ''}</div>
-                  )}
-                  {categoryStart && <div className="set-divider-label" title={cat}>{cat}</div>}
-                  
-                  {isTarget && (
-                    <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'var(--accent-green)', color: '#000', width: '30px', height: '30px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 4px 10px rgba(0,0,0,0.5)' }}>✓</div>
-                  )}
-                  
-                  {sortOrder === 'custom' && moveTargets.length > 1 && onMoveCard && (
-                    <div className="binder-pocket-actions">
-                      <select value="" onChange={(e) => { if (e.target.value) onMoveCard(card.entry_id, parseInt(e.target.value, 10)); }}>
-                        <option value="">Move...</option>
-                        {moveTargets.filter(t => t.id !== compartment.id).map(t => (
-                          <option key={t.id} value={t.id}>{t.display_label}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                </div>
-                {card.price_trend && (
-                  <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textAlign: 'center' }}>
-                    ${card.price_trend.toFixed(2)}
+              <div
+                key={card.entry_id || `slot-${i}`}
+                className={`binder-pocket ${categoryStart ? 'set-start' : ''} ${card.entry_id === focusEntryId ? 'focus-flash' : ''}`}
+                style={{
+                  ...getCardRarityBorder(card.rarity),
+                  ...(isTarget ? {
+                    borderColor: 'var(--accent-green)',
+                    boxShadow: '0 0 15px rgba(34,197,94,0.4), inset 0 0 20px rgba(34,197,94,0.3)'
+                  } : {}),
+                  ...(card.entry_id === binderActiveEntryId ? { borderColor: 'var(--accent-yellow)', boxShadow: '0 0 10px rgba(250,204,21,0.5)' } : {}),
+                  ...(isSelected(card.entry_id) ? selectedOutline : {})
+                }}
+                {...pressHandlers(card.entry_id)}
+                onClick={() => {
+                  if (handleSelectClick(card.entry_id)) return;
+                  if (card.entry_id === binderActiveEntryId) onCardClick && onCardClick(card);
+                  else setBinderActiveEntryId(card.entry_id);
+                }}
+              >
+                <img src={card.image_url} alt={card.name} title={card.name} />
+                {getFoilOverlayClass(card.printing) && <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4px' }} />}
+                <PrintingBadge printing={card.printing} />
+                {selectMode && (
+                  <div style={{ position: 'absolute', top: '3px', left: '3px', zIndex: 25, width: '18px', height: '18px', borderRadius: '50%', background: isSelected(card.entry_id) ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.65rem', fontWeight: 900 }}>{isSelected(card.entry_id) ? '✓' : ''}</div>
+                )}
+                {newDividers.length > 0 && (
+                  <div style={{ position: 'absolute', top: 0, left: 0, transform: 'translateY(-100%)', display: 'flex', flexDirection: 'column', gap: '2px', paddingBottom: '2px', zIndex: 20 }}>
+                    {newDividers.map((div, dIdx) => (
+                      <div key={dIdx} className="set-divider-label" title={div.label} style={{ position: 'relative', top: 'auto', left: 'auto', backgroundColor: div.color }}>{div.label}</div>
+                    ))}
                   </div>
+                )}
+
+                {isTarget && (
+                  <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'var(--accent-green)', color: '#000', width: '30px', height: '30px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 4px 10px rgba(0,0,0,0.5)' }}>✓</div>
                 )}
               </div>
             ) : (
@@ -374,6 +453,26 @@ export default function CompartmentView({
             );
           })}
         </div>
+
+        {(() => {
+          const activeCard = cards.find(c => c.entry_id === binderActiveEntryId);
+          if (!activeCard) return null;
+          const slotNumber = pockets.findIndex(p => p && p.entry_id === binderActiveEntryId) + 1;
+          const moveSelect = sortOrder === 'custom' && moveTargets.length > 1 && onMoveCard ? (
+            <select
+              className="select-control"
+              value=""
+              onChange={(e) => { if (e.target.value) onMoveCard(activeCard.entry_id, parseInt(e.target.value, 10)); }}
+              style={{ fontSize: '0.65rem', padding: '0.15rem 0.3rem', width: '110px', flexShrink: 0 }}
+            >
+              <option value="">Move to...</option>
+              {moveTargets.filter(t => t.id !== compartment.id).map(t => (
+                <option key={t.id} value={t.id}>{t.display_label}</option>
+              ))}
+            </select>
+          ) : null;
+          return <FocusedCardInfo card={activeCard} slotNumber={slotNumber} moveSelect={moveSelect} />;
+        })()}
       </div>
     );
   } else {
@@ -392,18 +491,34 @@ export default function CompartmentView({
     const highestTargetIdx = highlightPositions.length > 0 ? Math.max(...highlightPositions) - 1 : -1;
     const renderLimit = Math.max(lastFilledIdx, highestTargetIdx);
 
-    let currentCat = null;
+    let currentCats = [];
     for (let i = 0; i <= renderLimit; i++) {
       const card = filledCardsBox[i];
       if (card) {
-        const cat = getSortCategory(card, sortOrder, setsList);
-        if (cat && cat !== currentCat) {
-          renderedCards.push({
-            __divider: true,
-            entry_id: `div-${cat}`,
-            label: cat
-          });
-          currentCat = cat;
+        const cats = getSortCategories(card, sortOrder, setsList);
+        let diffIdx = -1;
+        if (cats.length > 0) {
+          if (currentCats.length === 0) {
+            diffIdx = 0;
+          } else {
+            for (let j = 0; j < cats.length; j++) {
+              if (!currentCats[j] || cats[j].label !== currentCats[j].label) {
+                diffIdx = j;
+                break;
+              }
+            }
+          }
+        }
+        if (diffIdx !== -1) {
+          for (let j = diffIdx; j < cats.length; j++) {
+            renderedCards.push({
+              __divider: true,
+              entry_id: `div-${card.entry_id || i}-${cats[j].field}-${cats[j].label}`,
+              label: cats[j].label,
+              color: cats[j].color
+            });
+          }
+          currentCats = cats;
         }
         renderedCards.push({ ...card, __slotNumber: slotCounter });
       } else {
@@ -429,7 +544,29 @@ export default function CompartmentView({
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%', overflow: 'hidden' }}>
         {onRename && (
           <div className="row-flash" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', background: 'rgba(0,0,0,0.1)', padding: '0.4rem 0.6rem', borderRadius: 'var(--radius-sm)', flexWrap: 'wrap' }}>
-            <strong style={{ fontSize: '0.85rem' }}>{compartment.display_label}</strong>
+            {editingLabel ? (
+              <input
+                autoFocus
+                className="input-control"
+                value={labelDraft}
+                onChange={(e) => setLabelDraft(e.target.value)}
+                onBlur={() => { if (editingLabel) { setEditingLabel(false); onRename(labelDraft); } }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { setEditingLabel(false); onRename(labelDraft); }
+                  else if (e.key === 'Escape') setEditingLabel(false);
+                }}
+                style={{ padding: '0.15rem 0.4rem', fontSize: '0.8rem', width: '150px' }}
+              />
+            ) : (
+              <strong onDoubleClick={() => { setLabelDraft(compartment.label || ''); setEditingLabel(true); }} title="Double-click to rename" style={{ cursor: 'pointer', fontSize: '0.85rem' }}>
+                {compartment.display_label}
+              </strong>
+            )}
+            {onEditRules && (
+              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title="Set which cards this row accepts" style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: '#fff' } : {}) }}>
+                {acceptsLabel}
+              </button>
+            )}
           </div>
         )}
 
@@ -507,10 +644,10 @@ export default function CompartmentView({
                     <div
                       key={card.entry_id}
                       className={`box-coverflow-card ${offset === 0 ? 'active' : ''}`}
-                      style={{ transform, zIndex, opacity, filter: 'none', background: 'linear-gradient(135deg, rgba(255, 71, 71, 0.8), rgba(150, 0, 0, 0.8))', border: '1px solid rgba(255, 71, 71, 0.5)', display: 'flex', flexDirection: 'column', overflow: 'visible' }}
+                      style={{ transform, zIndex, opacity, filter: 'none', background: card.color || 'var(--accent-red)', border: `1px solid ${card.color || 'var(--accent-red)'}`, display: 'flex', flexDirection: 'column', overflow: 'visible' }}
                       onClick={() => setCoverflowActiveIndex(i)}
                     >
-                      <div style={{ position: 'absolute', top: '-18px', left: '10px', background: 'var(--accent-red)', color: '#fff', padding: '2px 12px', borderRadius: '6px 6px 0 0', fontSize: '0.7rem', fontWeight: 'bold', boxShadow: '0 -2px 5px rgba(0,0,0,0.3)', whiteSpace: 'nowrap' }}>
+                      <div style={{ position: 'absolute', top: '-18px', left: '10px', background: card.color || 'var(--accent-red)', color: '#fff', padding: '2px 12px', borderRadius: '6px 6px 0 0', fontSize: '0.7rem', fontWeight: 'bold', boxShadow: '0 -2px 5px rgba(0,0,0,0.3)', whiteSpace: 'nowrap' }}>
                         {card.label}
                       </div>
                       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '0.5rem', color: '#fff' }}>
@@ -560,61 +697,22 @@ export default function CompartmentView({
           {(() => {
             const activeCard = renderedCards[activeCardIndex];
             if (!activeCard || activeCard.__ghost || activeCard.__divider || activeCard.__empty) return null;
-            
-            return (
-              <div className="focused-card-info-panel" style={{ marginTop: '0.5rem' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.7rem', borderRadius: 'var(--radius-sm)' }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
-                    <div style={{ minWidth: 0 }}>
-                      <strong style={{ fontSize: '0.85rem' }}>#{activeCard.__slotNumber} | {activeCard.name}</strong>
-                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
-                        {activeCard.set_name} • #{activeCard.number}
-                      </div>
-                    </div>
 
-                    {sortOrder === 'custom' && moveTargets.length > 1 && onMoveCard && (
-                      <select
-                        className="select-control"
-                        value=""
-                        onChange={(e) => { if (e.target.value) onMoveCard(activeCard.entry_id, parseInt(e.target.value, 10)); }}
-                        style={{ fontSize: '0.65rem', padding: '0.15rem 0.3rem', width: '110px', flexShrink: 0 }}
-                      >
-                        <option value="">Move to...</option>
-                        {moveTargets.filter(t => t.id !== compartment.id).map(t => (
-                          <option key={t.id} value={t.id}>{t.display_label}</option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
+            const moveSelect = sortOrder === 'custom' && moveTargets.length > 1 && onMoveCard ? (
+              <select
+                className="select-control"
+                value=""
+                onChange={(e) => { if (e.target.value) onMoveCard(activeCard.entry_id, parseInt(e.target.value, 10)); }}
+                style={{ fontSize: '0.65rem', padding: '0.15rem 0.3rem', width: '110px', flexShrink: 0 }}
+              >
+                <option value="">Move to...</option>
+                {moveTargets.filter(t => t.id !== compartment.id).map(t => (
+                  <option key={t.id} value={t.id}>{t.display_label}</option>
+                ))}
+              </select>
+            ) : null;
 
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-                    {activeCard.rarity && (
-                      <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.03em', ...getRarityBadgeStyle(activeCard.rarity) }}>
-                        {getRarityBadgeLabel(activeCard.rarity)}
-                      </span>
-                    )}
-                    {activeCard.printing && activeCard.printing !== 'Normal' && (
-                      <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', ...getPrintingBadgeStyle(activeCard.printing) }}>
-                        {getPrintingBadgeLabel(activeCard.printing)}
-                      </span>
-                    )}
-                    {activeCard.printing === 'Normal' && <span style={infoChipStyle}>Normal</span>}
-                    {activeCard.supertype && <span style={{ ...infoChipStyle, color: '#fff' }} title="Supertype">{activeCard.supertype}</span>}
-                    {(activeCard.types || []).length > 0 && <span style={infoChipStyle} title="Types">{activeCard.types.join(' / ')}</span>}
-                    {(activeCard.subtypes || []).length > 0 && <span style={infoChipStyle} title="Subtypes">{activeCard.subtypes.join(' / ')}</span>}
-                    {activeCard.condition && <span style={infoChipStyle}>{activeCard.condition}</span>}
-                    {activeCard.language && activeCard.language !== 'English' && <span style={infoChipStyle}>{activeCard.language}</span>}
-                    {activeCard.quantity > 1 && <span style={{ ...infoChipStyle, color: '#fff' }}>x{activeCard.quantity}</span>}
-                    {activeCard.price_trend > 0 && (
-                      <span style={{ ...infoChipStyle, color: 'var(--accent-yellow)', marginLeft: 'auto' }}>
-                        Value ${formatPrice(activeCard.price_trend)}
-                      </span>
-                    )}
-                    {activeCard.purchase_price > 0 && <span style={infoChipStyle}>Paid ${formatPrice(activeCard.purchase_price)}</span>}
-                  </div>
-                </div>
-              </div>
-            );
+            return <FocusedCardInfo card={activeCard} slotNumber={activeCard.__slotNumber} moveSelect={moveSelect} />;
           })()}
           </>
         )}

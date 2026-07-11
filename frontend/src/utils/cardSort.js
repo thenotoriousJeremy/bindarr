@@ -1,3 +1,5 @@
+import { getRarityRank } from './cardRarity';
+
 // Shared comparator logic for ordering collection cards. Previously copy-pasted
 // across autoSortContainerCards, findNextRecommendedSlot, the sorting assistant
 // queue, and the unsorted list view in LocationManager.jsx.
@@ -163,7 +165,7 @@ export function sortCardsByOrder(cards, sortOrder, foilSorting, setsList = []) {
           break;
         }
         case 'rarity':
-          cmp = (a.rarity || '').localeCompare(b.rarity || '');
+          cmp = getRarityRank(a.rarity) - getRarityRank(b.rarity);
           break;
       }
       if (cmp !== 0) return cmp * dirMult;

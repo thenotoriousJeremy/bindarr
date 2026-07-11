@@ -7,13 +7,15 @@ import { translateJapaneseName } from '../utils/pokemonTranslation';
 import { formatPrice } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
-import * as cardHashMatch from '../utils/cardHashMatch';
-
-// Max Hamming distance (0-256) to treat a perceptual-hash match as usable. Scan
-// noise (glare, angle, lighting) plus resize-kernel differences push a correct
-// full-card match into the tens, so this is deliberately loose — the user still
-// confirms from the results list. ponytail: tune if false matches/misses appear.
-const HASH_MAX_DISTANCE = 90;
+// Fixed centered guide box (normalized 0..1). Center the card in it; the crop
+// inside is sent to the server embedding matcher. OCR sub-region boxes (fallback)
+// are positioned as percentages of it.
+const DEFAULT_RECT = { x: 0.17, y: 0.06, w: 0.66, h: 0.88 };
+// Confidence gates for the server match. When ORB geometric verification ran
+// (verified=true), gate on inlier count; otherwise on CLIP cosine similarity.
+// Below the gate the scan falls back to OCR. Tunable once tested on real photos.
+const SCAN_MATCH_MIN_SCORE = 0.55;
+const SCAN_MATCH_MIN_INLIERS = 12;
 
 // Turn a failed /api/search response into a user-facing message. 429 (rate
 // limit) and 403 (bad API key) are called out distinctly so the user knows to
@@ -58,10 +60,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [hasCameraError, setHasCameraError] = useState(false);
   const [autoScan, setAutoScan] = useState(false);
   const [bulkMode, setBulkMode] = useState(false);
-  const [guideScale, setGuideScale] = useState(0.70); // Adjustable guide box scale
-  const [guideRotation, setGuideRotation] = useState(0);
-  const [guideOffsetX, setGuideOffsetX] = useState(0);
-  const [guideOffsetY, setGuideOffsetY] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [videoRatio, setVideoRatio] = useState(null);
   // Focus control
@@ -73,8 +71,8 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [torchSupported, setTorchSupported] = useState(false);
   const [isTorchOn, setIsTorchOn] = useState(false);
   const [cardLayout, setCardLayout] = useState('modern');
-  // Whether the MTG perceptual-hash DB has loaded (identify-by-image path).
-  const [hashReady, setHashReady] = useState(false);
+  // Per-set index prep state for MTG set-scoped matching: 'idle'|'building'|'ready'.
+  const [setPrep, setSetPrep] = useState('idle');
   // Which game the current layout belongs to. 'mtg' is its own layout; every
   // other layout value is a Pokémon sub-layout.
   const scanGame = cardLayout === 'mtg' ? 'mtg' : 'pokemon';
@@ -90,6 +88,11 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [debugNameImg, setDebugNameImg] = useState('');
   const [debugNumLeftImg, setDebugNumLeftImg] = useState('');
   const [debugNumRightImg, setDebugNumRightImg] = useState('');
+  // Hash-match diagnostics: the exact crop that gets hashed + the ranked
+  // candidates (name/set/number + Hamming distance) so matching is not a black box.
+  const [debugHashImg, setDebugHashImg] = useState('');
+  const [debugCandidates, setDebugCandidates] = useState([]);
+  const [debugScoped, setDebugScoped] = useState(null); // set code if set-scoped, false if global, null if n/a
   
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -102,105 +105,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setTimeout(() => {
       setScanStatus(prev => prev === 'Scan cancelled.' ? '' : prev);
     }, 2000);
-  };
-
-  // Touch/Mouse gesture state for overlay manipulation
-  const isDragging = useRef(false);
-  const startPan = useRef({ x: 0, y: 0 });
-  const startOffset = useRef({ x: 0, y: 0 });
-  const initialPinchDist = useRef(null);
-  const initialPinchAngle = useRef(null);
-  const initialScale = useRef(null);
-  const initialRotation = useRef(null);
-  const activePointers = useRef(new Map());
-
-  // Gesture Handlers
-  const handlePointerDown = (e) => {
-    e.target.setPointerCapture(e.pointerId);
-    activePointers.current.set(e.pointerId, e);
-    
-    if (activePointers.current.size === 1) {
-      isDragging.current = true;
-      startPan.current = { x: e.clientX, y: e.clientY };
-      startOffset.current = { x: guideOffsetX, y: guideOffsetY };
-    } else if (activePointers.current.size === 2) {
-      isDragging.current = false;
-      const pointers = Array.from(activePointers.current.values());
-      const dx = pointers[1].clientX - pointers[0].clientX;
-      const dy = pointers[1].clientY - pointers[0].clientY;
-      initialPinchDist.current = Math.hypot(dx, dy);
-      initialPinchAngle.current = Math.atan2(dy, dx) * (180 / Math.PI);
-      initialScale.current = guideScale;
-      initialRotation.current = guideRotation;
-    }
-  };
-
-  const handlePointerMove = (e) => {
-    if (!activePointers.current.has(e.pointerId)) return;
-    activePointers.current.set(e.pointerId, e);
-
-    if (activePointers.current.size === 1 && isDragging.current) {
-      const dx = e.clientX - startPan.current.x;
-      const dy = e.clientY - startPan.current.y;
-      
-      let newX = startOffset.current.x + dx;
-      let newY = startOffset.current.y + dy;
-      
-      const guide = document.querySelector('.scan-card-guide');
-      const video = videoRef.current;
-      if (guide && video) {
-        const W = video.clientWidth;
-        const H = video.clientHeight;
-        const w = guide.offsetWidth;
-        const h = guide.offsetHeight;
-        
-        const rad = guideRotation * (Math.PI / 180);
-        const boundingW = w * Math.abs(Math.cos(rad)) + h * Math.abs(Math.sin(rad));
-        const boundingH = w * Math.abs(Math.sin(rad)) + h * Math.abs(Math.cos(rad));
-        
-        const maxX = Math.max(0, (W - boundingW) / 2);
-        const maxY = Math.max(0, (H - boundingH) / 2);
-        
-        newX = Math.max(-maxX, Math.min(maxX, newX));
-        newY = Math.max(-maxY, Math.min(maxY, newY));
-      }
-      
-      setGuideOffsetX(newX);
-      setGuideOffsetY(newY);
-    } else if (activePointers.current.size === 2) {
-      const pointers = Array.from(activePointers.current.values());
-      const dx = pointers[1].clientX - pointers[0].clientX;
-      const dy = pointers[1].clientY - pointers[0].clientY;
-      
-      const dist = Math.hypot(dx, dy);
-      const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-      
-      if (initialPinchDist.current) {
-        const scaleFactor = dist / initialPinchDist.current;
-        let newScale = initialScale.current * scaleFactor;
-        newScale = Math.max(0.4, Math.min(newScale, 1.0));
-        setGuideScale(newScale);
-      }
-      
-      if (initialPinchAngle.current !== null) {
-        const angleDelta = angle - initialPinchAngle.current;
-        let newRotation = initialRotation.current + angleDelta;
-        newRotation = ((newRotation % 360) + 360) % 360;
-        setGuideRotation(Math.round(newRotation));
-      }
-    }
-  };
-
-  const handlePointerUp = (e) => {
-    e.target.releasePointerCapture(e.pointerId);
-    activePointers.current.delete(e.pointerId);
-    if (activePointers.current.size < 2) {
-      initialPinchDist.current = null;
-      initialPinchAngle.current = null;
-    }
-    if (activePointers.current.size === 0) {
-      isDragging.current = false;
-    }
   };
 
   // Drawer states
@@ -239,14 +143,29 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Lazy-load the current game's hash DB (identify-by-image). Runs whenever the
-  // game changes; loads are cached per game so switching back is instant. Leaves
-  // hashReady false (scanner falls back to OCR) if that game's DB isn't built.
+  // When an MTG set code is set, build/verify that set's index on the server so
+  // scans match within just that set (~300 cards) — accurate and fast. Polls
+  // until the one-time build finishes.
   useEffect(() => {
-    let cancelled = false;
-    cardHashMatch.loadHashDb(scanGame).then(ok => { if (!cancelled) setHashReady(ok); });
-    return () => { cancelled = true; };
-  }, [scanGame]);
+    if (scanGame !== 'mtg' || !mtgSetCode) { setSetPrep('idle'); return; }
+    let cancelled = false, timer;
+    const poll = async () => {
+      try {
+        const r = await fetch('/api/prepare-set', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ game: 'mtg', set: mtgSetCode }),
+        });
+        const d = await r.json();
+        if (cancelled) return;
+        if (d.ready) { setSetPrep('ready'); return; }
+        setSetPrep('building');
+        timer = setTimeout(poll, 3000);
+      } catch { if (!cancelled) setSetPrep('idle'); }
+    };
+    setSetPrep('building');
+    poll();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [scanGame, mtgSetCode]);
 
   const fetchLocations = async () => {
     try {
@@ -363,6 +282,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setScannedName('');
     setScannedNumber('');
     setDebugNameImg('');
+    setDebugHashImg('');
+    setDebugCandidates([]);
+    setDebugScoped(null);
     setDebugNumLeftImg('');
     setDebugNumRightImg('');
     setShowSettings(false);
@@ -424,6 +346,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setScannedName('');
     setScannedNumber('');
     setDebugNameImg('');
+    setDebugHashImg('');
+    setDebugCandidates([]);
+    setDebugScoped(null);
     setDebugNumLeftImg('');
     setDebugNumRightImg('');
     setShowSettings(false);
@@ -488,35 +413,38 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
   // Resolves the landscape-to-portrait camera stream rotation bug on mobile devices.
   // It creates a canvas matching the visual orientation on the user's screen.
-  const getOrientedVideoCanvas = (video) => {
+  // Pass maxW to downscale the output (cheap enough to run every frame for the
+  // live detection loop); omit it for a full-resolution capture.
+  const getOrientedVideoCanvas = (video, maxW = 0) => {
     const videoWidth = video.videoWidth;
     const videoHeight = video.videoHeight;
     const canvas = document.createElement('canvas');
-    
+
     const videoRect = video.getBoundingClientRect();
     const streamRatio = videoWidth / videoHeight;
     const visualRatio = videoRect.width / videoRect.height;
-    
+
     // Detect if browser displays stream rotated relative to raw texture resolution
     // (If stream is landscape but display container is portrait, or vice versa)
     const isRotated = (streamRatio > 1.0 && visualRatio < 1.0) || (streamRatio < 1.0 && visualRatio > 1.0);
-    
+
+    // Oriented output dimensions, then an optional uniform downscale.
+    const outW = isRotated ? videoHeight : videoWidth;
+    const outH = isRotated ? videoWidth : videoHeight;
+    const scale = (maxW && outW > maxW) ? maxW / outW : 1;
+    canvas.width = Math.max(1, Math.round(outW * scale));
+    canvas.height = Math.max(1, Math.round(outH * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.scale(scale, scale); // subsequent coords are in unscaled (oriented) space
+
     if (isRotated) {
-      canvas.width = videoHeight; // e.g. 720
-      canvas.height = videoWidth; // e.g. 1280
-      const ctx = canvas.getContext('2d');
-      
-      // Rotate 90 degrees clockwise around center
-      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.translate(outW / 2, outH / 2);
       ctx.rotate(90 * Math.PI / 180);
       ctx.drawImage(video, -videoWidth / 2, -videoHeight / 2, videoWidth, videoHeight);
     } else {
-      canvas.width = videoWidth;
-      canvas.height = videoHeight;
-      const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
     }
-    
+
     return canvas;
   };
 
@@ -574,25 +502,13 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     return tempCanvas.toDataURL('image/jpeg', 0.95);
   };
 
-  // Extract a rotated crop as a raw canvas (no contrast stretch) for perceptual
-  // hashing. Mirrors getProcessedDataUrl's inverse-rotation math at 1x scale.
-  const getCropCanvas = (sourceCanvas, cx, cy, w, h, rotationDeg) => {
-    const c = document.createElement('canvas');
-    c.width = Math.max(1, Math.round(w));
-    c.height = Math.max(1, Math.round(h));
-    const ctx = c.getContext('2d');
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.translate(c.width / 2, c.height / 2);
-    ctx.rotate(-rotationDeg * (Math.PI / 180));
-    ctx.drawImage(sourceCanvas, -cx, -cy);
-    return c;
-  };
-
-  // Present search results the same way whether they came from image-hash or OCR:
-  // show the picker, and for a single non-MTG match auto-add / quick-add per mode.
-  // MTG skips auto-add (name fallback returns many printings to choose from).
-  const applyMatches = async (matches, notFoundMsg) => {
+  // Present search results the same way whether they came from image match or OCR:
+  // show the picker, and on a single result take the fast path (auto-add / quick-
+  // add per mode). autoSingle lets the caller allow the fast path for a single MTG
+  // result too — used when the image match is confident and the printing is
+  // unambiguous (only one printing, or the set code narrowed it to one). Ambiguous
+  // MTG (many printings, no set code) still shows the picker.
+  const applyMatches = async (matches, notFoundMsg, autoSingle = false) => {
     setScanMatches(matches);
     if (matches.length === 0) {
       setScanStatus(notFoundMsg);
@@ -603,7 +519,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setScanStatus(`Found ${matches.length} matching card(s)!`);
     setScanFlash('success');
     setTimeout(() => setScanFlash(null), 1500);
-    if (matches.length === 1 && scanGame !== 'mtg') {
+    if (matches.length === 1 && (scanGame !== 'mtg' || autoSingle)) {
       if (autoScan) {
         setAutoAddTargetCard(matches[0]);
         setAutoAddCountdown(2);
@@ -669,44 +585,78 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     try {
       // Identify by perceptual hash of the whole card first (MTG + Pokémon). This
       // sidesteps the flaky corner OCR (tiny set code / collector number over art).
-      // Japanese Pokémon cards aren't in the English-only hash DB, so they skip
-      // straight to OCR + translation. Falls through if no confident match.
-      const hashEligible = hashReady && (scanGame === 'mtg' || (scanGame === 'pokemon' && cardLayout !== 'japanese'));
-      if (hashEligible) {
-        const cardCrop = getCropParams(guideElement);
-        if (cardCrop) {
-          setScanStatus('Matching card image...');
-          const cropCanvas = getCropCanvas(orientedCanvas, cardCrop.cx, cardCrop.cy, cardCrop.w, cardCrop.h, guideRotation);
-          const candidates = cardHashMatch.match(cropCanvas, scanGame, 6);
-          console.log('Hash candidates:', candidates);
-          if (candidates.length && candidates[0].distance <= HASH_MAX_DISTANCE) {
-            const top = candidates[0];
-            const params = new URLSearchParams({ game: scanGame });
-            if (top.set) params.append('set', top.set);
-            if (top.number) params.append('number', top.number);
-            if (top.name) params.append('name', top.name);
-            const searchResponse = await fetch(`/api/search?${params.toString()}`);
+      // Identify by image (server-side). Send the WHOLE oriented frame (downscaled)
+      // so the server can auto-detect + deskew the card before matching — the guide
+      // box is just an aim hint. Japanese Pokémon isn't in the (English) DB, so it
+      // skips to OCR. Empty candidates (DB not built) => fall through to OCR.
+      const matchEligible = scanGame === 'mtg' || (scanGame === 'pokemon' && cardLayout !== 'japanese');
+      if (matchEligible) {
+        setScanStatus('Matching card image...');
+        {
+          // Downscale the frame for upload; server auto-crops the card. Keep it
+          // fairly high-res so a far/small card still has enough pixels to match.
+          const up = document.createElement('canvas');
+          const s = Math.min(1, 1280 / orientedCanvas.width);
+          up.width = Math.round(orientedCanvas.width * s);
+          up.height = Math.round(orientedCanvas.height * s);
+          up.getContext('2d').drawImage(orientedCanvas, 0, 0, up.width, up.height);
+          const imageData = up.toDataURL('image/jpeg', 0.85);
+          setDebugHashImg(imageData);
+          try {
+            const resp = await fetch('/api/scan-match', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ game: scanGame, image: imageData, set: scanGame === 'mtg' ? mtgSetCode : '' }),
+            });
             if (scanId !== currentScanId.current) return;
-            if (searchResponse.ok) {
-              const matches = await searchResponse.json();
-              if (matches.length) {
-                await applyMatches(matches, '');
-                return;
+            if (resp.ok) {
+              const { game: matchGame, verified, candidates, crop, scoped } = await resp.json();
+              console.log('Scan candidates:', matchGame, scoped ? `(set-scoped ${mtgSetCode})` : '(GLOBAL)', verified ? 'ORB' : 'CLIP', candidates);
+              if (crop) setDebugHashImg(crop); // show the server's auto-cropped card
+              setDebugScoped(scoped ? mtgSetCode : false);
+              setDebugCandidates((candidates || []).map(c => ({ ...c, verified })));
+              const top = candidates && candidates[0];
+              const confident = top && (verified ? top.inliers >= SCAN_MATCH_MIN_INLIERS : top.score >= SCAN_MATCH_MIN_SCORE);
+              if (confident) {
+                // Image ID gives the card reliably, but not the printing/set —
+                // reprints share art. If MTG and the user gave a set code, narrow
+                // to that set for an exact one-printing hit (zero extra taps).
+                // Uses the DETECTED game (auto-detect may override the UI mode).
+                const usedSet = matchGame === 'mtg' && mtgSetCode;
+                const buildParams = (withSet) => {
+                  const p = new URLSearchParams({ game: matchGame, prints: '1' });
+                  if (top.name) p.append('name', top.name);
+                  if (withSet) p.append('set', mtgSetCode);
+                  return p;
+                };
+                let searchResponse = await fetch(`/api/search?${buildParams(usedSet).toString()}`);
+                if (scanId !== currentScanId.current) return;
+                let matches = searchResponse.ok ? await searchResponse.json() : [];
+                // Set code didn't match this card (wrong box / card not in that
+                // set) — retry across all printings so the user can still pick.
+                if (usedSet && matches.length === 0) {
+                  searchResponse = await fetch(`/api/search?${buildParams(false).toString()}`);
+                  if (scanId !== currentScanId.current) return;
+                  matches = searchResponse.ok ? await searchResponse.json() : [];
+                }
+                // Confident image match: a single result is unambiguous (one
+                // printing, or set code narrowed it), so take the fast path.
+                if (matches.length) { await applyMatches(matches, '', true); return; }
               }
             }
-          }
+          } catch (e) { console.warn('scan-match request failed:', e); }
           setScanStatus('No confident image match. Falling back to text scan...');
         }
       }
 
       // 2. Process crop images using the oriented canvas
       // We pass the center points, dimensions, and current rotation to inverse-rotate the crop perfectly!
-      const nameDataUrl = nameCrop ? getProcessedDataUrl(orientedCanvas, nameCrop.cx, nameCrop.cy, nameCrop.w, nameCrop.h, guideRotation) : '';
+      const nameDataUrl = nameCrop ? getProcessedDataUrl(orientedCanvas, nameCrop.cx, nameCrop.cy, nameCrop.w, nameCrop.h, 0) : '';
       setDebugNameImg(nameDataUrl);
 
       let numLeftDataUrl = '';
       if (numLeftCrop) {
-        numLeftDataUrl = getProcessedDataUrl(orientedCanvas, numLeftCrop.cx, numLeftCrop.cy, numLeftCrop.w, numLeftCrop.h, guideRotation);
+        numLeftDataUrl = getProcessedDataUrl(orientedCanvas, numLeftCrop.cx, numLeftCrop.cy, numLeftCrop.w, numLeftCrop.h, 0);
         setDebugNumLeftImg(numLeftDataUrl);
       } else {
         setDebugNumLeftImg('');
@@ -714,7 +664,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
       let numRightDataUrl = '';
       if (numRightCrop) {
-        numRightDataUrl = getProcessedDataUrl(orientedCanvas, numRightCrop.cx, numRightCrop.cy, numRightCrop.w, numRightCrop.h, guideRotation);
+        numRightDataUrl = getProcessedDataUrl(orientedCanvas, numRightCrop.cx, numRightCrop.cy, numRightCrop.w, numRightCrop.h, 0);
         setDebugNumRightImg(numRightDataUrl);
       } else {
         setDebugNumRightImg('');
@@ -843,8 +793,10 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         // Scryfall); the card name is a fallback if the corner didn't read.
         params.append('game', 'mtg');
         const parsed = parseMtgSetNumber(`${numLeftRaw} ${numRightRaw}`);
-        // Use OCR-detected set, fall back to manual set code input.
-        const effectiveSet = parsed?.set || mtgSetCode;
+        // The user-declared set code is authoritative (they know which box they're
+        // feeding); only fall back to the flaky OCR-read set if none was given.
+        // This keeps the OCR fallback inside the chosen set, never cross-set.
+        const effectiveSet = mtgSetCode || parsed?.set;
         if (effectiveSet) params.append('set', effectiveSet);
         if (parsed?.number) params.append('number', parsed.number);
         else if (detectedNumber) params.append('number', detectedNumber);
@@ -994,14 +946,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div
             className="camera-preview-wrapper camera-active"
-            style={{
-              ...(videoRatio ? { aspectRatio: `${videoRatio}` } : {}),
-              touchAction: 'none'
-            }}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerUp}
+            style={videoRatio ? { aspectRatio: `${videoRatio}` } : undefined}
           >
             <video 
               ref={videoRef} 
@@ -1055,13 +1000,15 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   30%, 70% { border-color: var(--accent-red); box-shadow: 0 0 25px var(--accent-red-glow); }
                 }
               `}</style>
-              <div 
-                className="scan-card-guide" 
-                style={{ 
-                  aspectRatio: '2.5 / 3.5',
-                  width: (videoRatio && videoRatio > 1) ? 'auto' : `${guideScale * 100}%`,
-                  height: (videoRatio && videoRatio > 1) ? `${guideScale * 100}%` : 'auto',
-                  transform: `translate(${guideOffsetX}px, ${guideOffsetY}px) rotate(${guideRotation}deg)`,
+              {(() => { const r = DEFAULT_RECT; return (
+              <div
+                className="scan-card-guide"
+                style={{
+                  position: 'absolute',
+                  left: `${r.x * 100}%`,
+                  top: `${r.y * 100}%`,
+                  width: `${r.w * 100}%`,
+                  height: `${r.h * 100}%`,
                   animation: scanFlash === 'success' ? 'border-flash-success 1.5s ease-in-out' : scanFlash === 'error' ? 'border-flash-error 1.5s ease-in-out' : 'none'
                 }}
               >
@@ -1103,6 +1050,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 
                 {loading && <div className="scan-line"></div>}
               </div>
+              ); })()}
             </div>
           </div>
 
@@ -1155,29 +1103,11 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 </div>
               </div>
 
-              {/* Overlay Fine-Tuning */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Overlay Scale</span>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-primary)' }}>{Math.round(guideScale * 100)}%</span>
-                </div>
-                <input type="range" min="40" max="100" step="5" value={guideScale * 100} onChange={(e) => setGuideScale(parseFloat(e.target.value) / 100)} style={{ width: '100%', cursor: 'pointer' }} />
-                
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.25rem' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Rotation Offset</span>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-primary)' }}>{guideRotation}°</span>
-                </div>
-                <input type="range" min="0" max="360" step="1" value={guideRotation} onChange={(e) => setGuideRotation(parseInt(e.target.value, 10))} style={{ width: '100%', cursor: 'pointer' }} />
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.25rem' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Location Offset (X / Y)</span>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-primary)' }}>{Math.round(guideOffsetX)}px, {Math.round(guideOffsetY)}px</span>
-                </div>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <input type="range" min="-300" max="300" step="1" value={guideOffsetX} onChange={(e) => setGuideOffsetX(parseInt(e.target.value, 10))} style={{ flex: 1, cursor: 'pointer' }} title="Horizontal Shift" />
-                  <input type="range" min="-300" max="300" step="1" value={guideOffsetY} onChange={(e) => setGuideOffsetY(parseInt(e.target.value, 10))} style={{ flex: 1, cursor: 'pointer' }} title="Vertical Shift" />
-                </div>
-                <button type="button" className="btn btn-secondary" style={{ fontSize: '0.65rem', padding: '0.2rem', marginTop: '0.25rem' }} onClick={() => { setGuideScale(0.70); setGuideRotation(0); setGuideOffsetX(0); setGuideOffsetY(0); }}>Reset Overlay</button>
+              {/* Framing note: center the card in the box; the scanner sweeps crop
+                  scales at capture, so exact size/position isn't required. */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Card Framing</span>
+                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)' }}>Auto (center the card)</span>
               </div>
 
               {/* Focus Control */}
@@ -1269,8 +1199,14 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                    <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', margin: 0, textAlign: 'center' }}>
-                      Aim the guide box at the bottom-left set code + collector number.
+                    <p style={{ fontSize: '0.7rem', color: !mtgSetCode ? 'var(--accent-yellow)' : setPrep === 'ready' ? 'var(--type-grass)' : 'var(--text-secondary)', margin: 0, textAlign: 'center', fontWeight: 600 }}>
+                      {!mtgSetCode
+                        ? 'Tip: set your box’s set code for accurate one-step scans of that set.'
+                        : setPrep === 'building'
+                          ? `Preparing set ${mtgSetCode}… (one-time, ~1 min). Scans work meanwhile.`
+                          : setPrep === 'ready'
+                            ? `Set ${mtgSetCode} ready: exact matches, no set to pick.`
+                            : `Set ${mtgSetCode}.`}
                     </p>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Set Code</label>
@@ -1279,7 +1215,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                         value={mtgSetCode}
                         onChange={(e) => setMtgSetCode(e.target.value)}
                         placeholder="e.g. FDN, ELD, M21"
-                        style={{ flex: 1, padding: '0.3rem 0.5rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', color: '#fff', textTransform: 'uppercase', letterSpacing: '0.05em' }}
+                        style={{ flex: 1, padding: '0.3rem 0.5rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.06)', border: `1px solid ${mtgSetCode ? 'var(--type-grass)' : 'var(--border-glass)'}`, borderRadius: 'var(--radius-sm)', color: '#fff', textTransform: 'uppercase', letterSpacing: '0.05em' }}
                       />
                       {mtgSetCode && (
                         <button type="button" className="btn btn-secondary" style={{ fontSize: '0.6rem', padding: '0.2rem 0.4rem' }} onClick={() => setMtgSetCode('')}>Clear</button>
@@ -1293,8 +1229,39 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
           {/* OCR Crop Results — only render when we actually have crop feeds,
               so an empty dashed box doesn't eat vertical space on phone. */}
-          {cameraActive && (debugNameImg || debugNumLeftImg || debugNumRightImg) && (
+          {cameraActive && (debugHashImg || debugCandidates.length > 0 || debugNameImg || debugNumLeftImg || debugNumRightImg) && (
             <div className="glass-panel" style={{ width: '100%', padding: '0.75rem 1rem', background: 'rgba(0,0,0,0.3)', border: '1px dashed var(--border-glass-hover)', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.25rem' }}>
+              {/* Hash-match diagnostics: what was cropped + the ranked candidates. */}
+              {(debugHashImg || debugCandidates.length > 0) && (
+                <div style={{ display: 'flex', gap: '0.75rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginTop: '0.25rem' }}>
+                  {debugHashImg && (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem', flexShrink: 0 }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Hashed Crop</span>
+                      <img src={debugHashImg} style={{ width: '52px', maxHeight: '80px', objectFit: 'contain', background: '#111', borderRadius: '3px', border: '1px solid var(--border-glass-hover)' }} alt="Hashed crop" />
+                    </div>
+                  )}
+                  <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                    {debugScoped !== null && (
+                      <span style={{ fontSize: '0.65rem', fontWeight: 700, color: debugScoped ? 'var(--type-grass)' : 'var(--accent-red)' }}>
+                        {debugScoped ? `✓ Set-scoped: ${debugScoped}` : '✗ GLOBAL search (not scoped to a set)'}
+                      </span>
+                    )}
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Top matches ({debugCandidates[0]?.verified ? 'ORB inliers' : 'similarity'}, higher = closer)</span>
+                    {debugCandidates.length === 0 ? (
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>No candidates.</span>
+                    ) : debugCandidates.map((cd, i) => {
+                      const pass = cd.verified ? cd.inliers >= SCAN_MATCH_MIN_INLIERS : cd.score >= SCAN_MATCH_MIN_SCORE;
+                      const label = cd.verified ? `${cd.inliers} inl` : (cd.score != null ? cd.score.toFixed(2) : '?');
+                      return (
+                        <div key={i} style={{ fontSize: '0.7rem', color: i === 0 ? '#fff' : 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <span style={{ color: pass ? 'var(--type-grass)' : 'var(--accent-red)', fontWeight: 700 }}>{label}</span>
+                          {' '}{cd.name} <span style={{ color: 'var(--text-muted)' }}>({cd.set} #{cd.number})</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {/* Show cropped OCR feeds for alignment debugging */}
               {(debugNameImg || debugNumLeftImg || debugNumRightImg) && (
                 <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginTop: '0.25rem' }}>

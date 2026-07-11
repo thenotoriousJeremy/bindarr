@@ -4,32 +4,9 @@ import { sortCardsByOrder } from '../utils/cardSort';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder } from '../utils/cardRarity';
 import CardInspectorModal from './CardInspectorModal';
-import CompartmentView, { getSortCategory } from './CompartmentView';
+import CompartmentView, { getPrimaryCategory } from './CompartmentView';
 import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
-
-const CONTAINER_TYPES = ['Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other'];
-
-// Mirrors defaultCompartmentPlan in backend/src/routes/collection.js — used to
-// prefill the creation form so the user sees (and can adjust) the container's
-// shape before it exists.
-const DEFAULT_COMPARTMENT_PLANS = {
-  'Binder': { count: 30, capacity: 9 },
-  'Toploader Binder': { count: 14, capacity: 4 },
-  'Box': { count: 3, capacity: 1000 },
-  'Toploader Box': { count: 1, capacity: 100 },
-  'Graded Slab Box': { count: 1, capacity: 40 },
-  'Display Shelf / Stand': { count: 1, capacity: 10 },
-  'Deck Box': { count: 1, capacity: 60 },
-  'Tin / Case': { count: 1, capacity: 200 },
-  'Other': { count: 1, capacity: 1000 }
-};
-
-// What a compartment is called for a given container type.
-function compartmentNoun(type, plural = true) {
-  const isBinder = type === 'Binder' || type === 'Toploader Binder';
-  const noun = isBinder ? 'Page' : 'Row';
-  return plural ? `${noun}s` : noun;
-}
+import CreateContainerModal from './CreateContainerModal';
 
 // Base sort schemes a container can use. 'set-number' has a foil-aware
 // sub-option (stored as the separate 'set-number-printing' scheme
@@ -68,14 +45,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
 
   const [showCreate, setShowCreate] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newType, setNewType] = useState('Binder');
-  const [newGame, setNewGame] = useState('any'); // 'any' | 'pokemon' | 'mtg'
-  const [newPlanCount, setNewPlanCount] = useState(DEFAULT_COMPARTMENT_PLANS['Binder'].count);
-  const [newPlanCapacity, setNewPlanCapacity] = useState(DEFAULT_COMPARTMENT_PLANS['Binder'].capacity);
 
   const [capacityUpdatePending, setCapacityUpdatePending] = useState(null);
   const [showKebabMenu, setShowKebabMenu] = useState(false);
+  const [showCategoryMap, setShowCategoryMap] = useState(false);
   const [showRulesModal, setShowRulesModal] = useState(false);
   const [ruleSetSearch, setRuleSetSearch] = useState('');
   const [sortDraft, setSortDraft] = useState([]);
@@ -86,6 +59,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   // Multi-select over cards inside the open container.
   const [storageSelectMode, setStorageSelectMode] = useState(false);
   const [storageSelectedIds, setStorageSelectedIds] = useState(() => new Set());
+
+  // Per-compartment filing-rule editor.
+  const [rulesComp, setRulesComp] = useState(null);
+  const [compRuleDraft, setCompRuleDraft] = useState([]);
 
   const [unsortedSearch, setUnsortedSearch] = useState('');
   const [unsortedSort, setUnsortedSort] = useState('scanned-desc');
@@ -288,7 +265,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const availableCategories = useMemo(() => {
     const cats = new Set();
     allCards.forEach(c => {
-      const cat = getSortCategory(c, selectedLoc?.sort_order, setsList);
+      const cat = getPrimaryCategory(c, selectedLoc?.sort_order, setsList);
       if (cat) cats.add(cat);
     });
     return Array.from(cats).sort();
@@ -341,27 +318,17 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     return map;
   }, [allCards, selectedLoc, setsList]);
 
-  const handleCreateLocation = async (e) => {
-    e.preventDefault();
-    if (!newName.trim()) return;
+  // Receives the full payload built by the create wizard.
+  const handleCreateLocation = async (payload) => {
     try {
       const res = await fetch('/api/locations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: newName.trim(),
-          type: newType,
-          game: newGame,
-          compartmentPlan: {
-            count: Math.max(1, parseInt(newPlanCount, 10) || 1),
-            capacity: Math.max(1, parseInt(newPlanCapacity, 10) || 1)
-          }
-        })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (res.ok) {
         showToast('Storage container created!');
-        setNewName('');
         setShowCreate(false);
         await fetchLocations();
         setActiveLocationId(data.id);
@@ -453,13 +420,26 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     } catch (err) { console.error(err); showToast('Error resizing compartment.'); }
   };
 
-  const handleToggleCompartmentFilter = async (compartment, filterVal) => {
-    const current = compartment.assignedFilters || [];
-    const next = current.includes(filterVal) ? current.filter(s => s !== filterVal) : [...current, filterVal];
+  // Files one sorting category to exactly one page: add it to the target page
+  // and strip it from any other page that had it. Empty target = unassign.
+  const handleAssignCategoryToPage = async (filterVal, compartmentId) => {
+    const updates = [];
+    for (const c of compartments) {
+      const has = (c.assignedFilters || []).includes(filterVal);
+      if (compartmentId && String(c.id) === String(compartmentId)) {
+        if (!has) updates.push({ id: c.id, filters: [...(c.assignedFilters || []), filterVal] });
+      } else if (has) {
+        updates.push({ id: c.id, filters: (c.assignedFilters || []).filter(f => f !== filterVal) });
+      }
+    }
+    if (!updates.length) return;
     try {
-      await fetch(`/api/compartments/${compartment.id}/filters`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filters: next }) });
+      await Promise.all(updates.map(u => fetch(`/api/compartments/${u.id}/filters`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filters: u.filters })
+      })));
+      showToast('Category assignment updated.');
       await fetchCompartments(activeLocationId);
-    } catch (err) { console.error(err); showToast('Error updating filter assignment.'); }
+    } catch (err) { console.error(err); showToast('Error assigning category.'); }
   };
 
   const handleAutoAssignCategories = async () => {
@@ -547,6 +527,36 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       if (res.ok) { showToast(data.message || 'Done.'); exitStorageSelect(); await refreshAll(); onUpdate(); }
       else showToast(data.error || 'Bulk action failed.');
     } catch (err) { console.error(err); showToast('Error performing bulk action.'); }
+  };
+
+  const openCompartmentRules = (comp) => {
+    let draft = [];
+    const cfg = comp.rule_config;
+    if (cfg) {
+      try {
+        const p = typeof cfg === 'string' ? JSON.parse(cfg) : cfg;
+        draft = Array.isArray(p) ? p : (p.rules || []);
+      } catch (e) { draft = []; }
+    }
+    setCompRuleDraft(draft);
+    setRulesComp(comp);
+  };
+
+  const saveCompartmentRules = async () => {
+    if (!rulesComp) return;
+    try {
+      const res = await fetch(`/api/compartments/${rulesComp.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rule_config: compRuleDraft.length > 0 ? { rules: compRuleDraft } : null })
+      });
+      if (res.ok) {
+        showToast('Row rules updated.');
+        setRulesComp(null);
+        await refreshAll();
+      } else {
+        showToast('Failed to update row rules.');
+      }
+    } catch (err) { console.error(err); showToast('Error updating row rules.'); }
   };
 
   const handleFileCard = async (entryId, locationId) => {
@@ -669,6 +679,31 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   return (
     <div className="storage-workspace-grid">
+      {showCreate && (
+        <CreateContainerModal
+          onClose={() => setShowCreate(false)}
+          onCreate={handleCreateLocation}
+          setsList={setsList}
+          filterFieldOptions={filterFieldOptions}
+        />
+      )}
+
+      {rulesComp && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }} onClick={() => setRulesComp(null)}>
+          <div className="glass-panel" style={{ width: '480px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ margin: 0 }}>{rulesComp.display_label}: Accepts</h3>
+            <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0 }}>
+              Rules controlling which cards may be filed into this {isBinderType ? 'page' : 'row'}. No rules = accepts anything the container allows.
+            </p>
+            <FilterBuilder value={compRuleDraft} onChange={setCompRuleDraft} setsList={setsList} fieldOptions={filterFieldOptions} />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+              <button className="btn btn-secondary" onClick={() => setRulesComp(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveCompartmentRules}>Save Rules</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {capacityUpdatePending && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div className="glass-panel" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -838,55 +873,47 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           </div>
         )}
 
-        {showCreate && (
-          <form onSubmit={handleCreateLocation} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-              <input className="input-control" placeholder="Name" value={newName} onChange={(e) => setNewName(e.target.value)} style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem', flex: 1, minWidth: '110px' }} />
-              <select
-                className="select-control" value={newType}
-                onChange={(e) => {
-                  const t = e.target.value;
-                  setNewType(t);
-                  const plan = DEFAULT_COMPARTMENT_PLANS[t] || DEFAULT_COMPARTMENT_PLANS['Other'];
-                  setNewPlanCount(plan.count);
-                  setNewPlanCapacity(plan.capacity);
-                }}
-                style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
-              >
-                {CONTAINER_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <select
-                className="select-control" value={newGame}
-                onChange={(e) => setNewGame(e.target.value)}
-                title="Restrict which game's cards this container accepts"
-                style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
-              >
-                <option value="any">Any game</option>
-                <option value="pokemon">Pokémon only</option>
-                <option value="mtg">MTG only</option>
-              </select>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                {compartmentNoun(newType)}:
-                <input type="number" min="1" className="input-control" value={newPlanCount} onChange={(e) => setNewPlanCount(e.target.value)} style={{ width: '55px', fontSize: '0.75rem', padding: '0.2rem 0.3rem' }} />
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                Cards per {compartmentNoun(newType, false).toLowerCase()}:
-                <input type="number" min="1" className="input-control" value={newPlanCapacity} onChange={(e) => setNewPlanCapacity(e.target.value)} style={{ width: '60px', fontSize: '0.75rem', padding: '0.2rem 0.3rem' }} />
-              </label>
-              <span style={{ marginLeft: 'auto', display: 'flex', gap: '0.4rem' }}>
-                <button type="submit" className="btn btn-primary" style={{ fontSize: '0.75rem', padding: '0.35rem' }}>Create</button>
-                <button type="button" className="btn btn-secondary" onClick={() => setShowCreate(false)} style={{ fontSize: '0.75rem', padding: '0.35rem' }}>Cancel</button>
-              </span>
-            </div>
-          </form>
-        )}
-
         {!selectedLoc ? (
           <p style={{ color: 'var(--text-secondary)' }}>Select a container to view its compartments.</p>
         ) : (
           <>
+            {isBinderType && compartments.length > 0 && availableCategories.length > 0 && (
+              <div style={{ background: 'rgba(0,0,0,0.1)', padding: '0.4rem 0.6rem', borderRadius: 'var(--radius-sm)' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowCategoryMap(s => !s)}
+                  style={{ fontSize: '0.72rem', padding: '0.25rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                >
+                  <LayoutList size={13} /> Category to Page map {showCategoryMap ? '▾' : '▸'}
+                </button>
+                {showCategoryMap && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginTop: '0.5rem' }}>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                      Pick which page each sorting category files onto. Unset pages accept any category.
+                    </span>
+                    {availableCategories.map(cat => {
+                      const owner = compartments.find(c => (c.assignedFilters || []).includes(cat));
+                      return (
+                        <div key={cat} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ fontSize: '0.72rem', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cat}</span>
+                          <select
+                            className="select-control"
+                            value={owner ? owner.id : ''}
+                            onChange={(e) => handleAssignCategoryToPage(cat, e.target.value)}
+                            style={{ fontSize: '0.7rem', padding: '0.15rem 0.3rem', width: '140px' }}
+                          >
+                            <option value="">Any page</option>
+                            {compartments.map(c => <option key={c.id} value={c.id}>{c.display_label}</option>)}
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             {isBinderType && compartments.length > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem', margin: '0.2rem 0', background: 'rgba(0,0,0,0.1)', padding: '0.4rem', borderRadius: 'var(--radius-sm)' }}>
                 <button
@@ -927,13 +954,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   compartment: c,
                   cards: cardsByCompartment.get(c.id) || [],
                   sortOrder: selectedLoc.sort_order,
-                  availableFilters: availableCategories, setsList,
+                  setsList,
                   canRemove: idx === compartments.length - 1 && compartments.length > 1 && (cardsByCompartment.get(c.id) || []).length === 0,
                   moveTargets: compartments,
                   onRename: (label) => handleRenameCompartment(c.id, label),
                   onSetCapacity: (cap) => handleSetCapacity(c.id, cap),
-                  onToggleFilter: (filterVal) => handleToggleCompartmentFilter(c, filterVal),
                   onRemove: () => handleRemoveCompartment(c.id),
+                  onCardClick: setInspectorCard,
                   onDeleteCard: handleDeleteCard,
                   onMoveCard: handleMoveCard,
                   recommendedSpot: currentRecSpot && currentRecSpot.compartment_id === c.id ? {
@@ -946,7 +973,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   selectMode: storageSelectMode,
                   selectedIds: storageSelectedIds,
                   onCardLongPress: armStorageSelect,
-                  onCardToggle: toggleStorageSelect
+                  onCardToggle: toggleStorageSelect,
+                  onEditRules: openCompartmentRules
                 });
 
                 if (isMobile) {
@@ -1039,6 +1067,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       selectedIds={storageSelectedIds}
                       onCardLongPress={armStorageSelect}
                       onCardToggle={toggleStorageSelect}
+                      onEditRules={openCompartmentRules}
                     />
                   </div>
                 );

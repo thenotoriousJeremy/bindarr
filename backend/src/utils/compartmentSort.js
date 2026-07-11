@@ -18,6 +18,63 @@ async function loadSetsCache(db) {
 
 
 
+// Evaluates compound include/exclude rules against a card. Returns true if the
+// card is allowed: every 'exclude' rule must miss and every 'include' rule hit.
+// Shared by container-level (locationAcceptsCard) and per-compartment rules.
+function evaluateCompoundRules(rules, cardMetadata) {
+  for (const rule of (rules || [])) {
+    let matches = false;
+    let cValue = cardMetadata[rule.field];
+    if (typeof cValue === 'string' && (cValue.startsWith('[') || cValue.startsWith('{'))) {
+      try { cValue = JSON.parse(cValue); } catch(e){}
+    }
+
+    // MTG stores card-type words (Land, Creature, Instant...) in `subtypes` (the
+    // whole type line is split into it) while `types` holds colors. The filter
+    // UI lists card types under the "types" field, so a "types = Land" rule must
+    // also see subtypes or it silently never matches a Mountain.
+    if (rule.field === 'types') {
+      let sub = cardMetadata.subtypes;
+      if (typeof sub === 'string') { try { sub = JSON.parse(sub); } catch { sub = []; } }
+      if (Array.isArray(sub) && sub.length) {
+        const base = Array.isArray(cValue) ? cValue : (cValue == null || cValue === '' ? [] : [cValue]);
+        cValue = [...base, ...sub];
+      }
+    }
+
+    if (rule.operator === 'equals') {
+      if (Array.isArray(cValue)) matches = cValue.some(v => String(v).toLowerCase() === String(rule.value).toLowerCase());
+      else matches = String(cValue).toLowerCase() === String(rule.value).toLowerCase();
+    } else if (rule.operator === 'contains') {
+      if (Array.isArray(cValue)) matches = cValue.some(v => String(v).toLowerCase().includes(String(rule.value).toLowerCase()));
+      else matches = String(cValue || '').toLowerCase().includes(String(rule.value).toLowerCase());
+    } else if (rule.operator === '>') {
+      matches = parseFloat(cValue) > parseFloat(rule.value);
+    } else if (rule.operator === '<') {
+      matches = parseFloat(cValue) < parseFloat(rule.value);
+    } else if (rule.operator === '>=') {
+      matches = parseFloat(cValue) >= parseFloat(rule.value);
+    } else if (rule.operator === '<=') {
+      matches = parseFloat(cValue) <= parseFloat(rule.value);
+    } else if (rule.operator === 'exists') {
+      matches = cValue != null && cValue !== '';
+    }
+
+    if (rule.action === 'exclude' && matches) return false;
+    if (rule.action === 'include' && !matches) return false;
+  }
+  return true;
+}
+
+// A compartment with its own rule_config only accepts cards satisfying those
+// rules. No rules → accepts anything (container + category logic still apply).
+function compartmentAcceptsCard(compartment, cardMetadata) {
+  const cfg = compartment && compartment.ruleConfig;
+  const rules = Array.isArray(cfg) ? cfg : ((cfg && cfg.rules) || []);
+  if (rules.length === 0) return true;
+  return evaluateCompoundRules(rules, cardMetadata);
+}
+
 function locationAcceptsCard(location, cardMetadata) {
   // Game restriction is orthogonal to the alphabetical/set rules below and
   // applies first: an MTG-only container never accepts a Pokémon card, etc.
@@ -32,35 +89,7 @@ function locationAcceptsCard(location, cardMetadata) {
     const config = location.rule_config ? (typeof location.rule_config === 'string' ? JSON.parse(location.rule_config) : location.rule_config) : {};
     if (location.rule_type === 'compound') {
       const rules = Array.isArray(config) ? config : (config.rules || []);
-      for (const rule of rules) {
-        let matches = false;
-        let cValue = cardMetadata[rule.field];
-        if (typeof cValue === 'string' && (cValue.startsWith('[') || cValue.startsWith('{'))) {
-          try { cValue = JSON.parse(cValue); } catch(e){}
-        }
-        
-        if (rule.operator === 'equals') {
-          if (Array.isArray(cValue)) matches = cValue.some(v => String(v).toLowerCase() === String(rule.value).toLowerCase());
-          else matches = String(cValue).toLowerCase() === String(rule.value).toLowerCase();
-        } else if (rule.operator === 'contains') {
-          if (Array.isArray(cValue)) matches = cValue.some(v => String(v).toLowerCase().includes(String(rule.value).toLowerCase()));
-          else matches = String(cValue || '').toLowerCase().includes(String(rule.value).toLowerCase());
-        } else if (rule.operator === '>') {
-          matches = parseFloat(cValue) > parseFloat(rule.value);
-        } else if (rule.operator === '<') {
-          matches = parseFloat(cValue) < parseFloat(rule.value);
-        } else if (rule.operator === '>=') {
-          matches = parseFloat(cValue) >= parseFloat(rule.value);
-        } else if (rule.operator === '<=') {
-          matches = parseFloat(cValue) <= parseFloat(rule.value);
-        } else if (rule.operator === 'exists') {
-          matches = cValue != null && cValue !== '';
-        }
-        
-        if (rule.action === 'exclude' && matches) return false;
-        if (rule.action === 'include' && !matches) return false;
-      }
-      return true;
+      return evaluateCompoundRules(rules, cardMetadata);
     }
   } catch (e) {
     console.error('Failed to parse location rule_config', e);
@@ -97,6 +126,23 @@ const PRINTING_ORDER_FOILS_FIRST = { 'Reverse Holofoil': 1, 'Holofoil': 2, 'Norm
 // home for non-Latin (e.g. Japanese) cards that an A-Z alphabetical range
 // can't place by first letter.
 const LANGUAGE_ORDER = { 'English': 1, 'Japanese': 2, 'German': 3, 'French': 4, 'Spanish': 5, 'Italian': 6 };
+
+// Scarcity rank for the 'rarity' sort: higher = rarer. Checked rarest-keyword
+// first ("Rare Secret" scores secret, not plain rare; "Uncommon" before
+// "Common"). Must stay aligned with RARITY_RANK in
+// frontend/src/utils/cardRarity.js so placement matches display order.
+const RARITY_RANK = [
+  ['classic collection', 16], ['hyper', 15], ['special illustration', 14],
+  ['illustration', 13], ['secret', 12], ['ultra', 11], ['radiant', 10],
+  ['amazing', 9], ['shiny', 8], ['double rare', 7], ['mythic', 6],
+  ['rare holo', 5], ['holo rare', 5], ['promo', 4], ['rare', 3],
+  ['uncommon', 2], ['common', 1],
+];
+function rarityRank(rarity) {
+  const r = (rarity || '').toLowerCase();
+  for (const [kw, rank] of RARITY_RANK) if (r.includes(kw)) return rank;
+  return 0;
+}
 
 function sortCards(cards, sortOrder, foilSorting) {
   let criteria = [];
@@ -175,7 +221,7 @@ function sortCards(cards, sortOrder, foilSorting) {
           break;
         }
         case 'rarity':
-          cmp = (a.rarity || '').localeCompare(b.rarity || '');
+          cmp = rarityRank(a.rarity) - rarityRank(b.rarity);
           break;
       }
       if (cmp !== 0) return cmp * dirMult;
@@ -245,7 +291,7 @@ function getSortCategory(card, sortOrder) {
 // queries scattered around.
 async function loadCompartments(db, locationId, userId) {
   const compartments = await db.all(
-    `SELECT id, idx, label, capacity FROM compartments WHERE location_id = ? ORDER BY idx ASC`,
+    `SELECT id, idx, label, capacity, rule_config FROM compartments WHERE location_id = ? ORDER BY idx ASC`,
     [locationId]
   );
   if (compartments.length === 0) return [];
@@ -269,9 +315,15 @@ async function loadCompartments(db, locationId, userId) {
   );
   const countByCompartment = new Map(countRows.map(r => [r.compartment_id, r.cnt]));
 
+  const parseCfg = (rc) => {
+    if (!rc) return null;
+    try { return typeof rc === 'string' ? JSON.parse(rc) : rc; } catch (e) { return null; }
+  };
+
   return compartments.map(c => ({
     ...c,
     assignedFilters: filtersByCompartment.get(c.id) || [],
+    ruleConfig: parseCfg(c.rule_config),
     count: countByCompartment.get(c.id) || 0,
     free: c.capacity - (countByCompartment.get(c.id) || 0)
   }));
@@ -386,6 +438,10 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
   });
 
   const validComps = compartments.filter(c => {
+    // Per-compartment filing rules are a hard gate: a row/page with its own
+    // rule_config never accepts a card those rules reject.
+    if (!compartmentAcceptsCard(c, cardMetadata)) return false;
+
     // If it has explicit filters, it MUST match
     if (c.assignedFilters && c.assignedFilters.length > 0) {
       return cardCat && c.assignedFilters.includes(cardCat);
@@ -450,8 +506,9 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
     // into any compartment WITHOUT an explicit filter mismatch rather than
     // reporting "full" while pockets sit empty. Explicit filters stay hard.
     pool = compartments.filter(c =>
-      !(c.assignedFilters && c.assignedFilters.length > 0) ||
-      (cardCat && c.assignedFilters.includes(cardCat))
+      compartmentAcceptsCard(c, cardMetadata) &&
+      (!(c.assignedFilters && c.assignedFilters.length > 0) ||
+      (cardCat && c.assignedFilters.includes(cardCat)))
     );
   }
 

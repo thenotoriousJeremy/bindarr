@@ -24,26 +24,29 @@ function SortableItem({ id, children }) {
       <div {...listeners} style={{ cursor: 'grab', display: 'flex', alignItems: 'center' }}>
         <GripVertical size={16} color="var(--text-muted)" />
       </div>
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
         {children}
       </div>
     </div>
   );
 }
 
+// label = dropdown name. asc/desc = what each direction actually does for that
+// field, so the user isn't guessing what "Asc" means (e.g. cheapest-first vs
+// A-Z vs common-first).
 const SORT_OPTIONS = [
-  { value: 'name', label: 'Alphabetical (Name)' },
-  { value: 'price', label: 'Price / Value' },
-  { value: 'set', label: 'Set' },
-  { value: 'number', label: 'Card Number' },
-  { value: 'printing', label: 'Foil / Printing' },
-  { value: 'type', label: 'Type' },
-  { value: 'color', label: 'Color Identity' },
-  { value: 'cmc', label: 'Mana Value (CMC)' },
-  { value: 'rarity', label: 'Rarity' },
-  { value: 'language', label: 'Language' },
-  { value: 'added_at', label: 'Date Added' },
-  { value: 'entry_id', label: 'Entry Order' }
+  { value: 'name', label: 'Alphabetical (Name)', asc: 'A → Z', desc: 'Z → A' },
+  { value: 'price', label: 'Price / Value', asc: 'Cheapest first', desc: 'Priciest first' },
+  { value: 'set', label: 'Set', asc: 'Oldest set first', desc: 'Newest set first' },
+  { value: 'number', label: 'Card Number', asc: 'Low → high', desc: 'High → low' },
+  { value: 'printing', label: 'Foil / Printing', asc: 'Non-foil first', desc: 'Foil first' },
+  { value: 'type', label: 'Type', asc: 'Standard order', desc: 'Reversed' },
+  { value: 'color', label: 'Color Identity', asc: 'W → U → B → R → G', desc: 'G → R → B → U → W' },
+  { value: 'cmc', label: 'Mana Value (CMC)', asc: 'Low → high', desc: 'High → low' },
+  { value: 'rarity', label: 'Rarity', asc: 'Common first', desc: 'Rarest first' },
+  { value: 'language', label: 'Language', asc: 'English first', desc: 'English last' },
+  { value: 'added_at', label: 'Date Added', asc: 'Oldest first', desc: 'Newest first' },
+  { value: 'entry_id', label: 'Entry Order', asc: 'Oldest first', desc: 'Newest first' }
 ];
 
 export function SortBuilder({ value, onChange }) {
@@ -64,7 +67,7 @@ export function SortBuilder({ value, onChange }) {
   };
 
   const addCriteria = () => {
-    onChange([...items, { id: Date.now().toString(), by: 'name', dir: 'asc', divider: true }]);
+    onChange([...items, { id: Date.now().toString(), by: 'name', dir: 'asc', divider: false }]);
   };
 
   const updateCriteria = (id, updates) => {
@@ -75,13 +78,35 @@ export function SortBuilder({ value, onChange }) {
     onChange(items.filter(i => i.id !== id));
   };
 
+  // Legacy rules with no flag at all default to the primary (first) rule so old containers still
+  // show their dividers. Toggling a rule's checkbox now allows multiple dividers.
+  const anyExplicit = items.some(i => i.divider === true || i.divider === false);
+  const isDividerOn = (item, idx) => item.divider === true || (!anyExplicit && idx === 0);
+  
+  const toggleDivider = (id, idx) => {
+    const nextState = !isDividerOn(items[idx], idx);
+    onChange(items.map((i, iIdx) => {
+      if (i.id === id) {
+        return { ...i, divider: nextState, dividerColor: i.dividerColor || '#ff4747' };
+      }
+      if (!anyExplicit) {
+        return { ...i, divider: iIdx === 0 && iIdx !== idx };
+      }
+      return i;
+    }));
+  };
+
+  const updateDividerColor = (id, color) => {
+    onChange(items.map(i => i.id === id ? { ...i, dividerColor: color } : i));
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
       <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Sort Priority List</label>
-      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Top rule applies first, falling back to subsequent rules on ties.</span>
+      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Top rule applies first, falling back to subsequent rules on ties. Check Divider to group items by this field.</span>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={items.map(i => i.id)} strategy={verticalListSortingStrategy}>
-          {items.map((item) => (
+          {items.map((item, idx) => (
             <SortableItem key={item.id} id={item.id}>
               <select
                 className="select-control"
@@ -91,27 +116,41 @@ export function SortBuilder({ value, onChange }) {
               >
                 {SORT_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
               </select>
-              <select
-                className="select-control"
-                style={{ width: '80px', padding: '0.2rem' }}
-                value={item.dir}
-                onChange={(e) => updateCriteria(item.id, { dir: e.target.value })}
-              >
-                <option value="asc">Asc</option>
-                <option value="desc">Desc</option>
-              </select>
+              {(() => {
+                const opt = SORT_OPTIONS.find(o => o.value === item.by) || {};
+                return (
+                  <select
+                    className="select-control"
+                    style={{ width: '130px', padding: '0.2rem' }}
+                    value={item.dir}
+                    onChange={(e) => updateCriteria(item.id, { dir: e.target.value })}
+                  >
+                    <option value="asc">{opt.asc || 'Asc'}</option>
+                    <option value="desc">{opt.desc || 'Desc'}</option>
+                  </select>
+                );
+              })()}
               <label
-                title="Show a labeled divider between groups for this rule"
+                title="Divide the groups on this field."
                 style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', cursor: 'pointer' }}
               >
                 <input
                   type="checkbox"
-                  checked={item.divider !== false}
-                  onChange={(e) => updateCriteria(item.id, { divider: e.target.checked })}
+                  checked={isDividerOn(item, idx)}
+                  onChange={() => toggleDivider(item.id, idx)}
                   style={{ width: '14px', height: '14px', cursor: 'pointer' }}
                 />
                 Divider
               </label>
+              {isDividerOn(item, idx) && (
+                <input 
+                  type="color" 
+                  value={item.dividerColor || '#ff4747'}
+                  onChange={(e) => updateDividerColor(item.id, e.target.value)}
+                  title="Divider Color"
+                  style={{ width: '24px', height: '24px', padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
+                />
+              )}
               <button
                 type="button"
                 className="btn btn-secondary"

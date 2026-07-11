@@ -10,6 +10,39 @@ export function getRarityTier(rarity) {
   return 'common';
 }
 
+// Scarcity rank for sorting: higher = rarer. Checked rarest-keyword first so
+// "Rare Secret" scores as secret, not plain rare, and "Uncommon" before
+// "Common" (it contains the substring). Unknown rarities score 0 (before
+// Common on ascending). Must stay aligned with RARITY_RANK in
+// backend/src/utils/compartmentSort.js so display order matches placement.
+const RARITY_RANK = [
+  { kw: 'classic collection', rank: 16 },
+  { kw: 'hyper', rank: 15 },
+  { kw: 'special illustration', rank: 14 },
+  { kw: 'illustration', rank: 13 },
+  { kw: 'secret', rank: 12 },
+  { kw: 'ultra', rank: 11 },
+  { kw: 'radiant', rank: 10 },
+  { kw: 'amazing', rank: 9 },
+  { kw: 'shiny', rank: 8 },
+  { kw: 'double rare', rank: 7 },
+  { kw: 'mythic', rank: 6 },
+  { kw: 'rare holo', rank: 5 },
+  { kw: 'holo rare', rank: 5 },
+  { kw: 'promo', rank: 4 },
+  { kw: 'rare', rank: 3 },
+  { kw: 'uncommon', rank: 2 },
+  { kw: 'common', rank: 1 },
+];
+
+export function getRarityRank(rarity) {
+  const r = (rarity || '').toLowerCase();
+  for (const { kw, rank } of RARITY_RANK) {
+    if (r.includes(kw)) return rank;
+  }
+  return 0;
+}
+
 export function getCardRarityBorder(rarity) {
   switch (getRarityTier(rarity)) {
     case 'top':
