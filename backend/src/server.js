@@ -57,9 +57,11 @@ app.use(helmet({
   }
 }));
 
-// Restrict cross-origin access to known frontend origins. Explicit CORS_ORIGIN
-// wins for production. Without it (dev / self-hosted), allow localhost plus
-// private-LAN origins on any port: the Vite dev server runs with host:true +
+// Restrict cross-origin access to known frontend origins. Localhost + private-
+// LAN origins are ALWAYS allowed (see PRIVATE_ORIGIN below); CORS_ORIGIN adds
+// public origins on top (e.g. a reverse-proxy domain) rather than replacing the
+// LAN allowance, so a self-hosted instance behind a proxy stays reachable both
+// ways without listing the LAN IP. The Vite dev server runs with host:true +
 // HTTPS so the mobile scanner can reach it over the LAN, which makes the
 // browser send an Origin like https://192.168.1.20:5173 on writes (PUT/POST/
 // DELETE) — GETs are same-origin and send none, which is why only writes were
@@ -76,8 +78,8 @@ const PRIVATE_ORIGIN = /^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.
 
 function isAllowedOrigin(origin) {
   if (!origin) return true; // same-origin / non-browser client
-  if (explicitOrigins.length > 0) return explicitOrigins.includes(origin);
-  return PRIVATE_ORIGIN.test(origin);
+  if (PRIVATE_ORIGIN.test(origin)) return true; // localhost + private LAN, always
+  return explicitOrigins.includes(origin);
 }
 
 app.use(cors({
