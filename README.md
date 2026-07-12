@@ -1,6 +1,36 @@
-# CardDexrr 🎴
+<div align="center">
 
-CardDexrr is a self-hostable, mobile-friendly full-stack web application for **Pokémon** and **Magic: The Gathering** card collectors. It allows you to identify your physical cards using your phone's camera, track real-time market valuations, organize card placements in physical binders and boxes, view rich analytics, and export your database for external trackers.
+# Bindarr 🎴
+
+**Scan, value, organize, and locate your Pokémon & Magic: The Gathering cards — self-hosted.**
+
+Identify physical cards with your phone's camera, track real-time market valuations, map every card to its binder/box slot, view rich analytics, and export your database for external trackers.
+
+[![CI](https://img.shields.io/github/actions/workflow/status/thenotoriousJeremy/pokedexrr/docker-build.yml?branch=main&label=CI&logo=github)](https://github.com/thenotoriousJeremy/pokedexrr/actions/workflows/docker-build.yml)
+[![Docker image](https://img.shields.io/badge/ghcr.io-pokedexrr-2496ED?logo=docker&logoColor=white)](https://github.com/thenotoriousJeremy/pokedexrr/pkgs/container/pokedexrr)
+[![License: MIT](https://img.shields.io/github/license/thenotoriousJeremy/pokedexrr?color=blue)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/thenotoriousJeremy/pokedexrr?style=flat&logo=github)](https://github.com/thenotoriousJeremy/pokedexrr/stargazers)
+[![Issues](https://img.shields.io/github/issues/thenotoriousJeremy/pokedexrr)](https://github.com/thenotoriousJeremy/pokedexrr/issues)
+[![Last commit](https://img.shields.io/github/last-commit/thenotoriousJeremy/pokedexrr)](https://github.com/thenotoriousJeremy/pokedexrr/commits/main)
+
+[Quick Start](#-quick-start-development) · [Run with Docker](#-docker-deployment-production) · [Features](#-features) · [How Scanning Works](#-card-scanning--match-data) · [Report a Bug](https://github.com/thenotoriousJeremy/pokedexrr/issues/new)
+
+</div>
+
+---
+
+## 📖 Table of Contents
+
+- [✨ Features](#-features)
+- [🛠️ Tech Stack](#-tech-stack)
+- [🐳 Run with Docker (fastest)](#-docker-deployment-production)
+- [🚀 Quick Start (Development)](#-quick-start-development)
+- [🔑 First-Time Sign In](#-first-time-sign-in)
+- [🎮 Deck Checkout & Check-In](#-deck-checkout--check-in)
+- [🔍 Card Scanning & Match Data](#-card-scanning--match-data)
+- [💾 Backup, Restore & Recovery](#-backup-restore--recovery)
+- [📂 Project Structure](#-project-structure)
+- [📄 License](#-license)
 
 ---
 
@@ -72,7 +102,7 @@ If you prefer not to use self-signed HTTPS in development:
 
 ## 🔑 First-Time Sign In
 
-On its **first startup**, CardDexrr creates a default administrator account and prints the credentials to the server console (the terminal running `npm run dev` / `npm start`, or `docker-compose logs`).
+On its **first startup**, Bindarr creates a default administrator account and prints the credentials to the server console (the terminal running `npm run dev` / `npm start`, or `docker-compose logs`).
 
 Look for these lines in the startup logs:
 ```text
@@ -117,21 +147,57 @@ While a deck is checked out, its cards show **greyed with an "In Play" badge** i
 
 ## 🐳 Docker Deployment (Production)
 
-CardDexrr is packaged as a single-container multi-stage Docker build, serving the compiled frontend directly from the Node server.
+Bindarr ships as a single container (multi-stage build, serves the compiled frontend from the Node server) published to GitHub Container Registry. **No clone or build needed** — copy the compose file below and run.
 
-### Run with Docker Compose
-1. Ensure Docker is running.
-2. Run the following command in the root folder:
-   ```bash
-   docker-compose up -d
+### Run with the prebuilt image (copy-paste)
+
+1. Create a `docker-compose.yml`:
+   ```yaml
+   services:
+     bindarr:
+       image: ghcr.io/thenotoriousjeremy/pokedexrr:latest
+       container_name: bindarr
+       restart: unless-stopped
+       ports:
+         - "3001:3001"
+       environment:
+         - PORT=3001
+         - DB_PATH=/app/database/pokemon_cards.db
+         # Set to your real domain in production (used for CORS + share links)
+         - CORS_ORIGIN=http://localhost:3001
+         # --- Optional ---
+         - POKEMON_TCG_API_KEY=        # free key from pokemontcg.io raises rate limits
+         - PUBLIC_BASE_URL=            # external URL for share links behind a proxy, e.g. https://cards.example.com
+         - DEFAULT_ADMIN_PASSWORD=     # pin the initial admin password (else it's auto-generated in the logs)
+         - ALLOW_REGISTRATION=         # "true" to allow open self-registration; default is invite-only
+         - TRUST_PROXY=                # "1" when behind a TLS-terminating reverse proxy
+       volumes:
+         - bindarr-data:/app/database
+
+   volumes:
+     bindarr-data:
+       driver: local
    ```
-3. Open `http://localhost:3001` in your browser. All database files are persisted in the `carddexrr-data` Docker volume.
+
+2. Start it:
+   ```bash
+   docker compose up -d
+   ```
+
+3. Open `http://localhost:3001`. Grab the auto-generated admin password from the logs (`docker compose logs | grep password`) — see [First-Time Sign In](#-first-time-sign-in). All data persists in the `bindarr-data` volume.
+
+> [!TIP]
+> Update to the newest image any time with `docker compose pull && docker compose up -d`. Your data in the volume is untouched.
+
+### Building from source instead
+
+Prefer to build locally? Clone the repo — its [`docker-compose.yml`](docker-compose.yml) uses `build:` instead of `image:` — then run `docker compose up -d`.
 
 ### Environment variables (`.env`)
-You can configure CardDexrr by passing these environment variables in your container configuration:
+You can configure Bindarr by passing these environment variables in your container configuration:
 - `PORT` (Default: `3001`) - The port the server runs on.
 - `DB_PATH` (Default: `/app/database/pokemon_cards.db`) - Location of the SQLite database.
-- `POKEMON_TCG_API_KEY` (Optional) - Your API key from [pokemontcg.io](https://pokemontcg.io). While CardDexrr works without one, adding a free key increases TCG API rate limits (from 20k to 50k requests/day).
+- `POKEMON_TCG_API_KEY` (Optional) - Your API key from [pokemontcg.io](https://pokemontcg.io). While Bindarr works without one, adding a free key increases TCG API rate limits (from 20k to 50k requests/day).
 - `DEFAULT_ADMIN_PASSWORD` (Optional) - Sets a known password for the auto-created `admin` account on first startup. If unset, a random password is generated and printed once to the server logs (see [First-Time Sign In](#-first-time-sign-in)).
 - `CORS_ORIGIN` (Optional) - Comma-separated list of origins allowed to call the API. Defaults to the Vite dev server + same-origin. Set to your real domain when deploying.
 - `ALLOW_REGISTRATION` (Optional) - Set to `true` to allow open self-registration from the login screen. Default (unset) is **invite-only**: only an admin creates accounts via the Admin panel, and the Sign Up option is hidden.
@@ -181,8 +247,8 @@ These download every card image and are **heavy**: several hours of CPU + downlo
 
 ## 💾 Backup, Restore & Recovery
 
-**Backup.** All state lives in the single SQLite file (the `carddexrr-data` volume in Docker, or `DB_PATH` locally). Two options:
-- **File-level:** copy the DB file while the container is stopped, e.g. `docker run --rm -v carddexrr-data:/data -v "$PWD":/backup alpine cp /data/pokemon_cards.db /backup/`. (The app runs in WAL mode; stop the container first so the `-wal`/`-shm` files are checkpointed.)
+**Backup.** All state lives in the single SQLite file (the `bindarr-data` volume in Docker, or `DB_PATH` locally). Two options:
+- **File-level:** copy the DB file while the container is stopped, e.g. `docker run --rm -v bindarr-data:/data -v "$PWD":/backup alpine cp /data/pokemon_cards.db /backup/`. (The app runs in WAL mode; stop the container first so the `-wal`/`-shm` files are checkpointed.)
 - **Per-user data:** each user can also export their own collection from the app as CSV or JSON (Collection → Export). This is portable to other trackers but does not include other users or app settings.
 
 **Restore.** Stop the container, drop the backed-up `pokemon_cards.db` into the volume, start again. Or use the in-app Import (CSV/JSON) to restore a single user's collection.
@@ -194,7 +260,7 @@ These download every card image and are **heavy**: several hours of CPU + downlo
 ## 📂 Project Structure
 
 ```text
-/carddexrr
+/bindarr
   ├── backend/
   │     ├── src/
   │     │     ├── db.js              # SQLite schema, migrations & DB connection
