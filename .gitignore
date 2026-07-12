@@ -50,11 +50,16 @@ patch*.py
 .DS_Store
 
 # AI/Agent directories
+.agents/
 .claude/
 .codegraph/
 .gemini/
 .cursor/
 .aider/
+
+# Agent-workflow scratch docs (regenerated per run; not shipped)
+TEST_INFRA.md
+TEST_READY.md
 
 # Prebuilt scan-match data (embeddings, ORB indexes, per-set caches) — large, regenerable
 backend/data/
