@@ -186,10 +186,11 @@ router.post('/scan-match', searchLimiter, async (req, res) => {
 router.post('/prepare-set', searchLimiter, async (req, res) => {
   try {
     const { game = 'mtg', set } = req.body || {};
-    if (game !== 'mtg' || !set) return res.json({ ready: false, supported: game === 'mtg' });
-    if (setIndex.isReady('mtg', set)) return res.json({ ready: true });
+    const supported = game === 'mtg' || game === 'pokemon';
+    if (!supported || !set) return res.json({ ready: false, supported });
+    if (setIndex.isReady(game, set)) return res.json({ ready: true });
     // Kick the build without blocking the request; client polls.
-    setIndex.ensureSet('mtg', set).catch(() => {});
+    setIndex.ensureSet(game, set).catch(() => {});
     res.json({ ready: false, building: true });
   } catch (error) {
     console.error('prepare-set failed:', error.message);
@@ -1632,13 +1633,13 @@ router.get('/export', async (req, res) => {
 
     if (format.toLowerCase() === 'json') {
       res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', 'attachment; filename=carddexrr_collection.json');
+      res.setHeader('Content-Disposition', 'attachment; filename=bindarr_collection.json');
       return res.json(rows);
     }
 
     // Default to CSV
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename=carddexrr_collection.csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=bindarr_collection.csv');
 
     // Headers
     const headers = [

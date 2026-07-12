@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Camera, RefreshCw, AlertTriangle, X, Settings, Library, Zap, ZapOff } from 'lucide-react';
+import { Camera, RefreshCw, AlertTriangle, X, Library, Zap, ZapOff } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
@@ -29,14 +29,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [cameraActive, setCameraActive] = useState(false);
   const [hasCameraError, setHasCameraError] = useState(false);
   const [autoScan, setAutoScan] = useState(false);
-  const [bulkMode, setBulkMode] = useState(() => localStorage.getItem('scanner_auto_confirm') === '1');
-  const [showSettings, setShowSettings] = useState(false);
   const [videoRatio, setVideoRatio] = useState(null);
-  // Focus control
-  const [focusSupported, setFocusSupported] = useState(false);
-  const [focusMode, setFocusMode] = useState('continuous'); // 'continuous' | 'manual'
-  const [focusDistance, setFocusDistance] = useState(0);
-  const [focusRange, setFocusRange] = useState({ min: 0, max: 1, step: 0.1 });
   // Torch/Flashlight control
   const [isTorchOn, setIsTorchOn] = useState(false);
   const [cardLayout, setCardLayout] = useState(() => localStorage.getItem('default_game') === 'mtg' ? 'mtg' : 'modern');
@@ -45,8 +38,19 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   // Which game the current layout belongs to. 'mtg' is its own layout; every
   // other layout value is a Pokémon sub-layout.
   const scanGame = cardLayout === 'mtg' ? 'mtg' : 'pokemon';
-  const [mtgSetCode, setMtgSetCodeState] = useState(() => localStorage.getItem('scanner_mtg_set') || '');
-  const setMtgSetCode = (v) => { const upper = (v || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5); setMtgSetCodeState(upper); localStorage.setItem('scanner_mtg_set', upper); };
+  // Set code for set-scoped scanning (both games). Persisted per game so
+  // switching Pokémon<->MTG restores that game's remembered set.
+  const [scanSetCode, setScanSetCodeState] = useState('');
+  const setScanSetCode = (v) => { const val = v || ''; setScanSetCodeState(val); localStorage.setItem(`scanner_set_${scanGame}`, val); };
+  const [setList, setSetList] = useState([]);        // {id,name,...} for the active game
+  const [setSearchOpen, setSetSearchOpen] = useState(false);
+  // Code fed to the scanner: pokemontcg.io set id as-is; for MTG the bare
+  // Scryfall code (sets.id is stored prefixed as "mtg-<code>").
+  const setScanCode = (s) => scanGame === 'mtg' ? (s.ptcgo_code || (s.id || '').replace(/^mtg-/, '')) : s.id;
+  const setQuery = scanSetCode.trim().toLowerCase();
+  const setSuggestions = setQuery
+    ? setList.filter(s => [s.id, s.ptcgo_code, s.name].some(v => (v || '').toLowerCase().includes(setQuery))).slice(0, 8)
+    : [];
 
   const [debugHashImg, setDebugHashImg] = useState('');
   const [debugCandidates, setDebugCandidates] = useState([]);
@@ -92,17 +96,25 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     };
   }, []);
 
-  // When an MTG set code is set, build/verify that set's index on the server so
-  // scans match within just that set (~300 cards) — accurate and fast. Polls
-  // until the one-time build finishes.
+  // On game switch: restore that game's remembered set and load its set list
+  // (for the search autocomplete).
   useEffect(() => {
-    if (scanGame !== 'mtg' || !mtgSetCode) { setSetPrep('idle'); return; }
+    setScanSetCodeState(localStorage.getItem(`scanner_set_${scanGame}`) || '');
+    setSetSearchOpen(false);
+    fetch(`/api/sets?game=${scanGame}`).then(r => r.ok ? r.json() : []).then(setSetList).catch(() => setSetList([]));
+  }, [scanGame]);
+
+  // When a set code is set, build/verify that set's index on the server so scans
+  // match within just that set (~300 cards) — accurate and fast. Polls until the
+  // one-time build finishes.
+  useEffect(() => {
+    if (!scanSetCode) { setSetPrep('idle'); return; }
     let cancelled = false, timer;
     const poll = async () => {
       try {
         const r = await fetch('/api/prepare-set', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ game: 'mtg', set: mtgSetCode }),
+          body: JSON.stringify({ game: scanGame, set: scanSetCode }),
         });
         const d = await r.json();
         if (cancelled) return;
@@ -114,7 +126,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setSetPrep('building');
     poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [scanGame, mtgSetCode]);
+  }, [scanGame, scanSetCode]);
 
   const fetchLocations = async () => {
     try {
@@ -225,7 +237,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setDebugHashImg('');
     setDebugCandidates([]);
     setDebugScoped(null);
-    setShowSettings(false);
     setVideoRatio(null);
     try {
       const constraints = {
@@ -240,21 +251,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
       setStream(mediaStream);
       setCameraActive(true);
-
-      // Detect focus capabilities
-      try {
-        const track = mediaStream.getVideoTracks()[0];
-        if (track && typeof track.getCapabilities === 'function') {
-          const caps = track.getCapabilities();
-          if (caps.focusMode && caps.focusMode.includes('manual') && caps.focusDistance) {
-            setFocusSupported(true);
-            setFocusRange({ min: caps.focusDistance.min, max: caps.focusDistance.max, step: caps.focusDistance.step || 0.01 });
-            setFocusDistance(caps.focusDistance.max * 0.3); // sensible default for cards
-          }
-        }
-      } catch (e) {
-        console.warn('Focus detection failed:', e);
-      }
     } catch (err) {
       console.error('Error opening camera:', err);
       setHasCameraError(true);
@@ -277,7 +273,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setDebugHashImg('');
     setDebugCandidates([]);
     setDebugScoped(null);
-    setShowSettings(false);
     setVideoRatio(null);
   };
 
@@ -396,9 +391,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         setAutoAddTargetCard(matches[0]);
         setAutoAddCountdown(2);
         setScanMatches([]);
-      } else if (bulkMode) {
-        await autoAddCard(matches[0]);
-        setScanMatches([]); // Clear results so the auto-scan loop triggers again
       } else {
         stopCamera();
         openQuickAdd(matches[0]);
@@ -427,14 +419,10 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     const orientedCanvas = getOrientedVideoCanvas(video);
 
     try {
-      // Identify by perceptual hash of the whole card first (MTG + Pokémon). This
-      // sidesteps the flaky corner OCR (tiny set code / collector number over art).
       // Identify by image (server-side). Send the WHOLE oriented frame (downscaled)
       // so the server can auto-detect + deskew the card before matching — the guide
-      // box is just an aim hint. Japanese Pokémon isn't in the (English) DB, so it
-      // skips to OCR. Empty candidates (DB not built) => fall through to OCR.
-      const matchEligible = scanGame === 'mtg' || (scanGame === 'pokemon' && cardLayout !== 'japanese');
-      if (matchEligible) {
+      // box is just an aim hint.
+      {
         setScanStatus('Matching card image...');
         {
           // Downscale the frame for upload; server auto-crops the card. Keep it
@@ -450,25 +438,25 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
             const resp = await fetch('/api/scan-match', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ game: scanGame, image: imageData, set: scanGame === 'mtg' ? mtgSetCode : '' }),
+              body: JSON.stringify({ game: scanGame, image: imageData, set: scanSetCode }),
             });
             if (scanId !== currentScanId.current) return;
             if (resp.ok) {
               const { game: matchGame, verified, candidates, crop, scoped } = await resp.json();
-              console.log('Scan candidates:', matchGame, scoped ? `(set-scoped ${mtgSetCode})` : '(GLOBAL)', verified ? 'ORB' : 'CLIP', candidates);
+              console.log('Scan candidates:', matchGame, scoped ? `(set-scoped ${scanSetCode})` : '(GLOBAL)', verified ? 'ORB' : 'CLIP', candidates);
               if (crop) setDebugHashImg(crop); // show the server's auto-cropped card
-              setDebugScoped(scoped ? mtgSetCode : false);
+              setDebugScoped(scoped ? scanSetCode : false);
               setDebugCandidates((candidates || []).map(c => ({ ...c, verified })));
               const top = candidates && candidates[0];
               const confident = top && (verified ? top.inliers >= SCAN_MATCH_MIN_INLIERS : top.score >= SCAN_MATCH_MIN_SCORE);
               if (candidates && candidates.length > 0) {
                 if (confident) {
                   // Uses the DETECTED game (auto-detect may override the UI mode).
-                  const usedSet = matchGame === 'mtg' && mtgSetCode;
+                  const usedSet = matchGame === scanGame && scanSetCode;
                   const buildParams = (withSet) => {
                     const p = new URLSearchParams({ game: matchGame, prints: '1' });
                     if (top.name) p.append('name', top.name);
-                    if (withSet) p.append('set', mtgSetCode);
+                    if (withSet) p.append('set', scanSetCode);
                     return p;
                   };
                   let searchResponse = await fetch(`/api/search?${buildParams(usedSet).toString()}`);
@@ -535,11 +523,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     } else {
       setPrinting('Normal');
     }
-    if (cardLayout === 'japanese') {
-      setLanguage('Japanese');
-    } else {
-      setLanguage('English');
-    }
+    setLanguage('English');
     setIsDrawerOpen(true);
   };
 
@@ -713,220 +697,97 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   animation: scanFlash === 'success' ? 'border-flash-success 1.5s ease-in-out' : scanFlash === 'error' ? 'border-flash-error 1.5s ease-in-out' : 'none'
                 }}
               >
-                {/* Name Guide: shift lower and widen if trainer layout */}
+                {/* Name Guide */}
+                <div className="scan-region-title" />
+
+                {/* Left Number Guide. MTG puts the set code + collector number in
+                    the bottom-left corner, so its box sits low-left and is taller
+                    to catch its two lines. */}
                 <div
-                  className="scan-region-title"
-                  style={
-                    cardLayout === 'trainer' ? { top: '11%', height: '7%', width: '75%' } :
-                    cardLayout === 'vintage' ? { top: '8%', height: '6.5%' } :
-                    {}
-                  }
+                  className="scan-region-number-left"
+                  style={cardLayout === 'mtg' ? { left: '4%', bottom: '4%', width: '45%', height: '11%' } : {}}
                 />
 
-                {/* Left Number Guide: show for Modern, Trainer, Japanese, MTG. MTG
-                    puts the set code + collector number in the bottom-left corner,
-                    so the box sits low-left and is taller to catch its two lines. */}
-                {(cardLayout === 'modern' || cardLayout === 'trainer' || cardLayout === 'japanese' || cardLayout === 'mtg') && (
-                  <div
-                    className="scan-region-number-left"
-                    style={
-                      cardLayout === 'japanese' ? { left: '4%', bottom: '5%' } :
-                      cardLayout === 'mtg' ? { left: '4%', bottom: '4%', width: '45%', height: '11%' } :
-                      {}
-                    }
-                  />
-                )}
-                
-                {/* Right Number Guide: show for Vintage, Trainer, Japanese */}
-                {(cardLayout === 'vintage' || cardLayout === 'trainer' || cardLayout === 'japanese') && (
-                  <div 
-                    className="scan-region-number-right" 
-                    style={
-                      cardLayout === 'japanese' ? { right: '4%', bottom: '5%' } : 
-                      cardLayout === 'vintage' ? { right: '4%', width: '30%' } :
-                      {}
-                    }
-                  />
-                )}
-                
                 {loading && <div className="scan-line"></div>}
               </div>
               ); })()}
             </div>
           </div>
 
-          {/* Collapsible Settings Accordion (CardSlinger Configurations) */}
-          <button 
-            type="button" 
-            className="btn btn-secondary" 
-            style={{ width: '100%', padding: '0.45rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-glass)' }}
-            onClick={() => setShowSettings(!showSettings)}
-          >
-            <Settings size={14} /> {showSettings ? 'Hide Scanner Settings' : 'Configure Scanner Settings'}
-          </button>
+          {/* Scanner controls: game + set (needed for matching) and auto-capture. */}
+          <div className="glass-panel" style={{ width: '100%', padding: '1rem', background: 'rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '0.25rem' }}>
+            <div className="sub-nav-tabs" style={{ marginBottom: 0 }}>
+              {[['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([g, label]) => (
+                <button
+                  key={g}
+                  type="button"
+                  className={`sub-nav-tab ${scanGame === g ? 'active' : ''}`}
+                  style={{ padding: '0.5rem', fontSize: '0.8rem', fontWeight: 700 }}
+                  onClick={() => setCardLayout(g === 'mtg' ? 'mtg' : 'modern')}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
 
-          {showSettings && (
-            <div className="glass-panel" style={{ width: '100%', padding: '1rem', background: 'rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '-0.25rem', marginBottom: '0.25rem' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.25rem' }}>
-                Scanner Configurations
-              </div>
-              
-              {/* Toggles Row */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Auto-Capture</span>
-                  <button 
-                    type="button"
-                    className={`btn ${autoScan ? 'btn-primary' : 'btn-secondary'}`} 
-                    onClick={() => setAutoScan(!autoScan)}
-                    style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
-                  >
-                    {autoScan ? 'ON' : 'OFF'}
-                  </button>
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Bulk Auto-Add</span>
-                  <button 
-                    type="button"
-                    className={`btn ${bulkMode ? 'btn-primary' : 'btn-secondary'}`} 
-                    onClick={() => {
-                      setBulkMode(!bulkMode);
-                      if (!bulkMode) {
-                        setAutoScan(true);
-                        showToast('Bulk Mode enabled: Identified cards add automatically!');
-                      }
-                    }}
-                    style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
-                  >
-                    {bulkMode ? 'ON' : 'OFF'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Framing note: center the card in the box; the scanner sweeps crop
-                  scales at capture, so exact size/position isn't required. */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Card Framing</span>
-                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)' }}>Auto (center the card)</span>
-              </div>
-
-              {/* Focus Control */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Focus</span>
-                  {focusSupported ? (
-                    <button
-                      type="button"
-                      className={`btn ${focusMode === 'manual' ? 'btn-primary' : 'btn-secondary'}`}
-                      style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
-                      onClick={() => {
-                        const next = focusMode === 'continuous' ? 'manual' : 'continuous';
-                        setFocusMode(next);
-                        try {
-                          const track = stream?.getVideoTracks()[0];
-                          if (track) {
-                            if (next === 'manual') {
-                              updateAdvancedConstraints(track, { focusMode: 'manual', focusDistance: focusDistance });
-                            } else {
-                              updateAdvancedConstraints(track, { focusMode: 'continuous' });
-                            }
-                          }
-                        } catch (e) { console.warn('Focus toggle failed:', e); }
-                      }}
-                    >
-                      {focusMode === 'manual' ? 'Manual' : 'Auto'}
-                    </button>
-                  ) : (
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Not supported</span>
-                  )}
-                </div>
-                {focusSupported && focusMode === 'manual' && (
-                  <>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Near</span>
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-primary)' }}>{focusDistance.toFixed(2)}</span>
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Far</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={focusRange.min}
-                      max={focusRange.max}
-                      step={focusRange.step}
-                      value={focusDistance}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value);
-                        setFocusDistance(val);
-                        try {
-                          const track = stream?.getVideoTracks()[0];
-                          if (track) updateAdvancedConstraints(track, { focusMode: 'manual', focusDistance: val });
-                        } catch (err) { console.warn('Focus adjust failed:', err); }
-                      }}
-                      style={{ width: '100%', cursor: 'pointer' }}
-                    />
-                  </>
+            {/* Set search (both games): pick a set to build a per-set index
+                for accurate one-step scans. Free text also works as an
+                exact-id escape hatch for sets not yet cached. */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', position: 'relative' }}>
+              <p style={{ fontSize: '0.7rem', color: !scanSetCode ? 'var(--accent-yellow)' : setPrep === 'ready' ? 'var(--type-grass)' : 'var(--text-secondary)', margin: 0, textAlign: 'center', fontWeight: 600 }}>
+                {!scanSetCode
+                  ? 'Tip: search your box’s set for accurate one-step scans of that set.'
+                  : setPrep === 'building'
+                    ? `Preparing set ${scanSetCode}… (one-time, ~1 min). Scans work meanwhile.`
+                    : setPrep === 'ready'
+                      ? `Set ${scanSetCode} ready: exact matches, no set to pick.`
+                      : `Set ${scanSetCode}.`}
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Set</label>
+                <input
+                  type="text"
+                  value={scanSetCode}
+                  onChange={(e) => { setScanSetCode(e.target.value); setSetSearchOpen(true); }}
+                  onFocus={() => setSetSearchOpen(true)}
+                  onBlur={() => setTimeout(() => setSetSearchOpen(false), 150)}
+                  placeholder={scanGame === 'mtg' ? 'Search set name or code (e.g. Foundations, FDN)' : 'Search set name or id (e.g. Surging Sparks, sv8)'}
+                  style={{ flex: 1, padding: '0.3rem 0.5rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.06)', border: `1px solid ${scanSetCode ? 'var(--type-grass)' : 'var(--border-glass)'}`, borderRadius: 'var(--radius-sm)', color: '#fff' }}
+                />
+                {scanSetCode && (
+                  <button type="button" className="btn btn-secondary" style={{ fontSize: '0.6rem', padding: '0.2rem 0.4rem' }} onClick={() => { setScanSetCode(''); setSetSearchOpen(false); }}>Clear</button>
                 )}
               </div>
-
-              {/* Game selection first, then that game's layouts. */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
-                <div className="sub-nav-tabs" style={{ marginBottom: 0 }}>
-                  {[['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([g, label]) => (
+              {setSearchOpen && setSuggestions.length > 0 && (
+                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 30, marginTop: '0.2rem', background: 'var(--bg-elevated, #1c1c22)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', maxHeight: '220px', overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
+                  {setSuggestions.map((s) => (
                     <button
-                      key={g}
+                      key={s.id}
                       type="button"
-                      className={`sub-nav-tab ${scanGame === g ? 'active' : ''}`}
-                      style={{ padding: '0.5rem', fontSize: '0.8rem', fontWeight: 700 }}
-                      onClick={() => setCardLayout(g === 'mtg' ? 'mtg' : 'modern')}
+                      onMouseDown={() => { setScanSetCode(setScanCode(s)); setSetSearchOpen(false); }}
+                      style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', width: '100%', padding: '0.4rem 0.6rem', background: 'none', border: 'none', color: '#fff', fontSize: '0.75rem', textAlign: 'left', cursor: 'pointer' }}
                     >
-                      {label}
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+                      <span style={{ color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0 }}>{setScanCode(s)}</span>
                     </button>
                   ))}
                 </div>
-
-                {scanGame === 'pokemon' ? (
-                  <div className="sub-nav-tabs" style={{ marginBottom: 0 }}>
-                    {['modern', 'vintage', 'trainer', 'japanese'].map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        className={`sub-nav-tab ${cardLayout === mode ? 'active' : ''}`}
-                        style={{ padding: '0.5rem', fontSize: '0.75rem', textTransform: 'capitalize' }}
-                        onClick={() => setCardLayout(mode)}
-                      >
-                        {mode}
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                    <p style={{ fontSize: '0.7rem', color: !mtgSetCode ? 'var(--accent-yellow)' : setPrep === 'ready' ? 'var(--type-grass)' : 'var(--text-secondary)', margin: 0, textAlign: 'center', fontWeight: 600 }}>
-                      {!mtgSetCode
-                        ? 'Tip: set your box’s set code for accurate one-step scans of that set.'
-                        : setPrep === 'building'
-                          ? `Preparing set ${mtgSetCode}… (one-time, ~1 min). Scans work meanwhile.`
-                          : setPrep === 'ready'
-                            ? `Set ${mtgSetCode} ready: exact matches, no set to pick.`
-                            : `Set ${mtgSetCode}.`}
-                    </p>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Set Code</label>
-                      <input
-                        type="text"
-                        value={mtgSetCode}
-                        onChange={(e) => setMtgSetCode(e.target.value)}
-                        placeholder="e.g. FDN, ELD, M21"
-                        style={{ flex: 1, padding: '0.3rem 0.5rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.06)', border: `1px solid ${mtgSetCode ? 'var(--type-grass)' : 'var(--border-glass)'}`, borderRadius: 'var(--radius-sm)', color: '#fff', textTransform: 'uppercase', letterSpacing: '0.05em' }}
-                      />
-                      {mtgSetCode && (
-                        <button type="button" className="btn btn-secondary" style={{ fontSize: '0.6rem', padding: '0.2rem 0.4rem' }} onClick={() => setMtgSetCode('')}>Clear</button>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
+              )}
             </div>
-          )}
+
+            {/* Auto-Capture: scan every few seconds without tapping Capture. */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Auto-Capture</span>
+              <button
+                type="button"
+                className={`btn ${autoScan ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setAutoScan(!autoScan)}
+                style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
+              >
+                {autoScan ? 'ON' : 'OFF'}
+              </button>
+            </div>
+          </div>
 
           {/* OCR Crop Results — only render when we actually have crop feeds,
               so an empty dashed box doesn't eat vertical space on phone. */}

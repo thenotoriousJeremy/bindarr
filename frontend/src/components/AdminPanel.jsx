@@ -1,5 +1,13 @@
-import { useState, useEffect } from 'react';
-import { Shield, UserPlus, Key, Trash2, ToggleLeft, ToggleRight, Search, Users, Globe } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Shield, UserPlus, Key, Trash2, ToggleLeft, ToggleRight, Search, Users, Globe, Database, Play, RefreshCw, AlertTriangle } from 'lucide-react';
+
+const formatBytes = (n) => {
+  if (!n) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return `${(n / Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${u[i]}`;
+};
+const isActive = (p) => p && (p.status === 'fetching' || p.status === 'indexing');
 
 function AdminPanel({ showToast }) {
   const [users, setUsers] = useState([]);
@@ -21,11 +29,106 @@ function AdminPanel({ showToast }) {
   const [publicBaseUrl, setPublicBaseUrl] = useState('');
   const [settingsLoading, setSettingsLoading] = useState(false);
 
+  // Set-index build states
+  const [builds, setBuilds] = useState([]);
+  const [buildProgress, setBuildProgress] = useState({});
+  const [buildGame, setBuildGame] = useState('mtg');
+  const [buildSetCode, setBuildSetCode] = useState('');
+  const [preview, setPreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const pollRef = useRef(null);
+
   useEffect(() => {
     fetchUsers();
     fetchSettings();
+    fetchBuilds().then((active) => { if (active) startPolling(); });
+    return stopPolling;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const stopPolling = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  };
+  const startPolling = () => {
+    if (pollRef.current) return;
+    pollRef.current = setInterval(async () => {
+      const active = await fetchBuilds();
+      if (!active) stopPolling();
+    }, 1500);
+  };
+
+  // Returns whether any build is currently in flight (drives polling).
+  const fetchBuilds = async () => {
+    try {
+      const res = await fetch('/api/admin/set-indexes');
+      if (!res.ok) return false;
+      const data = await res.json();
+      setBuilds(data.builds || []);
+      setBuildProgress(data.progress || {});
+      return Object.values(data.progress || {}).some(isActive);
+    } catch (err) {
+      console.error(err);
+      return false;
+    }
+  };
+
+  const handlePreview = async () => {
+    const set = buildSetCode.trim();
+    if (!set) return;
+    setPreviewLoading(true);
+    setPreview(null);
+    try {
+      const res = await fetch(`/api/admin/set-indexes/preview?game=${buildGame}&set=${encodeURIComponent(set)}`);
+      const data = await res.json();
+      if (res.ok) setPreview(data);
+      else showToast(data.error || 'Preview failed.');
+    } catch (err) {
+      console.error(err);
+      showToast('Error looking up set.');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleBuild = async (game, set, cardCount) => {
+    const warn = cardCount
+      ? `Build ${game} "${set}"? This downloads ~${cardCount} card images (about ${formatBytes(cardCount * 20 * 1024)} on disk) and can take several minutes.`
+      : `Rebuild ${game} "${set}"? This re-downloads every card image and can take several minutes.`;
+    if (!window.confirm(warn)) return;
+    try {
+      const res = await fetch('/api/admin/set-indexes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ game, set }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(data.message);
+        setPreview(null);
+        setBuildSetCode('');
+        await fetchBuilds();
+        startPolling();
+      } else {
+        showToast(data.error || 'Failed to start build.');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error starting build.');
+    }
+  };
+
+  const handleDeleteBuild = async (game, set) => {
+    if (!window.confirm(`Remove the ${game} "${set}" index? Scanning this set will rebuild it on demand.`)) return;
+    try {
+      const res = await fetch(`/api/admin/set-indexes/${game}/${encodeURIComponent(set)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) { showToast(data.message); fetchBuilds(); }
+      else showToast(data.error || 'Failed to remove index.');
+    } catch (err) {
+      console.error(err);
+      showToast('Error removing index.');
+    }
+  };
 
   const handleSeedDatabase = async () => {
     if (!window.confirm("Seed database with a random collection of test cards (Pikachu, Charizard, etc.)? This will add them to your collection.")) {
@@ -339,6 +442,132 @@ function AdminPanel({ showToast }) {
               {settingsLoading ? <div className="spinner" style={{ width: '14px', height: '14px', margin: 0, borderWidth: '2px' }}></div> : 'Save Settings'}
             </button>
           </form>
+        </div>
+
+        {/* Set Index Builds Panel */}
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <h3 style={{ color: '#fff', fontSize: '1.1rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Database size={18} style={{ color: 'var(--accent-red)' }} />
+            Set Scan Indexes
+          </h3>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: 0, lineHeight: 1.4 }}>
+            Per-set image indexes power set-scoped camera scanning. They build automatically the first time a set is scanned; build them here ahead of time, or remove ones you no longer need. Use the MTG set code (e.g. <code>mh3</code>) or Pokémon set id (e.g. <code>sv1</code>).
+          </p>
+
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div className="form-group" style={{ marginBottom: 0, width: '120px' }}>
+              <label htmlFor="build-game">Game</label>
+              <select id="build-game" className="select-control" value={buildGame} onChange={(e) => { setBuildGame(e.target.value); setPreview(null); }}>
+                <option value="mtg">MTG</option>
+                <option value="pokemon">Pokémon</option>
+              </select>
+            </div>
+            <div className="form-group" style={{ marginBottom: 0, flex: 1, minWidth: '140px' }}>
+              <label htmlFor="build-set">Set code / id</label>
+              <input
+                id="build-set"
+                type="text"
+                className="input-control"
+                placeholder="mh3 / sv1"
+                value={buildSetCode}
+                onChange={(e) => { setBuildSetCode(e.target.value); setPreview(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handlePreview(); } }}
+              />
+            </div>
+            <button type="button" className="btn btn-secondary" style={{ height: '42px' }} onClick={handlePreview} disabled={previewLoading || !buildSetCode.trim()}>
+              {previewLoading ? <div className="spinner" style={{ width: '14px', height: '14px', margin: 0, borderWidth: '2px' }}></div> : 'Preview'}
+            </button>
+          </div>
+
+          {preview && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem', background: 'rgba(255,193,71,0.05)', border: '1px solid var(--border-glass)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem' }}>
+              <AlertTriangle size={16} style={{ color: 'var(--accent-yellow)', flexShrink: 0 }} />
+              <span style={{ flex: 1, minWidth: '180px', color: 'var(--text-secondary)' }}>
+                <strong style={{ color: '#fff' }}>{preview.cardCount}</strong> printings, up to <strong style={{ color: '#fff' }}>{formatBytes(preview.estBytes)}</strong> on disk. Downloads one image per card; can take several minutes.
+              </span>
+              <button type="button" className="btn btn-primary" onClick={() => handleBuild(preview.game, preview.set, preview.cardCount)} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <Play size={14} /> Build Set
+              </button>
+            </div>
+          )}
+
+          {builds.length === 0 && !Object.values(buildProgress).some(isActive) ? (
+            <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+              No set indexes built yet.
+            </div>
+          ) : (
+            <div className="collection-table-wrapper" style={{ overflowX: 'auto' }}>
+              <table className="collection-table">
+                <thead>
+                  <tr>
+                    <th>Game</th>
+                    <th>Set</th>
+                    <th>Cards</th>
+                    <th>Size</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    const builtKeys = new Set(builds.map(b => b.key));
+                    const pending = Object.entries(buildProgress)
+                      .filter(([key, p]) => isActive(p) && !builtKeys.has(key))
+                      .map(([key]) => ({ key, game: key.split('|')[0], set: key.split('|')[1], cardCount: 0, sizeBytes: 0, builtAt: 0 }));
+                    return [...pending, ...builds].map((b) => {
+                      const p = buildProgress[b.key];
+                      const active = isActive(p);
+                      const pct = p && p.total ? Math.round((p.done / p.total) * 100) : 0;
+                      return (
+                        <tr key={b.key}>
+                          <td style={{ textTransform: 'uppercase', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{b.game}</td>
+                          <td style={{ fontWeight: 700, color: '#fff' }}>{b.set}</td>
+                          <td>{b.cardCount || (p && p.total) || '-'}</td>
+                          <td style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{b.sizeBytes ? formatBytes(b.sizeBytes) : '-'}</td>
+                          <td style={{ minWidth: '160px' }}>
+                            {active ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                <div style={{ height: '6px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
+                                  <div style={{ height: '100%', width: p.status === 'fetching' ? '15%' : `${pct}%`, background: 'var(--accent-red)', transition: 'width 0.4s ease' }}></div>
+                                </div>
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                                  {p.status === 'fetching' ? 'Fetching card list...' : `Indexing ${p.done}/${p.total} (${pct}%)`}
+                                </span>
+                              </div>
+                            ) : p && p.status === 'error' ? (
+                              <span style={{ fontSize: '0.75rem', color: 'var(--accent-red)' }} title={p.error}>Failed</span>
+                            ) : (
+                              <span style={{ fontSize: '0.75rem', color: 'var(--accent-green, #4ade80)' }}>Ready</span>
+                            )}
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', gap: '0.35rem' }}>
+                              <button
+                                className="btn btn-secondary btn-icon-only"
+                                title="Rebuild"
+                                onClick={() => handleBuild(b.game, b.set, 0)}
+                                disabled={active}
+                              >
+                                <RefreshCw size={14} />
+                              </button>
+                              <button
+                                className="btn btn-danger btn-icon-only"
+                                title="Remove index"
+                                onClick={() => handleDeleteBuild(b.game, b.set)}
+                                disabled={active}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    });
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         {/* User Maintenance Table */}

@@ -147,45 +147,26 @@ button, input, select, textarea {
   gap: 0.75rem;
 }
 
-/* Game-neutral mark: two fanned trading cards (works for Pokémon + MTG). */
+/* Binder-page mark: a fanned card behind a three-hole-punched binder page
+   (works for Pokémon + MTG). SVG lives in App.jsx. */
 .logo-icon {
-  width: 38px;
-  height: 38px;
-  position: relative;
-  animation: logo-spin 4s ease-in-out infinite alternate;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: logo-float 3s ease-in-out infinite;
 }
 
-.logo-icon::before,
-.logo-icon::after {
-  content: '';
-  position: absolute;
-  width: 22px;
-  height: 30px;
-  top: 4px;
-  left: 8px;
-  border-radius: 4px;
-  border: 2px solid #111;
+.logo-icon svg {
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 0 8px var(--accent-red-glow));
 }
 
-.logo-icon::before {
-  background: #fff;
-  transform: rotate(-14deg);
-  z-index: 1;
-}
-
-.logo-icon::after {
-  background: var(--accent-red);
-  transform: rotate(12deg);
-  box-shadow: 0 0 12px var(--accent-red-glow);
-  z-index: 2;
-}
-
-@keyframes logo-spin {
-  0% { transform: rotate(0deg); }
-  20% { transform: rotate(15deg); }
-  40% { transform: rotate(-15deg); }
-  60% { transform: rotate(360deg); }
-  100% { transform: rotate(360deg); }
+@keyframes logo-float {
+  0%, 100% { transform: translateY(0) rotate(-3deg); }
+  50% { transform: translateY(-3px) rotate(3deg); }
 }
 
 .logo-text {

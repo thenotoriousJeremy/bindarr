@@ -234,11 +234,11 @@ async function match(imageBuffer, requestedGame, topK = 8, setCode = '') {
   const bf = new cv.BFMatcher(cv.NORM_HAMMING, false);
   const q = await queryOrb(orb, cardBuf);
   try {
-    // Set-scoped fast path: if the user gave an MTG set code and that set's index
-    // is built, match only within it (~300 cards) — accurate, no global recall.
-    if (requestedGame === 'mtg' && setCode && setIndex.isReady('mtg', setCode)) {
-      const candidates = setIndex.matchSet(q, 'mtg', setCode, topK);
-      if (candidates) return { game: 'mtg', verified: true, candidates, crop, scoped: true };
+    // Set-scoped fast path: if the user gave a set code and that set's index is
+    // built, match only within it (~300 cards) — accurate, no global recall.
+    if (setCode && setIndex.isReady(requestedGame, setCode)) {
+      const candidates = setIndex.matchSet(q, requestedGame, setCode, topK);
+      if (candidates) return { game: requestedGame, verified: true, candidates, crop, scoped: true };
     }
 
     const order = requestedGame === 'pokemon' ? ['pokemon', 'mtg'] : ['mtg', 'pokemon'];

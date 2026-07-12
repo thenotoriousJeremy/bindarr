@@ -2,6 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
 const tcgApi = require('../tcgApi');
+const setIndex = require('../setIndex');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
@@ -276,6 +277,44 @@ router.post('/seed-cards', async (req, res) => {
     console.error(error);
     res.status(500).json({ error: 'Failed to seed test cards' });
   }
+});
+
+// --- Set-index build management ---
+
+const isGame = (g) => g === 'mtg' || g === 'pokemon';
+
+// List persisted builds plus any in-flight/recent build progress.
+router.get('/set-indexes', (req, res) => {
+  res.json({ builds: setIndex.listBuilds(), progress: setIndex.getProgress() });
+});
+
+// Preview a set's printing count so the UI can warn about size before building.
+router.get('/set-indexes/preview', async (req, res) => {
+  const { game, set } = req.query;
+  if (!isGame(game) || !set) return res.status(400).json({ error: 'game (mtg|pokemon) and set are required' });
+  try {
+    const cardCount = await setIndex.previewSet(game, set);
+    if (!cardCount) return res.status(404).json({ error: `No cards found for ${game} set "${set}"` });
+    res.json({ game, set, cardCount, estBytes: cardCount * 20 * 1024 });
+  } catch (error) {
+    res.status(502).json({ error: `Set lookup failed: ${error.message}` });
+  }
+});
+
+// Start (or restart) a full-set build. Runs in the background; poll GET for progress.
+router.post('/set-indexes', (req, res) => {
+  const { game, set } = req.body;
+  if (!isGame(game) || !set) return res.status(400).json({ error: 'game (mtg|pokemon) and set are required' });
+  setIndex.startBuild(game, set);
+  res.status(202).json({ message: `Build started for ${game} ${set}` });
+});
+
+// Remove a build's files.
+router.delete('/set-indexes/:game/:set', (req, res) => {
+  const { game, set } = req.params;
+  if (!isGame(game)) return res.status(400).json({ error: 'invalid game' });
+  setIndex.deleteBuild(game, set);
+  res.json({ message: `Removed ${game} ${set} index` });
 });
 
 module.exports = router;
