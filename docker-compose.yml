@@ -1,11 +1,11 @@
 version: '3.8'
 
 services:
-  carddexrr:
+  bindarr:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: carddexrr
+    container_name: bindarr
     restart: unless-stopped
     ports:
       - "3001:3001"
@@ -19,8 +19,8 @@ services:
       - ALLOW_REGISTRATION= # Optional: "true" enables open self-registration. Default (unset) = invite-only; admin creates accounts.
       - TRUST_PROXY= # Set to "1" (proxy hop count) when running behind a TLS-terminating reverse proxy so rate limiting sees the real client IP. Leave unset if directly exposed.
     volumes:
-      - carddexrr-data:/app/database
+      - bindarr-data:/app/database
 
 volumes:
-  carddexrr-data:
+  bindarr-data:
     driver: local

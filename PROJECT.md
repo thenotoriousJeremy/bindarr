@@ -1,10 +1,10 @@
-# CardDexrr — Architecture & Developer Guide
+# Bindarr — Architecture & Developer Guide
 
 Developer-facing reference for the codebase. For install/run/deploy and end-user
 features, see [README.md](README.md); this document explains **how the system is
 built and why**.
 
-CardDexrr is a self-hosted trading-card collection manager for **Pokémon** and
+Bindarr is a self-hosted trading-card collection manager for **Pokémon** and
 **Magic: The Gathering**. It identifies cards from a phone photo (no typing),
 tracks their real-world physical location (which binder page / box row slot),
 values the collection over time, and helps you pull and re-file the cards for a
@@ -152,7 +152,7 @@ across compartments).
 ## Frontend
 
 `App.jsx` holds auth state (`token`/`user` in `localStorage` under
-`carddexrr_*`), installs a `fetch` wrapper that injects the `Bearer` header on
+`bindarr_*`), installs a `fetch` wrapper that injects the `Bearer` header on
 `/api/*` calls and dispatches a logout event on `401`, and tab-routes between
 code-split view components. `/share/:token` renders the public view without auth.
 

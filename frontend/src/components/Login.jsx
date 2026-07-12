@@ -84,37 +84,19 @@ function Login({ onLoginSuccess }) {
       }}>
         {/* Logo/Icon */}
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <div style={{
-            width: '60px',
-            height: '60px',
-            background: 'linear-gradient(135deg, var(--accent-red), var(--accent-yellow))',
-            borderRadius: '50%',
-            margin: '0 auto 1rem auto',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 0 20px rgba(255, 71, 71, 0.5)'
-          }}>
-            <div style={{
-              width: '54px',
-              height: '54px',
-              backgroundColor: 'var(--bg-primary)',
-              borderRadius: '50%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}>
-              <div style={{
-                width: '18px',
-                height: '18px',
-                backgroundColor: 'var(--accent-red)',
-                borderRadius: '50%',
-                boxShadow: '0 0 8px var(--accent-red-glow)'
-              }}></div>
-            </div>
+          <div style={{ width: '84px', height: '84px', margin: '0 auto 1rem auto', filter: 'drop-shadow(0 0 12px var(--accent-red-glow))' }}>
+            <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Bindarr logo" style={{ width: '100%', height: '100%' }}>
+              <rect x="4" y="9" width="32" height="24" rx="2.5" fill="#ff4747" stroke="#111" strokeWidth="1.6" />
+              <rect x="7" y="12" width="10" height="18" rx="1.5" fill="#ffd0d0" stroke="#111" strokeWidth="1.2" />
+              <rect x="23" y="12" width="10" height="18" rx="1.5" fill="#fff" stroke="#111" strokeWidth="1.2" />
+              <rect x="18.5" y="9" width="3" height="24" fill="#c92f2f" stroke="#111" strokeWidth="1" />
+              <path d="M17.88 17.12 A3 3 0 1 1 22.12 17.12" fill="none" stroke="#fff" strokeWidth="1.7" />
+              <path d="M17.88 23.12 A3 3 0 1 1 22.12 23.12" fill="none" stroke="#fff" strokeWidth="1.7" />
+              <path d="M17.88 29.12 A3 3 0 1 1 22.12 29.12" fill="none" stroke="#fff" strokeWidth="1.7" />
+            </svg>
           </div>
           <h2 style={{ fontSize: '1.8rem', color: '#fff', fontWeight: 800 }}>
-            CardDex<span style={{ color: 'var(--accent-red)' }}>rr</span>
+            Bind<span style={{ color: 'var(--accent-red)' }}>arr</span>
           </h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
             {isRegister ? 'Create your trainer account' : 'Access your personal card database'}

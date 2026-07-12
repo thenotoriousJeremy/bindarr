@@ -6,7 +6,7 @@ const os = require('os');
 const crypto = require('crypto');
 const assert = require('assert');
 
-const tmpDb = path.join(os.tmpdir(), `carddexrr-auth-test-${process.pid}.db`);
+const tmpDb = path.join(os.tmpdir(), `bindarr-auth-test-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;
 
 const db = require('../src/db');

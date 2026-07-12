@@ -5,7 +5,7 @@ const assert = require('assert');
 const { spawn } = require('child_process');
 
 // Isolated temp DB and unique port
-const tmpDb = path.join(os.tmpdir(), `carddexrr-scenarios-test-${process.pid}.db`);
+const tmpDb = path.join(os.tmpdir(), `bindarr-scenarios-test-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;
 const port = '3012';
 

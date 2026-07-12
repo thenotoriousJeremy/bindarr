@@ -9,7 +9,7 @@ const assert = require('assert');
 
 // Point the db module at a throwaway file BEFORE requiring it (db.js reads
 // DB_PATH at import time).
-const tmpDb = path.join(os.tmpdir(), `carddexrr-test-${process.pid}.db`);
+const tmpDb = path.join(os.tmpdir(), `bindarr-test-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;
 
 const db = require('../src/db');

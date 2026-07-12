@@ -144,7 +144,7 @@ db.initDb()
 // Unauthenticated; pings the DB so a wedged database reads as unhealthy.
 // Declared before the /api collection mount so nothing shadows it.
 app.get('/api/health', async (req, res) => {
-  res.setHeader('X-App-Name', 'CardDexrr');
+  res.setHeader('X-App-Name', 'Bindarr');
   try {
     await db.get('SELECT 1');
     res.json({ status: 'ok' });
@@ -189,7 +189,7 @@ app.use((err, req, res, next) => {
 // Start Express Server
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`=========================================`);
-  console.log(`CardDexrr Server running on port ${PORT}`);
+  console.log(`Bindarr Server running on port ${PORT}`);
   console.log(`Access local: http://localhost:${PORT}`);
   console.log(`=========================================`);
 });

@@ -7,7 +7,7 @@ const axios = require('axios');
 function makeHttp() {
   return axios.create({
     timeout: 30000,
-    headers: { 'User-Agent': 'CardDexrr/1.0', 'Accept': 'application/json' },
+    headers: { 'User-Agent': 'Bindarr/1.0', 'Accept': 'application/json' },
   });
 }
 

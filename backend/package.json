@@ -1,7 +1,7 @@
 {
-  "name": "carddexrr-backend",
+  "name": "bindarr-backend",
   "version": "1.0.0",
-  "description": "Backend API for CardDexrr",
+  "description": "Backend API for Bindarr",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

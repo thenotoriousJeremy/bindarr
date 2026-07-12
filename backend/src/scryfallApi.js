@@ -8,7 +8,7 @@ const db = require('./db');
 const client = axios.create({
   baseURL: 'https://api.scryfall.com',
   timeout: 6000,
-  headers: { 'User-Agent': 'CardDexrr/1.0', 'Accept': 'application/json' }
+  headers: { 'User-Agent': 'Bindarr/1.0', 'Accept': 'application/json' }
 });
 
 const COLOR_NAMES = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };

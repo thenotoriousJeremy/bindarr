@@ -1,7 +1,7 @@
 {
-  "name": "carddexrr-monorepo",
+  "name": "bindarr-monorepo",
   "version": "1.0.0",
-  "description": "Monorepo for CardDexrr Pokémon Card Collection Manager",
+  "description": "Monorepo for Bindarr Pokémon Card Collection Manager",
   "scripts": {
     "install:all": "npm install && npm install --prefix backend && npm install --prefix frontend",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",

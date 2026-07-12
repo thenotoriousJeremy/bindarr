@@ -100,7 +100,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
     return (
       <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem 1.5rem', color: 'var(--text-secondary)' }}>
         <TrendingUp size={48} style={{ color: 'var(--accent-red)', marginBottom: '1.5rem', opacity: 0.8 }} />
-        <h2 style={{ color: '#fff', marginBottom: '0.5rem' }}>Welcome to CardDexrr!</h2>
+        <h2 style={{ color: '#fff', marginBottom: '0.5rem' }}>Welcome to Bindarr!</h2>
         <p style={{ maxWidth: '400px', margin: '0 auto 1.5rem auto' }}>
           Your collection database is currently empty. Start scanning cards with your phone camera or search cards manually to build your binder!
         </p>

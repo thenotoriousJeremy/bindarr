@@ -4,7 +4,7 @@ const os = require('os');
 const assert = require('assert');
 
 // Point the db module at a throwaway file BEFORE requiring it
-const tmpDb = path.join(os.tmpdir(), `carddexrr-schema-test-${process.pid}.db`);
+const tmpDb = path.join(os.tmpdir(), `bindarr-schema-test-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;
 
 const db = require('../../src/db');

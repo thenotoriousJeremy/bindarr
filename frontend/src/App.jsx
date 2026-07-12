@@ -55,7 +55,7 @@ window.fetch = function (input, options = {}) {
   const url = typeof input === 'string' ? input : (input && input.url) || '';
   const isPublicOrAuthRoute = url.includes('/api/shared/') || url.includes('/api/auth/login') || url.includes('/api/auth/register');
 
-  const token = localStorage.getItem('carddexrr_token');
+  const token = localStorage.getItem('bindarr_token');
   const finalOptions = { ...options };
   if (token && url.startsWith('/api/') && !isPublicOrAuthRoute) {
     finalOptions.headers = {
@@ -66,17 +66,17 @@ window.fetch = function (input, options = {}) {
   return originalFetch(input, finalOptions).then(response => {
     if (response.status === 401 && !isPublicOrAuthRoute) {
       // Dispatch custom event to trigger logout without page refresh
-      window.dispatchEvent(new Event('carddexrr_logout'));
+      window.dispatchEvent(new Event('bindarr_logout'));
     }
     return response;
   });
 };
 
 function App() {
-  const [token, setToken] = useState(localStorage.getItem('carddexrr_token'));
+  const [token, setToken] = useState(localStorage.getItem('bindarr_token'));
   const [user, setUser] = useState(() => {
     try {
-      const u = localStorage.getItem('carddexrr_user');
+      const u = localStorage.getItem('bindarr_user');
       return u ? JSON.parse(u) : null;
     } catch {
       return null;
@@ -114,19 +114,19 @@ function App() {
     const handleAutoLogout = () => {
       setToken(null);
       setUser(null);
-      localStorage.removeItem('carddexrr_token');
-      localStorage.removeItem('carddexrr_user');
+      localStorage.removeItem('bindarr_token');
+      localStorage.removeItem('bindarr_user');
       showToast('Session expired. Please log in again.');
     };
-    window.addEventListener('carddexrr_logout', handleAutoLogout);
-    return () => window.removeEventListener('carddexrr_logout', handleAutoLogout);
+    window.addEventListener('bindarr_logout', handleAutoLogout);
+    return () => window.removeEventListener('bindarr_logout', handleAutoLogout);
   }, []);
 
   const handleLoginSuccess = (newToken, newUser) => {
     setToken(newToken);
     setUser(newUser);
-    localStorage.setItem('carddexrr_token', newToken);
-    localStorage.setItem('carddexrr_user', JSON.stringify(newUser));
+    localStorage.setItem('bindarr_token', newToken);
+    localStorage.setItem('bindarr_user', JSON.stringify(newUser));
     showToast(`Welcome back, ${newUser.username}!`);
     setActiveTab('dashboard');
   };
@@ -137,14 +137,14 @@ function App() {
 
     setToken(null);
     setUser(null);
-    localStorage.removeItem('carddexrr_token');
-    localStorage.removeItem('carddexrr_user');
+    localStorage.removeItem('bindarr_token');
+    localStorage.removeItem('bindarr_user');
     showToast('Logged out successfully.');
   };
 
   const handleUpdateUser = (updatedUser) => {
     setUser(updatedUser);
-    localStorage.setItem('carddexrr_user', JSON.stringify(updatedUser));
+    localStorage.setItem('bindarr_user', JSON.stringify(updatedUser));
   };
 
   const triggerRefresh = () => {
@@ -214,8 +214,22 @@ function App() {
       {/* Premium Header */}
       <header className="app-header" style={{ position: 'relative' }}>
         <div className="logo-section">
-          <div className="logo-icon"></div>
-          <h1 className="logo-text">Card<span>Dexrr</span></h1>
+          <div className="logo-icon">
+            <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              {/* open binder covers spread flat */}
+              <rect x="4" y="9" width="32" height="24" rx="2.5" fill="#ff4747" stroke="#111" strokeWidth="1.6" />
+              {/* pages/cards held on each side */}
+              <rect x="7" y="12" width="10" height="18" rx="1.5" fill="#ffd0d0" stroke="#111" strokeWidth="1.2" />
+              <rect x="23" y="12" width="10" height="18" rx="1.5" fill="#fff" stroke="#111" strokeWidth="1.2" />
+              {/* center gutter / spine */}
+              <rect x="18.5" y="9" width="3" height="24" fill="#c92f2f" stroke="#111" strokeWidth="1" />
+              {/* three open ring arcs clasping the pages */}
+              <path d="M17.88 17.12 A3 3 0 1 1 22.12 17.12" fill="none" stroke="#fff" strokeWidth="1.7" />
+              <path d="M17.88 23.12 A3 3 0 1 1 22.12 23.12" fill="none" stroke="#fff" strokeWidth="1.7" />
+              <path d="M17.88 29.12 A3 3 0 1 1 22.12 29.12" fill="none" stroke="#fff" strokeWidth="1.7" />
+            </svg>
+          </div>
+          <h1 className="logo-text">Bind<span>arr</span></h1>
         </div>
 
         {/* Navigation Tabs (Nested inside header for unified layout) */}

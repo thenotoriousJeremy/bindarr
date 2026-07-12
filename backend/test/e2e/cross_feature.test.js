@@ -5,7 +5,7 @@ const assert = require('assert');
 const { spawn } = require('child_process');
 
 // Isolated temp DB and unique port
-const tmpDb = path.join(os.tmpdir(), `carddexrr-cross-test-${process.pid}.db`);
+const tmpDb = path.join(os.tmpdir(), `bindarr-cross-test-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;
 const port = '3011';
 
@@ -69,7 +69,7 @@ async function runTests() {
       'Authorization': `Bearer ${token}`
     };
 
-    // F5-TC1: Verify that Scryfall API calls include user-agent headers containing CardDexrr
+    // F5-TC1: Verify that Scryfall API calls include user-agent headers containing Bindarr
     try {
       // Note: we can't easily assert on headers since the server handles the call in a separate process,
       // but if the feature is not implemented, the API call won't happen.
