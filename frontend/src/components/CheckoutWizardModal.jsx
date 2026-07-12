@@ -1,336 +1,326 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { X, CheckCircle, ChevronRight, ChevronLeft, Layers } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { X, Check, Minus, MapPin, Package, AlertTriangle } from 'lucide-react';
 import CompartmentView from './CompartmentView';
+import { sortCardsByOrder } from '../utils/cardSort';
 
-const CheckoutWizardModal = ({ locationsData, onClose }) => {
-  const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [checkedCards, setCheckedCards] = useState(new Set());
-  const [compartmentData, setCompartmentData] = useState(null);
-  const [loadingContext, setLoadingContext] = useState(false);
+// Slot number a stored position encodes (positions are slot * 1000).
+const slotOf = (position) => (position ? Math.floor(position / 1000) : null);
+
+const COPY = {
+  checkout: {
+    title: 'Deck Checked Out',
+    subtitle: 'Grab these cards from your collection.',
+    verb: 'pulled'
+  },
+  checkin: {
+    title: 'Return to Storage',
+    subtitle: 'Put these cards back where they belong.',
+    verb: 'returned'
+  }
+};
+
+// Post-checkout / return locator. A "where does each card go" checklist backed
+// by the locations payload the backend computed. Never mutates the collection
+// (checkout no longer unassigns, so a card's stored slot is both where you grab
+// it and where it returns). Located pages render their compartment layout with
+// the cards highlighted by entry_id. Select-all works per page, per container,
+// and globally.
+const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose }) => {
+  const copy = COPY[mode] || COPY.checkout;
+  const [done, setDone] = useState(new Set());
   const [setsList, setSetsList] = useState([]);
+  const [grids, setGrids] = useState({}); // page.key -> { compartment, cards, locationType, sortOrder }
+
+  // Flatten to pulls, then build container -> page tree plus a flat page list.
+  const { containers, pagesFlat, missing, totalPulls, allEntryIds } = useMemo(() => {
+    const pulls = [];
+    const missing = [];
+    for (const card of locationsData || []) {
+      for (const loc of card.locations || []) pulls.push({ ...loc, card_id: card.card_id });
+      if (card.missing > 0) {
+        const name = card.locations?.[0]?.card_name || card.card_id;
+        missing.push({ card_id: card.card_id, name, qty: card.missing });
+      }
+    }
+
+    const containerMap = new Map();
+    for (const p of pulls) {
+      const cKey = p.location_id ? `loc-${p.location_id}` : 'unassigned';
+      if (!containerMap.has(cKey)) {
+        containerMap.set(cKey, {
+          key: cKey,
+          unassigned: !p.location_id,
+          location_name: p.location_name || 'Unassigned Pile',
+          pageMap: new Map()
+        });
+      }
+      const c = containerMap.get(cKey);
+      const pKey = p.location_id ? `${p.location_id}-${p.compartment_id}` : 'unassigned';
+      if (!c.pageMap.has(pKey)) {
+        c.pageMap.set(pKey, {
+          key: pKey,
+          location_id: p.location_id || null,
+          compartment_id: p.compartment_id || null,
+          compartment_display: p.compartment_display,
+          pulls: []
+        });
+      }
+      c.pageMap.get(pKey).pulls.push(p);
+    }
+
+    const containers = Array.from(containerMap.values()).map(c => {
+      const pages = Array.from(c.pageMap.values()).sort((a, b) => (a.compartment_id || 0) - (b.compartment_id || 0));
+      for (const pg of pages) pg.pulls.sort((x, y) => (x.position || 0) - (y.position || 0));
+      return {
+        key: c.key,
+        unassigned: c.unassigned,
+        location_name: c.location_name,
+        pages,
+        entryIds: pages.flatMap(pg => pg.pulls.map(p => p.entry_id))
+      };
+    });
+    containers.sort((a, b) => {
+      if (a.unassigned !== b.unassigned) return a.unassigned ? 1 : -1;
+      return a.location_name.localeCompare(b.location_name);
+    });
+
+    const pagesFlat = containers.filter(c => !c.unassigned).flatMap(c => c.pages);
+    return { containers, pagesFlat, missing, totalPulls: pulls.length, allEntryIds: pulls.map(p => p.entry_id) };
+  }, [locationsData]);
 
   useEffect(() => {
     fetch('/api/sets').then(r => r.json()).then(setSetsList).catch(() => {});
   }, []);
 
-  // 1. Regroup locationsData by Location -> Compartment
-  const steps = useMemo(() => {
-    const grouped = [];
-    
-    // First, flatten into individual cards to pull
-    const pulls = [];
-    for (const cardInfo of locationsData) {
-      for (const loc of cardInfo.locations) {
-        pulls.push({
-          entry_id: loc.entry_id, // include entry_id from backend
-          card_id: cardInfo.card_id,
-          card_name: loc.card_name,
-          set_name: loc.set_name,
-          number: loc.number,
-          take: loc.take,
-          location_id: loc.location_id,
-          location_name: loc.location_name,
-          compartment_id: loc.compartment_id,
-          compartment_display: loc.compartment_display,
-          position: loc.position
-        });
-      }
-    }
-
-    // Group by location_id + compartment_id
-    const stepMap = new Map();
-    for (const pull of pulls) {
-      const stepKey = pull.location_id ? `${pull.location_id}-${pull.compartment_id}` : 'unassigned';
-      if (!stepMap.has(stepKey)) {
-        stepMap.set(stepKey, {
-          id: stepKey,
-          location_id: pull.location_id,
-          location_name: pull.location_name,
-          compartment_id: pull.compartment_id,
-          compartment_display: pull.compartment_display,
-          pulls: []
-        });
-      }
-      stepMap.get(stepKey).pulls.push(pull);
-    }
-
-    // Sort pulls within each step by position so the user can pull them in order
-    for (const step of stepMap.values()) {
-      step.pulls.sort((a, b) => {
-        const posA = a.position || 0;
-        const posB = b.position || 0;
-        return posA - posB;
-      });
-    }
-
-    return Array.from(stepMap.values()).sort((a, b) => {
-      if (a.location_id === null) return 1;
-      if (b.location_id === null) return -1;
-      if (a.location_name !== b.location_name) return a.location_name.localeCompare(b.location_name);
-      return (a.compartment_id || 0) - (b.compartment_id || 0);
-    });
-  }, [locationsData]);
-
-  const currentStep = steps[currentStepIndex];
-
-  // 2. Fetch compartment context when step changes
+  // Load each located page's compartment layout so pulled cards can be
+  // highlighted in their physical grid (by entry_id, order-independent).
   useEffect(() => {
     let active = true;
-    if (!currentStep) return;
+    if (pagesFlat.length === 0) { setGrids({}); return; }
 
-    if (currentStep.id === 'unassigned' || !currentStep.location_id) {
-      setCompartmentData(null);
-      return;
-    }
-
-    const fetchCompartment = async () => {
-      setLoadingContext(true);
-      try {
-        const [locRes, compsRes, cardsRes] = await Promise.all([
-          fetch(`/api/locations/${currentStep.location_id}`),
-          fetch(`/api/locations/${currentStep.location_id}/compartments`),
-          fetch(`/api/collection?compartment_id=${currentStep.compartment_id}`)
-        ]);
-
-        if (locRes.ok && compsRes.ok && cardsRes.ok) {
-          const loc = await locRes.json();
-          const comps = await compsRes.json();
-          const cards = await cardsRes.json();
-          // Find the specific compartment metadata
-          const comp = comps.find(c => c.id === currentStep.compartment_id);
-          
-          if (active && comp) {
-            // Sort cards by position (or custom sort order) so CompartmentView matches the physical layout
-            cards.sort((a, b) => (a.position || 0) - (b.position || 0));
-            setCompartmentData({ ...comp, cards, location: loc });
-          }
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        if (active) setLoadingContext(false);
+    const locCache = new Map();
+    const fetchLocation = async (locationId) => {
+      if (!locCache.has(locationId)) {
+        locCache.set(locationId, Promise.all([
+          fetch(`/api/locations/${locationId}`).then(r => r.json()),
+          fetch(`/api/locations/${locationId}/compartments`).then(r => r.json())
+        ]).then(([loc, comps]) => ({ loc, comps })));
       }
+      return locCache.get(locationId);
     };
-    fetchCompartment();
-    return () => { active = false; };
-  }, [currentStep]);
 
-  // First unchecked card position
-  const firstUnchecked = currentStep ? currentStep.pulls.find(p => !checkedCards.has(`${p.card_id}-${p.position}`)) : null;
-  const focusEntryId = firstUnchecked ? firstUnchecked.entry_id : null;
-
-  if (!currentStep) return null;
-
-  // Track checked state via unique pull ID (card_id + position)
-  const toggleCheck = async (pull) => {
-    const pullId = getPullId(pull);
-    const isChecked = checkedCards.has(pullId);
-    
-    // Optimistic UI update
-    const next = new Set(checkedCards);
-    if (isChecked) {
-      next.delete(pullId);
-    } else {
-      next.add(pullId);
-    }
-    setCheckedCards(next);
-
-    // Update physical location in backend
-    if (pull.entry_id) {
-      try {
-        if (!isChecked) {
-          // Unassign the card since it's checked (pulled)
-          await fetch(`/api/collection/${pull.entry_id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ location_id: null, compartment_id: null, position: null })
-          });
-        } else {
-          // Put it back to its original location if unchecked
-          await fetch(`/api/collection/${pull.entry_id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              location_id: pull.location_id, 
-              compartment_id: pull.compartment_id, 
-              position: pull.position 
-            })
-          });
+    (async () => {
+      const next = {};
+      for (const pg of pagesFlat) {
+        try {
+          const { loc, comps } = await fetchLocation(pg.location_id);
+          const comp = comps.find(c => c.id === pg.compartment_id);
+          if (!comp) continue;
+          const cards = await fetch(`/api/collection?compartment_id=${pg.compartment_id}`).then(r => r.json());
+          const sortOrder = loc.sort_order || 'custom';
+          if (sortOrder === 'custom') cards.sort((a, b) => (a.position || 0) - (b.position || 0));
+          else sortCardsByOrder(cards, sortOrder, loc.foil_sorting, setsList);
+          next[pg.key] = { compartment: comp, cards, locationType: loc.type || 'Binder', sortOrder };
+        } catch (err) {
+          console.error('Failed to load compartment layout', err);
         }
-      } catch (err) {
-        console.error('Failed to update card location', err);
       }
-    }
+      if (active) setGrids(next);
+    })();
+
+    return () => { active = false; };
+  }, [pagesFlat, setsList]);
+
+  const doneCount = done.size;
+  const allComplete = totalPulls > 0 && doneCount === totalPulls;
+  const pct = totalPulls ? Math.round((doneCount / totalPulls) * 100) : 0;
+
+  const setChecked = (ids, on) => setDone(prev => {
+    const next = new Set(prev);
+    ids.forEach(id => (on ? next.add(id) : next.delete(id)));
+    return next;
+  });
+  const toggleOne = (id) => setChecked([id], !done.has(id));
+
+  const SelectAll = ({ ids, label = 'Select all' }) => {
+    const all = ids.length > 0 && ids.every(id => done.has(id));
+    const some = !all && ids.some(id => done.has(id));
+    return (
+      <button
+        type="button"
+        onClick={() => setChecked(ids, !all)}
+        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 600, padding: '0.2rem', flexShrink: 0 }}
+      >
+        <span style={{ width: '16px', height: '16px', borderRadius: '4px', border: all || some ? 'none' : '2px solid var(--text-muted)', background: all ? 'var(--accent-green)' : some ? 'var(--accent-blue)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', color: all ? '#000' : '#fff' }}>
+          {all ? <Check size={11} strokeWidth={3} /> : some ? <Minus size={11} strokeWidth={3} /> : null}
+        </span>
+        {label}
+      </button>
+    );
   };
 
-  const getPullId = (pull) => `${pull.card_id}-${pull.position}`;
+  const renderRows = (pulls) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+      {pulls.map(pull => {
+        const isDone = done.has(pull.entry_id);
+        const slot = slotOf(pull.position);
+        return (
+          <button
+            key={pull.entry_id}
+            type="button"
+            onClick={() => toggleOne(pull.entry_id)}
+            style={{
+              textAlign: 'left', width: '100%', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.65rem 0.75rem',
+              background: isDone ? 'rgba(16,185,129,0.1)' : 'rgba(255,255,255,0.03)',
+              border: isDone ? '1px solid var(--accent-green)' : '1px solid var(--border-glass)',
+              borderRadius: 'var(--radius-sm)', transition: 'background 0.15s, border-color 0.15s'
+            }}
+          >
+            <div style={{
+              width: '22px', height: '22px', flexShrink: 0, borderRadius: '50%',
+              border: isDone ? 'none' : '2px solid var(--text-muted)',
+              background: isDone ? 'var(--accent-green)' : 'transparent',
+              display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}>
+              {isDone && <Check size={14} color="#000" strokeWidth={3} />}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: '#fff', fontSize: '0.9rem', fontWeight: 600, textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.6 : 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {pull.card_name}
+              </div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                {pull.set_name} · #{pull.number}{slot ? ` · Slot ${slot}` : ''}
+              </div>
+            </div>
+            {pull.take > 1 && (
+              <span className="badge" style={{ flexShrink: 0, background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)', fontSize: '0.8rem', padding: '0.2rem 0.5rem' }}>
+                ×{pull.take}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
 
-  const handleNext = () => {
-    if (currentStepIndex < steps.length - 1) {
-      setCurrentStepIndex(i => i + 1);
-    } else {
-      onClose(); // Finished
-    }
+  const renderGrid = (page) => {
+    const grid = grids[page.key];
+    if (!grid) return null;
+    return (
+      <div style={{ background: 'rgba(0,0,0,0.25)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-md)', padding: '0.85rem', marginBottom: '0.6rem', pointerEvents: 'none', overflow: 'hidden' }}>
+        <CompartmentView
+          compartment={grid.compartment}
+          cards={grid.cards}
+          locationType={grid.locationType}
+          sortOrder={grid.sortOrder}
+          setsList={setsList}
+          highlightEntryIds={page.pulls.map(p => p.entry_id)}
+          focusEntryId={page.pulls[0]?.entry_id}
+          hideFocusedCardInfo
+        />
+      </div>
+    );
   };
-
-  const allPullsChecked = currentStep.pulls.every(p => checkedCards.has(getPullId(p)));
 
   return (
-    <div style={{
-      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-      backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem'
-    }} onClick={onClose}>
-      <div className="glass-panel" style={{
-        maxWidth: '800px', width: '100%', maxHeight: '90vh', overflowY: 'auto',
-        display: 'flex', flexDirection: 'column', gap: '0'
-      }} onClick={e => e.stopPropagation()}>
-        
+    <div
+      style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}
+      onClick={onClose}
+    >
+      <div
+        className="glass-panel"
+        style={{ maxWidth: '640px', width: '100%', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
+        onClick={e => e.stopPropagation()}
+      >
         {/* Header */}
-        <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-glass)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border-glass)', flexShrink: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
             <div>
-              <h2 style={{ fontSize: '1.5rem', color: '#fff', fontWeight: 800, margin: '0 0 0.5rem 0' }}>
-                Deck Checked Out!
-              </h2>
-              <p style={{ color: 'var(--text-secondary)', margin: 0, fontSize: '0.9rem' }}>
-                Pull the physical cards from your collection.
-              </p>
+              <h2 style={{ fontSize: '1.35rem', color: '#fff', fontWeight: 800, margin: '0 0 0.25rem 0' }}>{copy.title}</h2>
+              <p style={{ color: 'var(--text-secondary)', margin: 0, fontSize: '0.85rem' }}>{copy.subtitle}</p>
             </div>
-            <button className="btn btn-secondary btn-icon-only" onClick={onClose}>
+            <button className="btn btn-secondary btn-icon-only" onClick={onClose} aria-label="Close">
               <X size={16} />
             </button>
           </div>
-          
-          {/* Progress Bar */}
-          <div style={{ marginTop: '1.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-              <span>Step {currentStepIndex + 1} of {steps.length}</span>
-              <span>{Math.round(((currentStepIndex) / steps.length) * 100)}% Complete</span>
+
+          {totalPulls > 0 && (
+            <div style={{ marginTop: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{doneCount} of {totalPulls} {copy.verb}</span>
+                <SelectAll ids={allEntryIds} label={allComplete ? 'Clear all' : 'Select all'} />
+              </div>
+              <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
+                <div style={{ width: `${pct}%`, height: '100%', background: allComplete ? 'var(--accent-green)' : 'var(--accent-blue)', transition: 'width 0.3s ease' }} />
+              </div>
             </div>
-            <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
-              <div style={{ width: `${((currentStepIndex + (allPullsChecked ? 1 : 0)) / steps.length) * 100}%`, height: '100%', background: 'var(--accent-blue)', transition: 'width 0.3s ease' }} />
-            </div>
-          </div>
+          )}
         </div>
 
-        {/* Content Area */}
-        <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem', minHeight: '300px' }}>
-          
-          {/* Step Context Header */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)' }}>
-            <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'rgba(59,130,246,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-blue)' }}>
-              <Layers size={20} />
-            </div>
-            <div>
-              <h3 style={{ margin: 0, color: '#fff', fontSize: '1.1rem' }}>{currentStep.location_name}</h3>
-              {currentStep.compartment_display && (
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{currentStep.compartment_display}</div>
-              )}
-            </div>
-          </div>
+        {/* Body */}
+        <div style={{ padding: '1.25rem 1.5rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          {totalPulls === 0 && missing.length === 0 && (
+            <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '1.5rem 0', fontSize: '0.9rem' }}>No cards to move.</div>
+          )}
 
-          {/* Unassigned Pile Message */}
-          {currentStep.id === 'unassigned' && (
-            <div style={{ background: 'rgba(59,130,246,0.1)', color: 'var(--accent-blue)', borderRadius: 'var(--radius-md)', padding: '1rem', border: '1px solid rgba(59,130,246,0.3)', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <div style={{ fontSize: '1.25rem' }}>ℹ️</div>
-              <div>These cards are in your <strong>Unassigned Pile</strong> (not stored in a Binder or Box yet), so there is no visual grid layout to show.</div>
+          {missing.length > 0 && (
+            <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.4)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-red)', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.4rem' }}>
+                <AlertTriangle size={16} /> Not enough copies owned
+              </div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                {missing.map(m => <div key={m.card_id}>{m.qty}× {m.name}</div>)}
+              </div>
             </div>
           )}
 
-          {/* Visual Grid Context (If available) */}
-          {currentStep.id !== 'unassigned' && (
-            <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: 'var(--radius-md)', padding: '1rem', border: '1px solid var(--border-glass)' }}>
-              <div style={{ marginBottom: '1rem', color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 600 }}>Compartment Layout</div>
-              {loadingContext ? (
-                <div className="spinner" style={{ margin: '2rem auto' }}></div>
-              ) : compartmentData ? (
-                <div style={{ pointerEvents: 'none' }}>
-                  <CompartmentView
-                    compartment={compartmentData}
-                    cards={compartmentData.cards}
-                    locationType={compartmentData.location?.type || 'Binder'}
-                    sortOrder={compartmentData.location?.sort_order || 'custom'}
-                    setsList={setsList}
-                    highlightPositions={currentStep.pulls.map(p => Math.floor(p.position / 1000))}
-                    focusEntryId={focusEntryId}
-                  />
-                </div>
-              ) : (
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '1rem' }}>Layout context unavailable</div>
-              )}
-            </div>
-          )}
-
-          {/* Cards to pull list */}
-          <div>
-            <h4 style={{ margin: '0 0 1rem 0', color: '#fff', fontSize: '0.95rem' }}>Cards to pull:</h4>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {currentStep.pulls.map((pull, idx) => {
-                const pullId = getPullId(pull);
-                const isChecked = checkedCards.has(pullId);
-                return (
-                  <div 
-                    key={idx}
-                    onClick={() => toggleCheck(pull)}
-                    style={{ 
-                      display: 'flex', alignItems: 'center', gap: '1rem', 
-                      padding: '1rem', 
-                      background: isChecked ? 'rgba(16,185,129,0.1)' : 'rgba(255,255,255,0.02)', 
-                      border: isChecked ? '1px solid var(--accent-green)' : '1px solid var(--border-glass)',
-                      borderRadius: 'var(--radius-sm)',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s'
-                    }}
-                  >
-                    <div style={{
-                      width: '24px', height: '24px', borderRadius: '50%',
-                      border: isChecked ? 'none' : '2px solid var(--text-muted)',
-                      background: isChecked ? 'var(--accent-green)' : 'transparent',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center'
-                    }}>
-                      {isChecked && <CheckCircle size={16} color="#000" />}
-                    </div>
-                    
-                    <div style={{ flex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <strong style={{ color: isChecked ? '#fff' : 'var(--text-primary)', fontSize: '1rem' }}>{pull.card_name}</strong>
-                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{pull.set_name} • #{pull.number} {pull.position ? `• Slot ${Math.floor(pull.position / 1000)}` : ''}</div>
-                      </div>
-                      <div className="badge" style={{ background: isChecked ? 'var(--accent-green)' : 'var(--accent-blue)', color: isChecked ? '#000' : '#fff', fontSize: '0.9rem', padding: '0.25rem 0.5rem' }}>
-                        Pull x{pull.take}
-                      </div>
-                    </div>
+          {containers.map(container => {
+            const singlePage = container.pages.length === 1;
+            return (
+              <div key={container.key} style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                {/* Container header (with container-level select-all) */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                  <div style={{ width: '32px', height: '32px', borderRadius: '8px', flexShrink: 0, background: container.unassigned ? 'rgba(148,163,184,0.15)' : 'rgba(59,130,246,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: container.unassigned ? 'var(--text-muted)' : 'var(--accent-blue)' }}>
+                    {container.unassigned ? <Package size={16} /> : <MapPin size={16} />}
                   </div>
-                );
-              })}
-            </div>
-          </div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ color: '#fff', fontWeight: 700, fontSize: '0.95rem' }}>{container.location_name}</div>
+                    {singlePage && container.pages[0].compartment_display && (
+                      <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{container.pages[0].compartment_display}</div>
+                    )}
+                  </div>
+                  <SelectAll ids={container.entryIds} />
+                </div>
+
+                {/* Single-page container: grid + rows directly under the header */}
+                {singlePage ? (
+                  <>
+                    {!container.unassigned && renderGrid(container.pages[0])}
+                    {renderRows(container.pages[0].pulls)}
+                  </>
+                ) : (
+                  // Multi-page container: each page gets its own select-all + grid
+                  container.pages.map(page => (
+                    <div key={page.key} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingLeft: '0.5rem', borderLeft: '2px solid var(--border-glass)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: 600 }}>{page.compartment_display || 'Page'}</span>
+                        <SelectAll ids={page.pulls.map(p => p.entry_id)} />
+                      </div>
+                      {renderGrid(page)}
+                      {renderRows(page.pulls)}
+                    </div>
+                  ))
+                )}
+              </div>
+            );
+          })}
         </div>
 
         {/* Footer */}
-        <div style={{ padding: '1.5rem', borderTop: '1px solid var(--border-glass)', display: 'flex', justifyContent: 'space-between', background: 'rgba(0,0,0,0.2)' }}>
-          <button 
-            className="btn btn-secondary" 
-            onClick={() => setCurrentStepIndex(i => Math.max(0, i - 1))}
-            disabled={currentStepIndex === 0}
-          >
-            <ChevronLeft size={16} /> Previous
-          </button>
-          
-          <button 
-            className="btn btn-primary" 
-            onClick={handleNext}
-            style={{ 
-              opacity: allPullsChecked ? 1 : 0.5,
-              transform: allPullsChecked ? 'scale(1.05)' : 'none',
-              boxShadow: allPullsChecked ? '0 0 15px rgba(59,130,246,0.5)' : 'none'
-            }}
-          >
-            {currentStepIndex === steps.length - 1 ? 'Finish Checklist' : 'Next Location'} <ChevronRight size={16} />
-          </button>
+        <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid var(--border-glass)', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', flexShrink: 0 }}>
+          <button className="btn btn-primary" onClick={onClose}>{allComplete ? 'Done' : 'Close'}</button>
         </div>
-
       </div>
     </div>
   );

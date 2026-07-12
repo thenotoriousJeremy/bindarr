@@ -26,6 +26,39 @@ function defaultCompartmentPlan(type) {
   return { count: 1, capacity: 500 };
 }
 
+// How many copies of each collection entry are physically pulled for a
+// checked-out deck. Sums required quantity per card across all of the user's
+// checked-out decks, then allocates greedily onto their owned entries using the
+// same ordering the checkout locator uses (located copies first, newest first),
+// so storage greys out the same copies the wizard told them to grab.
+// ponytail: N+1 query per distinct checked-out card. Fine at personal-collection
+// scale; batch into one windowed query if a user ever checks out hundreds of cards.
+async function checkedOutAllocation(userId) {
+  const required = await db.all(`
+    SELECT dc.card_id, SUM(dc.quantity) AS req
+    FROM deck_cards dc
+    JOIN decks d ON dc.deck_id = d.id
+    WHERE d.user_id = ? AND d.checked_out = 1
+    GROUP BY dc.card_id
+  `, [userId]);
+  const alloc = new Map();
+  for (const { card_id, req } of required) {
+    let need = req;
+    const entries = await db.all(`
+      SELECT id AS entry_id, quantity FROM collection
+      WHERE user_id = ? AND list_type = 'collection' AND card_id = ?
+      ORDER BY (location_id IS NOT NULL) DESC, added_at DESC
+    `, [userId, card_id]);
+    for (const e of entries) {
+      if (need <= 0) break;
+      const take = Math.min(e.quantity, need);
+      need -= take;
+      alloc.set(e.entry_id, take);
+    }
+  }
+  return alloc;
+}
+
 // Resolves where a card should actually land: an explicit compartment_id is
 // trusted as-is (manual placement from the box/binder UI); given only a
 // location_id, the recommendation engine picks a compartment automatically;
@@ -228,6 +261,8 @@ router.get('/collection', async (req, res) => {
     `;
     const rows = await db.all(query, filterParams);
 
+    const alloc = await checkedOutAllocation(req.user.id);
+
     // Parse JSON fields
     const formatted = rows.map(row => ({
       ...row,
@@ -235,6 +270,7 @@ router.get('/collection', async (req, res) => {
       subtypes: JSON.parse(row.subtypes || '[]'),
       types: JSON.parse(row.types || '[]'),
       color_identity: JSON.parse(row.color_identity || '[]'),
+      checked_out_qty: alloc.get(row.entry_id) || 0,
       compartment_display_label: row.compartment_id
         ? compartmentLabel({ idx: row.compartment_idx, label: row.compartment_label }, row.location_type)
         : null,

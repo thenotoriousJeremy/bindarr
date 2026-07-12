@@ -3,6 +3,7 @@ import { Layers } from 'lucide-react';
 import { getPrintingBadgeStyle, getPrintingBadgeLabel, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { formatPrice } from '../utils/formatPrice';
+import { typeCategory } from '../utils/cardSort';
 
 const infoChipStyle = { fontSize: '0.6rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)', whiteSpace: 'nowrap' };
 
@@ -21,26 +22,30 @@ function categoryForField(card, field, setsList = []) {
       const idx = setsList.findIndex(s => s.name === card.set_name);
       return idx >= 0 ? `${idx + 1}. ${card.set_name}` : card.set_name;
     }
+    case 'color_identity':
+    case 'color': {
+      let ci = 'Colorless';
+      if (typeof card.color_identity === 'string') {
+        try { const p = JSON.parse(card.color_identity); if (p.length > 0) ci = p[0]; } catch(e){}
+      } else if (Array.isArray(card.color_identity) && card.color_identity.length > 0) {
+        ci = card.color_identity[0];
+      }
+      const names = { 'W': 'White', 'U': 'Blue', 'B': 'Black', 'R': 'Red', 'G': 'Green' };
+      return names[ci] || ci || 'Colorless';
+    }
     case 'type': {
-      let typeStr = 'Colorless';
+      let types = [];
       if (card.types) {
         try {
-          const t = typeof card.types === 'string' ? JSON.parse(card.types) : card.types;
-          if (t && t.length > 0) typeStr = t[0];
-        } catch (e) { /* no-op */ }
+          types = typeof card.types === 'string' ? JSON.parse(card.types) : card.types;
+        } catch (e) { types = Array.isArray(card.types) ? card.types : []; }
       }
-      return typeStr;
-    }
-    case 'color':
-    case 'color_identity': {
-      let ci = card.color_identity;
-      if (typeof ci === 'string') { try { ci = JSON.parse(ci); } catch (e) { ci = []; } }
-      return Array.isArray(ci) && ci.length > 0 ? ci.join('') : 'Colorless';
+      return typeCategory(types);
     }
     case 'cmc':
-      return (card.cmc != null && card.cmc !== '') ? `Mana Value ${card.cmc}` : 'Mana Value ?';
+      return `CMC ${card.cmc != null && card.cmc !== '' ? card.cmc : '?'}`;
     case 'rarity':
-      return card.rarity || 'Unknown Rarity';
+      return card.rarity || 'Common';
     case 'printing':
       return card.printing || 'Normal';
     case 'language':
@@ -63,9 +68,9 @@ function categoryForField(card, field, setsList = []) {
 function dividerFieldsOf(arr) {
   if (!Array.isArray(arr) || arr.length === 0) return [];
   const chosen = arr.filter(r => r && r.divider === true);
-  if (chosen.length > 0) return chosen.map(r => ({ field: r.by, color: r.dividerColor || '#ff4747' }));
+  if (chosen.length > 0) return chosen.map(r => ({ field: r.by, color: r.dividerColor || '#6b7280' }));
   if (arr.some(r => r && r.divider === false)) return [];
-  return [{ field: arr[0].by, color: '#ff4747' }];
+  return [{ field: arr[0].by, color: '#6b7280' }];
 }
 
 export function getSortCategories(card, sortOrder, setsList = []) {
@@ -78,11 +83,11 @@ export function getSortCategories(card, sortOrder, setsList = []) {
     try { dividerFields = dividerFieldsOf(JSON.parse(sortOrder)); }
     catch (e) { dividerFields = []; }
   } else if (typeof sortOrder === 'string') {
-    if (sortOrder.startsWith('name')) dividerFields = [{ field: 'name', color: '#ff4747' }];
-    else if (sortOrder.startsWith('set')) dividerFields = [{ field: 'set', color: '#ff4747' }];
-    else if (sortOrder.startsWith('type')) dividerFields = [{ field: 'type', color: '#ff4747' }];
-    else if (sortOrder.startsWith('price')) dividerFields = [{ field: 'price', color: '#ff4747' }];
-    else if (sortOrder.startsWith('language')) dividerFields = [{ field: 'language', color: '#ff4747' }];
+    if (sortOrder.startsWith('name')) dividerFields = [{ field: 'name', color: '#6b7280' }];
+    else if (sortOrder.startsWith('set')) dividerFields = [{ field: 'set', color: '#6b7280' }];
+    else if (sortOrder.startsWith('type')) dividerFields = [{ field: 'type', color: '#6b7280' }];
+    else if (sortOrder.startsWith('price')) dividerFields = [{ field: 'price', color: '#6b7280' }];
+    else if (sortOrder.startsWith('language')) dividerFields = [{ field: 'language', color: '#6b7280' }];
   }
 
   return dividerFields.map(df => ({
@@ -129,7 +134,7 @@ function PrintingBadge({ printing }) {
 
 // Detail banner for the currently focused card. Shared by the box coverflow and
 // the binder grid so both surfaces describe a selection the same way.
-function FocusedCardInfo({ card, slotNumber, moveSelect = null }) {
+export function FocusedCardInfo({ card, slotNumber, moveSelect = null }) {
   return (
     <div className="focused-card-info-panel" style={{ marginTop: '0.5rem' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.7rem', borderRadius: 'var(--radius-sm)' }}>
@@ -180,9 +185,15 @@ export default function CompartmentView({
   sortOrder = 'custom',
   setsList = [],
   highlightPositions = [], // Array of positions to highlight (1-indexed)
+  highlightEntryIds = [], // Cards to highlight by entry_id (exact, packing-independent)
   targetActiveIndex = null,
   onCardClick = null,
   
+  // Lifted state for binder active card
+  activeEntryId = undefined,
+  onActiveEntryIdChange = null,
+  hideFocusedCardInfo = false,
+
   // Storage Management Props (can be omitted for read-only view)
   onRename = null,
   onSetCapacity = null,
@@ -204,6 +215,7 @@ export default function CompartmentView({
 }) {
   const isBinder = locationType === 'Binder' || locationType === 'Toploader Binder';
   const isSelected = (entryId) => !!(selectedIds && selectedIds.has(entryId));
+  const highlightSet = new Set(highlightEntryIds);
 
   // Long-press-to-arm selection, mirrors CollectionList. Coexists with the
   // swipe/coverflow touch handlers because a >10px move cancels the timer.
@@ -257,21 +269,29 @@ export default function CompartmentView({
   })();
   const acceptsLabel = compRuleCount > 0 ? `Accepts (${compRuleCount})` : 'Accepts';
 
+  const recIdx = recommendedSpot ? recommendedSpot.index : -1;
+  const cardsWithGhost = [...cards];
+  if (recIdx >= 0) {
+    while (cardsWithGhost.length < recIdx) cardsWithGhost.push(null);
+    cardsWithGhost.splice(recIdx, 0, {
+      __ghost: true,
+      image_url: recommendedSpot.image_url,
+      name: recommendedSpot.name,
+      set_name: recommendedSpot.set_name
+    });
+  }
+
   // --- Box Coverflow State ---
-  const slotCountBox = Math.max(compartment?.capacity || 1, cards.length);
-  const filledCardsBox = Array.from({ length: slotCountBox }, (_, i) => cards[i] || null);
+  const slotCountBox = Math.max(compartment?.capacity || 1, cardsWithGhost.length);
+  const filledCardsBox = Array.from({ length: slotCountBox }, (_, i) => cardsWithGhost[i] || null);
   
   const initialActiveIndex = highlightPositions.length > 0 
     ? Math.max(0, highlightPositions[0] - 1) 
     : 0;
     
-  const [coverflowActiveIndex, setCoverflowActiveIndex] = useState(targetActiveIndex !== null ? targetActiveIndex : initialActiveIndex);
+  const [coverflowActiveIndex, setCoverflowActiveIndex] = useState(0);
+  const lastTargetActiveRef = useRef(null);
 
-  useEffect(() => {
-    if (targetActiveIndex !== null && targetActiveIndex !== undefined) {
-      setCoverflowActiveIndex(targetActiveIndex);
-    }
-  }, [targetActiveIndex]);
   const [touchStart, setTouchStart] = useState(0);
 
   const handleCoverflowTouchStart = (e) => setTouchStart(e.touches[0].clientX);
@@ -286,23 +306,18 @@ export default function CompartmentView({
   const [labelDraft, setLabelDraft] = useState(compartment?.display_label || '');
   const [binderActiveEntryId, setBinderActiveEntryId] = useState(null);
 
+  const currentActiveId = activeEntryId !== undefined ? activeEntryId : binderActiveEntryId;
+  const setCurrentActiveId = (id) => {
+    if (onActiveEntryIdChange) onActiveEntryIdChange(id);
+    else setBinderActiveEntryId(id);
+  };
+
   if (!compartment) return null;
 
   if (isBinder) {
     const cols = pocketColumns(compartment.capacity);
-    const recIdx = recommendedSpot ? recommendedSpot.index : -1;
-    const rendered = [...cards];
-    if (recIdx >= 0) {
-      while (rendered.length < recIdx) rendered.push(null);
-      rendered.splice(recIdx, 0, {
-        __ghost: true,
-        image_url: recommendedSpot.image_url,
-        name: recommendedSpot.name,
-        set_name: recommendedSpot.set_name
-      });
-    }
-    const slotCount = Math.max(compartment.capacity, rendered.length);
-    const pockets = Array.from({ length: slotCount }, (_, i) => rendered[i] || null);
+    const slotCount = Math.max(compartment.capacity, cardsWithGhost.length);
+    const pockets = Array.from({ length: slotCount }, (_, i) => cardsWithGhost[i] || null);
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', height: '100%' }}>
@@ -361,40 +376,86 @@ export default function CompartmentView({
         )}
         
         <div className="binder-pocket-grid" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
-          {pockets.map((card, i) => {
-            const pos = i + 1;
-            const prev = i > 0 ? pockets[i - 1] : null;
-            const cats = getSortCategories(card, sortOrder, setsList);
-            const prevCats = getSortCategories(prev, sortOrder, setsList);
-            
-            const newDividers = [];
-            if (cats.length > 0) {
-              if (!prev || prevCats.length === 0) {
-                newDividers.push(...cats);
-              } else {
-                let diffIdx = -1;
-                for (let j = 0; j < cats.length; j++) {
-                  if (!prevCats[j] || cats[j].label !== prevCats[j].label) {
-                    diffIdx = j;
-                    break;
+          {(() => {
+            let lastNonGhostCats = [];
+            return pockets.map((card, i) => {
+              const pos = i + 1;
+              const cats = card && card.__ghost ? [] : getSortCategories(card, sortOrder, setsList);
+              const prevCats = lastNonGhostCats;
+              
+              const newDividers = [];
+              if (cats.length > 0) {
+                if (prevCats.length === 0) {
+                  newDividers.push(...cats);
+                } else {
+                  let diffIdx = -1;
+                  for (let j = 0; j < cats.length; j++) {
+                    if (!prevCats[j] || cats[j].label !== prevCats[j].label) {
+                      diffIdx = j;
+                      break;
+                    }
+                  }
+                  if (diffIdx !== -1) {
+                    for (let j = diffIdx; j < cats.length; j++) {
+                      newDividers.push(cats[j]);
+                    }
                   }
                 }
-                if (diffIdx !== -1) {
-                  for (let j = diffIdx; j < cats.length; j++) {
-                    newDividers.push(cats[j]);
-                  }
-                }
+                lastNonGhostCats = cats;
               }
-            }
-            const categoryStart = newDividers.length > 0;
-            const isHighlighted = highlightPositions.includes(pos);
-            const isTarget = isHighlighted;
 
-            if (card && card.__ghost) {
-              return (
-                <div key={`ghost-${i}`} id="recommended-spot" className={`binder-pocket recommended-ghost ${categoryStart ? 'set-start' : ''}`}>
-                  {card.image_url && <img src={card.image_url} alt={card.name} style={{ opacity: 0.85 }} />}
-                  <div className="rec-ghost-label">Slot {pos}</div>
+              const categoryStart = newDividers.length > 0;
+              const isHighlighted = highlightPositions.includes(pos);
+              const isTarget = isHighlighted || (card && !card.__ghost && highlightSet.has(card.entry_id));
+
+              if (card && card.__ghost) {
+                return (
+                  <div key={`ghost-${i}`} id="recommended-spot" className={`binder-pocket recommended-ghost ${categoryStart ? 'set-start' : ''}`}>
+                    {card.image_url && <img src={card.image_url} alt={card.name} style={{ opacity: 0.85 }} />}
+                    <div className="rec-ghost-label">Slot {pos}</div>
+                    {newDividers.length > 0 && (
+                      <div style={{ position: 'absolute', top: 0, left: 0, transform: 'translateY(-100%)', display: 'flex', flexDirection: 'column', gap: '2px', paddingBottom: '2px', zIndex: 20 }}>
+                        {newDividers.map((div, dIdx) => (
+                          <div key={dIdx} className="set-divider-label" title={div.label} style={{ position: 'relative', top: 'auto', left: 'auto', backgroundColor: div.color }}>{div.label}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+              return card ? (
+                <div
+                  key={card.entry_id || `slot-${i}`}
+                  className={`binder-pocket ${categoryStart ? 'set-start' : ''} ${card.entry_id === focusEntryId ? 'focus-flash' : ''}`}
+                  style={{
+                    ...getCardRarityBorder(card.rarity),
+                    ...(isTarget ? {
+                      border: '2.5px solid var(--accent-green)',
+                      boxShadow: '0 0 15px rgba(34,197,94,0.4), inset 0 0 20px rgba(34,197,94,0.3)'
+                    } : {}),
+                    ...(card.entry_id === currentActiveId ? { border: '2.5px solid var(--accent-yellow)', boxShadow: '0 0 10px rgba(250,204,21,0.5)' } : {}),
+                    ...(isSelected(card.entry_id) ? selectedOutline : {})
+                  }}
+                  {...pressHandlers(card.entry_id)}
+                  onClick={() => {
+                    if (handleSelectClick(card.entry_id)) return;
+                    if (card.entry_id === currentActiveId) onCardClick && onCardClick(card);
+                    else setCurrentActiveId(card.entry_id);
+                  }}
+                >
+                  <img src={card.image_url} alt={card.name} title={card.name} />
+                  {getFoilOverlayClass(card.printing) && <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4px' }} />}
+                  <PrintingBadge printing={card.printing} />
+                  {card.checked_out_qty > 0 && (
+                    <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.62)', borderRadius: '4px', zIndex: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                      <span style={{ fontSize: '0.5rem', fontWeight: 900, letterSpacing: '0.04em', color: '#fff', background: 'var(--accent-red)', padding: '2px 5px', borderRadius: '4px', transform: 'rotate(-8deg)', textTransform: 'uppercase' }}>
+                        {card.checked_out_qty < card.quantity ? `${card.checked_out_qty}/${card.quantity} Out` : 'In Play'}
+                      </span>
+                    </div>
+                  )}
+                  {selectMode && (
+                    <div style={{ position: 'absolute', top: '3px', left: '3px', zIndex: 25, width: '18px', height: '18px', borderRadius: '50%', background: isSelected(card.entry_id) ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.65rem', fontWeight: 900 }}>{isSelected(card.entry_id) ? '✓' : ''}</div>
+                  )}
                   {newDividers.length > 0 && (
                     <div style={{ position: 'absolute', top: 0, left: 0, transform: 'translateY(-100%)', display: 'flex', flexDirection: 'column', gap: '2px', paddingBottom: '2px', zIndex: 20 }}>
                       {newDividers.map((div, dIdx) => (
@@ -402,62 +463,27 @@ export default function CompartmentView({
                       ))}
                     </div>
                   )}
+
+                  {isTarget && (
+                    <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'var(--accent-green)', color: '#000', width: '30px', height: '30px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 4px 10px rgba(0,0,0,0.5)' }}>✓</div>
+                  )}
+                </div>
+              ) : (
+                <div key={`empty-${i}`} className="binder-pocket empty" style={isTarget ? { borderColor: 'var(--accent-green)', background: 'rgba(34,197,94,0.1)' } : {}}>
+                  <span className="slot-number">{pos}</span>
+                  {isTarget && (
+                    <div style={{ color: 'var(--accent-green)', fontWeight: 'bold', fontSize: '0.8rem', marginTop: '0.5rem' }}>Pull</div>
+                  )}
                 </div>
               );
-            }
-            return card ? (
-              <div
-                key={card.entry_id || `slot-${i}`}
-                className={`binder-pocket ${categoryStart ? 'set-start' : ''} ${card.entry_id === focusEntryId ? 'focus-flash' : ''}`}
-                style={{
-                  ...getCardRarityBorder(card.rarity),
-                  ...(isTarget ? {
-                    borderColor: 'var(--accent-green)',
-                    boxShadow: '0 0 15px rgba(34,197,94,0.4), inset 0 0 20px rgba(34,197,94,0.3)'
-                  } : {}),
-                  ...(card.entry_id === binderActiveEntryId ? { borderColor: 'var(--accent-yellow)', boxShadow: '0 0 10px rgba(250,204,21,0.5)' } : {}),
-                  ...(isSelected(card.entry_id) ? selectedOutline : {})
-                }}
-                {...pressHandlers(card.entry_id)}
-                onClick={() => {
-                  if (handleSelectClick(card.entry_id)) return;
-                  if (card.entry_id === binderActiveEntryId) onCardClick && onCardClick(card);
-                  else setBinderActiveEntryId(card.entry_id);
-                }}
-              >
-                <img src={card.image_url} alt={card.name} title={card.name} />
-                {getFoilOverlayClass(card.printing) && <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4px' }} />}
-                <PrintingBadge printing={card.printing} />
-                {selectMode && (
-                  <div style={{ position: 'absolute', top: '3px', left: '3px', zIndex: 25, width: '18px', height: '18px', borderRadius: '50%', background: isSelected(card.entry_id) ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.65rem', fontWeight: 900 }}>{isSelected(card.entry_id) ? '✓' : ''}</div>
-                )}
-                {newDividers.length > 0 && (
-                  <div style={{ position: 'absolute', top: 0, left: 0, transform: 'translateY(-100%)', display: 'flex', flexDirection: 'column', gap: '2px', paddingBottom: '2px', zIndex: 20 }}>
-                    {newDividers.map((div, dIdx) => (
-                      <div key={dIdx} className="set-divider-label" title={div.label} style={{ position: 'relative', top: 'auto', left: 'auto', backgroundColor: div.color }}>{div.label}</div>
-                    ))}
-                  </div>
-                )}
-
-                {isTarget && (
-                  <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'var(--accent-green)', color: '#000', width: '30px', height: '30px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 4px 10px rgba(0,0,0,0.5)' }}>✓</div>
-                )}
-              </div>
-            ) : (
-              <div key={`empty-${i}`} className="binder-pocket empty" style={isTarget ? { borderColor: 'var(--accent-green)', background: 'rgba(34,197,94,0.1)' } : {}}>
-                <span className="slot-number">{pos}</span>
-                {isTarget && (
-                  <div style={{ color: 'var(--accent-green)', fontWeight: 'bold', fontSize: '0.8rem', marginTop: '0.5rem' }}>Pull</div>
-                )}
-              </div>
-            );
-          })}
+            })})()}
         </div>
 
         {(() => {
-          const activeCard = cards.find(c => c.entry_id === binderActiveEntryId);
+          if (hideFocusedCardInfo) return null;
+          const activeCard = cards.find(c => c.entry_id === currentActiveId);
           if (!activeCard) return null;
-          const slotNumber = pockets.findIndex(p => p && p.entry_id === binderActiveEntryId) + 1;
+          const slotNumber = pockets.findIndex(p => p && p.entry_id === currentActiveId) + 1;
           const moveSelect = sortOrder === 'custom' && moveTargets.length > 1 && onMoveCard ? (
             <select
               className="select-control"
@@ -495,32 +521,38 @@ export default function CompartmentView({
     for (let i = 0; i <= renderLimit; i++) {
       const card = filledCardsBox[i];
       if (card) {
-        const cats = getSortCategories(card, sortOrder, setsList);
-        let diffIdx = -1;
-        if (cats.length > 0) {
-          if (currentCats.length === 0) {
-            diffIdx = 0;
-          } else {
-            for (let j = 0; j < cats.length; j++) {
-              if (!currentCats[j] || cats[j].label !== currentCats[j].label) {
-                diffIdx = j;
-                break;
+        if (card.__ghost) {
+          // Ghost cards don't have full metadata (price, type, etc.) and aren't 
+          // permanently in the compartment, so they shouldn't trigger dividers.
+          renderedCards.push({ ...card, __slotNumber: slotCounter });
+        } else {
+          const cats = getSortCategories(card, sortOrder, setsList);
+          let diffIdx = -1;
+          if (cats.length > 0) {
+            if (currentCats.length === 0) {
+              diffIdx = 0;
+            } else {
+              for (let j = 0; j < cats.length; j++) {
+                if (!currentCats[j] || cats[j].label !== currentCats[j].label) {
+                  diffIdx = j;
+                  break;
+                }
               }
             }
           }
-        }
-        if (diffIdx !== -1) {
-          for (let j = diffIdx; j < cats.length; j++) {
-            renderedCards.push({
-              __divider: true,
-              entry_id: `div-${card.entry_id || i}-${cats[j].field}-${cats[j].label}`,
-              label: cats[j].label,
-              color: cats[j].color
-            });
+          if (diffIdx !== -1) {
+            for (let j = diffIdx; j < cats.length; j++) {
+              renderedCards.push({
+                __divider: true,
+                entry_id: `div-${card.entry_id || i}-${cats[j].field}-${cats[j].label}`,
+                label: cats[j].label,
+                color: cats[j].color
+              });
+            }
+            currentCats = cats;
           }
-          currentCats = cats;
+          renderedCards.push({ ...card, __slotNumber: slotCounter });
         }
-        renderedCards.push({ ...card, __slotNumber: slotCounter });
       } else {
         renderedCards.push({
           __empty: true,
@@ -537,7 +569,28 @@ export default function CompartmentView({
       if (targetIdx !== -1) {
         actualActiveIndex = targetIdx;
       }
+    } else if (targetActiveIndex !== null && targetActiveIndex !== undefined) {
+      // Map slot index to renderedCards index
+      const targetIdx = renderedCards.findIndex(c => c.__slotNumber === targetActiveIndex + 1 && !c.__divider);
+      if (targetIdx !== -1) {
+        if (lastTargetActiveRef.current !== targetActiveIndex) {
+          lastTargetActiveRef.current = targetActiveIndex;
+          actualActiveIndex = targetIdx;
+          setTimeout(() => setCoverflowActiveIndex(targetIdx), 0);
+        }
+      }
     }
+    
+    // Also fix initialization on first render if targetActiveIndex wasn't provided
+    if (actualActiveIndex === 0 && initialActiveIndex > 0 && (targetActiveIndex === null || targetActiveIndex === undefined)) {
+      const targetIdx = renderedCards.findIndex(c => c.__slotNumber === initialActiveIndex + 1 && !c.__divider);
+      if (targetIdx !== -1 && actualActiveIndex !== targetIdx && lastTargetActiveRef.current !== 'init') {
+        lastTargetActiveRef.current = 'init';
+        actualActiveIndex = targetIdx;
+        setTimeout(() => setCoverflowActiveIndex(targetIdx), 0);
+      }
+    }
+
     const activeCardIndex = Math.min(actualActiveIndex, Math.max(0, renderedCards.length - 1));
 
     return (
@@ -612,12 +665,10 @@ export default function CompartmentView({
                 }
                 
                 const pos = card.__slotNumber;
-                const isTarget = highlightPositions.includes(pos);
+                const isTarget = highlightPositions.includes(pos) || (!card.__divider && !card.__empty && !card.__ghost && highlightSet.has(card.entry_id));
                 
                 const highlightStyle = isTarget ? { 
-                  borderColor: 'var(--accent-green)', 
-                  borderWidth: '2px', 
-                  borderStyle: 'solid', 
+                  border: '2px solid var(--accent-green)', 
                   boxShadow: '0 0 20px rgba(34,197,94,0.6)' 
                 } : {};
 
@@ -657,6 +708,21 @@ export default function CompartmentView({
                   );
                 }
 
+                if (card.__ghost) {
+                  return (
+                    <div
+                      key="ghost"
+                      id="recommended-spot"
+                      className={`box-coverflow-card recommended-ghost ${offset === 0 ? 'active' : ''}`}
+                      style={{ transform, zIndex, opacity: opacity * 0.85, filter }}
+                      onClick={() => setCoverflowActiveIndex(i)}
+                    >
+                      {card.image_url && <img src={card.image_url} alt={card.name} />}
+                      <div className="rec-ghost-label">Slot {pos}</div>
+                    </div>
+                  );
+                }
+
                 return (
                   <div
                     key={card.entry_id}
@@ -672,6 +738,13 @@ export default function CompartmentView({
                     <img src={card.image_url} alt={card.name} />
                     {getFoilOverlayClass(card.printing) && <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4.5px' }} />}
                     <PrintingBadge printing={card.printing} />
+                    {card.checked_out_qty > 0 && (
+                      <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.62)', borderRadius: '5px', zIndex: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                        <span style={{ fontSize: '0.7rem', fontWeight: 900, letterSpacing: '0.04em', color: '#fff', background: 'var(--accent-red)', padding: '3px 8px', borderRadius: '4px', transform: 'rotate(-8deg)', textTransform: 'uppercase' }}>
+                          {card.checked_out_qty < card.quantity ? `${card.checked_out_qty}/${card.quantity} Out` : 'In Play'}
+                        </span>
+                      </div>
+                    )}
                     {selectMode && (
                       <div style={{ position: 'absolute', top: '4px', left: '4px', zIndex: 25, width: '20px', height: '20px', borderRadius: '50%', background: isSelected(card.entry_id) ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.7rem', fontWeight: 900 }}>{isSelected(card.entry_id) ? '✓' : ''}</div>
                     )}

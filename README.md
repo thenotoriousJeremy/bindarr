@@ -12,6 +12,7 @@ CardDexrr is a self-hostable, mobile-friendly full-stack web application for **P
 - **🗺️ Real-world Location Coordinator**: Assign physical coordinate mappings to your cards so you can locate them instantly:
   - **Binders**: Maps by Binder Name, Page Number, and Slot (1-9). Features a double-page book view with 3D page-flip animations and multi-card slot stacking.
   - **Storage Boxes**: Maps by Box Name, Row ID/Letter, and Divider Section.
+- **🎮 Deck Checkout & Check-In**: Reserve the physical cards for a deck and find them fast. Checking a deck out "for play" opens a locator that groups every card by **container → page → slot** and highlights each one in its compartment grid; while checked out, those cards are greyed and badged **In Play** in Storage. Checking the deck back in reverses the flow, guiding each card back to its slot. Select-all by page, container, or the whole deck.
 - **🇯🇵 Japanese Card Support**: OCR scans Japanese card names (hiragana, katakana, kanji), automatically translates them to English for API lookups, and displays them in their native Japanese names across the app.
 - **💾 Universal Database Exports**: One-click downloads of your complete database in CSV (TCGplayer format compatible) or JSON.
 - **🔐 Multi-User Auth**: Session-token authentication (opaque random tokens stored in a server-side `sessions` table, sent as a `Bearer` header) with admin controls for managing users and roles.
@@ -90,6 +91,27 @@ Log in and change this password immediately via Settings.
 > The password is only printed on the run that creates the account (when the database is first initialized). If you miss it and did not set `DEFAULT_ADMIN_PASSWORD`, delete the SQLite database file so it is recreated on the next startup, or set `DEFAULT_ADMIN_PASSWORD` and recreate the database.
 
 After logging in, open **Settings** and change the password. Additional users can self-register from the login screen (they are created with the `member` role); an `admin` can manage users and roles from the **Admin** panel.
+
+---
+
+## 🎮 Deck Checkout & Check-In
+
+Decks let you reserve the physical cards you need for a game and locate them fast. Checkout and check-in **never move your cards** in the database — a card's stored slot is both where you grab it and where it returns. The only thing that changes is the deck's checked-out status, which drives the greying in Storage.
+
+### Checking out (grab cards for play)
+1. Open the **Decks** tab, select a deck, and click **Checkout**.
+2. The app verifies you own enough copies (copies already committed to other checked-out decks are excluded). If you're short, it lists what's missing and stops.
+3. A **locator** opens, grouped by where each card lives:
+   - **Container → Page** (e.g. `binder → Page 5`). Each located page renders its compartment grid with the cards you need highlighted in green.
+   - **Unassigned Pile** for cards not yet filed into a container (no grid).
+4. Tick each card as you pull it. Progress shows `N of M pulled`. Use **Select all** at the page, container, or whole-deck level to check off groups at once.
+
+While a deck is checked out, its cards show **greyed with an "In Play" badge** in the Storage view, so you can see which slots are empty at a glance. If you pull only some copies of a stack, the badge reads `1/2 Out`.
+
+### Checking in (put cards back)
+1. Click **Return** on a checked-out deck.
+2. The same locator opens in reverse — **Return to Storage** — showing where each card goes back (container → page → slot, highlighted in the grid).
+3. Tick cards as you re-file them; the same select-all controls apply.
 
 ---
 

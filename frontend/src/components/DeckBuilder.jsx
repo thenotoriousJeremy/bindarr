@@ -33,6 +33,7 @@ function DeckBuilder({ showToast }) {
   const [checkingOut, setCheckingOut] = useState(false);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [checkoutLocations, setCheckoutLocations] = useState([]);
+  const [checkoutMode, setCheckoutMode] = useState('checkout'); // 'checkout' | 'checkin'
 
   // True while an add/qty write is in flight. Blocks overlapping clicks that
   // would otherwise each compute a new quantity from the same stale render and
@@ -267,6 +268,7 @@ function DeckBuilder({ showToast }) {
         if (locRes.ok) {
           const locData = await locRes.json();
           setCheckoutLocations(locData);
+          setCheckoutMode('checkout');
           setShowCheckoutModal(true);
         }
       } else {
@@ -290,6 +292,11 @@ function DeckBuilder({ showToast }) {
     if (!targetDeck) return;
     try {
       setCheckingOut(true);
+      // Capture where each card lives before flipping the flag, so the check-in
+      // guide can show where to return them (cards stay in their slots either
+      // way, but fetch first to be safe).
+      const locRes = await fetch(`/api/decks/${targetDeck.id}/locations`);
+      const locData = locRes.ok ? await locRes.json() : null;
       const res = await fetch(`/api/decks/${targetDeck.id}/return`, { method: 'PUT' });
       if (res.ok) {
         showToast(`📦 "${targetDeck.name}" returned to storage.`);
@@ -297,6 +304,11 @@ function DeckBuilder({ showToast }) {
           setActiveDeck(prev => ({ ...prev, checked_out: 0, checked_out_at: null }));
         }
         fetchDecks();
+        if (locData) {
+          setCheckoutLocations(locData);
+          setCheckoutMode('checkin');
+          setShowCheckoutModal(true);
+        }
       } else {
         showToast('Failed to return deck.');
       }
@@ -975,9 +987,10 @@ function DeckBuilder({ showToast }) {
 
       {/* Checkout Locator Modal */}
       {showCheckoutModal && (
-        <CheckoutWizardModal 
-          locationsData={checkoutLocations} 
-          onClose={() => setShowCheckoutModal(false)} 
+        <CheckoutWizardModal
+          locationsData={checkoutLocations}
+          mode={checkoutMode}
+          onClose={() => setShowCheckoutModal(false)}
         />
       )}
 
