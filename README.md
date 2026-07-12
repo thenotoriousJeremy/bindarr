@@ -163,8 +163,8 @@ Bindarr ships as a single container (multi-stage build, serves the compiled fron
        environment:
          # All optional. Uncomment and set as needed.
          # - POKEMON_TCG_API_KEY=        # free key from pokemontcg.io raises rate limits
-         # - CORS_ORIGIN=                # frontend origin(s), comma-separated. Unset = localhost + private-LAN allowed
-         # - PUBLIC_BASE_URL=            # external URL for share links behind a proxy, e.g. https://cards.example.com
+         # - PUBLIC_BASE_URL=            # external URL behind a proxy, e.g. https://cards.example.com. Share links + auto-allowed as a CORS origin (proxied logins work with just this)
+         # - CORS_ORIGIN=                # extra allowed origin(s), comma-separated. localhost + private-LAN always allowed; PUBLIC_BASE_URL added automatically
          # - DEFAULT_ADMIN_PASSWORD=     # pin the initial admin password (else it's auto-generated in the logs)
          # - ALLOW_REGISTRATION=         # "true" to allow open self-registration; default is invite-only
          # - TRUST_PROXY=                # "1" when behind a TLS-terminating reverse proxy
@@ -195,7 +195,8 @@ You can configure Bindarr by passing these environment variables in your contain
 - `DB_PATH` (Default: `/app/database/pokemon_cards.db`) - Location of the SQLite database.
 - `POKEMON_TCG_API_KEY` (Optional) - Your API key from [pokemontcg.io](https://pokemontcg.io). While Bindarr works without one, adding a free key increases TCG API rate limits (from 20k to 50k requests/day).
 - `DEFAULT_ADMIN_PASSWORD` (Optional) - Sets a known password for the auto-created `admin` account on first startup. If unset, a random password is generated and printed once to the server logs (see [First-Time Sign In](#-first-time-sign-in)).
-- `CORS_ORIGIN` (Optional) - Comma-separated list of origins allowed to call the API. Unset allows same-origin plus localhost and private-LAN origins on any port. Set to your real domain when deploying.
+- `PUBLIC_BASE_URL` (Optional) - Externally-reachable URL when running behind a reverse proxy, e.g. `https://cards.example.com`. Used to build collection share links, and its origin is automatically added to the CORS allow-list, so setting this alone is enough for logins through the proxy. Also editable from the Admin panel.
+- `CORS_ORIGIN` (Optional) - Extra comma-separated origins allowed to call the API. `localhost` and private-LAN origins (any port) are **always** allowed, and `PUBLIC_BASE_URL`'s origin is added automatically. Only needed to whitelist additional public origins.
 - `ALLOW_REGISTRATION` (Optional) - Set to `true` to allow open self-registration from the login screen. Default (unset) is **invite-only**: only an admin creates accounts via the Admin panel, and the Sign Up option is hidden.
 - `TRUST_PROXY` (Optional) - Set to the number of proxy hops (usually `1`) when running behind a reverse proxy that terminates TLS, so `req.ip` and the rate limiters use the real client IP from `X-Forwarded-For`. Leave unset when the app is directly exposed. Note: mobile camera access requires HTTPS, so a TLS-terminating proxy in front of the app is the expected production setup.
 
