@@ -71,6 +71,14 @@ const explicitOrigins = (process.env.CORS_ORIGIN || '')
   .map(o => o.trim())
   .filter(Boolean);
 
+// The reverse-proxy domain is already configured as PUBLIC_BASE_URL for share
+// links, so reuse its origin as an allowed CORS origin — setting it alone is
+// enough for proxied logins, no separate CORS_ORIGIN needed.
+if (process.env.PUBLIC_BASE_URL) {
+  try { explicitOrigins.push(new URL(process.env.PUBLIC_BASE_URL).origin); }
+  catch { /* malformed URL — ignore */ }
+}
+
 // Loopback + RFC1918 private ranges (10/8, 172.16-31/12, 192.168/16) and
 // *.local, with any scheme/port. Not internet-routable, so this is safe for a
 // self-hosted app while still blocking arbitrary public websites.
