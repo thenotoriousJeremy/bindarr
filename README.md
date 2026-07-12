@@ -6,14 +6,14 @@
 
 Identify physical cards with your phone's camera, track real-time market valuations, map every card to its binder/box slot, view rich analytics, and export your database for external trackers.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/thenotoriousJeremy/pokedexrr/docker-build.yml?branch=main&label=CI&logo=github)](https://github.com/thenotoriousJeremy/pokedexrr/actions/workflows/docker-build.yml)
-[![Docker image](https://img.shields.io/badge/ghcr.io-pokedexrr-2496ED?logo=docker&logoColor=white)](https://github.com/thenotoriousJeremy/pokedexrr/pkgs/container/pokedexrr)
-[![License: MIT](https://img.shields.io/github/license/thenotoriousJeremy/pokedexrr?color=blue)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/thenotoriousJeremy/pokedexrr?style=flat&logo=github)](https://github.com/thenotoriousJeremy/pokedexrr/stargazers)
-[![Issues](https://img.shields.io/github/issues/thenotoriousJeremy/pokedexrr)](https://github.com/thenotoriousJeremy/pokedexrr/issues)
-[![Last commit](https://img.shields.io/github/last-commit/thenotoriousJeremy/pokedexrr)](https://github.com/thenotoriousJeremy/pokedexrr/commits/main)
+[![CI](https://img.shields.io/github/actions/workflow/status/thenotoriousJeremy/bindarr/docker-build.yml?branch=main&label=CI&logo=github)](https://github.com/thenotoriousJeremy/bindarr/actions/workflows/docker-build.yml)
+[![Docker image](https://img.shields.io/badge/ghcr.io-bindarr-2496ED?logo=docker&logoColor=white)](https://github.com/thenotoriousJeremy/bindarr/pkgs/container/bindarr)
+[![License: MIT](https://img.shields.io/github/license/thenotoriousJeremy/bindarr?color=blue)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/thenotoriousJeremy/bindarr?style=flat&logo=github)](https://github.com/thenotoriousJeremy/bindarr/stargazers)
+[![Issues](https://img.shields.io/github/issues/thenotoriousJeremy/bindarr)](https://github.com/thenotoriousJeremy/bindarr/issues)
+[![Last commit](https://img.shields.io/github/last-commit/thenotoriousJeremy/bindarr)](https://github.com/thenotoriousJeremy/bindarr/commits/main)
 
-[Quick Start](#-quick-start-development) · [Run with Docker](#-docker-deployment-production) · [Features](#-features) · [How Scanning Works](#-card-scanning--match-data) · [Report a Bug](https://github.com/thenotoriousJeremy/pokedexrr/issues/new)
+[Quick Start](#-quick-start-development) · [Run with Docker](#-docker-deployment-production) · [Features](#-features) · [How Scanning Works](#-card-scanning--match-data) · [Report a Bug](https://github.com/thenotoriousJeremy/bindarr/issues/new)
 
 </div>
 
@@ -155,7 +155,7 @@ Bindarr ships as a single container (multi-stage build, serves the compiled fron
    ```yaml
    services:
      bindarr:
-       image: ghcr.io/thenotoriousjeremy/pokedexrr:latest
+       image: ghcr.io/thenotoriousjeremy/bindarr:latest
        container_name: bindarr
        restart: unless-stopped
        ports:
