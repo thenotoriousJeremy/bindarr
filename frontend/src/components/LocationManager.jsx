@@ -630,7 +630,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
       {rulesComp && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }} onClick={() => setRulesComp(null)}>
-          <div className="glass-panel" style={{ width: '480px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }} onClick={(e) => e.stopPropagation()}>
+          <div className="glass-panel" style={{ width: '480px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', background: 'var(--bg-secondary)' }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ margin: 0 }}>{rulesComp.display_label}: Accepts</h3>
             <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0 }}>
               Rules controlling which cards may be filed into this {isBinderType ? 'page' : 'row'}. No rules = accepts anything the container allows.
@@ -646,7 +646,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
       {capacityUpdatePending && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div className="glass-panel" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div className="glass-panel" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--bg-secondary)' }}>
             <h3 style={{ margin: 0 }}>Sync Capacity</h3>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0 }}>
               Do you want to apply the capacity <strong>{capacityUpdatePending.capacity}</strong> to ALL compartments in this container, or just this specific one?
@@ -661,7 +661,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
       {showRulesModal && selectedLoc && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div className="glass-panel" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div className="glass-panel" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--bg-secondary)' }}>
             <h3 style={{ margin: 0 }}>Container Settings</h3>
             
             {selectedLoc?.type === 'binder' && (
