@@ -1,22 +1,41 @@
-import React, { useState, useEffect } from 'react';
-import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload, Eye, EyeOff, SlidersHorizontal } from 'lucide-react';
 
 function Settings({ user, onUpdateUser, showToast }) {
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
   
   const [shareEnabled, setShareEnabled] = useState(user?.share_enabled === 1);
   const [shareLoading, setShareLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const [tcgApiKey, setTcgApiKey] = useState(user?.tcg_api_key || '');
   const [apiKeyLoading, setApiKeyLoading] = useState(false);
-  const token = localStorage.getItem('pokedexrr_token');
+
+  const [publicBaseUrl, setPublicBaseUrl] = useState('');
+
+  const [defaultGame, setDefaultGame] = useState(() => localStorage.getItem('default_game') || 'pokemon');
+  const [autoConfirm, setAutoConfirm] = useState(() => localStorage.getItem('scanner_auto_confirm') === '1');
+
+  useEffect(() => {
+    fetch('/api/settings')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data) setPublicBaseUrl(data.public_base_url || '');
+      })
+      .catch(() => {});
+  }, []);
 
   const handleImportFile = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+
+    if (!window.confirm(`Import "${file.name}"? Cards from this file will be merged into your existing collection. This cannot be undone.`)) {
+      e.target.value = '';
+      return;
+    }
 
     const reader = new FileReader();
     const isJson = file.name.endsWith('.json');
@@ -28,10 +47,7 @@ function Settings({ user, onUpdateUser, showToast }) {
         showToast('Importing collection...');
         const response = await fetch('/api/import', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             format,
             data: fileData
@@ -50,6 +66,10 @@ function Settings({ user, onUpdateUser, showToast }) {
       }
     };
 
+    reader.onerror = () => {
+      showToast('Failed to read the selected file.');
+    };
+
     reader.readAsText(file);
     e.target.value = null;
   };
@@ -63,8 +83,12 @@ function Settings({ user, onUpdateUser, showToast }) {
 
   const handlePasswordChange = async (e) => {
     e.preventDefault();
-    if (password.length < 5) {
-      showToast('Password must be at least 5 characters.');
+    if (!currentPassword) {
+      showToast('Please enter your current password.');
+      return;
+    }
+    if (password.length < 8) {
+      showToast('Password must be at least 8 characters.');
       return;
     }
     if (password !== confirmPassword) {
@@ -77,11 +101,12 @@ function Settings({ user, onUpdateUser, showToast }) {
       const response = await fetch('/api/auth/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
+        body: JSON.stringify({ current_password: currentPassword, password })
       });
 
       if (response.ok) {
         showToast('Password updated successfully.');
+        setCurrentPassword('');
         setPassword('');
         setConfirmPassword('');
       } else {
@@ -93,6 +118,28 @@ function Settings({ user, onUpdateUser, showToast }) {
       showToast('Error updating password.');
     } finally {
       setPasswordLoading(false);
+    }
+  };
+
+  const handleExport = async (format) => {
+    try {
+      const response = await fetch(`/api/export?format=${format}`);
+      if (!response.ok) {
+        showToast('Export failed.');
+        return;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `bindarr_collection.${format === 'json' ? 'json' : 'csv'}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      showToast('Error exporting collection.');
     }
   };
 
@@ -177,17 +224,21 @@ function Settings({ user, onUpdateUser, showToast }) {
     }
   };
 
-  const shareUrl = `${window.location.protocol}//${window.location.host}/share/${user?.share_token}`;
-  const tradeUrl = `${window.location.protocol}//${window.location.host}/share/${user?.share_token}?list=trade`;
-  const wishlistUrl = `${window.location.protocol}//${window.location.host}/share/${user?.share_token}?list=wishlist`;
+  const origin = publicBaseUrl || `${window.location.protocol}//${window.location.host}`;
+  const shareUrl = `${origin}/share/${user?.share_token}`;
+  const tradeUrl = `${origin}/share/${user?.share_token}?list=trade`;
+  const wishlistUrl = `${origin}/share/${user?.share_token}?list=wishlist`;
 
   const [copiedType, setCopiedType] = useState(''); // 'collection', 'trade', 'wishlist'
 
   const copyToClipboard = (url, type) => {
-    navigator.clipboard.writeText(url);
-    setCopiedType(type);
-    showToast(`Copied public ${type} link to clipboard.`);
-    setTimeout(() => setCopiedType(''), 2000);
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedType(type);
+      showToast(`Copied public ${type} link to clipboard.`);
+      setTimeout(() => setCopiedType(''), 2000);
+    }).catch(() => {
+      showToast('Could not copy to clipboard. Copy the link manually.');
+    });
   };
 
   return (
@@ -326,23 +377,45 @@ function Settings({ user, onUpdateUser, showToast }) {
 
           <form onSubmit={handlePasswordChange} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>New Password</label>
-              <input 
-                type="password" 
-                className="input-control" 
-                placeholder="At least 5 characters"
+              <label htmlFor="current-password">Current Password</label>
+              <input
+                id="current-password"
+                type="password"
+                name="current-password"
+                autoComplete="current-password"
+                className="input-control"
+                placeholder="Your current password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                required
+                disabled={passwordLoading}
+              />
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label htmlFor="settings-new-password">New Password</label>
+              <input
+                id="settings-new-password"
+                type="password"
+                name="new-password"
+                autoComplete="new-password"
+                className="input-control"
+                placeholder="At least 8 characters"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={passwordLoading}
               />
             </div>
-            
+
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Confirm Password</label>
-              <input 
-                type="password" 
-                className="input-control" 
+              <label htmlFor="settings-confirm-password">Confirm Password</label>
+              <input
+                id="settings-confirm-password"
+                type="password"
+                name="confirm-password"
+                autoComplete="new-password"
+                className="input-control"
                 placeholder="Re-enter password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
@@ -368,25 +441,39 @@ function Settings({ user, onUpdateUser, showToast }) {
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
             <KeyRound size={20} style={{ color: 'var(--accent-red)' }} />
-            <h3 style={{ color: '#fff', fontSize: '1.1rem' }}>Developer API Key</h3>
+            <h3 style={{ color: '#fff', fontSize: '1.1rem' }}>Pokémon TCG API Key</h3>
           </div>
 
           <form onSubmit={handleApiKeyChange} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div style={{ background: 'rgba(255, 71, 71, 0.03)', border: '1px solid var(--border-glass)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-              Avoid rate-limit delay tarpits by registering for a free key at <a href="https://dev.pokemontcg.io" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-yellow)', fontWeight: 600 }}>dev.pokemontcg.io</a> and entering it below.
+              Card searches use the free Pokémon TCG API. Adding your own key raises your rate limit so searches stay fast during bulk scanning. Grab a free key at <a href="https://dev.pokemontcg.io" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-yellow)', fontWeight: 600 }}>dev.pokemontcg.io</a> and paste it below. It&apos;s optional.
             </div>
 
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>X-Api-Key Header Value</label>
-              <input 
-                type="text" 
-                className="input-control" 
-                placeholder="e.g. xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                value={tcgApiKey}
-                onChange={(e) => setTcgApiKey(e.target.value)}
-                disabled={apiKeyLoading}
-                style={{ fontFamily: 'monospace' }}
-              />
+              <label htmlFor="settings-tcg-api-key">API Key</label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  id="settings-tcg-api-key"
+                  type={showApiKey ? 'text' : 'password'}
+                  name="tcg-api-key"
+                  autoComplete="off"
+                  className="input-control"
+                  placeholder="e.g. xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  value={tcgApiKey}
+                  onChange={(e) => setTcgApiKey(e.target.value)}
+                  disabled={apiKeyLoading}
+                  style={{ fontFamily: 'monospace', paddingRight: '2.4rem', width: '100%' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey((v) => !v)}
+                  aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
+                  title={showApiKey ? 'Hide API key' : 'Show API key'}
+                  style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
+                >
+                  {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </div>
 
             <button 
@@ -414,24 +501,24 @@ function Settings({ user, onUpdateUser, showToast }) {
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <a 
-              href={`/api/export?format=csv&token=${token}`} 
-              download 
-              className="btn btn-secondary" 
-              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
+            <button
+              type="button"
+              onClick={() => handleExport('csv')}
+              className="btn btn-secondary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
             >
               <Download size={14} />
               <span>Export CSV</span>
-            </a>
-            <a 
-              href={`/api/export?format=json&token=${token}`} 
-              download 
-              className="btn btn-secondary" 
-              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleExport('json')}
+              className="btn btn-secondary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
             >
               <Download size={14} />
               <span>Export JSON</span>
-            </a>
+            </button>
 
             <label 
               className="btn btn-primary" 
@@ -439,12 +526,80 @@ function Settings({ user, onUpdateUser, showToast }) {
             >
               <Upload size={14} />
               <span>Import Backup</span>
-              <input 
-                type="file" 
-                accept=".json,.csv" 
+              <input
+                type="file"
+                accept=".json,.csv"
                 onChange={handleImportFile}
                 style={{ display: 'none' }}
               />
+            </label>
+          </div>
+        </div>
+
+        {/* Preferences Panel */}
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
+            <SlidersHorizontal size={20} style={{ color: 'var(--accent-yellow)' }} />
+            <h3 style={{ color: '#fff', fontSize: '1.1rem' }}>Preferences</h3>
+          </div>
+
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label htmlFor="settings-default-game">Default Game</label>
+            <select
+              id="settings-default-game"
+              className="select-control"
+              value={defaultGame}
+              onChange={(e) => {
+                const val = e.target.value;
+                setDefaultGame(val);
+                localStorage.setItem('default_game', val);
+                showToast(`Default game set to ${val === 'mtg' ? 'Magic: The Gathering' : 'Pokémon'}.`);
+              }}
+            >
+              <option value="pokemon">Pokémon</option>
+              <option value="mtg">Magic: The Gathering</option>
+            </select>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>
+              The scanner and collection open scoped to this game.
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+            <div>
+              <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.95rem' }}>Scanner Auto-Confirm</div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Add high-confidence single matches automatically, skipping the confirm dialog.</div>
+            </div>
+            <label className="switch-control" style={{ position: 'relative', display: 'inline-block', width: '46px', height: '24px', flexShrink: 0 }}>
+              <input
+                type="checkbox"
+                checked={autoConfirm}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setAutoConfirm(checked);
+                  localStorage.setItem('scanner_auto_confirm', checked ? '1' : '0');
+                  showToast(checked ? 'Scanner auto-confirm enabled.' : 'Scanner auto-confirm disabled.');
+                }}
+                style={{ opacity: 0, width: 0, height: 0 }}
+              />
+              <span className={`switch-slider ${autoConfirm ? 'active' : ''}`} style={{
+                position: 'absolute',
+                cursor: 'pointer',
+                top: 0, left: 0, right: 0, bottom: 0,
+                backgroundColor: autoConfirm ? 'var(--type-grass)' : '#334155',
+                transition: '0.3s',
+                borderRadius: '24px'
+              }}>
+                <span style={{
+                  position: 'absolute',
+                  height: '18px', width: '18px',
+                  left: autoConfirm ? '24px' : '4px',
+                  bottom: '3px',
+                  backgroundColor: '#fff',
+                  transition: '0.3s',
+                  borderRadius: '50%',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
+                }}></span>
+              </span>
             </label>
           </div>
         </div>

@@ -1,4 +1,5 @@
 # =========================================
+# Bindarr Dockerfile
 # Stage 1: Build Frontend Assets
 # =========================================
 FROM node:20-alpine AS frontend-builder
@@ -39,11 +40,23 @@ RUN npm ci --omit=dev
 # Copy backend source files
 COPY backend/src/ ./src/
 
-# Copy compiled frontend assets from Stage 1 into the backend public folder
-COPY --from=frontend-builder /app/frontend/dist ./dist
+# Copy compiled frontend assets from Stage 1 to the location server.js expects
+# (../../frontend/dist relative to backend/src, i.e. /app/frontend/dist)
+COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
+
+# Drop root: run as the built-in unprivileged `node` user. Ownership of the
+# database dir is set here so a fresh named volume mounted at /app/database
+# inherits node-writable permissions on first init.
+RUN chown -R node:node /app
+USER node
 
 # Expose port
 EXPOSE 3001
+
+# Liveness/readiness probe. start-period covers startup (set sync + price job).
+# busybox wget ships with the alpine base image.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
+  CMD wget -qO- http://localhost:3001/api/health || exit 1
 
 # Command to start Express server
 CMD ["node", "src/server.js"]

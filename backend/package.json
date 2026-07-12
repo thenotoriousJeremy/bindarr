@@ -1,18 +1,24 @@
 {
-  "name": "pokedexrr-backend",
+  "name": "bindarr-backend",
   "version": "1.0.0",
-  "description": "Backend API for Pokedexrr",
+  "description": "Backend API for Bindarr",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "test": "node test/sort.test.js && node test/auth.test.js"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "axios": "^1.6.8",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "sqlite3": "^5.1.7"
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.2.0",
+    "opencv-wasm": "^4.3.0-10",
+    "sharp": "^0.33.5",
+    "sqlite3": "^6.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"

@@ -1,115 +1,105 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Download, Trash2, Edit2, X, MapPin, LayoutGrid, List, Database, Upload, ChevronDown } from 'lucide-react';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { Search, Trash2, Edit2, LayoutGrid, List, SlidersHorizontal, X, MousePointerClick } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
-import DeckBuilder from './DeckBuilder';
+import { formatPrice } from '../utils/formatPrice';
+import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
+import { translateJapaneseName } from '../utils/pokemonTranslation';
+import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
+import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
+import { sortCardsByOrder } from '../utils/cardSort';
+import CardInspectorModal from './CardInspectorModal';
 
-function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
+const labelStyle = { fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' };
+
+// Maps each Sort By option to sortCardsByOrder criteria so ordering matches the
+// storage engine (set = chronological via setsList, type = POKEMON_TYPE_ORDER).
+// 'qty-desc' isn't a card-order scheme, handled separately.
+const SORT_CRITERIA = {
+  'added-newest': [{ by: 'added_at', dir: 'desc' }, { by: 'entry_id', dir: 'desc' }],
+  'added-oldest': [{ by: 'added_at', dir: 'asc' }],
+  'name-asc': [{ by: 'name', dir: 'asc' }],
+  'name-desc': [{ by: 'name', dir: 'desc' }],
+  'price-desc': [{ by: 'price', dir: 'desc' }],
+  'price-asc': [{ by: 'price', dir: 'asc' }],
+  'set-asc': [{ by: 'set', dir: 'asc' }, { by: 'number', dir: 'asc' }],
+  'number-asc': [{ by: 'number', dir: 'asc' }, { by: 'name', dir: 'asc' }],
+  'rarity-asc': [{ by: 'rarity', dir: 'asc' }, { by: 'name', dir: 'asc' }],
+  'type-asc': [{ by: 'type', dir: 'asc' }, { by: 'name', dir: 'asc' }],
+  'language-asc': [{ by: 'language', dir: 'asc' }, { by: 'name', dir: 'asc' }],
+};
+
+// Small labelled field wrapper to keep the filter grid uniform.
+function Field({ label, children }) {
+  return (
+    <div className="form-group" style={{ marginBottom: 0 }}>
+      <label style={labelStyle}>{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter, setSelectedCardFilter, onNavigate, setSelectedLocationId }) {
   const [collection, setCollection] = useState([]);
   const [locations, setLocations] = useState([]);
+  const [setsList, setSetsList] = useState([]);
   const [loading, setLoading] = useState(true);
-  
+
+  useEffect(() => {
+    if (selectedCardFilter) {
+      setSearchFilter(selectedCardFilter);
+      // Reset after applying so they can clear search manually
+      setSelectedCardFilter('');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCardFilter]);
+
   // UX view state
   const [viewMode, setViewMode] = useState('gallery'); // 'gallery' or 'list'
   const [inspectorCard, setInspectorCard] = useState(null);
-  const [subTab, setSubTab] = useState('collection'); // 'collection', 'wishlist', 'trade'
-  const [priceHistory, setPriceHistory] = useState([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  
+  const [inspectorStartEdit, setInspectorStartEdit] = useState(false);
+  const [subTab, setSubTab] = useState('collection'); // 'collection', 'wishlist'
+  const [showFilters, setShowFilters] = useState(false);
+
   // Search & Filter state
   const [searchFilter, setSearchFilter] = useState('');
+  const [gameFilter, setGameFilter] = useState(() => localStorage.getItem('default_game') || ''); // '' | 'pokemon' | 'mtg'
   const [locationFilter, setLocationFilter] = useState('');
   const [rarityFilter, setRarityFilter] = useState('');
   const [conditionFilter, setConditionFilter] = useState('');
   const [printingFilter, setPrintingFilter] = useState('');
+  const [setFilter, setSetFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [supertypeFilter, setSupertypeFilter] = useState('');
+  const [cmcFilter, setCmcFilter] = useState('');
+  const [languageFilter, setLanguageFilter] = useState('');
   const [minPriceFilter, setMinPriceFilter] = useState('');
   const [maxPriceFilter, setMaxPriceFilter] = useState('');
   const [sortBy, setSortBy] = useState('added-newest');
-  
-  // Edit Modal State
-  const [editingItem, setEditingItem] = useState(null);
-  const [isEditOpen, setIsEditOpen] = useState(false);
-  const [editQuantity, setEditQuantity] = useState(1);
-  const [editCondition, setEditCondition] = useState('Near Mint');
-  const [editPrinting, setEditPrinting] = useState('Normal');
-  const [editLanguage, setEditLanguage] = useState('English');
-  const [editPurchasePrice, setEditPurchasePrice] = useState(0);
-  const [editLocationId, setEditLocationId] = useState('');
-  const [editSubLocation1, setEditSubLocation1] = useState('');
-  const [editSubLocation2, setEditSubLocation2] = useState('');
-  const [editIsTrade, setEditIsTrade] = useState(0);
-  const [editListType, setEditListType] = useState('collection');
-  const [showDataMenu, setShowDataMenu] = useState(false);
+  const [tradeOnly, setTradeOnly] = useState(false);
 
-  const handleImportFile = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  // Stacking state
+  const [stackCards, setStackCards] = useState(false);
+  const [stackByCondition, setStackByCondition] = useState(false);
+  const [stackByPrinting, setStackByPrinting] = useState(false);
 
-    const reader = new FileReader();
-    const isJson = file.name.endsWith('.json');
-    const format = isJson ? 'json' : 'csv';
+  // Multi-select / bulk actions
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkMoveTarget, setBulkMoveTarget] = useState('');
 
-    reader.onload = async (event) => {
-      try {
-        const fileData = event.target.result;
-        showToast('Importing collection...');
-        const response = await fetch('/api/import', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            format,
-            data: fileData
-          })
-        });
+  // Long-press-to-arm selection (works for mouse + touch via pointer events).
+  const longPressTimer = useRef(null);
+  const longPressFired = useRef(false);
+  const pointerStart = useRef(null);
 
-        const result = await response.json();
-        if (response.ok) {
-          showToast(result.message || 'Import successful!');
-          fetchCollection();
-          if (onUpdate) onUpdate();
-        } else {
-          showToast(`Import failed: ${result.error || 'Unknown error'}`);
-        }
-      } catch (err) {
-        console.error(err);
-        showToast(`Import failed: ${err.message}`);
-      }
-    };
-
-    reader.readAsText(file);
-    e.target.value = null;
-  };
+  useEffect(() => () => clearTimeout(longPressTimer.current), []);
 
   useEffect(() => {
     fetchCollection();
     fetchLocations();
-  }, [statsTrigger, subTab]);
-
-  useEffect(() => {
-    if (inspectorCard) {
-      fetchPriceHistory(inspectorCard.card_id);
-    } else {
-      setPriceHistory([]);
-    }
-  }, [inspectorCard]);
-
-  const fetchPriceHistory = async (cardId) => {
-    try {
-      setLoadingHistory(true);
-      const response = await fetch(`/api/cards/${cardId}/price-history`);
-      if (response.ok) {
-        const data = await response.json();
-        setPriceHistory(data);
-      }
-    } catch (err) {
-      console.error('Error fetching price history:', err);
-    } finally {
-      setLoadingHistory(false);
-    }
-  };
+    fetchSets();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statsTrigger, subTab, tradeOnly]);
 
   const fetchCollection = async () => {
     try {
@@ -117,8 +107,9 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
       let url = '/api/collection?list_type=collection';
       if (subTab === 'wishlist') {
         url = '/api/collection?list_type=wishlist';
-      } else if (subTab === 'trade') {
-        url = '/api/collection?list_type=collection&is_trade=1';
+      }
+      if (tradeOnly) {
+        url += '&is_trade=1';
       }
 
       const response = await fetch(url);
@@ -146,6 +137,15 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
     }
   };
 
+  const fetchSets = async () => {
+    try {
+      const response = await fetch('/api/sets');
+      if (response.ok) setSetsList(await response.json());
+    } catch (err) {
+      console.error('Error fetching sets:', err);
+    }
+  };
+
   const handleDelete = async (entryId, cardName) => {
     if (!window.confirm(`Are you sure you want to delete ${cardName} from your collection?`)) {
       return;
@@ -169,293 +169,517 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
   };
 
   const openEdit = (item) => {
-    setEditingItem(item);
-    setEditQuantity(item.quantity);
-    setEditCondition(item.condition);
-    setEditPrinting(item.printing);
-    setEditLanguage(item.language);
-    setEditPurchasePrice(item.purchase_price || 0);
-    setEditLocationId(item.location_id || '');
-    setEditSubLocation1(item.sub_location_1 || '');
-    setEditSubLocation2(item.sub_location_2 || '');
-    setEditIsTrade(item.is_trade || 0);
-    setEditListType(item.list_type || 'collection');
-    setIsEditOpen(true);
+    setInspectorCard(item);
+    setInspectorStartEdit(true);
   };
 
-  const closeEdit = () => {
-    setIsEditOpen(false);
-    setEditingItem(null);
+  const toggleSelect = (entryId) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(entryId)) next.delete(entryId); else next.add(entryId);
+      return next;
+    });
   };
+  const clearSelection = () => setSelectedIds(new Set());
+  const exitSelectMode = () => { setSelectMode(false); clearSelection(); setBulkMoveTarget(''); };
 
-  const handleEditSubmit = async (e) => {
-    e.preventDefault();
-    if (!editingItem) return;
+  // --- Long-press handlers ---
+  const beginPress = (e, entryId) => {
+    longPressFired.current = false;
+    pointerStart.current = { x: e.clientX, y: e.clientY };
+    clearTimeout(longPressTimer.current);
+    longPressTimer.current = setTimeout(() => {
+      longPressFired.current = true;
+      setSelectMode(true);
+      setSelectedIds(prev => new Set(prev).add(entryId));
+      if (navigator.vibrate) navigator.vibrate(25);
+    }, 450);
+  };
+  const movePress = (e) => {
+    if (!pointerStart.current) return;
+    if (Math.abs(e.clientX - pointerStart.current.x) > 10 || Math.abs(e.clientY - pointerStart.current.y) > 10) {
+      clearTimeout(longPressTimer.current);
+    }
+  };
+  const endPress = () => { clearTimeout(longPressTimer.current); pointerStart.current = null; };
 
+  // Tap: swallowed if a long-press just armed selection; otherwise toggle (in
+  // select mode) or open the inspector.
+  const activateCard = (item) => {
+    if (longPressFired.current) { longPressFired.current = false; return; }
+    if (selectMode) toggleSelect(item.entry_id);
+    else { setInspectorCard(item); setInspectorStartEdit(false); }
+  };
+  const pressHandlers = (entryId) => ({
+    onPointerDown: (e) => beginPress(e, entryId),
+    onPointerMove: movePress,
+    onPointerUp: endPress,
+    onPointerLeave: endPress,
+    onContextMenu: (e) => e.preventDefault(), // suppress mobile long-press image popup
+  });
+
+  // Runs one bulk action against every selected entry via the bulk endpoint.
+  const runBulk = async (action, value, confirmMsg) => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) { showToast('No cards selected.'); return; }
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
     try {
-      const response = await fetch(`/api/collection/${editingItem.entry_id}`, {
-        method: 'PUT',
+      const res = await fetch('/api/collection/bulk', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          quantity: parseInt(editQuantity, 10),
-          condition: editCondition,
-          printing: editPrinting,
-          language: editLanguage,
-          purchase_price: parseFloat(editPurchasePrice) || 0,
-          location_id: editLocationId ? parseInt(editLocationId, 10) : null,
-          sub_location_1: editSubLocation1,
-          sub_location_2: editSubLocation2,
-          list_type: editListType,
-          is_trade: editIsTrade
-        })
+        body: JSON.stringify({ entry_ids: ids, action, value })
       });
-
-      if (response.ok) {
-        showToast('Card entry updated.');
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        showToast(data.message || 'Done.');
+        clearSelection();
         onUpdate();
-        closeEdit();
+        fetchCollection();
       } else {
-        showToast('Failed to update card.');
+        showToast(data.error || 'Bulk action failed.');
       }
     } catch (err) {
       console.error(err);
-      showToast('Error editing card.');
+      showToast('Error performing bulk action.');
     }
   };
 
-  // Extract unique rarities from collection for filters
-  const uniqueRarities = Array.from(new Set(collection.map(item => item.rarity).filter(Boolean)));
-
-  // Filter logic
-  const filteredCollection = collection.filter(item => {
-    const matchesSearch = item.name.toLowerCase().includes(searchFilter.toLowerCase()) || 
-                          (item.set_name || '').toLowerCase().includes(searchFilter.toLowerCase()) ||
-                          (item.number || '').includes(searchFilter);
-    const matchesLocation = locationFilter === '' ? true : 
-                            locationFilter === 'unassigned' ? !item.location_id : 
-                            item.location_id == locationFilter;
-    const matchesRarity = rarityFilter === '' ? true : item.rarity === rarityFilter;
-    const matchesCondition = conditionFilter === '' ? true : item.condition === conditionFilter;
-    const matchesPrinting = printingFilter === '' ? true : item.printing === printingFilter;
-    
-    const price = item.price_trend || 0;
-    const matchesMinPrice = minPriceFilter === '' ? true : price >= parseFloat(minPriceFilter);
-    const matchesMaxPrice = maxPriceFilter === '' ? true : price <= parseFloat(maxPriceFilter);
-
-    return matchesSearch && matchesLocation && matchesRarity && matchesCondition && matchesPrinting && matchesMinPrice && matchesMaxPrice;
-  }).sort((a, b) => {
-    if (sortBy === 'name-asc') {
-      return a.name.localeCompare(b.name);
-    } else if (sortBy === 'name-desc') {
-      return b.name.localeCompare(a.name);
-    } else if (sortBy === 'price-desc') {
-      return (b.price_trend || 0) - (a.price_trend || 0);
-    } else if (sortBy === 'price-asc') {
-      return (a.price_trend || 0) - (b.price_trend || 0);
-    } else if (sortBy === 'qty-desc') {
-      return (b.quantity || 0) - (a.quantity || 0);
-    } else if (sortBy === 'added-oldest') {
-      return new Date(a.added_at || 0) - new Date(b.added_at || 0);
-    } else { // 'added-newest'
-      return new Date(b.added_at || 0) - new Date(a.added_at || 0);
+  const handleViewStorage = (card) => {
+    setInspectorCard(null);
+    if (setSelectedLocationId) {
+      setSelectedLocationId(card.location_id || 'unassigned');
     }
-  });
+    if (onNavigate) {
+      onNavigate('storage');
+    }
+  };
 
-  const selectedLoc = locations.find(l => l.id == editLocationId);
-  const isBinder = selectedLoc ? selectedLoc.type === 'Binder' : false;
-  const isBox = selectedLoc ? selectedLoc.type === 'Box' : false;
+  // Extract unique filter values from the loaded collection.
+  const uniqueRarities = useMemo(
+    () => Array.from(new Set(collection.map(item => item.rarity).filter(Boolean))).sort(),
+    [collection]
+  );
+  const uniqueSets = useMemo(
+    () => Array.from(new Set(collection.map(item => item.set_name).filter(Boolean))).sort(),
+    [collection]
+  );
+  const uniqueTypes = useMemo(
+    () => Array.from(new Set(collection.flatMap(item => item.types || []).filter(Boolean))).sort(),
+    [collection]
+  );
+  const uniqueSupertypes = useMemo(
+    () => Array.from(new Set(collection.map(item => item.supertype).filter(Boolean))).sort(),
+    [collection]
+  );
+  const uniqueLanguages = useMemo(
+    () => Array.from(new Set(collection.map(item => item.language).filter(Boolean))).sort(),
+    [collection]
+  );
+  const uniqueCmcs = useMemo(
+    () => Array.from(new Set(collection.map(item => item.cmc).filter(v => v !== null && v !== undefined))).sort((a, b) => a - b),
+    [collection]
+  );
+
+  const activeFilterCount = [
+    gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter,
+    setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter,
+    minPriceFilter, maxPriceFilter
+  ].filter(v => v !== '').length + (tradeOnly ? 1 : 0);
+
+  const clearAllFilters = () => {
+    setSearchFilter('');
+    setGameFilter(''); setLocationFilter(''); setRarityFilter(''); setConditionFilter('');
+    setPrintingFilter(''); setSetFilter(''); setTypeFilter(''); setSupertypeFilter('');
+    setCmcFilter(''); setLanguageFilter(''); setMinPriceFilter('');
+    setMaxPriceFilter(''); setTradeOnly(false);
+  };
+
+  // Filter + sort
+  const filteredCollection = useMemo(() => {
+    const translatedSearch = searchFilter ? (translateJapaneseName(searchFilter) || searchFilter).toLowerCase() : '';
+    const result = collection.filter(item => {
+      const matchesSearch = item.name.toLowerCase().includes(translatedSearch) ||
+                            (item.set_name || '').toLowerCase().includes(translatedSearch) ||
+                            (item.number || '').includes(searchFilter);
+      const matchesLocation = locationFilter === '' ? true :
+                              locationFilter === 'unassigned' ? !item.location_id :
+                              item.location_id == locationFilter;
+      const matchesGame = gameFilter === '' ? true : (item.game || 'pokemon') === gameFilter;
+      const matchesRarity = rarityFilter === '' ? true : item.rarity === rarityFilter;
+      const matchesCondition = conditionFilter === '' ? true : item.condition === conditionFilter;
+      const matchesPrinting = printingFilter === '' ? true : item.printing === printingFilter;
+      const matchesSet = setFilter === '' ? true : item.set_name === setFilter;
+      const matchesType = typeFilter === '' ? true : (item.types || []).includes(typeFilter);
+      const matchesSupertype = supertypeFilter === '' ? true : item.supertype === supertypeFilter;
+      const matchesCmc = cmcFilter === '' ? true : String(item.cmc) === cmcFilter;
+      const matchesLanguage = languageFilter === '' ? true : item.language === languageFilter;
+
+      const price = item.price_trend || 0;
+      const matchesMinPrice = minPriceFilter === '' ? true : price >= parseFloat(minPriceFilter);
+      const matchesMaxPrice = maxPriceFilter === '' ? true : price <= parseFloat(maxPriceFilter);
+
+      return matchesSearch && matchesGame && matchesLocation && matchesRarity && matchesCondition &&
+             matchesPrinting && matchesSet && matchesType && matchesSupertype &&
+             matchesCmc && matchesLanguage && matchesMinPrice && matchesMaxPrice;
+    });
+
+    if (sortBy === 'qty-desc') {
+      result.sort((a, b) => (b.quantity || 0) - (a.quantity || 0));
+    } else {
+      sortCardsByOrder(result, SORT_CRITERIA[sortBy] || SORT_CRITERIA['added-newest'], undefined, setsList);
+    }
+    return result;
+  }, [collection, searchFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter, minPriceFilter, maxPriceFilter, sortBy, setsList]);
+
+  // Group duplicate cards if stack option is active
+  const processedCollection = useMemo(() => {
+    if (!stackCards) return filteredCollection;
+
+    const groups = {};
+    filteredCollection.forEach(item => {
+      let key = item.card_id;
+      if (stackByCondition) key += `-${item.condition}`;
+      if (stackByPrinting) key += `-${item.printing}`;
+
+      if (!groups[key]) {
+        groups[key] = { ...item };
+      } else {
+        groups[key].quantity += item.quantity;
+      }
+    });
+    return Object.values(groups);
+  }, [filteredCollection, stackCards, stackByCondition, stackByPrinting]);
+
+  // In select mode, render the unstacked list so every entry is individually
+  // selectable and bulk actions hit real entry_ids (stacking merges rows).
+  const displayCards = selectMode ? filteredCollection : processedCollection;
+
+  const totalValue = useMemo(
+    () => displayCards.reduce((sum, item) => sum + (item.price_trend || 0) * (item.quantity || 1), 0),
+    [displayCards]
+  );
 
   return (
     <div>
-      {/* Sub Navigation Tabs & View Toggle */}
+      {/* Header: sub-tabs + selection hint + view toggle */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <button 
+          <button
             className={`btn ${subTab === 'collection' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setSubTab('collection')}
             style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
           >
             Collection
           </button>
-          <button 
+          <button
             className={`btn ${subTab === 'wishlist' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setSubTab('wishlist')}
             style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
           >
             Wishlist
           </button>
-          <button 
-            className={`btn ${subTab === 'trade' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setSubTab('trade')}
-            style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
-          >
-            Trade Binder
-          </button>
-          <button 
-            className={`btn ${subTab === 'deckbuilder' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setSubTab('deckbuilder')}
-            style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
-          >
-            Deck Builder
-          </button>
         </div>
 
-        {/* View Toggle */}
-        <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-          <button 
-            className={`btn btn-icon-only ${viewMode === 'gallery' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setViewMode('gallery')}
-            style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
-            title="Gallery View"
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {/* Multi-select toggle (long-press cards is the primary path) */}
+          <button
+            className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+            style={{ fontSize: '0.8rem', padding: '0.4rem 0.9rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+            title="Or long-press any card to start selecting"
           >
-            <LayoutGrid size={14} />
+            <MousePointerClick size={14} />
+            {selectMode ? 'Done' : 'Select'}
           </button>
-          <button 
-            className={`btn btn-icon-only ${viewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setViewMode('list')}
-            style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
-            title="List Table View"
-          >
-            <List size={14} />
-          </button>
+
+          {/* View Toggle */}
+          <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+            <button
+              className={`btn btn-icon-only ${viewMode === 'gallery' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setViewMode('gallery')}
+              style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
+              title="Gallery View"
+            >
+              <LayoutGrid size={14} />
+            </button>
+            <button
+              className={`btn btn-icon-only ${viewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setViewMode('list')}
+              style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
+              title="List Table View"
+            >
+              <List size={14} />
+            </button>
+          </div>
         </div>
       </div>
 
-      {subTab === 'deckbuilder' ? (
-        <DeckBuilder showToast={showToast} />
-      ) : (
-        <>
-          {/* Filter Options Panel */}
-          <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1.25rem' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              
-              {/* Row 1: Text Search & Sorting */}
-              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '0.75rem', flexWrap: 'wrap' }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Search Cards</label>
-                  <div style={{ position: 'relative' }}>
-                    <input 
-                      type="text" 
-                      className="input-control" 
-                      placeholder="Search name, set, card number..." 
-                      value={searchFilter}
-                      onChange={(e) => setSearchFilter(e.target.value)}
-                      style={{ width: '100%', paddingLeft: '2.5rem' }}
-                    />
-                    <Search size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+      {/* Filter Panel */}
+      <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
+        {/* Always-visible top bar: search + sort + filters toggle */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2.5fr) minmax(150px, 1fr) auto', gap: '0.75rem', alignItems: 'flex-end' }}>
+          <Field label="Search Cards">
+            <div style={{ position: 'relative' }}>
+              <input
+                type="text"
+                className="input-control"
+                placeholder="Search name, set, card number..."
+                value={searchFilter}
+                onChange={(e) => setSearchFilter(e.target.value)}
+                style={{ width: '100%', paddingLeft: '2.5rem' }}
+              />
+              <Search size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            </div>
+          </Field>
+
+          <Field label="Sort By">
+            <select className="select-control" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+              <option value="added-newest">Added (Newest)</option>
+              <option value="added-oldest">Added (Oldest)</option>
+              <option value="name-asc">Name (A-Z)</option>
+              <option value="name-desc">Name (Z-A)</option>
+              <option value="price-desc">Value (High-Low)</option>
+              <option value="price-asc">Value (Low-High)</option>
+              <option value="qty-desc">Quantity (High-Low)</option>
+              <option value="set-asc">Set</option>
+              <option value="number-asc">Card Number</option>
+              <option value="type-asc">Type / Color</option>
+              <option value="rarity-asc">Rarity</option>
+              <option value="language-asc">Language</option>
+            </select>
+          </Field>
+
+          <button
+            className={`btn ${showFilters ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setShowFilters(s => !s)}
+            style={{ padding: '0.5rem 0.9rem', height: '40px', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', whiteSpace: 'nowrap' }}
+          >
+            <SlidersHorizontal size={15} />
+            Filters
+            {activeFilterCount > 0 && (
+              <span style={{ background: 'var(--accent-red)', color: '#fff', fontSize: '0.65rem', fontWeight: 900, borderRadius: '999px', padding: '1px 7px', minWidth: '18px', textAlign: 'center' }}>
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {showFilters && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-glass)' }}>
+            {/* Selector filters grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.75rem' }}>
+              <Field label="Game">
+                <select className="select-control" value={gameFilter} onChange={(e) => setGameFilter(e.target.value)}>
+                  <option value="">All Games</option>
+                  <option value="pokemon">Pokémon</option>
+                  <option value="mtg">Magic: The Gathering</option>
+                </select>
+              </Field>
+
+              <Field label="Location">
+                <select className="select-control" value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)}>
+                  <option value="">All Locations</option>
+                  <option value="unassigned">Unassigned Pile</option>
+                  {locations.map(loc => (
+                    <option key={loc.id} value={loc.id}>{loc.name}</option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Set">
+                <select className="select-control" value={setFilter} onChange={(e) => setSetFilter(e.target.value)}>
+                  <option value="">All Sets</option>
+                  {uniqueSets.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </Field>
+
+              <Field label="Supertype">
+                <select className="select-control" value={supertypeFilter} onChange={(e) => setSupertypeFilter(e.target.value)}>
+                  <option value="">All Supertypes</option>
+                  {uniqueSupertypes.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </Field>
+
+              <Field label="Type / Color">
+                <select className="select-control" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+                  <option value="">All Types</option>
+                  {uniqueTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </Field>
+
+              <Field label="Rarity">
+                <select className="select-control" value={rarityFilter} onChange={(e) => setRarityFilter(e.target.value)}>
+                  <option value="">All Rarities</option>
+                  {uniqueRarities.map(rarity => (
+                    <option key={rarity} value={rarity}>{rarity}</option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Condition">
+                <select className="select-control" value={conditionFilter} onChange={(e) => setConditionFilter(e.target.value)}>
+                  <option value="">All Conditions</option>
+                  {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </Field>
+
+              <Field label="Printing">
+                <select className="select-control" value={printingFilter} onChange={(e) => setPrintingFilter(e.target.value)}>
+                  <option value="">All Printings</option>
+                  {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </Field>
+
+              {uniqueCmcs.length > 0 && (
+                <Field label="Mana Value">
+                  <select className="select-control" value={cmcFilter} onChange={(e) => setCmcFilter(e.target.value)}>
+                    <option value="">All Mana Values</option>
+                    {uniqueCmcs.map(c => <option key={c} value={String(c)}>{c}</option>)}
+                  </select>
+                </Field>
+              )}
+
+              <Field label="Language">
+                <select className="select-control" value={languageFilter} onChange={(e) => setLanguageFilter(e.target.value)}>
+                  <option value="">All Languages</option>
+                  {uniqueLanguages.map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
+              </Field>
+
+              <Field label="Min Price">
+                <input type="number" className="input-control" placeholder="Min $" value={minPriceFilter} onChange={(e) => setMinPriceFilter(e.target.value)} />
+              </Field>
+
+              <Field label="Max Price">
+                <input type="number" className="input-control" placeholder="Max $" value={maxPriceFilter} onChange={(e) => setMaxPriceFilter(e.target.value)} />
+              </Field>
+            </div>
+
+            {/* Options row: stacking + trade + clear */}
+            <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input type="checkbox" id="stackCardsOpt" checked={stackCards} onChange={(e) => setStackCards(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
+                <label htmlFor="stackCardsOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.8rem', fontWeight: 700, color: '#fff' }}>
+                  Stack Duplicates
+                </label>
+              </div>
+
+              {stackCards && (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <input type="checkbox" id="stackByConditionOpt" checked={stackByCondition} onChange={(e) => setStackByCondition(e.target.checked)} style={{ width: '14px', height: '14px', cursor: 'pointer' }} />
+                    <label htmlFor="stackByConditionOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      Split by Condition
+                    </label>
                   </div>
-                </div>
 
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Sort By</label>
-                  <select className="select-control" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-                    <option value="added-newest">Added (Newest)</option>
-                    <option value="added-oldest">Added (Oldest)</option>
-                    <option value="name-asc">Name (A-Z)</option>
-                    <option value="name-desc">Name (Z-A)</option>
-                    <option value="price-desc">Price (High to Low)</option>
-                    <option value="price-asc">Price (Low to High)</option>
-                    <option value="qty-desc">Quantity (High to Low)</option>
-                  </select>
-                </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <input type="checkbox" id="stackByPrintingOpt" checked={stackByPrinting} onChange={(e) => setStackByPrinting(e.target.checked)} style={{ width: '14px', height: '14px', cursor: 'pointer' }} />
+                    <label htmlFor="stackByPrintingOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      Split by Holo/Printing
+                    </label>
+                  </div>
+                </>
+              )}
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input type="checkbox" id="tradeOnlyOpt" checked={tradeOnly} onChange={(e) => setTradeOnly(e.target.checked)} style={{ width: '14px', height: '14px', cursor: 'pointer' }} />
+                <label htmlFor="tradeOnlyOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--accent-yellow)', fontWeight: 600 }}>
+                  For Trade Only
+                </label>
               </div>
 
-              {/* Row 2: Selector Filters Grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '0.75rem' }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Location</label>
-                  <select className="select-control" value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)}>
-                    <option value="">All Locations</option>
-                    <option value="unassigned">Unassigned Pile</option>
-                    {locations.map(loc => (
-                      <option key={loc.id} value={loc.id}>{loc.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Rarity</label>
-                  <select className="select-control" value={rarityFilter} onChange={(e) => setRarityFilter(e.target.value)}>
-                    <option value="">All Rarities</option>
-                    {uniqueRarities.map(rarity => (
-                      <option key={rarity} value={rarity}>{rarity}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Condition</label>
-                  <select className="select-control" value={conditionFilter} onChange={(e) => setConditionFilter(e.target.value)}>
-                    <option value="">All Conditions</option>
-                    <option value="Near Mint">Near Mint</option>
-                    <option value="Lightly Played">Lightly Played</option>
-                    <option value="Moderately Played">Moderately Played</option>
-                    <option value="Heavily Played">Heavily Played</option>
-                    <option value="Damaged">Damaged</option>
-                  </select>
-                </div>
-
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Printing</label>
-                  <select className="select-control" value={printingFilter} onChange={(e) => setPrintingFilter(e.target.value)}>
-                    <option value="">All Printings</option>
-                    <option value="Normal">Normal</option>
-                    <option value="Holofoil">Holofoil</option>
-                    <option value="Reverse Holofoil">Reverse Holofoil</option>
-                    <option value="1st Edition">1st Edition</option>
-                    <option value="Promo">Promo</option>
-                  </select>
-                </div>
-
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Min Price</label>
-                  <input 
-                    type="number" 
-                    className="input-control" 
-                    placeholder="Min $" 
-                    value={minPriceFilter} 
-                    onChange={(e) => setMinPriceFilter(e.target.value)} 
-                    style={{ padding: '0.4rem 0.5rem' }}
-                  />
-                </div>
-
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Max Price</label>
-                  <input 
-                    type="number" 
-                    className="input-control" 
-                    placeholder="Max $" 
-                    value={maxPriceFilter} 
-                    onChange={(e) => setMaxPriceFilter(e.target.value)} 
-                    style={{ padding: '0.4rem 0.5rem' }}
-                  />
-                </div>
-              </div>
-
+              {activeFilterCount > 0 && (
+                <button className="btn btn-secondary" onClick={clearAllFilters} style={{ marginLeft: 'auto', fontSize: '0.72rem', padding: '0.3rem 0.7rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <X size={13} /> Clear filters
+                </button>
+              )}
             </div>
           </div>
+        )}
+      </div>
 
-      {/* Database Listing Panel */}
+      {/* Result summary bar */}
+      {!loading && !selectMode && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', fontSize: '0.78rem', color: 'var(--text-secondary)', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <span><strong style={{ color: '#fff' }}>{displayCards.length}</strong> {displayCards.length === 1 ? 'card' : 'cards'}</span>
+          <span>Total value <strong style={{ color: 'var(--accent-yellow)' }}>${formatPrice(totalValue)}</strong></span>
+        </div>
+      )}
+
+      {/* Bulk action bar */}
+      {selectMode && (
+        <div className="glass-panel" style={{ marginBottom: '1rem', padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', position: 'sticky', top: '0.5rem', zIndex: 30 }}>
+          <span style={{ fontWeight: 800, color: '#fff', fontSize: '0.85rem' }}>{selectedIds.size} selected</span>
+          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={() => setSelectedIds(new Set(filteredCollection.map(i => i.entry_id)))}>Select all ({filteredCollection.length})</button>
+          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={clearSelection}>Clear</button>
+          <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
+          <button className="btn btn-danger" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('delete', null, `Delete ${selectedIds.size} selected card(s)? This cannot be undone.`)}>Delete</button>
+          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('trade', null)}>Mark Trade</button>
+          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('untrade', null)}>Untrade</button>
+          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('list_type', subTab === 'wishlist' ? 'collection' : 'wishlist', null)}>{subTab === 'wishlist' ? 'Move to Collection' : 'Move to Wishlist'}</button>
+          <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
+          <select className="select-control" value={bulkMoveTarget} onChange={(e) => setBulkMoveTarget(e.target.value)} style={{ fontSize: '0.72rem', maxWidth: '170px', padding: '0.3rem 0.4rem' }}>
+            <option value="">Move to container…</option>
+            <option value="unassign">Unassigned Pile</option>
+            {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+          <button className="btn btn-primary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!bulkMoveTarget || !selectedIds.size} onClick={() => runBulk('move', bulkMoveTarget === 'unassign' ? null : bulkMoveTarget)}>Apply Move</button>
+          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem', marginLeft: 'auto' }} onClick={exitSelectMode}>Done</button>
+        </div>
+      )}
+
       {loading ? (
         <div className="spinner"></div>
-      ) : filteredCollection.length === 0 ? (
+      ) : displayCards.length === 0 ? (
         <div className="glass-panel" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem 1.5rem' }}>
-          <p>No cards matched your filters. Clear filters or add some cards!</p>
+          <p>No cards matched your filters. {activeFilterCount > 0 ? 'Try clearing some filters.' : 'Add some cards!'}</p>
         </div>
       ) : viewMode === 'gallery' ? (
         /* Visual Cards Grid Gallery View */
         <div className="card-grid">
-          {filteredCollection.map((item) => {
-            const rarity = (item.rarity || '').toLowerCase();
-            const isUltra = rarity.includes('rare') || rarity.includes('secret') || rarity.includes('promo') || rarity.includes('ultra');
-            const glowClass = isUltra ? 'rarity-glow-ultra' : '';
+          {displayCards.map((item) => {
+            const rarityStyle = getCardRarityBorder(item.rarity);
+            const selected = selectedIds.has(item.entry_id);
 
             return (
-              <div key={item.entry_id} className="tcg-card" onClick={() => setInspectorCard(item)}>
-                <div className={`tcg-card-inner ${glowClass}`}>
-                  <img src={item.image_url} alt={item.name} className="tcg-card-image" loading="lazy" />
-                  <div className="tcg-card-quantity-tag">x{item.quantity}</div>
-                  
+              <div
+                key={item.entry_id}
+                className="tcg-card tilt-card-wrapper"
+                style={{ cursor: 'pointer', touchAction: 'pan-y' }}
+                onClick={() => activateCard(item)}
+                {...pressHandlers(item.entry_id)}
+              >
+                <div className="tcg-card-inner" style={{ ...rarityStyle, ...(selected ? { outline: '3px solid var(--accent-red)', outlineOffset: '2px' } : {}) }}>
+                  {selectMode && (
+                    <div style={{ position: 'absolute', top: '6px', right: '6px', zIndex: 20, width: '22px', height: '22px', borderRadius: '50%', background: selected ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.8rem', fontWeight: 900 }}>{selected ? '✓' : ''}</div>
+                  )}
+                  <img src={item.image_url} alt={item.name} className="tcg-card-image" loading="lazy" draggable={false} />
+                  {getFoilOverlayClass(item.printing) && (
+                    <div className={getFoilOverlayClass(item.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
+                  )}
+                  {item.quantity > 1 && (
+                    <div className="tcg-card-quantity-tag">x{item.quantity}</div>
+                  )}
+
+                  {/* Rarity badge (shared tier system, matches Storage view) */}
+                  <span style={{
+                    position: 'absolute',
+                    top: '6px',
+                    left: '6px',
+                    fontSize: '0.55rem',
+                    fontWeight: 900,
+                    padding: '2px 4px',
+                    borderRadius: '3px',
+                    zIndex: 10,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+                    ...getRarityBadgeStyle(item.rarity)
+                  }}>
+                    {getRarityBadgeLabel(item.rarity)}
+                  </span>
+
                   {/* Overlay Tags */}
                   <div style={{
                     position: 'absolute',
@@ -477,9 +701,9 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
                       border: '1px solid rgba(255, 255, 255, 0.1)',
                       textTransform: 'uppercase'
                     }}>
-                      {item.condition === 'Near Mint' ? 'NM' : 
-                       item.condition === 'Lightly Played' ? 'LP' : 
-                       item.condition === 'Moderately Played' ? 'MP' : 
+                      {item.condition === 'Near Mint' ? 'NM' :
+                       item.condition === 'Lightly Played' ? 'LP' :
+                       item.condition === 'Moderately Played' ? 'MP' :
                        item.condition === 'Heavily Played' ? 'HP' : 'DMG'}
                     </span>
                     {item.printing !== 'Normal' && (
@@ -488,13 +712,10 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
                         fontWeight: 800,
                         padding: '2px 5px',
                         borderRadius: '3px',
-                        background: item.printing.includes('Holo') ? 'rgba(234, 179, 8, 0.9)' : 'rgba(59, 130, 246, 0.9)',
-                        color: '#000',
+                        ...getPrintingBadgeStyle(item.printing),
                         border: '1px solid rgba(255, 255, 255, 0.2)'
                       }}>
-                        {item.printing === 'Reverse Holofoil' ? 'REV' : 
-                         item.printing === 'Holofoil' ? 'HOLO' : 
-                         item.printing === '1st Edition' ? '1ST' : 'PRM'}
+                        {getPrintingBadgeLabel(item.printing)}
                       </span>
                     )}
                   </div>
@@ -503,7 +724,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
                   <div className="tcg-card-name">{getCardDisplayName(item.name, item.language)}</div>
                   <div className="tcg-card-meta">
                     <span style={{ fontSize: '0.7rem' }}>{item.set_name} • #{item.number}</span>
-                    <span className="tcg-card-price">${item.price_trend ? item.price_trend.toFixed(2) : '0.00'}</span>
+                    <span className="tcg-card-price">${formatPrice(item.price_trend)}</span>
                   </div>
                 </div>
               </div>
@@ -513,431 +734,88 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
       ) : (
         /* Traditional List Table View */
         <div className="glass-panel" style={{ padding: 0, overflow: 'hidden' }}>
-          <div className="collection-table-wrapper">
-            <table className="collection-table">
+          <div style={{ overflowY: 'auto' }}>
+            <table className="collection-table" style={{ minWidth: 0 }}>
               <thead>
                 <tr>
-                  <th>Card Name / Set</th>
-                  <th>Real-World Location</th>
-                  <th>Condition / Printing</th>
-                  <th>Qty</th>
-                  <th>Valuation (Each)</th>
-                  <th>Total Spent</th>
-                  <th>Actions</th>
+                  <th>Card</th>
+                  <th style={{ width: '70px', textAlign: 'right' }}>Qty / Value</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredCollection.map((item) => (
-                  <tr key={item.entry_id}>
+                {displayCards.map((item) => {
+                  const selected = selectedIds.has(item.entry_id);
+                  return (
+                  <tr key={item.entry_id} style={selected ? { background: 'rgba(255,71,71,0.12)' } : undefined}>
                     <td>
-                      <div className="collection-card-row-info">
-                        <img src={item.image_url} alt={item.name} className="collection-row-thumbnail" />
-                        <div>
-                          <div style={{ fontWeight: 700, color: '#fff' }}>{getCardDisplayName(item.name, item.language)}</div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                            {item.set_name} • #{item.number} • {item.rarity}
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      {item.location_name ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
-                          <span style={{ fontWeight: 600, color: '#fff', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <MapPin size={12} style={{ color: 'var(--accent-red)' }} />
-                            {item.location_name}
-                          </span>
-                          {(item.sub_location_1 || item.sub_location_2) && (
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', paddingLeft: '1rem' }}>
-                              {item.location_type === 'Binder' ? 'Page' : item.location_type === 'Box' ? 'Row' : ''} {item.sub_location_1 || '?'}{' '}
-                              {item.sub_location_2 ? `• Slot/Section: ${item.sub_location_2}` : ''}
-                            </span>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        {selectMode && (
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleSelect(item.entry_id)}
+                            style={{ width: '18px', height: '18px', flexShrink: 0, cursor: 'pointer' }}
+                          />
+                        )}
+                        <div
+                          onClick={() => activateCard(item)}
+                          {...pressHandlers(item.entry_id)}
+                          style={{ position: 'relative', width: '36px', height: '50px', flexShrink: 0, overflow: 'hidden', borderRadius: '4px', cursor: 'pointer', touchAction: 'pan-y', ...getCardRarityBorder(item.rarity) }}
+                        >
+                          <img src={item.image_url} alt={item.name} className="collection-row-thumbnail" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px' }} draggable={false} />
+                          {getFoilOverlayClass(item.printing) && (
+                            <div className={getFoilOverlayClass(item.printing)} style={{ borderRadius: '4px' }} />
                           )}
                         </div>
-                      ) : (
-                        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Unassigned Pile</span>
-                      )}
-                    </td>
-                    <td>
-                      <div style={{ fontSize: '0.85rem', color: '#fff' }}>{item.condition}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{item.printing} • {item.language}</div>
-                    </td>
-                    <td style={{ fontWeight: 700 }}>x{item.quantity}</td>
-                    <td>
-                      <div style={{ fontWeight: 700, color: 'var(--accent-yellow)' }}>${(item.price_trend || 0).toFixed(2)}</div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Market Price</div>
-                    </td>
-                    <td style={{ fontSize: '0.9rem' }}>
-                      ${((item.purchase_price || 0) * item.quantity).toFixed(2)}
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: '0.35rem' }}>
-                        <button className="btn btn-secondary btn-icon-only" onClick={() => openEdit(item)}>
-                          <Edit2 size={12} />
-                        </button>
-                        <button className="btn btn-danger btn-icon-only" onClick={() => handleDelete(item.entry_id, item.name)}>
-                          <Trash2 size={12} />
-                        </button>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div onClick={() => activateCard(item)} {...pressHandlers(item.entry_id)} style={{ fontWeight: 700, color: '#fff', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{getCardDisplayName(item.name, item.language)}</div>
+                          <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                            <span>{item.set_name} • #{item.number}</span>
+                            <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 3px', borderRadius: '3px', flexShrink: 0, ...getRarityBadgeStyle(item.rarity) }}>
+                              {getRarityBadgeLabel(item.rarity)}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                            {item.printing} • {item.condition}
+                          </div>
+                          {!selectMode && (
+                            <div style={{ display: 'flex', gap: '0.35rem', marginTop: '2px' }}>
+                              <button className="btn btn-secondary btn-icon-only" style={{ width: '18px', height: '18px', padding: 0, borderRadius: '3px' }} onClick={() => openEdit(item)} title="Edit">
+                                <Edit2 size={9} />
+                              </button>
+                              <button className="btn btn-danger btn-icon-only" style={{ width: '18px', height: '18px', padding: 0, borderRadius: '3px' }} onClick={() => handleDelete(item.entry_id, item.name)} title="Delete">
+                                <Trash2 size={9} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </td>
+                    <td style={{ textAlign: 'right', verticalAlign: 'top', paddingTop: '0.6rem' }}>
+                      {item.quantity > 1 && (
+                        <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.85rem' }}>x{item.quantity}</div>
+                      )}
+                      <div style={{ fontSize: '0.7rem', color: 'var(--accent-yellow)', fontWeight: 600 }}>${formatPrice(item.price_trend)}</div>
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </div>
       )}
 
-      {/* Drawer Overlay for Editing Collection Item */}
-      <div className={`drawer-backdrop ${isEditOpen ? 'open' : ''}`} onClick={closeEdit}></div>
-      <div className={`quick-add-drawer ${isEditOpen ? 'open' : ''}`}>
-        {editingItem && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <h3 style={{ color: '#fff', fontSize: '1.25rem' }}>Edit Collection Card</h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{editingItem.name} ({editingItem.set_name} • #{editingItem.number})</p>
-              </div>
-              <button className="btn btn-secondary btn-icon-only" onClick={closeEdit} style={{ borderRadius: '50%' }}>
-                <X size={18} />
-              </button>
-            </div>
-
-            <form onSubmit={handleEditSubmit}>
-              {editListType === 'wishlist' ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(74,222,128,0.1)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(74,222,128,0.2)', marginBottom: '1.25rem' }}>
-                  <input 
-                    type="checkbox" 
-                    checked={editListType === 'collection'} 
-                    onChange={(e) => setEditListType(e.target.checked ? 'collection' : 'wishlist')} 
-                    id="markOwnedCheckbox"
-                    style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="markOwnedCheckbox" style={{ cursor: 'pointer', margin: 0, fontWeight: 700, color: 'var(--type-grass)', fontSize: '0.85rem' }}>
-                    Mark as Obtained (Move to Collection)
-                  </label>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.02)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginBottom: '1.25rem' }}>
-                  <input 
-                    type="checkbox" 
-                    checked={editIsTrade === 1} 
-                    onChange={(e) => setEditIsTrade(e.target.checked ? 1 : 0)} 
-                    id="isTradeCheckbox"
-                    style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="isTradeCheckbox" style={{ cursor: 'pointer', margin: 0, fontWeight: 700, color: '#fff', fontSize: '0.85rem' }}>
-                    Listed in Trade Binder
-                  </label>
-                </div>
-              )}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-                <div className="form-group">
-                  <label>Quantity</label>
-                  <input 
-                    type="number" 
-                    className="input-control" 
-                    min="1" 
-                    value={editQuantity}
-                    onChange={(e) => setEditQuantity(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Purchase Price ($)</label>
-                  <input 
-                    type="number" 
-                    step="0.01" 
-                    className="input-control" 
-                    value={editPurchasePrice}
-                    onChange={(e) => setEditPurchasePrice(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
-                <div className="form-group">
-                  <label>Condition</label>
-                  <select className="select-control" value={editCondition} onChange={(e) => setEditCondition(e.target.value)}>
-                    <option value="Near Mint">Near Mint</option>
-                    <option value="Lightly Played">Lightly Played</option>
-                    <option value="Moderately Played">Moderately Played</option>
-                    <option value="Heavily Played">Heavily Played</option>
-                    <option value="Damaged">Damaged</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Printing</label>
-                  <select className="select-control" value={editPrinting} onChange={(e) => setEditPrinting(e.target.value)}>
-                    <option value="Normal">Normal</option>
-                    <option value="Holofoil">Holofoil</option>
-                    <option value="Reverse Holofoil">Reverse Holofoil</option>
-                    <option value="1st Edition">1st Edition</option>
-                    <option value="Promo">Promo</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Language</label>
-                  <select className="select-control" value={editLanguage} onChange={(e) => setEditLanguage(e.target.value)}>
-                    <option value="English">English</option>
-                    <option value="Japanese">Japanese</option>
-                    <option value="German">German</option>
-                    <option value="French">French</option>
-                    <option value="Spanish">Spanish</option>
-                    <option value="Italian">Italian</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="glass-panel" style={{ padding: '1rem', marginTop: '0.5rem', marginBottom: '1.25rem', background: 'rgba(0,0,0,0.2)' }}>
-                <h4 style={{ fontSize: '0.8rem', color: 'var(--text-primary)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Real-World Location Assignment</h4>
-                
-                <div className="form-group">
-                  <label>Storage Container</label>
-                  <select className="select-control" value={editLocationId} onChange={(e) => setEditLocationId(e.target.value)}>
-                    <option value="">Unassigned Pile</option>
-                    {locations.map((loc) => (
-                      <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
-                    ))}
-                  </select>
-                </div>
-
-                {editLocationId && (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem', marginTop: '0.75rem' }}>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>{isBinder ? 'Page Number' : isBox ? 'Row Number / Letter' : 'Sub-Location 1'}</label>
-                      <input 
-                        type="text" 
-                        className="input-control" 
-                        placeholder={isBinder ? 'e.g. Page 12' : isBox ? 'e.g. Row 2' : 'e.g. Top shelf'} 
-                        value={editSubLocation1}
-                        onChange={(e) => setEditSubLocation1(e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>{isBinder ? 'Slot Number (1-9)' : isBox ? 'Divider / Section' : 'Sub-Location 2'}</label>
-                      <input 
-                        type="text" 
-                        className="input-control" 
-                        placeholder={isBinder ? 'e.g. Slot 4' : isBox ? 'e.g. Behind Grass Divider' : 'e.g. Box A'} 
-                        value={editSubLocation2}
-                        onChange={(e) => setEditSubLocation2(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
-                <button type="button" className="btn btn-secondary" onClick={closeEdit} style={{ flex: 1 }}>Cancel</button>
-                <button type="submit" className="btn btn-primary" style={{ flex: 2 }}>Save Changes</button>
-              </div>
-            </form>
-          </div>
-        )}
-      </div>
       {/* Card Detail Inspector Modal (Private Authorized View) */}
-      {inspectorCard && (
-        <div style={{
-          position: 'fixed',
-          top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.75)',
-          backdropFilter: 'blur(8px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 999,
-          padding: '1.5rem'
-        }} onClick={() => setInspectorCard(null)}>
-          <div className="glass-panel" style={{
-            maxWidth: '720px',
-            width: '100%',
-            padding: '2.5rem',
-            display: 'flex',
-            flexDirection: 'row',
-            flexWrap: 'wrap',
-            gap: '2.5rem',
-            position: 'relative',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
-            boxShadow: '0 20px 50px rgba(0,0,0,0.6)'
-          }} onClick={(e) => e.stopPropagation()}>
-            <button className="btn btn-secondary btn-icon-only" onClick={() => setInspectorCard(null)} style={{
-              position: 'absolute',
-              top: '1rem',
-              right: '1rem',
-              borderRadius: '50%'
-            }}>
-              <X size={16} />
-            </button>
-
-            {/* Left side: Card Image & Badge overlays */}
-            <div style={{ flex: '1 1 250px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
-              <div style={{ position: 'relative', width: '100%', maxWidth: '280px' }}>
-                <img 
-                  src={inspectorCard.image_url} 
-                  alt={inspectorCard.name} 
-                  style={{
-                    width: '100%',
-                    aspectRatio: 0.718,
-                    objectFit: 'cover',
-                    borderRadius: 'var(--radius-md)',
-                    boxShadow: '0 12px 36px rgba(0,0,0,0.6), 0 0 20px rgba(255,255,255,0.05)'
-                  }}
-                />
-              </div>
-              
-              {/* Quantities indicator badge */}
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
-                <span className="badge" style={{ padding: '0.4rem 0.8rem', background: 'rgba(255, 255, 255, 0.05)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', color: '#fff', fontSize: '0.75rem', fontWeight: 700 }}>
-                  Owned: x{inspectorCard.quantity}
-                </span>
-                <span className="badge" style={{ padding: '0.4rem 0.8rem', background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.2)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-yellow)', fontSize: '0.75rem', fontWeight: 700 }}>
-                  {inspectorCard.rarity || 'Common'}
-                </span>
-              </div>
-            </div>
-
-            {/* Right side: Information */}
-            <div style={{ flex: '1 1 320px', display: 'flex', flexDirection: 'column', gap: '1.25rem', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-                  {inspectorCard.list_type === 'wishlist' && (
-                    <span style={{ fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.2rem 0.5rem', borderRadius: '4px', backgroundColor: 'rgba(6, 182, 212, 0.15)', color: '#06b6d4', border: '1px solid rgba(6, 182, 212, 0.3)' }}>
-                      Wishlist Item
-                    </span>
-                  )}
-                  {inspectorCard.is_trade === 1 && (
-                    <span style={{ fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.2rem 0.5rem', borderRadius: '4px', backgroundColor: 'rgba(74, 222, 128, 0.15)', color: 'var(--type-grass)', border: '1px solid rgba(74, 222, 128, 0.3)' }}>
-                      For Trade
-                    </span>
-                  )}
-                </div>
-
-                <h3 style={{ fontSize: '1.65rem', color: '#fff', fontWeight: 800, lineHeight: 1.15, marginBottom: '0.25rem' }}>
-                  {getCardDisplayName(inspectorCard.name, inspectorCard.language)}
-                </h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 500 }}>{inspectorCard.set_name} • Card #{inspectorCard.number}</p>
-              </div>
-
-              {/* Price Panel */}
-              <div style={{ borderTop: '1px solid var(--border-glass)', borderBottom: '1px solid var(--border-glass)', padding: '0.75rem 0', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-                <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>TCG MARKET PRICE</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--accent-yellow)', marginTop: '0.15rem' }}>
-                    ${inspectorCard.price_trend ? inspectorCard.price_trend.toFixed(2) : '0.00'}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>EST. PURCHASE VALUE</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#fff', marginTop: '0.15rem' }}>
-                    ${inspectorCard.purchase_price ? inspectorCard.purchase_price.toFixed(2) : '0.00'}
-                  </div>
-                </div>
-              </div>
-
-              {/* Price History Area Chart */}
-              {loadingHistory ? (
-                <div className="spinner" style={{ height: '30px', margin: '0.5rem auto' }}></div>
-              ) : priceHistory.length > 0 && (
-                <div style={{ width: '100%', background: 'rgba(0,0,0,0.15)', padding: '0.6rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', marginBottom: '6px', letterSpacing: '0.05em' }}>Price History (30 Days)</div>
-                  <div style={{ width: '100%', height: '65px' }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={priceHistory} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
-                        <defs>
-                          <linearGradient id="priceGlow" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="var(--accent-yellow)" stopOpacity={0.25}/>
-                            <stop offset="95%" stopColor="var(--accent-yellow)" stopOpacity={0}/>
-                          </linearGradient>
-                        </defs>
-                        <XAxis dataKey="recorded_at" hide />
-                        <YAxis domain={['auto', 'auto']} stroke="var(--text-secondary)" style={{ fontSize: '0.55rem' }} width={30} />
-                        <Tooltip 
-                          contentStyle={{ background: 'rgba(0,0,0,0.85)', border: '1px solid var(--border-glass)', borderRadius: '4px', fontSize: '0.7rem', color: '#fff' }}
-                          labelFormatter={(label) => new Date(label).toLocaleDateString()}
-                          formatter={(val) => [`$${val.toFixed(2)}`, 'Market']}
-                        />
-                        <Area type="monotone" dataKey="price" stroke="var(--accent-yellow)" strokeWidth={1.5} fillOpacity={1} fill="url(#priceGlow)" />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              )}
-
-              {/* Specifications Details Grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem 1rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-glass)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem' }}>
-                <div><span style={{ color: 'var(--text-muted)' }}>Condition:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{inspectorCard.condition}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>Printing:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{inspectorCard.printing}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>Language:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{inspectorCard.language}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>Supertype:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{inspectorCard.supertype}</span></div>
-              </div>
-
-              {/* Storage Container details */}
-              {inspectorCard.list_type !== 'wishlist' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255, 71, 71, 0.02)', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', fontSize: '0.75rem' }}>
-                  <MapPin size={14} style={{ color: 'var(--accent-red)', flexShrink: 0 }} />
-                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Location: </span>
-                    <strong style={{ color: '#fff' }}>
-                      {inspectorCard.location_name ? `${inspectorCard.location_name} (${inspectorCard.location_type})` : 'Unassigned Pile'}
-                    </strong>
-                    {inspectorCard.location_name && (inspectorCard.sub_location_1 || inspectorCard.sub_location_2) && (
-                      <span style={{ color: 'var(--text-secondary)' }}>
-                        {` • ${inspectorCard.location_type === 'Binder' ? 'Page' : 'Row'} ${inspectorCard.sub_location_1 || '?'}`}
-                        {inspectorCard.sub_location_2 ? ` / Slot ${inspectorCard.sub_location_2}` : ''}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Actions row inside modal */}
-              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
-                {inspectorCard.list_type === 'wishlist' && (
-                  <button 
-                    className="btn btn-primary" 
-                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
-                    onClick={() => {
-                      openEdit(inspectorCard);
-                      setEditListType('collection');
-                      setInspectorCard(null);
-                    }}
-                  >
-                    Move to Collection
-                  </button>
-                )}
-                <button 
-                  className="btn btn-secondary" 
-                  style={{ flex: 1 }}
-                  onClick={() => {
-                    openEdit(inspectorCard);
-                    setInspectorCard(null);
-                  }}
-                >
-                  Edit Card
-                </button>
-                <button 
-                  className="btn btn-danger" 
-                  style={{ flex: 1 }}
-                  onClick={() => {
-                    handleDelete(inspectorCard.entry_id, inspectorCard.name);
-                    setInspectorCard(null);
-                  }}
-                >
-                  Delete
-                </button>
-              </div>
-
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  )}
-</div>
+      <CardInspectorModal
+        card={inspectorCard}
+        startInEdit={inspectorStartEdit}
+        onClose={() => { setInspectorCard(null); setInspectorStartEdit(false); }}
+        onUpdate={onUpdate}
+        showToast={showToast}
+        onViewStorage={handleViewStorage}
+      />
+    </div>
   );
 }
 

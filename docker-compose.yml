@@ -1,21 +1,21 @@
-version: '3.8'
-
 services:
-  pokedexrr:
+  bindarr:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: pokedexrr
+    container_name: bindarr
     restart: unless-stopped
     ports:
       - "3001:3001"
     environment:
-      - PORT=3001
-      - DB_PATH=/app/database/pokemon_cards.db
-      - POKEMON_TCG_API_KEY= # Optional: Add your Pokemon TCG API Key here to increase rate limits
+      # All optional. Uncomment and set as needed.
+      # - POKEMON_TCG_API_KEY=          # Pokemon TCG API key to raise rate limits
+      # - PUBLIC_BASE_URL=              # External URL behind a reverse proxy, e.g. https://cards.example.com. Used for share links AND auto-allowed as a CORS origin (so proxied logins work with just this set)
+      # - DEFAULT_ADMIN_PASSWORD=       # Pin the initial admin password instead of the auto-generated one (see startup logs)
+      # - ALLOW_REGISTRATION=           # "true" = open self-registration. Unset = invite-only
+      # - TRUST_PROXY=                  # "1" behind a TLS-terminating reverse proxy so rate limiting sees the real client IP
     volumes:
-      - pokedexrr-data:/app/database
+      - bindarr-data:/app/database
 
 volumes:
-  pokedexrr-data:
-    driver: local
+  bindarr-data:

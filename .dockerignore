@@ -1,0 +1,35 @@
+# Dependencies are installed inside the image (npm ci); never copy host ones —
+# they may be the wrong arch (native sqlite3) and bloat the build context.
+node_modules
+**/node_modules
+
+# Build output (frontend is rebuilt in stage 1)
+dist
+**/dist
+build
+out
+
+# VCS / CI
+.git
+.github
+.gitignore
+
+# Local databases and env — must not leak into the image
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+backend/database
+.env
+.env.*
+
+# Logs and editor cruft
+*.log
+logs
+.vscode
+.idea
+.DS_Store
+
+# Agent / docs not needed at runtime
+CLAUDE.md

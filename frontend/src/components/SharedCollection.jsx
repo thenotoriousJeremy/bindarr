@@ -1,6 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend } from 'recharts';
 import { Search, Trophy, Compass, Library, ShieldAlert, Sparkles, X } from 'lucide-react';
+import { formatPrice } from '../utils/formatPrice';
+import { PRINTINGS } from '../utils/cardOptions';
+import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
@@ -42,6 +45,7 @@ function SharedCollection({ shareToken }) {
 
   useEffect(() => {
     fetchSharedData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareToken, listType]);
 
   const fetchSharedData = async () => {
@@ -89,7 +93,7 @@ function SharedCollection({ shareToken }) {
             borderRadius: 'var(--radius-sm)',
             boxShadow: 'var(--shadow-accent)'
           }}>
-            Go to Pokedexrr
+            Go to Bindarr
           </a>
         </div>
       </div>
@@ -170,7 +174,7 @@ function SharedCollection({ shareToken }) {
       {/* Title block based on active share view */}
       <div className="glass-panel" style={{ marginBottom: '1.5rem' }}>
         <h2 style={{ fontSize: '1.25rem', color: '#fff', textTransform: 'capitalize' }}>
-          {owner}'s {listType === 'trade' ? 'Trade Binder' : listType === 'wishlist' ? 'Wanted Wishlist' : 'Pokémon Collection'}
+          {owner}&apos;s {listType === 'trade' ? 'Trade Binder' : listType === 'wishlist' ? 'Wanted Wishlist' : 'Pokémon Collection'}
         </h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
           {listType === 'trade' ? 'Browse cards this collector is willing to trade.' : listType === 'wishlist' ? 'View cards this collector is searching for.' : 'Browse this collector\'s catalog library.'}
@@ -313,11 +317,7 @@ function SharedCollection({ shareToken }) {
               <label>Printing</label>
               <select className="select-control" value={printingFilter} onChange={(e) => setPrintingFilter(e.target.value)}>
                 <option value="">All Printings</option>
-                <option value="Normal">Normal</option>
-                <option value="Holofoil">Holofoil</option>
-                <option value="Reverse Holofoil">Reverse Holofoil</option>
-                <option value="1st Edition">1st Edition</option>
-                <option value="Promo">Promo</option>
+                {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
           </div>
@@ -337,16 +337,24 @@ function SharedCollection({ shareToken }) {
             const glowClass = isUltra ? 'rarity-glow-ultra' : '';
 
             return (
-              <div key={card.entry_id} className="tcg-card" onClick={() => setActiveCard(card)}>
+              <div key={card.entry_id} className="tcg-card tilt-card-wrapper" onClick={() => setActiveCard(card)}>
                 <div className={`tcg-card-inner ${glowClass}`}>
                   <img src={card.image_url} alt={card.name} className="tcg-card-image" loading="lazy" />
+                  {getFoilOverlayClass(card.printing) && (
+                    <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
+                  )}
+                  {getPrintingBadgeLabel(card.printing) && (
+                    <span style={{ position: 'absolute', top: '6px', left: '6px', fontSize: '0.6rem', fontWeight: 800, padding: '2px 5px', borderRadius: '3px', zIndex: 6, ...getPrintingBadgeStyle(card.printing) }}>
+                      {getPrintingBadgeLabel(card.printing)}
+                    </span>
+                  )}
                   <div className="tcg-card-quantity-tag">x{card.quantity}</div>
                 </div>
                 <div className="tcg-card-info">
                   <div className="tcg-card-name">{card.name}</div>
                   <div className="tcg-card-meta">
                     <span style={{ fontSize: '0.7rem' }}>{card.set_name} • #{card.number}</span>
-                    <span className="tcg-card-price">${card.price_trend ? card.price_trend.toFixed(2) : '0.00'}</span>
+                    <span className="tcg-card-price">${formatPrice(card.price_trend)}</span>
                   </div>
                 </div>
               </div>
@@ -428,7 +436,7 @@ function SharedCollection({ shareToken }) {
                 <div>
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>EST. MARKET PRICE</div>
                   <div style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>
-                    ${activeCard.price_trend ? activeCard.price_trend.toFixed(2) : '0.00'}
+                    ${formatPrice(activeCard.price_trend)}
                   </div>
                 </div>
                 <div>
