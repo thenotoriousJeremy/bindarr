@@ -8,6 +8,140 @@ const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
+router.post('/seed-cards', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ error: 'Not available in production' });
+  }
+  try {
+    let binder = await db.get(`SELECT id FROM locations WHERE user_id = ? AND type = 'Binder' LIMIT 1`, [req.user.id]);
+    if (!binder) {
+      const result = await db.run(`
+        INSERT INTO locations (name, type, sort_order, user_id) VALUES (?, ?, ?, ?)
+      `, ['Binder Seed Box', 'Binder', 'custom', req.user.id]);
+      await db.createCompartments(result.lastID, 12, 9);
+      binder = { id: result.lastID };
+    }
+
+    let box = await db.get(`SELECT id FROM locations WHERE user_id = ? AND type = 'Box' LIMIT 1`, [req.user.id]);
+    if (!box) {
+      const result = await db.run(`
+        INSERT INTO locations (name, type, sort_order, user_id) VALUES (?, ?, ?, ?)
+      `, ['Box Seed Box', 'Box', 'custom', req.user.id]);
+      await db.createCompartments(result.lastID, 4, 40);
+      box = { id: result.lastID };
+    }
+
+    const SEED_SETS = ['base1', 'sv1', 'swsh1'];
+    const MOCK_POOL = [];
+    for (const setId of SEED_SETS) {
+      try {
+        MOCK_POOL.push(...await tcgApi.getCardsBySet(setId, req.user.tcg_api_key));
+        await new Promise(r => setTimeout(r, 500)); // Be gentle on the rate limits
+      } catch (err) {
+        console.error(`Seed: skipping Pokémon set ${setId}:`, err.message);
+      }
+    }
+    const MTG_SEED_SETS = ['lea', 'mh3'];
+    for (const setCode of MTG_SEED_SETS) {
+      try {
+        MOCK_POOL.push(...await scryfallApi.getCardsBySet(setCode));
+        await new Promise(r => setTimeout(r, 500)); // Scryfall strictly requires 50-100ms between requests
+      } catch (err) {
+        console.error(`Seed: skipping MTG set ${setCode}:`, err.message);
+      }
+    }
+    if (MOCK_POOL.length === 0) {
+      // Fallback: If APIs are completely down/rate-limited, try to use whatever is already in the cache
+      const cached = await db.all(`SELECT * FROM card_cache LIMIT 500`);
+      if (cached.length > 0) {
+        console.log(`Seed: APIs failed, falling back to ${cached.length} locally cached cards.`);
+        for (const r of cached) {
+          MOCK_POOL.push({
+            ...r,
+            subtypes: JSON.parse(r.subtypes || '[]'),
+            types: JSON.parse(r.types || '[]'),
+            color_identity: JSON.parse(r.color_identity || '[]')
+          });
+        }
+      } else {
+        return res.status(502).json({ error: 'Could not fetch seed card data from the card APIs, and local cache is empty. Try again shortly.' });
+      }
+    }
+
+    const seedSetIds = [...new Set(MOCK_POOL.map(c => c.set_id))];
+    const seedSetPlaceholders = seedSetIds.map(() => '?').join(',');
+    await db.run(
+      `DELETE FROM collection WHERE user_id = ? AND card_id IN (
+         SELECT id FROM card_cache WHERE set_id IN (${seedSetPlaceholders})
+       )`,
+      [req.user.id, ...seedSetIds]
+    );
+
+    const conditions = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played'];
+    const languages = ['English', 'English', 'English', 'Japanese'];
+
+    const printsForCard = (card) => {
+      const options = [];
+      if (card.price_normal > 0) options.push('Normal');
+      if (card.price_holofoil > 0) options.push('Holofoil');
+      if (card.price_reverse_holofoil > 0) options.push('Reverse Holofoil');
+      return options.length > 0 ? options : ['Normal'];
+    };
+
+    let addedCount = 0;
+
+    const randomEntry = (maxPrice) => {
+      const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
+      const prints = printsForCard(card);
+      return {
+        card,
+        print: prints[Math.floor(Math.random() * prints.length)],
+        condition: conditions[Math.floor(Math.random() * conditions.length)],
+        language: languages[Math.floor(Math.random() * languages.length)],
+        qty: Math.floor(Math.random() * 2) + 1,
+        purchasePrice: parseFloat((Math.random() * maxPrice).toFixed(2))
+      };
+    };
+
+    const fillLocation = async (locationId, maxPrice, fillRatio) => {
+      const compartments = await db.all(
+        `SELECT id, capacity FROM compartments WHERE location_id = ? ORDER BY idx`,
+        [locationId]
+      );
+      for (const comp of compartments) {
+        const slots = Math.max(1, Math.round(comp.capacity * fillRatio));
+        for (let s = 0; s < slots; s++) {
+          const e = randomEntry(maxPrice);
+          await db.run(`
+            INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, position, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [e.card.id, e.qty, e.condition, e.print, e.language, e.purchasePrice, locationId, comp.id, s * 1000, req.user.id]);
+          addedCount += e.qty;
+        }
+      }
+    };
+
+    await fillLocation(binder.id, 10, 0.7);
+    await fillLocation(box.id, 5, 0.6);
+
+    let unsortedAdded = 0;
+    for (let i = 0; i < 40; i++) {
+      const e = randomEntry(5);
+      await db.run(`
+        INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, position, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?)
+      `, [e.card.id, e.qty, e.condition, e.print, e.language, e.purchasePrice, req.user.id]);
+      addedCount += e.qty;
+      unsortedAdded++;
+    }
+
+    res.json({ message: `Successfully seeded a large test collection: ${addedCount} cards for admin user (${unsortedAdded} left unsorted to try Assistant Mode on).` });
+  } catch (error) {
+    console.error('SEEDING ERROR:', error);
+    res.status(500).json({ error: 'Failed to seed test cards' });
+  }
+});
+
 router.use(authenticateToken, requireAdmin);
 
 // Get all users with their statistics
@@ -152,151 +286,7 @@ router.delete('/users/:id', async (req, res) => {
   }
 });
 
-// Generate a random collection of various cards for admins database so we can test.
-// Dev/test-data helper only — unreachable once NODE_ENV=production.
-router.post('/seed-cards', async (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(403).json({ error: 'Not available in production' });
-  }
-  try {
-    // 1. Get or create Binder and Box locations for admin. fillLocation below
-    // spreads cards across every compartment, so fresh containers get enough
-    // pages/rows to make a large, multi-page test collection.
-    let binder = await db.get(`SELECT id FROM locations WHERE user_id = ? AND type = 'Binder' LIMIT 1`, [req.user.id]);
-    if (!binder) {
-      const result = await db.run(`
-        INSERT INTO locations (name, type, sort_order, user_id) VALUES (?, ?, ?, ?)
-      `, ['Binder Seed Box', 'Binder', 'custom', req.user.id]);
-      await db.createCompartments(result.lastID, 12, 9); // 12 pages, 9 pockets each
-      binder = { id: result.lastID };
-    }
 
-    let box = await db.get(`SELECT id FROM locations WHERE user_id = ? AND type = 'Box' LIMIT 1`, [req.user.id]);
-    if (!box) {
-      const result = await db.run(`
-        INSERT INTO locations (name, type, sort_order, user_id) VALUES (?, ?, ?, ?)
-      `, ['Box Seed Box', 'Box', 'custom', req.user.id]);
-      await db.createCompartments(result.lastID, 4, 40); // 4 rows, 40 cards each
-      box = { id: result.lastID };
-    }
-
-    // Pull whole sets so the pool spans every energy type, both supertypes
-    // (Pokémon/Trainer/Energy), and Common through Ultra Rare across vintage
-    // (Base Set) and modern (Scarlet & Violet, Sword & Shield). One API request
-    // per set via getCardsBySet, cached like any real lookup.
-    const SEED_SETS = ['base1', 'sv1', 'swsh1'];
-    const MOCK_POOL = [];
-    // A transient API hiccup (rate limit, timeout) on one set shouldn't fail the
-    // whole seed — skip that set and keep going. The empty-pool guard below
-    // still catches the case where every set failed.
-    for (const setId of SEED_SETS) {
-      try {
-        MOCK_POOL.push(...await tcgApi.getCardsBySet(setId));
-      } catch (err) {
-        console.error(`Seed: skipping Pokémon set ${setId}:`, err.message);
-      }
-    }
-    // Also pull MTG sets (vintage + modern) via Scryfall so the seeded
-    // collection spans both games, not just Pokémon.
-    const MTG_SEED_SETS = ['lea', 'mh3'];
-    for (const setCode of MTG_SEED_SETS) {
-      try {
-        MOCK_POOL.push(...await scryfallApi.getCardsBySet(setCode));
-      } catch (err) {
-        console.error(`Seed: skipping MTG set ${setCode}:`, err.message);
-      }
-    }
-    if (MOCK_POOL.length === 0) {
-      return res.status(502).json({ error: 'Could not fetch seed card data from the card APIs. Try again shortly.' });
-    }
-
-    // Clear out any previously-seeded copies of these sets' cards first, so
-    // running this repeatedly re-seeds instead of piling up more copies every
-    // time. Scoped to the seeded set ids so it never touches cards a real
-    // scan/search added.
-    const seedSetIds = [...new Set(MOCK_POOL.map(c => c.set_id))];
-    const seedSetPlaceholders = seedSetIds.map(() => '?').join(',');
-    await db.run(
-      `DELETE FROM collection WHERE user_id = ? AND card_id IN (
-         SELECT id FROM card_cache WHERE set_id IN (${seedSetPlaceholders})
-       )`,
-      [req.user.id, ...seedSetIds]
-    );
-
-    // Insert random collection entries distributed across binder & box
-    const conditions = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played'];
-    const languages = ['English', 'English', 'English', 'Japanese']; // ~25% Japanese so both display modes are visible
-
-    // Only offer printings the card actually has a tracked price for (e.g. a
-    // modern Common has no Holofoil print/price) — otherwise resolveCardPrice
-    // silently falls back to price_trend and the seeded card's "Holofoil"
-    // price ends up identical to its Normal price, which looks like a bug.
-    const printsForCard = (card) => {
-      const options = [];
-      if (card.price_normal > 0) options.push('Normal');
-      if (card.price_holofoil > 0) options.push('Holofoil');
-      if (card.price_reverse_holofoil > 0) options.push('Reverse Holofoil');
-      return options.length > 0 ? options : ['Normal'];
-    };
-
-    let addedCount = 0;
-
-    // Pick a random card + random valid printing/condition/language/qty for one slot.
-    const randomEntry = (maxPrice) => {
-      const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
-      const prints = printsForCard(card);
-      return {
-        card,
-        print: prints[Math.floor(Math.random() * prints.length)],
-        condition: conditions[Math.floor(Math.random() * conditions.length)],
-        language: languages[Math.floor(Math.random() * languages.length)],
-        qty: Math.floor(Math.random() * 2) + 1, // 1-2 copies
-        purchasePrice: parseFloat((Math.random() * maxPrice).toFixed(2))
-      };
-    };
-
-    // Fill each compartment of a location up to ~fillRatio of its capacity so
-    // the test collection spans many pages/rows, not just the first one.
-    const fillLocation = async (locationId, maxPrice, fillRatio) => {
-      const compartments = await db.all(
-        `SELECT id, capacity FROM compartments WHERE location_id = ? ORDER BY idx`,
-        [locationId]
-      );
-      for (const comp of compartments) {
-        const slots = Math.max(1, Math.round(comp.capacity * fillRatio));
-        for (let s = 0; s < slots; s++) {
-          const e = randomEntry(maxPrice);
-          await db.run(`
-            INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, position, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `, [e.card.id, e.qty, e.condition, e.print, e.language, e.purchasePrice, locationId, comp.id, s * 1000, req.user.id]);
-          addedCount += e.qty;
-        }
-      }
-    };
-
-    await fillLocation(binder.id, 10, 0.7); // binder pages ~70% full
-    await fillLocation(box.id, 5, 0.6);     // box rows ~60% full
-
-    // A pile of genuinely unsorted cards (no location_id) to try Assistant
-    // Mode / bulk sort on right away.
-    let unsortedAdded = 0;
-    for (let i = 0; i < 40; i++) {
-      const e = randomEntry(5);
-      await db.run(`
-        INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, position, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?)
-      `, [e.card.id, e.qty, e.condition, e.print, e.language, e.purchasePrice, req.user.id]);
-      addedCount += e.qty;
-      unsortedAdded++;
-    }
-
-    res.json({ message: `Successfully seeded a large test collection: ${addedCount} cards for admin user (${unsortedAdded} left unsorted to try Assistant Mode on).` });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Failed to seed test cards' });
-  }
-});
 
 // --- Set-index build management ---
 
