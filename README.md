@@ -19,6 +19,20 @@ Identify physical cards with your phone's camera, track real-time market valuati
 
 ---
 
+## Screenshots
+
+<div align="center">
+  <img src="docs/images/dashboard.png" width="32%" alt="Dashboard Analytics">
+  <img src="docs/images/collection.png" width="32%" alt="Card Collection">
+  <img src="docs/images/storage.png" width="32%" alt="Storage Binder View">
+  <br/>
+  <img src="docs/images/storage_box.png" width="32%" alt="Storage Box View">
+  <img src="docs/images/add_cards.png" width="32%" alt="Camera Scanning">
+  <img src="docs/images/login.png" width="32%" alt="Secure Login">
+</div>
+
+---
+
 ## Table of Contents
 
 - [Features](#features)
