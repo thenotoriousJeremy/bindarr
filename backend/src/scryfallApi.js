@@ -244,6 +244,23 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
   }
 }
 
+// Fetch a set's cards from Scryfall (dev seed helper). Mirrors
+// tcgApi.getCardsBySet: one request, normalized + cached like any lookup, so
+// the seed route gets a varied MTG pool (all colors/rarities). Takes the first
+// page (~175 cards) — plenty for test data, so pagination is skipped.
+async function getCardsBySet(setCode) {
+  try {
+    console.log(`Querying Scryfall for full set: ${setCode}`);
+    const raw = await fetchFromScryfall(`set:${setCode}`);
+    const cards = raw.map(c => normalizeCard(c));
+    if (cards.length > 0) await cacheCards(cards);
+    return cards;
+  } catch (error) {
+    console.error(`Error fetching MTG set ${setCode} from Scryfall:`, error.message);
+    return [];
+  }
+}
+
 // Fetch MTG sets from Scryfall and cache them in the shared `sets` table
 // (game='mtg'). Set ids are prefixed "mtg-" so a Scryfall set code can never
 // collide with a Pokémon set id on the primary key. Skips if already populated
@@ -311,4 +328,4 @@ async function updateCollectionPrices() {
   }
 }
 
-module.exports = { searchCards, normalizeCard, cacheCards, fetchAndCacheSets, updateCollectionPrices };
+module.exports = { searchCards, normalizeCard, cacheCards, getCardsBySet, fetchAndCacheSets, updateCollectionPrices };

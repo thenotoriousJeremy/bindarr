@@ -2,6 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
 const tcgApi = require('../tcgApi');
+const scryfallApi = require('../scryfallApi');
 const setIndex = require('../setIndex');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
@@ -189,19 +190,28 @@ router.post('/seed-cards', async (req, res) => {
       const cards = await tcgApi.getCardsBySet(setId);
       MOCK_POOL.push(...cards);
     }
+    // Also pull MTG sets (vintage + modern) via Scryfall so the seeded
+    // collection spans both games, not just Pokémon.
+    const MTG_SEED_SETS = ['lea', 'mh3'];
+    for (const setCode of MTG_SEED_SETS) {
+      const cards = await scryfallApi.getCardsBySet(setCode);
+      MOCK_POOL.push(...cards);
+    }
     if (MOCK_POOL.length === 0) {
-      return res.status(502).json({ error: 'Could not fetch seed card data from the Pokémon TCG API. Try again shortly.' });
+      return res.status(502).json({ error: 'Could not fetch seed card data from the card APIs. Try again shortly.' });
     }
 
     // Clear out any previously-seeded copies of these sets' cards first, so
     // running this repeatedly re-seeds instead of piling up more copies every
     // time. Scoped to the seeded set ids so it never touches cards a real
     // scan/search added.
-    const seedCardIds = MOCK_POOL.map(c => c.id);
-    const seedIdPlaceholders = seedCardIds.map(() => '?').join(',');
+    const seedSetIds = [...new Set(MOCK_POOL.map(c => c.set_id))];
+    const seedSetPlaceholders = seedSetIds.map(() => '?').join(',');
     await db.run(
-      `DELETE FROM collection WHERE user_id = ? AND card_id IN (${seedIdPlaceholders})`,
-      [req.user.id, ...seedCardIds]
+      `DELETE FROM collection WHERE user_id = ? AND card_id IN (
+         SELECT id FROM card_cache WHERE set_id IN (${seedSetPlaceholders})
+       )`,
+      [req.user.id, ...seedSetIds]
     );
 
     // Insert random collection entries distributed across binder & box
