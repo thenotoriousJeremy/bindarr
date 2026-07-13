@@ -4,6 +4,7 @@ import { sortCardsByOrder } from '../utils/cardSort';
 import { getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder } from '../utils/cardRarity';
 import CardInspectorModal from './CardInspectorModal';
+import { isBinderType as computeIsBinder } from '../utils/cardOptions';
 import CompartmentView, { getPrimaryCategory, FocusedCardInfo } from './CompartmentView';
 import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
 import CreateContainerModal from './CreateContainerModal';
@@ -71,7 +72,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   // isBinderType in its dependency array, which is evaluated during render —
   // a lower `const` would be in the temporal dead zone at that point.
   const selectedLoc = locations.find(l => l.id === activeLocationId);
-  const isBinderType = selectedLoc?.type === 'Binder' || selectedLoc?.type === 'Toploader Binder';
+  const isBinderType = computeIsBinder(selectedLoc?.type);
   const isCustom = selectedLoc?.sort_order === 'custom';
 
   useEffect(() => {

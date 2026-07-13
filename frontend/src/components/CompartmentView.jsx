@@ -3,6 +3,7 @@ import { getPrintingBadgeStyle, getPrintingBadgeLabel, getFoilOverlayClass } fro
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { formatPrice } from '../utils/formatPrice';
 import { typeCategory } from '../utils/cardSort';
+import { isBinderType } from '../utils/cardOptions';
 
 const infoChipStyle = { fontSize: '0.6rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)', whiteSpace: 'nowrap' };
 
@@ -222,7 +223,7 @@ export default function CompartmentView({
   onPickCard = null,
   onPlaceSlot = null
 }) {
-  const isBinder = locationType === 'Binder' || locationType === 'Toploader Binder';
+  const isBinder = isBinderType(locationType);
   const isSelected = (entryId) => !!(selectedIds && selectedIds.has(entryId));
   const highlightSet = new Set(highlightEntryIds);
 

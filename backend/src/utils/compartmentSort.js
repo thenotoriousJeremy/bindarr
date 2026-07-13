@@ -242,10 +242,15 @@ function sortCards(cards, sortOrder, foilSorting) {
   return sorted;
 }
 
+// A binder-family container numbers its compartments as Pages; everything else
+// (boxes, deck boxes, etc.) numbers them as Rows.
+function isBinderType(type) {
+  return type === 'Binder' || type === 'Toploader Binder';
+}
+
 function compartmentLabel(compartment, locationType) {
   if (compartment.label) return compartment.label;
-  const isBinder = locationType === 'Binder' || locationType === 'Toploader Binder';
-  return isBinder ? `Page ${compartment.idx}` : `Row ${compartment.idx}`;
+  return isBinderType(locationType) ? `Page ${compartment.idx}` : `Row ${compartment.idx}`;
 }
 
 function getSortCategory(card, sortOrder) {
@@ -704,4 +709,4 @@ async function rebalanceCompartmentByScheme(db, compartmentId, userId, location)
   }
 }
 
-module.exports = { sortCards, compartmentLabel, loadCompartments, recommendSlot, rebalanceCompartmentByScheme, locationAcceptsCard, compartmentAcceptsCard, loadSetsCache, getSortCategory };
+module.exports = { sortCards, compartmentLabel, isBinderType, loadCompartments, recommendSlot, rebalanceCompartmentByScheme, locationAcceptsCard, compartmentAcceptsCard, loadSetsCache, getSortCategory };

@@ -5,6 +5,14 @@ import { shuffleArray } from '../utils/shuffle';
 import { translateJapaneseName } from '../utils/langHelper';
 import CheckoutWizardModal from './CheckoutWizardModal';
 
+// Basic Energy is exempt from the "max 4 of a card" deck rule; Special Energy is not.
+const isBasicEnergy = (card) =>
+  card.supertype === 'Energy' && (!card.subtypes || !card.subtypes.includes('Special'));
+
+// Total copies of a card (matched by name) already in a deck's card list.
+const deckCountByName = (deckCards, name) =>
+  (deckCards || []).filter(c => c.name === name).reduce((s, c) => s + c.quantity, 0);
+
 function DeckBuilder({ showToast }) {
   const [decks, setDecks] = useState([]);
   const [activeDeck, setActiveDeck] = useState(null);
@@ -159,13 +167,9 @@ function DeckBuilder({ showToast }) {
         return;
       }
       
-      const isBasicEnergy = card.supertype === 'Energy' && (!card.subtypes || !card.subtypes.includes('Special'));
-      if (!isBasicEnergy) {
-        const sameNameTotal = activeDeck.cards.filter(c => c.name === card.name).reduce((s, c) => s + c.quantity, 0);
-        if (sameNameTotal >= 4) {
-          showToast(`Cannot have more than 4 copies of ${card.name}.`);
-          return;
-        }
+      if (!isBasicEnergy(card) && deckCountByName(activeDeck.cards, card.name) >= 4) {
+        showToast(`Cannot have more than 4 copies of ${card.name}.`);
+        return;
       }
     }
 
@@ -676,9 +680,7 @@ function DeckBuilder({ showToast }) {
                           const ownedQty = card.owned_qty || 0;
                           const isAtMaxOwned = qtyInDeck >= ownedQty;
 
-                          const sameNameTotal = activeDeck?.cards.filter(c => c.name === card.name).reduce((s, c) => s + c.quantity, 0) || 0;
-                          const isBasicEnergy = card.supertype === 'Energy' && (!card.subtypes || !card.subtypes.includes('Special'));
-                          const isAtRuleMax = !isBasicEnergy && sameNameTotal >= 4;
+                          const isAtRuleMax = !isBasicEnergy(card) && deckCountByName(activeDeck?.cards, card.name) >= 4;
 
                           const disabledAdd = savingCard || isAtMaxOwned || isAtRuleMax;
 
@@ -750,7 +752,7 @@ function DeckBuilder({ showToast }) {
                                       <button
                                         className="btn btn-secondary btn-icon-only"
                                         style={{ width: '22px', height: '22px', padding: 0 }}
-                                        disabled={savingCard || card.quantity >= (card.owned_qty || 0) || (card.supertype !== 'Energy' && activeDeck.cards.filter(c => c.name === card.name).reduce((s, c) => s + c.quantity, 0) >= 4)}
+                                        disabled={savingCard || card.quantity >= (card.owned_qty || 0) || (!isBasicEnergy(card) && deckCountByName(activeDeck.cards, card.name) >= 4)}
                                         onClick={() => handleUpdateCardQty(card.id, card.quantity + 1)}
                                       >
                                         +

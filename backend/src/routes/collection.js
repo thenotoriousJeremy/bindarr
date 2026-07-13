@@ -6,7 +6,7 @@ const scanMatch = require('../scanMatch');
 const setIndex = require('../setIndex');
 const { authenticateToken, searchLimiter } = require('../middleware/auth');
 const { resolveCardPrice, parseCardRow } = require('../utils/priceHelpers');
-const { compartmentLabel, rebalanceCompartmentByScheme } = require('../utils/compartmentSort');
+const { compartmentLabel, isBinderType, rebalanceCompartmentByScheme } = require('../utils/compartmentSort');
 const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement } = require('../utils/collectionHelpers');
 
 const router = express.Router();
@@ -407,7 +407,7 @@ router.post('/collection/:id/place', async (req, res) => {
     if (!comp) return res.status(400).json({ error: 'Invalid compartment' });
     if (comp.sort_order !== 'custom') return res.status(400).json({ error: 'Manual placement is only available in Custom order' });
 
-    const isBinder = comp.loc_type === 'Binder' || comp.loc_type === 'Toploader Binder';
+    const isBinder = isBinderType(comp.loc_type);
 
     // Swap: exchange the two cards' slot + compartment atomically. No cascade.
     if (swap_with) {
@@ -445,7 +445,7 @@ router.post('/collection/:id/place', async (req, res) => {
     // Densify the source box compartment the card left, so no stray gap remains.
     if (sourceComp && sourceComp !== compartment_id) {
       const src = await db.get(`SELECT l.type AS loc_type FROM compartments c JOIN locations l ON c.location_id = l.id WHERE c.id = ?`, [sourceComp]);
-      if (src && src.loc_type !== 'Binder' && src.loc_type !== 'Toploader Binder') {
+      if (src && !isBinderType(src.loc_type)) {
         await rebalanceCompartmentByScheme(db, sourceComp, req.user.id, { sort_order: 'custom' });
       }
     }
