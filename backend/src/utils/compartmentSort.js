@@ -627,22 +627,34 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
     ? (overrideCompartments.find(oc => oc.id === c.id)?.count || 0)
     : (cardsByCompId.get(c.id) || []).length;
 
+  // The global targetIndex only picks WHICH compartment the card flows into.
+  // The slot WITHIN that compartment must come from the card's sorted position
+  // among that compartment's ACTUAL cards — not `targetIndex - cursor`, which
+  // assumes every earlier compartment is packed to capacity. A partly-filled
+  // row otherwise reports a slot far past its real cards (e.g. "Slot 92" in a
+  // 50-card row), padding the recommendation with phantom empty slots.
+  const localSeq = (comp) => {
+    const cc = cardsByCompId.get(comp.id) || [];
+    const ls = sortCards([...cc, newCard], location.sort_order, location.foil_sorting);
+    const idx = ls.findIndex(c => c.entry_id === -1);
+    return idx === -1 ? cc.length : idx; // fall back to append
+  };
+
   let cursor = 0;
   for (let i = 0; i < pool.length; i++) {
     const compartment = pool[i];
     if (targetIndex < cursor + compartment.capacity) {
       let target = compartment;
-      let seq = targetIndex - cursor;
-      // The capacity-window walk assumes every earlier compartment is packed
-      // to capacity, which isn't true when pages/rows have gaps. If the card
-      // sorts into a compartment that's already full, spill it to the start of
-      // the next pool compartment with room instead of overfilling this one —
-      // the auto-placement path trusts this result without a capacity recheck.
+      let seq = localSeq(target);
+      // If the card sorts into a compartment that's already full, spill it to
+      // the start of the next pool compartment with room instead of overfilling
+      // this one — the auto-placement path trusts this result without a
+      // capacity recheck.
       if (countOf(target) >= target.capacity) {
         const spill = pool.slice(i + 1).find(c => countOf(c) < c.capacity);
         if (!spill) return null;
         target = spill;
-        seq = countOf(spill); // append after the cards already there
+        seq = localSeq(spill);
       }
       let reason = `Sorted by ${scheme}`;
       if (prevCard) reason += `, right after ${prevCard.name}`;
@@ -692,4 +704,4 @@ async function rebalanceCompartmentByScheme(db, compartmentId, userId, location)
   }
 }
 
-module.exports = { sortCards, compartmentLabel, loadCompartments, recommendSlot, rebalanceCompartmentByScheme, locationAcceptsCard, loadSetsCache, getSortCategory };
+module.exports = { sortCards, compartmentLabel, loadCompartments, recommendSlot, rebalanceCompartmentByScheme, locationAcceptsCard, compartmentAcceptsCard, loadSetsCache, getSortCategory };

@@ -264,21 +264,36 @@ export function FilterBuilder({ value, onChange, setsList = [], fieldOptions = {
               {FILTER_OPERATORS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
             {rule.operator !== 'exists' && (
-              <>
-                <input
-                  className="input-control"
+              // Equals on an enumerable field: real <select> so the choices
+              // show on click. datalist only surfaced on typing (looked empty).
+              // contains/numeric operators keep free text + datalist suggestions.
+              options.length > 0 && rule.operator === 'equals' ? (
+                <select
+                  className="select-control"
                   style={{ flex: 1, minWidth: '100px', padding: '0.2rem' }}
-                  placeholder="Value"
-                  list={`opts-${rule.id}`}
                   value={rule.value || ''}
                   onChange={(e) => updateRule(rule.id, { value: e.target.value })}
-                />
-                {options.length > 0 && (
-                  <datalist id={`opts-${rule.id}`}>
-                    {options.map(opt => <option key={opt} value={opt} />)}
-                  </datalist>
-                )}
-              </>
+                >
+                  <option value="">Select value…</option>
+                  {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              ) : (
+                <>
+                  <input
+                    className="input-control"
+                    style={{ flex: 1, minWidth: '100px', padding: '0.2rem' }}
+                    placeholder="Value"
+                    list={`opts-${rule.id}`}
+                    value={rule.value || ''}
+                    onChange={(e) => updateRule(rule.id, { value: e.target.value })}
+                  />
+                  {options.length > 0 && (
+                    <datalist id={`opts-${rule.id}`}>
+                      {options.map(opt => <option key={opt} value={opt} />)}
+                    </datalist>
+                  )}
+                </>
+              )
             )}
             <button
               type="button"

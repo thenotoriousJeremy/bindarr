@@ -212,7 +212,15 @@ export default function CompartmentView({
   onCardToggle = null,
 
   // Per-compartment filing rules editor (optional)
-  onEditRules = null
+  onEditRules = null,
+
+  // Manual tap-to-place ("Arrange"). placementMode arms it; a picked card is
+  // placed/swapped when a slot is tapped. onPlaceSlot(compartmentId, slot,
+  // occupantEntryId|null); onPickCard(entryId).
+  placementMode = false,
+  pickedEntryId = null,
+  onPickCard = null,
+  onPlaceSlot = null
 }) {
   const isBinder = locationType === 'Binder' || locationType === 'Toploader Binder';
   const isSelected = (entryId) => !!(selectedIds && selectedIds.has(entryId));
@@ -412,7 +420,7 @@ export default function CompartmentView({
               if (card && card.__ghost) {
                 return (
                   <div key={`ghost-${i}`} id="recommended-spot" className={`binder-pocket recommended-ghost ${categoryStart ? 'set-start' : ''}`}>
-                    {card.image_url && <img src={card.image_url} alt={card.name} style={{ opacity: 0.85 }} />}
+                    {card.image_url && <img src={card.image_url} alt={card.name} loading="lazy" decoding="async" style={{ opacity: 0.85 }} />}
                     <div className="rec-ghost-label">Slot {pos}</div>
                     {newDividers.length > 0 && (
                       <div style={{ position: 'absolute', top: 0, left: 0, transform: 'translateY(-100%)', display: 'flex', flexDirection: 'column', gap: '2px', paddingBottom: '2px', zIndex: 20 }}>
@@ -435,16 +443,22 @@ export default function CompartmentView({
                       boxShadow: '0 0 15px rgba(34,197,94,0.4), inset 0 0 20px rgba(34,197,94,0.3)'
                     } : {}),
                     ...(card.entry_id === currentActiveId ? { border: '2.5px solid var(--accent-yellow)', boxShadow: '0 0 10px rgba(250,204,21,0.5)' } : {}),
-                    ...(isSelected(card.entry_id) ? selectedOutline : {})
+                    ...(isSelected(card.entry_id) ? selectedOutline : {}),
+                    ...(placementMode && pickedEntryId === card.entry_id ? selectedOutline : {})
                   }}
                   {...pressHandlers(card.entry_id)}
                   onClick={() => {
+                    if (placementMode) {
+                      if (pickedEntryId && pickedEntryId !== card.entry_id) onPlaceSlot(compartment.id, pos, card.entry_id);
+                      else onPickCard(card.entry_id);
+                      return;
+                    }
                     if (handleSelectClick(card.entry_id)) return;
                     if (card.entry_id === currentActiveId) onCardClick && onCardClick(card);
                     else setCurrentActiveId(card.entry_id);
                   }}
                 >
-                  <img src={card.image_url} alt={card.name} title={card.name} />
+                  <img src={card.image_url} alt={card.name} title={card.name} loading="lazy" decoding="async" />
                   {getFoilOverlayClass(card.printing) && <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4px' }} />}
                   <PrintingBadge printing={card.printing} />
                   {card.checked_out_qty > 0 && (
@@ -470,10 +484,21 @@ export default function CompartmentView({
                   )}
                 </div>
               ) : (
-                <div key={`empty-${i}`} className="binder-pocket empty" style={isTarget ? { borderColor: 'var(--accent-green)', background: 'rgba(34,197,94,0.1)' } : {}}>
+                <div
+                  key={`empty-${i}`}
+                  className="binder-pocket empty"
+                  onClick={placementMode && pickedEntryId ? () => onPlaceSlot(compartment.id, pos, null) : undefined}
+                  style={{
+                    ...(isTarget ? { borderColor: 'var(--accent-green)', background: 'rgba(34,197,94,0.1)' } : {}),
+                    ...(placementMode && pickedEntryId ? { cursor: 'pointer', borderColor: 'var(--accent-red)', background: 'rgba(255,71,71,0.08)' } : {})
+                  }}
+                >
                   <span className="slot-number">{pos}</span>
                   {isTarget && (
                     <div style={{ color: 'var(--accent-green)', fontWeight: 'bold', fontSize: '0.8rem', marginTop: '0.5rem' }}>Pull</div>
+                  )}
+                  {placementMode && pickedEntryId && !isTarget && (
+                    <div style={{ color: 'var(--accent-red)', fontWeight: 'bold', fontSize: '0.7rem', marginTop: '0.4rem' }}>Place</div>
                   )}
                 </div>
               );
@@ -516,7 +541,10 @@ export default function CompartmentView({
     }
     
     const highestTargetIdx = highlightPositions.length > 0 ? Math.max(...highlightPositions) - 1 : -1;
-    const renderLimit = Math.max(lastFilledIdx, highestTargetIdx);
+    // While arranging, expose one trailing empty slot so a picked card can be
+    // dropped at the end of the row (not just inserted before an existing card).
+    const arrangePad = placementMode && pickedEntryId ? 1 : 0;
+    const renderLimit = Math.min(slotCountBox - 1, Math.max(lastFilledIdx, highestTargetIdx) + arrangePad);
 
     let currentCats = [];
     for (let i = 0; i <= renderLimit; i++) {
@@ -593,6 +621,11 @@ export default function CompartmentView({
     }
 
     const activeCardIndex = Math.min(actualActiveIndex, Math.max(0, renderedCards.length - 1));
+    // ponytail: coverflow renders every slot's card div for nav/positioning, but
+    // only load the image for cards near the active one — the rest are rotated
+    // ~48deg and faded to near-invisible, so loading their full-res art just
+    // stalls the network. Widen IMG_WINDOW if distant cards ever need art.
+    const IMG_WINDOW = 8;
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%', overflow: 'hidden' }}>
@@ -678,8 +711,11 @@ export default function CompartmentView({
                     <div
                       key={card.entry_id}
                       className={`box-coverflow-card ${offset === 0 ? 'active' : ''}`}
-                      style={{ transform, zIndex, opacity: opacity * 0.6, filter, ...highlightStyle }}
-                      onClick={() => setCoverflowActiveIndex(i)}
+                      style={{ transform, zIndex, opacity: opacity * 0.6, filter, ...highlightStyle, ...(placementMode && pickedEntryId ? { border: '2px solid var(--accent-red)' } : {}) }}
+                      onClick={() => {
+                        if (placementMode && pickedEntryId) { onPlaceSlot(compartment.id, card.__slotNumber, null); return; }
+                        setCoverflowActiveIndex(i);
+                      }}
                     >
                       <div style={{ width: '100%', height: '100%', background: 'rgba(0,0,0,0.3)', border: '2px dashed rgba(255,255,255,0.1)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderRadius: '5px' }}>
                         <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem', fontWeight: 'bold' }}>Slot {card.__slotNumber}</span>
@@ -718,7 +754,7 @@ export default function CompartmentView({
                       style={{ transform, zIndex, opacity: opacity * 0.85, filter }}
                       onClick={() => setCoverflowActiveIndex(i)}
                     >
-                      {card.image_url && <img src={card.image_url} alt={card.name} />}
+                      {card.image_url && absOffset <= IMG_WINDOW && <img src={card.image_url} alt={card.name} decoding="async" />}
                       <div className="rec-ghost-label">Slot {pos}</div>
                     </div>
                   );
@@ -728,15 +764,20 @@ export default function CompartmentView({
                   <div
                     key={card.entry_id}
                     className={`box-coverflow-card ${offset === 0 ? 'active' : ''}`}
-                    style={{ transform, zIndex, opacity, filter, ...highlightStyle, ...getCardRarityBorder(card.rarity), ...(isSelected(card.entry_id) ? selectedOutline : {}) }}
+                    style={{ transform, zIndex, opacity, filter, ...highlightStyle, ...getCardRarityBorder(card.rarity), ...(isSelected(card.entry_id) ? selectedOutline : {}), ...(placementMode && pickedEntryId === card.entry_id ? selectedOutline : {}) }}
                     {...pressHandlers(card.entry_id)}
                     onClick={() => {
+                      if (placementMode) {
+                        if (pickedEntryId && pickedEntryId !== card.entry_id) onPlaceSlot(compartment.id, card.__slotNumber, card.entry_id);
+                        else onPickCard(card.entry_id);
+                        return;
+                      }
                       if (handleSelectClick(card.entry_id)) return;
                       if (offset === 0 && onCardClick) onCardClick(card);
                       else setCoverflowActiveIndex(i);
                     }}
                   >
-                    <img src={card.image_url} alt={card.name} />
+                    {absOffset <= IMG_WINDOW && <img src={card.image_url} alt={card.name} decoding="async" />}
                     {getFoilOverlayClass(card.printing) && <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4.5px' }} />}
                     <PrintingBadge printing={card.printing} />
                     {card.checked_out_qty > 0 && (

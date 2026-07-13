@@ -10,7 +10,7 @@ const {
   isVintageSet,
   parseSqliteUtc
 } = require('../utils/priceHelpers');
-const { recommendSlot, compartmentLabel, loadCompartments, rebalanceCompartmentByScheme, sortCards, locationAcceptsCard, loadSetsCache, getSortCategory } = require('../utils/compartmentSort');
+const { recommendSlot, compartmentLabel, loadCompartments, rebalanceCompartmentByScheme, sortCards, locationAcceptsCard, compartmentAcceptsCard, loadSetsCache, getSortCategory } = require('../utils/compartmentSort');
 
 // Default compartment plan by container type — used when a caller doesn't
 // specify one at creation time (see POST /locations).
@@ -518,6 +518,75 @@ router.put('/collection/:id', async (req, res) => {
   }
 });
 
+// 4b. Manual tap-to-place, CUSTOM-order containers only. Binder pockets are
+// fixed physical slots: place at an absolute pocket (empty pockets between
+// cards are preserved) and swap on an occupied pocket, so nothing cascades.
+// Boxes are continuous: inserting between cards shifts the rest down one.
+router.post('/collection/:id/place', async (req, res) => {
+  const { id } = req.params;
+  const { compartment_id, slot, swap_with } = req.body;
+  try {
+    const entry = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!entry) return res.status(404).json({ error: 'Collection entry not found' });
+
+    const comp = await db.get(`
+      SELECT c.id, c.capacity, l.id AS loc_id, l.type AS loc_type, l.sort_order
+      FROM compartments c JOIN locations l ON c.location_id = l.id
+      WHERE c.id = ? AND l.user_id = ?`, [compartment_id, req.user.id]);
+    if (!comp) return res.status(400).json({ error: 'Invalid compartment' });
+    if (comp.sort_order !== 'custom') return res.status(400).json({ error: 'Manual placement is only available in Custom order' });
+
+    const isBinder = comp.loc_type === 'Binder' || comp.loc_type === 'Toploader Binder';
+
+    // Swap: exchange the two cards' slot + compartment atomically. No cascade.
+    if (swap_with) {
+      const other = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [swap_with, req.user.id]);
+      if (!other) return res.status(400).json({ error: 'Swap target not found' });
+      await db.run(`UPDATE collection SET compartment_id = ?, location_id = ?, position = ? WHERE id = ? AND user_id = ?`,
+        [other.compartment_id, other.location_id, other.position, id, req.user.id]);
+      await db.run(`UPDATE collection SET compartment_id = ?, location_id = ?, position = ? WHERE id = ? AND user_id = ?`,
+        [entry.compartment_id, entry.location_id, entry.position, swap_with, req.user.id]);
+      const placement = await describePlacement(db, id, req.user.id);
+      return res.json({ message: 'Cards swapped', placement });
+    }
+
+    if (!Number.isInteger(slot) || slot < 1) return res.status(400).json({ error: 'Invalid slot' });
+
+    // Capacity guard only when the card is entering a compartment it isn't in.
+    if (entry.compartment_id !== compartment_id) {
+      const cnt = await db.get(`SELECT COUNT(*) AS n FROM collection WHERE compartment_id = ? AND user_id = ?`, [compartment_id, req.user.id]);
+      if (cnt.n >= comp.capacity) return res.status(400).json({ error: 'COMPARTMENT_FULL' });
+    }
+
+    const sourceComp = entry.compartment_id;
+    if (isBinder) {
+      // Absolute pocket, no compaction — a gap is a real empty pocket.
+      await db.run(`UPDATE collection SET compartment_id = ?, location_id = ?, position = ? WHERE id = ? AND user_id = ?`,
+        [compartment_id, comp.loc_id, slot * 1000, id, req.user.id]);
+    } else {
+      // Continuous box: land just before the current occupant of `slot`, then
+      // densify so everything from `slot` on shifts down one.
+      await db.run(`UPDATE collection SET compartment_id = ?, location_id = ?, position = ? WHERE id = ? AND user_id = ?`,
+        [compartment_id, comp.loc_id, slot * 1000 - 500, id, req.user.id]);
+      await rebalanceCompartmentByScheme(db, compartment_id, req.user.id, { sort_order: 'custom' });
+    }
+
+    // Densify the source box compartment the card left, so no stray gap remains.
+    if (sourceComp && sourceComp !== compartment_id) {
+      const src = await db.get(`SELECT l.type AS loc_type FROM compartments c JOIN locations l ON c.location_id = l.id WHERE c.id = ?`, [sourceComp]);
+      if (src && src.loc_type !== 'Binder' && src.loc_type !== 'Toploader Binder') {
+        await rebalanceCompartmentByScheme(db, sourceComp, req.user.id, { sort_order: 'custom' });
+      }
+    }
+
+    const placement = await describePlacement(db, id, req.user.id);
+    res.json({ message: 'Card placed', placement });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to place card' });
+  }
+});
+
 // 5. Delete Card from Collection
 router.delete('/collection/:id', async (req, res) => {
   const { id } = req.params;
@@ -722,7 +791,32 @@ router.put('/locations/:id', async (req, res) => {
         game = COALESCE(?, game)
       WHERE id = ? AND user_id = ?
     `, [name, type, sort_order, foil_sorting, rule_type, ruleConfigJson, game, id, req.user.id]);
-    res.json({ message: 'Location updated' });
+
+    // A tightened rule/game may now reject cards already stored here. Evict them
+    // to Unsorted (same as deleting the container) so it only holds cards it
+    // accepts. Only runs when a rule/game field actually changed.
+    let evicted = 0;
+    if (rule_type !== undefined || rule_config !== undefined || game !== undefined) {
+      const updated = await db.get(`SELECT id, rule_type, rule_config, game FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+      const stored = await db.all(`
+        SELECT c.id as entry_id, c.printing, c.language,
+               cc.name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.game,
+               cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
+        FROM collection c
+        JOIN card_cache cc ON c.card_id = cc.id
+        WHERE c.location_id = ? AND c.user_id = ?
+      `, [id, req.user.id]);
+      for (const entry of stored) {
+        entry.printing = entry.printing || 'Normal';
+        entry.language = entry.language || 'English';
+        try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
+        if (!locationAcceptsCard(updated, entry)) {
+          await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE id = ? AND user_id = ?`, [entry.entry_id, req.user.id]);
+          evicted++;
+        }
+      }
+    }
+    res.json({ message: 'Location updated', evicted });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to update location' });
@@ -794,9 +888,33 @@ router.patch('/compartments/:id', async (req, res) => {
     if (!compartment) return res.status(404).json({ error: 'Compartment not found' });
 
     // Per-compartment filing rules. Passing null/empty clears them.
+    let evicted = 0;
     if (rule_config !== undefined) {
       const hasRules = rule_config && (Array.isArray(rule_config) ? rule_config.length : (rule_config.rules || []).length);
       await db.run(`UPDATE compartments SET rule_config = ? WHERE id = ?`, [hasRules ? JSON.stringify(rule_config) : null, id]);
+
+      // A tightened rule may now reject cards already filed in this compartment.
+      // Evict them to Unsorted (the app doesn't auto-refile into sibling
+      // compartments on a rule change) so the compartment only holds cards it accepts.
+      if (hasRules) {
+        const stored = await db.all(`
+          SELECT c.id as entry_id, c.printing, c.language,
+                 cc.name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.game,
+                 cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
+          FROM collection c
+          JOIN card_cache cc ON c.card_id = cc.id
+          WHERE c.compartment_id = ? AND c.user_id = ?
+        `, [id, req.user.id]);
+        for (const entry of stored) {
+          entry.printing = entry.printing || 'Normal';
+          entry.language = entry.language || 'English';
+          try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
+          if (!compartmentAcceptsCard({ ruleConfig: rule_config }, entry)) {
+            await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE id = ? AND user_id = ?`, [entry.entry_id, req.user.id]);
+            evicted++;
+          }
+        }
+      }
     }
 
     if (req.query.updateAll === 'true' && capacity !== undefined) {
@@ -815,7 +933,7 @@ router.patch('/compartments/:id', async (req, res) => {
         id
       ]);
     }
-    res.json({ message: 'Compartment updated' });
+    res.json({ message: 'Compartment updated', evicted });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to update compartment' });
