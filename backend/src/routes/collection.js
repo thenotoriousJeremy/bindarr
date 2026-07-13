@@ -163,7 +163,7 @@ router.get('/search', searchLimiter, async (req, res) => {
 // 1b. Identify a scanned card image by CLIP embedding similarity. The client
 // POSTs a cropped card photo (data URL or base64); we return the closest cards
 // from the prebuilt embedding DB. Empty candidates if the DB isn't built yet
-// (the scanner then falls back to OCR).
+// or nothing matched (the scanner then prompts a manual search).
 router.post('/scan-match', searchLimiter, async (req, res) => {
   try {
     const { game = 'pokemon', image, set = '' } = req.body || {};
@@ -343,8 +343,6 @@ router.post('/collection', async (req, res) => {
       ? (resolved.location_id !== undefined && resolved.location_id !== null ? resolved.location_id : location_id)
       : null;
 
-    // No stacking logic here anymore
-
     // The card's game is derived from its cached metadata, not the client, so a
     // Scryfall-sourced card is always tagged 'mtg' in the collection.
     const cardMeta = await db.get(`SELECT game FROM card_cache WHERE id = ?`, [card_id]);
@@ -472,8 +470,6 @@ router.put('/collection/:id', async (req, res) => {
     const finalLanguage = language !== undefined ? language : entry.language;
     const finalListType = list_type !== undefined ? list_type : entry.list_type;
     const finalIsTrade = is_trade !== undefined ? (is_trade ? 1 : 0) : entry.is_trade;
-
-    // No stacking logic here anymore
 
     // Build dynamic UPDATE query based on passed values
     const fields = [];
@@ -977,91 +973,6 @@ router.get('/locations/:id/recommend', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to compute recommendation' });
-  }
-});
-
-
-
-router.post('/smart-recommend-batch', async (req, res) => {
-  const { entry_ids = [] } = req.body;
-  try {
-    if (!Array.isArray(entry_ids) || entry_ids.length === 0) return res.status(400).json({ error: 'entry_ids is required' });
-
-    const locations = await db.all(`SELECT * FROM locations WHERE user_id = ?`, [req.user.id]);
-    const stateByLocation = {};
-    for (const loc of locations) {
-      stateByLocation[loc.id] = {
-        workingCompartments: await loadCompartments(db, loc.id, req.user.id),
-        mockCards: []
-      };
-    }
-
-    const recommendations = [];
-
-    for (const entryId of entry_ids) {
-      const entry = await db.get(`
-        SELECT c.id as entry_id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url, cc.game
-        FROM collection c
-        JOIN card_cache cc ON c.card_id = cc.id
-        WHERE c.id = ? AND c.user_id = ?
-      `, [entryId, req.user.id]);
-      if (!entry) continue;
-      try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
-
-      // Try every container whose rules accept the card, not just the first —
-      // so a card only counts as "nowhere to go" when it fits no container's
-      // rules OR every accepting container is full. Only consider a container
-      // that still has a free slot in the running snapshot, which keeps
-      // recommendSlot from spilling into another location behind our backs.
-      const acceptingLocs = locations.filter(l => locationAcceptsCard(l, entry));
-      if (acceptingLocs.length === 0) {
-        recommendations.push({ entry, recommended: null, reason: 'no_container', message: 'No container accepts this card' });
-        continue;
-      }
-
-      let placedLoc = null;
-      let recommended = null;
-      for (const loc of acceptingLocs) {
-        const st = stateByLocation[loc.id];
-        if (!st.workingCompartments.some(c => c.free > 0)) continue;
-        const rec = await recommendSlot(db, loc, entry, st.workingCompartments, st.mockCards);
-        if (rec && rec.location_id === loc.id) { placedLoc = loc; recommended = rec; break; }
-      }
-
-      if (!recommended) {
-        recommendations.push({ entry, recommended: null, reason: 'full', message: 'Every matching container is full' });
-        continue;
-      }
-
-      recommendations.push({ entry, recommended });
-
-      const state = stateByLocation[placedLoc.id];
-      state.workingCompartments = state.workingCompartments.map(c =>
-        c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
-      );
-
-      state.mockCards.push({
-        entry_id: entry.entry_id,
-        compartment_id: recommended.compartment_id,
-        printing: entry.printing,
-        language: entry.language,
-        name: entry.name,
-        supertype: entry.supertype,
-        types: JSON.stringify(entry.types),
-        rarity: entry.rarity,
-        set_name: entry.set_name,
-        number: entry.number,
-        price_trend: entry.price_trend,
-        price_normal: entry.price_normal,
-        price_holofoil: entry.price_holofoil,
-        price_reverse_holofoil: entry.price_reverse_holofoil
-      });
-    }
-
-    res.json(recommendations);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Failed to compute smart batch recommendations' });
   }
 });
 

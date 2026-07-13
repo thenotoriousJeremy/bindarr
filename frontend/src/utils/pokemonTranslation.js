@@ -1,5 +1,6 @@
-// Japanese-to-English Pokémon name lookup used by the camera scanner's OCR
-// pipeline to recognize cards printed in Japanese.
+// Japanese-to-English Pokémon name lookup: lets users type a Japanese card name
+// in the search/collection/deck views and match it against the English-only card
+// APIs. See the inverse map (POKEMON_EN_TO_JP) in langHelper.js for display.
 const POKEMON_JP_TO_EN = {
   'カイリュー': 'Dragonite',
   'ハクリュー': 'Dragonair',

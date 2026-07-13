@@ -97,13 +97,12 @@ function locationAcceptsCard(location, cardMetadata) {
   return true;
 }
 
-// Must stay aligned with POKEMON_TYPE_ORDER in frontend/src/utils/cardSort.js —
-// the frontend renders compartments in this order and the backend places cards
-// by it; a mismatch makes the REC SPOT ghost point at the wrong slot.
-// Pokémon energy types first, then MTG colors in WUBRG order, then Multicolor.
-// Both games share the one 'type-name' scheme so a mixed binder files each card
-// deterministically. Must stay aligned with TYPE_ORDER in
-// frontend/src/utils/cardSort.js so the REC SPOT ghost points at the right slot.
+// Must stay aligned with POKEMON_TYPE_ORDER / TYPE_ORDER in
+// frontend/src/utils/cardSort.js — the frontend renders compartments in this
+// order and the backend places cards by it; a mismatch makes the REC SPOT ghost
+// point at the wrong slot. Pokémon energy types first, then MTG colors in WUBRG
+// order, then Multicolor. Both games share the one 'type-name' scheme so a mixed
+// binder files each card deterministically.
 const POKEMON_TYPE_ORDER = {
   'Grass': 1, 'Fire': 2, 'Water': 3, 'Lightning': 4, 'Psychic': 5,
   'Fighting': 6, 'Darkness': 7, 'Metal': 8, 'Fairy': 9, 'Dragon': 10, 'Colorless': 11, 'Trainer': 12, 'Energy': 13,

@@ -30,7 +30,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [showKebabMenu, setShowKebabMenu] = useState(false);
   const [showCategoryMap, setShowCategoryMap] = useState(false);
   const [showRulesModal, setShowRulesModal] = useState(false);
-  const [, setRuleSetSearch] = useState('');
   const [sortDraft, setSortDraft] = useState([]);
   const [filterDraft, setFilterDraft] = useState([]);
 
@@ -771,15 +770,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       try { cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config; } catch { /* ignore */ }
                       if (cfg?.start) fDraft.push({ id: '1', action: 'include', field: 'name', operator: '>=', value: cfg.start });
                       if (cfg?.end) fDraft.push({ id: '2', action: 'include', field: 'name', operator: '<=', value: cfg.end });
-                    } else if (selectedLoc.rule_type === 'specific_sets') {
-                       let cfg = {};
-                       try { cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config; } catch { /* ignore */ }
-                       if (cfg?.sets && cfg.sets.length > 0) {
-                          // Note: UI might need a multiple select or IN operator, but our current operator doesn't have IN natively yet, so we just use equals (backend `equals` supports arrays via some logic, wait, backend `equals` checks if cValue matches rule.value. For specific_sets, rule.value was the set name. If multiple, we might need multiple rules or an array match. Let's just create an exclude/include if needed. For now, since specific_sets are converted, we can just say "contains" or "equals"). Let's leave it empty and let the user rebuild it, or migrate properly. Let's just migrate properly later, or set it to empty for now if it's too complex.
-                       }
                     }
                     setFilterDraft(fDraft);
-                    setRuleSetSearch('');
                     setShowRulesModal(true);
                   }}>
                     <Settings size={14} /> Container Settings

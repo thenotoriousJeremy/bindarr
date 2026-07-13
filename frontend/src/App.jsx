@@ -2,8 +2,8 @@ import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords } from 'lucide-react';
 import Login from './components/Login';
 
-// View components are code-split so heavy deps (tesseract.js OCR in the scanner,
-// recharts in the chart views) load on demand instead of in the initial bundle.
+// View components are code-split so heavy deps (recharts in the chart views)
+// load on demand instead of in the initial bundle.
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const AddCards = lazy(() => import('./components/AddCards'));
 const CollectionList = lazy(() => import('./components/CollectionList'));
@@ -169,10 +169,6 @@ function App() {
     switch (activeTab) {
       case 'dashboard':
         return <Dashboard statsTrigger={statsTrigger} onNavigate={setActiveTab} setSelectedLocationId={setSelectedLocationId} onUpdate={triggerRefresh} showToast={showToast} />;
-      case 'scanner':
-        return <AddCards onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={setActiveTab} initialMode="scan" />;
-      case 'search':
-        return <AddCards onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={setActiveTab} initialMode="search" />;
       case 'add-cards':
         return <AddCards onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={setActiveTab} />;
       case 'collection':
@@ -242,7 +238,7 @@ function App() {
             <span>Dashboard</span>
           </button>
           <button 
-            className={`nav-tab ${activeTab === 'add-cards' || activeTab === 'scanner' || activeTab === 'search' ? 'active' : ''}`}
+            className={`nav-tab ${activeTab === 'add-cards' ? 'active' : ''}`}
             onClick={() => setActiveTab('add-cards')}
           >
             <Plus size={18} />

@@ -90,7 +90,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
   // Clean up camera stream on unmount
   useEffect(() => {
-    fetchLocations();
     return () => {
       streamRef.current?.getTracks().forEach(track => track.stop());
     };
@@ -127,17 +126,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [scanGame, scanSetCode]);
-
-  const fetchLocations = async () => {
-    try {
-      const response = await fetch('/api/locations');
-      if (response.ok) {
-        // We no longer use locations internally here, but keep fetch alive if needed by external logic.
-      }
-    } catch (err) {
-      console.error('Error fetching locations:', err);
-    }
-  };
 
   // Bind the camera stream to the video element when both are ready
   useEffect(() => {
@@ -369,8 +357,8 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     return canvas;
   };
 
-  // Present search results the same way whether they came from image match or OCR:
-  // show the picker, and on a single result take the fast path (auto-add / quick-
+  // Present the image-match results: show the picker, and on a single result
+  // take the fast path (auto-add / quick-
   // add per mode). autoSingle lets the caller allow the fast path for a single MTG
   // result too — used when the image match is confident and the printing is
   // unambiguous (only one printing, or the set code narrowed it to one). Ambiguous
@@ -789,8 +777,8 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
             </div>
           </div>
 
-          {/* OCR Crop Results — only render when we actually have crop feeds,
-              so an empty dashed box doesn't eat vertical space on phone. */}
+          {/* Scan crop + candidate diagnostics — only render when we actually have
+              a crop/candidates, so an empty dashed box doesn't eat vertical space on phone. */}
           {cameraActive && (debugHashImg || debugCandidates.length > 0) && (
             <div className="glass-panel" style={{ width: '100%', padding: '0.75rem 1rem', background: 'rgba(0,0,0,0.3)', border: '1px dashed var(--border-glass-hover)', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.25rem' }}>
               {/* Hash-match diagnostics: what was cropped + the ranked candidates. */}
@@ -844,7 +832,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         </div>
       )}
 
-      {/* OCR Scan Status Log */}
+      {/* Scan Status Log */}
       {scanStatus && (
         <div className="glass-panel" style={{ width: '100%', padding: '1rem', borderLeft: '3px solid var(--accent-red)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           {loading && <div className="spinner" style={{ width: '14px', height: '14px', margin: 0, borderWidth: '2px' }}></div>}
