@@ -198,23 +198,38 @@ function sortCards(cards, sortOrder, foilSorting) {
         case 'cmc':
           cmp = (a.cmc || 0) - (b.cmc || 0);
           break;
+const WUBRG_ORDER = {
+  'White': 1, 'W': 1,
+  'Blue': 2, 'U': 2,
+  'Black': 3, 'B': 3,
+  'Red': 4, 'R': 4,
+  'Green': 5, 'G': 5,
+  'Multicolor': 6,
+  'Colorless': 7
+};
+
+function getColorCategory(card) {
+  if (!card) return 'Colorless';
+  let ci = [];
+  if (typeof card.color_identity === 'string') {
+    try { ci = JSON.parse(card.color_identity); } catch(e){ if (card.color_identity) ci = [card.color_identity]; }
+  } else if (Array.isArray(card.color_identity)) {
+    ci = card.color_identity;
+  }
+  if (!ci || ci.length === 0) return 'Colorless';
+  if (ci.length > 1) return 'Multicolor';
+  const names = { 'W': 'White', 'U': 'Blue', 'B': 'Black', 'R': 'Red', 'G': 'Green' };
+  return names[ci[0]] || ci[0] || 'Colorless';
+}
+
         case 'color_identity':
         case 'color': {
-          let cA = 'Colorless';
-          if (typeof a.color_identity === 'string') {
-            try { const p = JSON.parse(a.color_identity); if (p.length > 0) cA = p[0]; } catch(e){}
-          } else if (Array.isArray(a.color_identity) && a.color_identity.length > 0) {
-            cA = a.color_identity[0];
-          }
-          let cB = 'Colorless';
-          if (typeof b.color_identity === 'string') {
-            try { const p = JSON.parse(b.color_identity); if (p.length > 0) cB = p[0]; } catch(e){}
-          } else if (Array.isArray(b.color_identity) && b.color_identity.length > 0) {
-            cB = b.color_identity[0];
-          }
-          const wubrg = { 'W': 1, 'White': 1, 'U': 2, 'Blue': 2, 'B': 3, 'Black': 3, 'R': 4, 'Red': 4, 'G': 5, 'Green': 5, 'Colorless': 6 };
-          cmp = (wubrg[cA] || 99) - (wubrg[cB] || 99);
-          if (cmp === 0) cmp = cA.localeCompare(cB);
+          const catA = getColorCategory(a);
+          const catB = getColorCategory(b);
+          const orderA = WUBRG_ORDER[catA] || 99;
+          const orderB = WUBRG_ORDER[catB] || 99;
+          cmp = orderA - orderB;
+          if (cmp === 0) cmp = catA.localeCompare(catB);
           break;
         }
         case 'rarity':
@@ -595,14 +610,7 @@ function getSortCategory(card, sortOrder) {
     return idx >= 0 ? `${idx + 1}. ${card.set_name}` : card.set_name;
   }
   if (primary === 'color_identity' || primary === 'color') {
-    let ci = 'Colorless';
-    if (typeof card.color_identity === 'string') {
-      try { const p = JSON.parse(card.color_identity); if (p.length > 0) ci = p[0]; } catch(e){}
-    } else if (Array.isArray(card.color_identity) && card.color_identity.length > 0) {
-      ci = card.color_identity[0];
-    }
-    const names = { 'W': 'White', 'U': 'Blue', 'B': 'Black', 'R': 'Red', 'G': 'Green' };
-    return names[ci] || ci || 'Colorless';
+    return getColorCategory(card);
   }
   if (primary === 'type') {
     let types = [];
