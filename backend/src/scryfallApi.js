@@ -343,4 +343,19 @@ async function updateCollectionPrices() {
   }
 }
 
-module.exports = { searchCards, normalizeCard, cacheCards, getCardsBySet, fetchAndCacheSets, updateCollectionPrices };
+async function getCardById(cardId) {
+  const rawId = cardId.startsWith('mtg-') ? cardId.slice(4) : cardId;
+  const cached = await db.get(`SELECT * FROM card_cache WHERE id = ?`, [cardId]);
+  if (cached) return parseCardRow(cached);
+  try {
+    const resp = await scryGet(`/cards/${rawId}`);
+    if (resp.data) {
+      const norm = normalizeCard(resp.data);
+      await cacheCards([norm]);
+      return norm;
+    }
+  } catch (e) {}
+  return null;
+}
+
+module.exports = { searchCards, normalizeCard, cacheCards, getCardsBySet, fetchAndCacheSets, updateCollectionPrices, getCardById };

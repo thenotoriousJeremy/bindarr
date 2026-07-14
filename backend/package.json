@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "node test/e2e/run.js",
+    "test": "node test/sort.test.js && node test/auth.test.js && node test/e2e/schema.test.js && node test/e2e/cross_feature.test.js && node test/e2e/scenarios.test.js && node test/e2e/scryfall.test.js && node test/e2e/run.js",
     "test:e2e": "node test/e2e/run.js"
   },
   "dependencies": {

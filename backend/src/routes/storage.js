@@ -1,74 +1,61 @@
 const express = require('express');
-const router = express.Router();
 const db = require('../db');
-const { sortCards } = require('../utils/compartmentSort');
+const { authenticateToken } = require('../middleware/auth');
+const {
+  recommendSlot,
+  compartmentLabel,
+  loadCompartments,
+  locationAcceptsCard,
+  compartmentAcceptsCard,
+  sortCards
+} = require('../utils/compartmentSort');
+const { defaultCompartmentPlan, normalizeRuleConfig } = require('../utils/collectionHelpers');
 
-// 1. Get Storage Locations with Card Count
-router.get('/api/locations', async (req, res) => {
+const router = express.Router();
+
+router.use(authenticateToken);
+
+// 1. Get Storage Locations with Compartment Summaries
+router.get('/locations', async (req, res) => {
   try {
     const locations = await db.all(`
-      SELECT l.*, 
-             COUNT(c.id) as card_count, 
-             COALESCE(SUM(c.quantity), 0) as total_cards 
+      SELECT l.*,
+             COUNT(DISTINCT cp.id) as compartment_count,
+             COALESCE(SUM(cp.capacity), 0) as total_capacity,
+             COALESCE(SUM(c.quantity), 0) as total_cards
       FROM locations l
-      LEFT JOIN collection c ON l.id = c.location_id AND c.user_id = l.user_id
+      LEFT JOIN compartments cp ON l.id = cp.location_id
+      LEFT JOIN collection c ON cp.id = c.compartment_id AND c.user_id = l.user_id
       WHERE l.user_id = ?
       GROUP BY l.id
     `, [req.user.id]);
     res.json(locations);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to retrieve locations', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve locations' });
   }
 });
 
-// 2. Storage Capacity Warning Alerts Endpoint
-router.get('/api/locations/alerts', async (req, res) => {
-  const userId = req.user.id;
-  try {
-    const alerts = await db.all(`
-      SELECT 
-        l.id AS location_id,
-        l.name AS location_name,
-        comp.id AS compartment_id,
-        comp.label AS compartment_label,
-        comp.idx AS compartment_idx,
-        COALESCE(SUM(c.quantity), 0) AS current_cards,
-        comp.capacity AS max_capacity,
-        ROUND((CAST(COALESCE(SUM(c.quantity), 0) AS REAL) / comp.capacity) * 100, 1) AS usage_percent
-      FROM compartments comp
-      JOIN locations l ON comp.location_id = l.id
-      LEFT JOIN collection c ON comp.id = c.compartment_id
-      WHERE l.user_id = ?
-      GROUP BY comp.id
-      HAVING usage_percent >= 80.0
-      ORDER BY usage_percent DESC
-    `, [userId]);
+const RULE_TYPES = ['any', 'alphabetical_range', 'specific_sets', 'compound'];
+const GAME_RESTRICTIONS = ['any', 'pokemon', 'mtg'];
 
-    const formattedAlerts = alerts.map(row => ({
-      location_id: row.location_id,
-      location_name: row.location_name,
-      compartment_id: row.compartment_id,
-      label: row.compartment_label || `Compartment ${row.compartment_idx}`,
-      current_cards: row.current_cards,
-      max_capacity: row.max_capacity,
-      usage_percent: row.usage_percent,
-      severity: row.usage_percent >= 100.0 ? 'CRITICAL' : 'WARNING',
-      message: row.usage_percent >= 100.0
-        ? `Container ${row.location_name} (${row.compartment_label || 'Compartment ' + row.compartment_idx}) is at 100% capacity!`
-        : `Container ${row.location_name} (${row.compartment_label || 'Compartment ' + row.compartment_idx}) has reached ${row.usage_percent}% capacity.`
-    }));
+router.post('/locations', async (req, res) => {
+  const { name, type, sort_order = 'name-asc', foil_sorting = 'normals_first', rule_type = 'any', rule_config, compartmentPlan, game = 'any' } = req.body;
 
-    return res.json({ alerts: formattedAlerts });
-  } catch (error) {
-    return res.status(500).json({ error: 'Failed to fetch storage alerts', message: error.message });
-  }
-});
-
-// 3. Create Location
-router.post('/api/locations', async (req, res) => {
-  const { name, type, description = '', sort_order, foil_sorting } = req.body;
   if (!name || !type) {
     return res.status(400).json({ error: 'name and type are required' });
+  }
+  if (!RULE_TYPES.includes(rule_type)) {
+    return res.status(400).json({ error: 'Invalid rule_type' });
+  }
+  if (!GAME_RESTRICTIONS.includes(game)) {
+    return res.status(400).json({ error: 'Invalid game restriction' });
+  }
+  let ruleConfigJson;
+  try {
+    ruleConfigJson = normalizeRuleConfig(rule_config);
+  } catch {
+    return res.status(400).json({ error: 'rule_config must be valid JSON' });
   }
   try {
     const existing = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [name, req.user.id]);
@@ -77,19 +64,47 @@ router.post('/api/locations', async (req, res) => {
     }
 
     const result = await db.run(`
-      INSERT INTO locations (name, type, description, sort_order, foil_sorting, user_id)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `, [name, type, description, sort_order || null, foil_sorting || null, req.user.id]);
-    res.status(201).json({ message: 'Location created', id: result.lastID });
+      INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, rule_config, game, user_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [name, type, sort_order, foil_sorting || 'normals_first', rule_type, ruleConfigJson, game, req.user.id]);
+
+    const plan = compartmentPlan || defaultCompartmentPlan(type);
+    await db.createCompartments(result.lastID, Math.max(1, parseInt(plan.count, 10) || 1), Math.max(1, parseInt(plan.capacity, 10) || 40));
+
+    res.status(200).json({ message: 'Location created', id: result.lastID });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to create location', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to create location' });
   }
 });
 
-// 4. Update Location
-router.put('/api/locations/:id', async (req, res) => {
+router.get('/locations/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, type, description, sort_order, foil_sorting } = req.body;
+  try {
+    const loc = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!loc) return res.status(404).json({ error: 'Location not found' });
+    res.json(loc);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve location' });
+  }
+});
+
+router.put('/locations/:id', async (req, res) => {
+  const { id } = req.params;
+  const { name, type, sort_order, foil_sorting, rule_type, rule_config, game } = req.body;
+  if (rule_type !== undefined && !RULE_TYPES.includes(rule_type)) {
+    return res.status(400).json({ error: 'Invalid rule_type' });
+  }
+  if (game !== undefined && !GAME_RESTRICTIONS.includes(game)) {
+    return res.status(400).json({ error: 'Invalid game restriction' });
+  }
+  let ruleConfigJson;
+  try {
+    ruleConfigJson = rule_config !== undefined ? normalizeRuleConfig(rule_config) : undefined;
+  } catch {
+    return res.status(400).json({ error: 'rule_config must be valid JSON' });
+  }
   try {
     const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) {
@@ -104,22 +119,47 @@ router.put('/api/locations/:id', async (req, res) => {
     }
 
     await db.run(`
-      UPDATE locations 
-      SET name = COALESCE(?, name), 
-          type = COALESCE(?, type), 
-          description = COALESCE(?, description),
-          sort_order = COALESCE(?, sort_order),
-          foil_sorting = COALESCE(?, foil_sorting)
+      UPDATE locations
+      SET
+        name = COALESCE(?, name),
+        type = COALESCE(?, type),
+        sort_order = COALESCE(?, sort_order),
+        foil_sorting = COALESCE(?, foil_sorting),
+        rule_type = COALESCE(?, rule_type),
+        rule_config = COALESCE(?, rule_config),
+        game = COALESCE(?, game)
       WHERE id = ? AND user_id = ?
-    `, [name, type, description, sort_order, foil_sorting, id, req.user.id]);
-    res.json({ message: 'Location updated successfully' });
+    `, [name, type, sort_order, foil_sorting, rule_type, ruleConfigJson, game, id, req.user.id]);
+
+    let evicted = 0;
+    if (rule_type !== undefined || rule_config !== undefined || game !== undefined) {
+      const updated = await db.get(`SELECT id, rule_type, rule_config, game FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+      const stored = await db.all(`
+        SELECT c.id as entry_id, c.printing, c.language,
+               cc.name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.game,
+               cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
+        FROM collection c
+        JOIN card_cache cc ON c.card_id = cc.id
+        WHERE c.location_id = ? AND c.user_id = ?
+      `, [id, req.user.id]);
+      for (const entry of stored) {
+        entry.printing = entry.printing || 'Normal';
+        entry.language = entry.language || 'English';
+        try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
+        if (!locationAcceptsCard(updated, entry)) {
+          await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE id = ? AND user_id = ?`, [entry.entry_id, req.user.id]);
+          evicted++;
+        }
+      }
+    }
+    res.json({ message: 'Location updated', evicted });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to update location', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to update location' });
   }
 });
 
-// 5. Delete Location
-router.delete('/api/locations/:id', async (req, res) => {
+router.delete('/locations/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
@@ -127,79 +167,293 @@ router.delete('/api/locations/:id', async (req, res) => {
       return res.status(404).json({ error: 'Location not found' });
     }
 
-    await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = NULL, sub_location_1 = NULL, sub_location_2 = NULL WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
-    await db.run(`DELETE FROM compartments WHERE location_id = ?`, [id]);
-    await db.run(`DELETE FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
 
-    res.json({ message: 'Location deleted successfully (stored cards unassigned)' });
+    await db.run(`DELETE FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    res.json({ message: 'Location deleted successfully (any stored cards moved to Unsorted)' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to delete location', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to delete location' });
   }
 });
 
-// 6. Refactor physical container re-sorting endpoint using CASE ... WHEN chunking in withTransaction
-router.post('/api/locations/:id/resort', async (req, res) => {
-  const locationId = req.params.id;
-
+// 6b. Manage Compartments
+router.get('/locations/:id/compartments', async (req, res) => {
+  const { id } = req.params;
   try {
-    const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [locationId, req.user.id]);
-    if (!location) {
-      return res.status(404).json({ error: 'Location not found' });
+    const loc = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!loc) return res.status(404).json({ error: 'Location not found' });
+    const compartments = await loadCompartments(db, id, req.user.id);
+    res.json(compartments.map(c => ({ ...c, display_label: compartmentLabel(c, loc.type) })));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve compartments' });
+  }
+});
+
+router.post('/locations/:id/compartments', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const loc = await db.get(`SELECT id, type FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!loc) return res.status(404).json({ error: 'Location not found' });
+
+    const last = await db.get(`SELECT MAX(idx) as maxIdx, capacity FROM compartments WHERE location_id = ? ORDER BY idx DESC LIMIT 1`, [id]);
+    const nextIdx = (last && last.maxIdx ? last.maxIdx : 0) + 1;
+    const capacity = (last && last.capacity) ? last.capacity : (loc.type === 'Binder' ? 9 : 400);
+
+    const result = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [id, nextIdx, capacity]);
+    const created = await db.get(`SELECT * FROM compartments WHERE id = ?`, [result.lastID]);
+    res.status(201).json({ ...created, display_label: compartmentLabel(created, loc.type) });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to add compartment' });
+  }
+});
+
+router.put('/locations/:id/compartments/:comp_id', async (req, res) => {
+  const { id, comp_id } = req.params;
+  const { label, capacity, rule_config, assignedFilters } = req.body;
+  try {
+    const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!loc) return res.status(404).json({ error: 'Location not found' });
+
+    let ruleConfigJson;
+    if (rule_config !== undefined) {
+      try {
+        ruleConfigJson = normalizeRuleConfig(rule_config);
+      } catch {
+        return res.status(400).json({ error: 'rule_config must be valid JSON' });
+      }
     }
 
-    let updatedCount = 0;
-    await db.withTransaction(async (tx) => {
-      const cards = await tx.all(`
-        SELECT c.*, cc.name, cc.set_id, cc.number, cc.types, cc.rarity, cc.price_trend
-        FROM collection c
-        LEFT JOIN card_cache cc ON c.card_id = cc.id
-        WHERE c.location_id = ? AND c.user_id = ?
-      `, [locationId, req.user.id]);
+    const updates = [];
+    const params = [];
+    if (label !== undefined) { updates.push('label = ?'); params.push(label || null); }
+    if (capacity !== undefined) { updates.push('capacity = ?'); params.push(Math.max(1, parseInt(capacity, 10) || 1)); }
+    if (rule_config !== undefined) { updates.push('rule_config = ?'); params.push(ruleConfigJson); }
 
-      if (cards.length === 0) return;
+    if (updates.length > 0) {
+      params.push(comp_id, id);
+      await db.run(`UPDATE compartments SET ${updates.join(', ')} WHERE id = ? AND location_id = ?`, params);
+    }
 
-      const compartments = await tx.all(`SELECT * FROM compartments WHERE location_id = ? ORDER BY idx ASC`, [locationId]);
-      const sortedCards = sortCards(cards, location.sort_order, location.foil_sorting);
-
-      const CHUNK_SIZE = 100;
-      for (let i = 0; i < sortedCards.length; i += CHUNK_SIZE) {
-        const chunk = sortedCards.slice(i, i + CHUNK_SIZE);
-        const ids = chunk.map(c => c.id);
-
-        let compCaseStr = 'CASE id ';
-        let posCaseStr = 'CASE id ';
-        const params = [];
-
-        chunk.forEach((card, idx) => {
-          const globalIndex = i + idx;
-          let targetCompId = card.compartment_id;
-          if (compartments && compartments.length > 0) {
-            const compIndex = Math.floor(globalIndex / (compartments[0].capacity || 100));
-            targetCompId = compartments[Math.min(compIndex, compartments.length - 1)].id;
-          }
-
-          compCaseStr += `WHEN ? THEN ? `;
-          posCaseStr += `WHEN ? THEN ? `;
-          params.push(card.id, targetCompId, card.id, (globalIndex + 1) * 1000);
-        });
-
-        compCaseStr += 'END';
-        posCaseStr += 'END';
-
-        const placeholders = ids.map(() => '?').join(',');
-        const sql = `UPDATE collection 
-                     SET compartment_id = (${compCaseStr}), 
-                         position = (${posCaseStr}) 
-                     WHERE id IN (${placeholders})`;
-
-        await tx.run(sql, [...params, ...ids]);
+    if (Array.isArray(assignedFilters)) {
+      await db.run(`DELETE FROM compartment_assignments WHERE compartment_id = ?`, [comp_id]);
+      for (const filterVal of assignedFilters) {
+        if (filterVal) {
+          await db.run(`INSERT OR IGNORE INTO compartment_assignments (compartment_id, filter_value) VALUES (?, ?)`, [comp_id, filterVal]);
+        }
       }
-      updatedCount = sortedCards.length;
-    });
+    }
 
-    return res.json({ success: true, count: updatedCount });
+    res.json({ message: 'Compartment updated successfully' });
   } catch (error) {
-    return res.status(500).json({ error: 'Container re-sorting failed', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to update compartment' });
+  }
+});
+
+router.delete('/locations/:id/compartments/:comp_id', async (req, res) => {
+  const { id, comp_id } = req.params;
+  try {
+    const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!loc) return res.status(404).json({ error: 'Location not found' });
+
+    const totalComps = await db.get(`SELECT COUNT(*) as count FROM compartments WHERE location_id = ?`, [id]);
+    if (totalComps.count <= 1) {
+      return res.status(400).json({ error: 'Cannot delete the last compartment of a location' });
+    }
+
+    await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE compartment_id = ? AND user_id = ?`, [comp_id, req.user.id]);
+    await db.run(`DELETE FROM compartments WHERE id = ? AND location_id = ?`, [comp_id, id]);
+
+    res.json({ message: 'Compartment deleted successfully (cards inside moved to Unsorted)' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to delete compartment' });
+  }
+});
+
+// Recommendation endpoints
+router.post('/locations/:id/recommend', async (req, res) => {
+  const { id } = req.params;
+  const { card_id, printing = 'Normal', language = 'English' } = req.body;
+  try {
+    const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!location) return res.status(404).json({ error: 'Location not found' });
+
+    const cardMetadata = await db.get(`SELECT name, set_name, number, types, subtypes, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity, game, cmc, color_identity FROM card_cache WHERE id = ?`, [card_id]);
+    if (!cardMetadata) return res.status(404).json({ error: 'Card not found in cache' });
+    cardMetadata.printing = printing;
+    cardMetadata.language = language;
+    try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }
+
+    if (!locationAcceptsCard(location, cardMetadata)) {
+      return res.json({ rejected: true });
+    }
+
+    const recommendation = await recommendSlot(db, location, cardMetadata);
+    if (!recommendation) return res.json({ full: true });
+    res.json(recommendation);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to compute recommendation' });
+  }
+});
+
+router.post('/locations/:id/recommend-batch', async (req, res) => {
+  const { id } = req.params;
+  const { entry_ids = [] } = req.body;
+  try {
+    const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!location) return res.status(404).json({ error: 'Location not found' });
+    if (!Array.isArray(entry_ids) || entry_ids.length === 0) return res.status(400).json({ error: 'entry_ids is required' });
+
+    let workingCompartments = await loadCompartments(db, id, req.user.id);
+    const mockCards = [];
+    const recommendations = [];
+
+    for (const entryId of entry_ids) {
+      const entry = await db.get(`
+        SELECT c.id as entry_id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url, cc.game
+        FROM collection c
+        JOIN card_cache cc ON c.card_id = cc.id
+        WHERE c.id = ? AND c.user_id = ?
+      `, [entryId, req.user.id]);
+      if (!entry) continue;
+      try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
+
+      if (!locationAcceptsCard(location, entry)) {
+        recommendations.push({ entry, recommended: null, rejected: true });
+        continue;
+      }
+
+      const recommended = await recommendSlot(db, location, entry, workingCompartments, mockCards);
+      if (!recommended) {
+        recommendations.push({ entry, recommended: null, full: true });
+        continue;
+      }
+
+      recommendations.push({ entry, recommended });
+
+      workingCompartments = workingCompartments.map(c =>
+        c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
+      );
+
+      mockCards.push({
+        entry_id: entry.entry_id,
+        compartment_id: recommended.compartment_id,
+        printing: entry.printing,
+        language: entry.language,
+        name: entry.name,
+        supertype: entry.supertype,
+        types: JSON.stringify(entry.types),
+        rarity: entry.rarity,
+        set_name: entry.set_name,
+        number: entry.number,
+        price_trend: entry.price_trend,
+        price_normal: entry.price_normal,
+        price_holofoil: entry.price_holofoil,
+        price_reverse_holofoil: entry.price_reverse_holofoil
+      });
+    }
+
+    res.json(recommendations);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to compute batch recommendations' });
+  }
+});
+
+router.post('/locations/:id/apply-all', async (req, res) => {
+  const { id } = req.params;
+  const { entry_ids = [] } = req.body;
+  try {
+    const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!location) return res.status(404).json({ error: 'Location not found' });
+    if (!Array.isArray(entry_ids) || entry_ids.length === 0) {
+      return res.status(400).json({ error: 'entry_ids is required' });
+    }
+
+    let workingCompartments = await loadCompartments(db, id, req.user.id);
+    let filed = 0;
+
+    for (const entryId of entry_ids) {
+      const entry = await db.get(`
+        SELECT c.id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.game, cc.cmc, cc.color_identity
+        FROM collection c
+        JOIN card_cache cc ON c.card_id = cc.id
+        WHERE c.id = ? AND c.user_id = ?
+      `, [entryId, req.user.id]);
+      if (!entry) continue;
+      try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
+
+      const recommended = await recommendSlot(db, location, entry, workingCompartments);
+      if (!recommended) continue;
+
+      await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`, [
+        id, recommended.compartment_id, recommended.position, entryId, req.user.id
+      ]);
+
+      workingCompartments = workingCompartments.map(c =>
+        c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
+      );
+      filed++;
+    }
+
+    res.json({ message: `Filed ${filed} of ${entry_ids.length} card(s).`, filed, total: entry_ids.length });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to apply batch' });
+  }
+});
+
+router.post('/locations/:id/resort', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!location) return res.status(404).json({ error: 'Location not found' });
+
+    const cards = await db.all(`
+      SELECT c.id as entry_id, c.card_id, c.printing, c.language, c.quantity,
+             cc.name, cc.set_name, cc.number, cc.types, cc.rarity, cc.supertype, cc.image_url, cc.game,
+             cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
+      FROM collection c
+      JOIN card_cache cc ON c.card_id = cc.id
+      WHERE c.location_id = ? AND c.user_id = ?
+    `, [id, req.user.id]);
+    cards.forEach(c => { try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; } });
+
+    if (cards.length === 0) return res.json([]);
+
+    await db.run(`UPDATE collection SET compartment_id = NULL, position = 0 WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
+
+    const ordered = sortCards(cards, location.sort_order, location.foil_sorting);
+
+    let workingCompartments = await loadCompartments(db, id, req.user.id);
+    const results = [];
+
+    for (const entry of ordered) {
+      const recommended = await recommendSlot(db, location, entry, workingCompartments, []);
+      if (!recommended) { results.push({ entry, recommended: null }); continue; }
+
+      const finalLoc = recommended.location_id || Number(id);
+      await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`, [
+        finalLoc, recommended.compartment_id, recommended.position, entry.entry_id, req.user.id
+      ]);
+      results.push({ entry, recommended });
+
+      if (finalLoc === Number(id)) {
+        workingCompartments = workingCompartments.map(c =>
+          c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
+        );
+      }
+    }
+
+    res.json(results);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to re-sort container' });
   }
 });
 

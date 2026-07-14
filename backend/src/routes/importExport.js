@@ -5,7 +5,7 @@ const { parseThirdPartyCSV } = require('../utils/csvMappers');
 const { generateExportCSV } = require('../utils/csvExporters');
 
 // Export endpoint
-router.get('/api/export', async (req, res) => {
+router.get('/export', async (req, res) => {
   const { format = 'csv', ecosystem = 'internal' } = req.query;
   const targetFormat = (ecosystem || format || 'internal').toLowerCase();
 
@@ -55,7 +55,7 @@ router.get('/api/export', async (req, res) => {
 });
 
 // Import endpoint
-router.post('/api/import', async (req, res) => {
+router.post('/import', async (req, res) => {
   const { format = 'internal', data } = req.body;
   if (!data) {
     return res.status(400).json({ error: 'No data provided' });

@@ -123,6 +123,7 @@ async function initDb() {
       foil_sorting TEXT DEFAULT 'normals_first',
       rule_type TEXT DEFAULT 'any',
       rule_config TEXT,
+      game TEXT DEFAULT 'any',
       user_id INTEGER REFERENCES users(id) ON DELETE CASCADE
     )
   `);
@@ -328,6 +329,9 @@ async function initDb() {
   }
   if (!locationsCols.some(c => c.name === 'foil_sorting')) {
     await run(`ALTER TABLE locations ADD COLUMN foil_sorting TEXT DEFAULT 'normals_first'`);
+  }
+  if (!locationsCols.some(c => c.name === 'game')) {
+    await run(`ALTER TABLE locations ADD COLUMN game TEXT DEFAULT 'any'`);
   }
 
   const usersCols = await all(`PRAGMA table_info(users)`);
