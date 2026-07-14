@@ -21,3 +21,10 @@ All notable changes to this project will be documented in this file.
 - Added append-only audit logging & action revert capabilities (`audit_logs` table, `/api/audit-logs`, `/api/audit-logs/:id/revert`).
 - Added saved filter presets (`saved_filter_presets` table, `/api/collection/filters/presets`, dynamic query builder).
 - Added third-party CSV strategy import mappers and hygiene export mappers for TCGPlayer, Dragon Shield, and ManaBox (`csvMappers.js`, `csvExporters.js`).
+
+### Scanner
+- Added a Scan Detail slider (Turbo/Fast/Balanced/Accurate) trading speed for accuracy per scan: upload resolution, auto-capture cadence, server-side CLIP recall depth (`recallK`) and ORB feature count (`orb`).
+- Turbo runs a fixed 2-second capture cadence with an on-screen countdown ring; the metronome holds while a scan is in flight so captures never overlap.
+- Instant capture cue (click + vibrate + border flash) fires the moment the frame is grabbed.
+- Added manual exposure control (shown when the camera track supports `exposureCompensation`).
+- Duplicate-scan handling: dedup guard set before the add request; the resolved-duplicate skip clears when the card leaves frame or a different card appears; Cancel in the candidate picker stops auto-capture.

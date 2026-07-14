@@ -18,7 +18,7 @@ const SCAN_MATCH_MIN_INLIERS = 12;
 // slower but more accurate. Lower = faster, less accurate. Turbo keeps ORB
 // verify but with the fewest recall candidates + features — leanest ORB pass.
 const SCAN_PROFILES = [
-  { label: 'Turbo',    uploadW: 400,  cooldown: 400,  countdown: 0, recallK: 28,  orb: 240 },
+  { label: 'Turbo',    uploadW: 400,  cooldown: 400,  countdown: 0, recallK: 28,  orb: 240, cadence: 2000 },
   { label: 'Fast',     uploadW: 640,  cooldown: 1200, countdown: 1, recallK: 60,  orb: 300 },
   { label: 'Balanced', uploadW: 900,  cooldown: 2000, countdown: 2, recallK: 120, orb: 400 },
   { label: 'Accurate', uploadW: 1280, cooldown: 3000, countdown: 2, recallK: 250, orb: 500 },
@@ -34,6 +34,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   // UX scan history & effects states
   const [recentScans, setRecentScans] = useState([]);
   const [scanFlash, setScanFlash] = useState(null); // 'capture', 'error', or null
+  // Fixed-cadence capture countdown (Turbo): ms remaining until the next photo,
+  // or null when the metronome isn't running. Drives the countdown ring.
+  const [captureCountdown, setCaptureCountdown] = useState(null);
   
   // Camera active states
   const [cameraActive, setCameraActive] = useState(false);
@@ -95,6 +98,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const lastAddedIdRef = useRef(null);
   const resolvedDupIdRef = useRef(null);
   const beepCtxRef = useRef(null); // reused AudioContext for the scan cue
+  const handleCaptureRef = useRef(null); // always the latest handleCapture, for timers
+  const captureBlockedRef = useRef(false); // true while a modal/picker/drawer is up
+  const loadingRef = useRef(false); // mirrors `loading` for the metronome interval
 
   // Instant feedback cue: flash the guide-box border, click, and (on mobile)
   // vibrate. 'capture' fires the instant the photo is grabbed so the user can
@@ -245,12 +251,44 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoAddCountdown, autoAddTargetCard]);
 
-  // Auto-capture scheduler: capture frame 3s after previous capture completes
+  // Fixed-cadence metronome (Turbo): fire a capture every profile.cadence ms
+  // with a visible countdown, independent of scan timing. `loading` is NOT a
+  // dep, so the tick keeps a steady beat; handleCapture no-ops while a previous
+  // scan is still running (its own loading guard), so ticks never overlap — if
+  // a scan ever runs longer than the cadence, that tick is simply skipped.
   useEffect(() => {
+    if (!profile.cadence || !cameraActive || !autoScan) { setCaptureCountdown(null); return; }
+    const cadence = profile.cadence;
+    let nextFireAt = Date.now() + cadence;
+    setCaptureCountdown(cadence);
+    const STEP = 100;
+    // Time-based metronome (one stable interval). The countdown is time-until-
+    // next-capture. When it hits 0 we fire — unless a scan is still running
+    // (loadingRef) or a modal is up (captureBlockedRef), in which case the ring
+    // holds at 0 and we fire the instant it's free. So the ring sweeps down ONCE
+    // per capture (no phantom resets), and the true cadence is max(cadence,
+    // lookupTime): a slow lookup just delays the next fire, never overlaps.
+    const id = setInterval(() => {
+      if (captureBlockedRef.current) return; // modal/picker/drawer: hold
+      const remaining = nextFireAt - Date.now();
+      if (remaining > 0) { setCaptureCountdown(remaining); return; }
+      if (loadingRef.current) { setCaptureCountdown(0); return; } // scan busy: wait
+      handleCaptureRef.current?.();
+      nextFireAt = Date.now() + cadence;
+      setCaptureCountdown(cadence);
+    }, STEP);
+    return () => { clearInterval(id); setCaptureCountdown(null); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraActive, autoScan, scanDetail]);
+
+  // After-completion scheduler (non-Turbo tiers): capture cooldown ms after the
+  // previous scan finishes (loading drops).
+  useEffect(() => {
+    if (profile.cadence) return;
     let timerId;
     if (cameraActive && autoScan && !isDrawerOpen && !loading && scanMatches.length === 0 && !autoAddTargetCard && !dupConfirmCard) {
       timerId = setTimeout(() => {
-        handleCapture();
+        handleCaptureRef.current?.();
       }, profile.cooldown);
     }
     return () => {
@@ -630,6 +668,13 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       if (scanId === currentScanId.current) setLoading(false);
     }
   };
+  // Keep the ref pointing at the latest handleCapture so timers (metronome /
+  // cooldown) always invoke the current closure, never a stale one.
+  handleCaptureRef.current = handleCapture;
+  // Metronome reads this (not effect deps) to decide whether to fire a capture,
+  // so a modal/picker/drawer pauses the beat without restarting the interval.
+  captureBlockedRef.current = isDrawerOpen || scanMatches.length > 0 || !!autoAddTargetCard || !!dupConfirmCard;
+  loadingRef.current = loading;
 
   const openQuickAdd = (card) => {
     setSelectedCard(card);
@@ -789,6 +834,28 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
               >
                 {isTorchOn ? <Zap size={18} /> : <ZapOff size={18} />}
               </button>
+
+            {/* Fixed-cadence countdown ring (Turbo): depletes over profile.cadence
+                and resets each capture, so the next-photo beat is visible. */}
+            {captureCountdown !== null && (() => {
+              const total = profile.cadence || 1000;
+              const frac = Math.max(0, Math.min(1, captureCountdown / total));
+              const R = 18, C = 2 * Math.PI * R;
+              return (
+                <div style={{ position: 'absolute', top: '1rem', left: '1rem', zIndex: 20, width: 44, height: 44, filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.6))' }}>
+                  <svg width="44" height="44" viewBox="0 0 44 44">
+                    <circle cx="22" cy="22" r={R} fill="rgba(0,0,0,0.45)" stroke="rgba(255,255,255,0.25)" strokeWidth="3" />
+                    <circle
+                      cx="22" cy="22" r={R} fill="none"
+                      stroke="var(--accent-red)" strokeWidth="3" strokeLinecap="round"
+                      strokeDasharray={C} strokeDashoffset={C * (1 - frac)}
+                      transform="rotate(-90 22 22)"
+                      style={{ transition: 'stroke-dashoffset 0.1s linear' }}
+                    />
+                  </svg>
+                </div>
+              );
+            })()}
 
             {/* Outline Box Guides */}
             <div className="camera-overlay">
