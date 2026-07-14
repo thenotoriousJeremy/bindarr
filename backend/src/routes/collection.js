@@ -40,13 +40,13 @@ router.get('/search', searchLimiter, async (req, res) => {
 // or nothing matched (the scanner then prompts a manual search).
 router.post('/scan-match', searchLimiter, async (req, res) => {
   try {
-    const { game = 'pokemon', image, set = '' } = req.body || {};
+    const { game = 'pokemon', image, set = '', recallK, orb } = req.body || {};
     if (game !== 'mtg' && game !== 'pokemon') return res.status(400).json({ error: 'Invalid game' });
     if (!image || typeof image !== 'string') return res.status(400).json({ error: 'Missing image' });
     const base64 = image.includes(',') ? image.slice(image.indexOf(',') + 1) : image;
     const buf = Buffer.from(base64, 'base64');
     if (buf.length < 100) return res.status(400).json({ error: 'Invalid image data' });
-    const result = await scanMatch.match(buf, game, 8, set);
+    const result = await scanMatch.match(buf, game, 8, set, { recallK, orb });
     res.json(result); // { game, verified, candidates, crop, scoped? }
   } catch (error) {
     console.error('scan-match failed:', error.message);
@@ -65,7 +65,8 @@ router.post('/prepare-set', searchLimiter, async (req, res) => {
     if (setIndex.isReady(game, set)) return res.json({ ready: true });
     // Kick the build without blocking the request; client polls.
     setIndex.ensureSet(game, set).catch(() => {});
-    res.json({ ready: false, building: true });
+    // { total, done, status } so the client can show build progress.
+    res.json({ ready: false, building: true, progress: setIndex.setProgress(game, set) });
   } catch (error) {
     console.error('prepare-set failed:', error.message);
     res.status(500).json({ error: 'Prepare set failed' });
@@ -104,6 +105,7 @@ router.get('/collection', async (req, res) => {
         c.position,
         c.added_at,
         c.is_trade,
+        c.favorite,
         c.list_type,
         cc.name,
         cc.supertype,
@@ -168,6 +170,7 @@ router.post('/collection', async (req, res) => {
     compartment_id = null,
     list_type = 'collection',
     is_trade = 0,
+    favorite = 0,
     position
   } = req.body;
 
@@ -226,8 +229,8 @@ router.post('/collection', async (req, res) => {
     for (let i = 0; i < numToInsert; i++) {
       const result = await db.run(`
         INSERT INTO collection
-        (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, user_id, list_type, is_trade, position, game)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, user_id, list_type, is_trade, favorite, position, game)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         card_id,
         1, // ALWAYS 1, never stacked
@@ -240,6 +243,7 @@ router.post('/collection', async (req, res) => {
         req.user.id,
         list_type,
         is_trade ? 1 : 0,
+        favorite ? 1 : 0,
         resolved.position,
         cardGame
       ]);
@@ -289,6 +293,7 @@ router.put('/collection/:id', async (req, res) => {
     compartment_id,
     list_type,
     is_trade,
+    favorite,
     position
   } = req.body;
 
@@ -363,6 +368,7 @@ router.put('/collection/:id', async (req, res) => {
     } else if (location_id !== undefined) { fields.push('location_id = ?'); params.push(location_id); }
     if (list_type !== undefined) { fields.push('list_type = ?'); params.push(list_type); }
     if (is_trade !== undefined) { fields.push('is_trade = ?'); params.push(is_trade ? 1 : 0); }
+    if (favorite !== undefined) { fields.push('favorite = ?'); params.push(favorite ? 1 : 0); }
     if (finalPosition !== undefined) { fields.push('position = ?'); params.push(finalPosition); }
 
     if (fields.length === 0) {

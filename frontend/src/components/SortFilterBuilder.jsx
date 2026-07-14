@@ -34,6 +34,7 @@ function SortableItem({ id, children }) {
 // field, so the user isn't guessing what "Asc" means (e.g. cheapest-first vs
 // A-Z vs common-first).
 const SORT_OPTIONS = [
+  { value: 'favorite', label: 'Favorite (Starred)', asc: 'Favorites last', desc: 'Favorites first' },
   { value: 'name', label: 'Alphabetical (Name)', asc: 'A → Z', desc: 'Z → A' },
   { value: 'price', label: 'Price / Value', asc: 'Cheapest first', desc: 'Priciest first' },
   { value: 'set', label: 'Set', asc: 'Oldest set first', desc: 'Newest set first' },

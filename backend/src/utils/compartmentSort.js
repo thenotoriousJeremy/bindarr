@@ -170,6 +170,9 @@ function sortCards(cards, sortOrder, foilSorting) {
       const dirMult = c.dir === 'desc' ? -1 : 1;
       let cmp = 0;
       switch (c.by) {
+        case 'favorite':
+          cmp = (a.favorite ? 1 : 0) - (b.favorite ? 1 : 0);
+          break;
         case 'name':
           cmp = (a.name || '').localeCompare(b.name || '');
           break;
@@ -391,7 +394,7 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
 
   // 1. Get all cards in this location to check which sets are currently in which compartments
   const allLocationCards = await db.all(`
-    SELECT c.id as entry_id, c.compartment_id, c.printing, c.language, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
+    SELECT c.id as entry_id, c.compartment_id, c.printing, c.language, c.favorite, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
            cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
     FROM collection c
     JOIN card_cache cc ON c.card_id = cc.id
@@ -588,6 +591,7 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
 
   const newCard = {
     entry_id: -1,
+    favorite: cardMetadata.favorite ? 1 : 0,
     printing: cardMetadata.printing || 'Normal',
     language: cardMetadata.language || 'English',
     name: cardMetadata.name || '',
@@ -694,7 +698,7 @@ async function rebalanceCompartmentByScheme(db, compartmentId, userId, location)
     return rebalanceCompartmentPositions(db, compartmentId, userId);
   }
   const cards = await db.all(`
-    SELECT c.id, c.printing, c.language, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
+    SELECT c.id, c.printing, c.language, c.favorite, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
            cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
     FROM collection c JOIN card_cache cc ON c.card_id = cc.id
     WHERE c.compartment_id = ? AND c.user_id = ?

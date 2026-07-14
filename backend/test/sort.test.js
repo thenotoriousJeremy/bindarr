@@ -32,6 +32,21 @@ function testLanguageScheme() {
   console.log('PASS: language filing scheme orders by language then name');
 }
 
+// Pure test (no DB): favorite as primary sort key floats starred cards to the
+// front while the secondary key (name) still sub-orders within each group.
+function testFavoriteScheme() {
+  const cards = [
+    { name: 'Bravo', favorite: 0 },
+    { name: 'Alpha', favorite: 1 },
+    { name: 'Delta', favorite: 0 },
+    { name: 'Charlie', favorite: 1 },
+  ];
+  const sorted = sortCards(cards, [{ by: 'favorite', dir: 'desc' }, { by: 'name', dir: 'asc' }], 'normals_first');
+  assert.deepStrictEqual(sorted.map(c => c.name), ['Alpha', 'Charlie', 'Bravo', 'Delta'],
+    'favorites must sort to the front, sub-ordered by name');
+  console.log('PASS: favorite sort key floats starred cards to the front');
+}
+
 function cleanup() {
   try { db.dbConnection.close(); } catch { /* already closed */ }
   for (const suffix of ['', '-wal', '-shm']) {
@@ -49,6 +64,7 @@ async function insertCard(id, name) {
 
 async function main() {
   testLanguageScheme();
+  testFavoriteScheme();
   await db.initDb(); // creates schema + default admin (user id 1)
   const userId = 1;
 

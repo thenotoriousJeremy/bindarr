@@ -224,13 +224,17 @@ function verifyGame(cardBuf, game, q, bf, recall, topK) {
 // first and, if the match is weak, also tries the other game and keeps whichever
 // scores higher — so scanning in the wrong mode still works. Returns
 // { game, verified, candidates:[{name,set,number,score,inliers}], crop }.
-async function match(imageBuffer, requestedGame, topK = 8, setCode = '') {
+async function match(imageBuffer, requestedGame, topK = 8, setCode = '', opts = {}) {
+  // Scan-detail knobs (client "Scan Detail" slider). Fewer CLIP candidates to
+  // verify + fewer ORB features = faster, less accurate. Clamped to sane bounds.
+  const recallK = Math.max(10, Math.min(RECALL_K, opts.recallK || RECALL_K));
+  const orbN = Math.max(150, Math.min(800, opts.orb || 500));
   // Auto-crop + deskew the card once; everything matches on the rectified image.
   const cardBuf = await preprocessCard(imageBuffer);
   const crop = 'data:image/jpeg;base64,' + (await sharp(cardBuf).resize({ width: 220 }).jpeg({ quality: 70 }).toBuffer()).toString('base64');
 
   // Query ORB features are game-independent — extract once, reuse everywhere.
-  const orb = new cv.ORB(500);
+  const orb = new cv.ORB(orbN);
   const bf = new cv.BFMatcher(cv.NORM_HAMMING, false);
   const q = await queryOrb(orb, cardBuf);
   try {
@@ -244,7 +248,7 @@ async function match(imageBuffer, requestedGame, topK = 8, setCode = '') {
     const order = requestedGame === 'pokemon' ? ['pokemon', 'mtg'] : ['mtg', 'pokemon'];
     let best = null;
     for (const g of order) {
-      const recall = await embedMatch.match(cardBuf, g, RECALL_K); // CLIP recall for this game
+      const recall = await embedMatch.match(cardBuf, g, recallK); // CLIP recall for this game
       if (recall.length === 0) continue;
       const r = verifyGame(cardBuf, g, q, bf, recall, topK);
       if (!best || r.top > best.top) best = { ...r, game: g };

@@ -585,5 +585,6 @@ module.exports = {
   getCardById,
   getCardsBySet,
   updateCollectionPrices,
-  fetchAndCacheSets
+  fetchAndCacheSets,
+  cacheCards
 };
