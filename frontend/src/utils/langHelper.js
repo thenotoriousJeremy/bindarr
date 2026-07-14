@@ -89,7 +89,7 @@ export const getCardDisplayName = (englishName, language) => {
 // A Japanese search string mapped back to the English name the card APIs use.
 // Returns '' when nothing matches, so callers can fall back to the raw query.
 export const translateJapaneseName = (rawJpName) => {
-  let jp = rawJpName.replace(/[^　-〿぀-ゟ゠-ヿ＀-￯一-龯]/g, '').trim();
+  let jp = rawJpName.replace(/[^\u3000-〿぀-ゟ゠-ヿ＀-￯一-龯]/g, '').trim();
   if (!jp) return '';
 
   let prefix = '';
