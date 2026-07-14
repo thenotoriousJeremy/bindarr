@@ -97,13 +97,12 @@ function locationAcceptsCard(location, cardMetadata) {
   return true;
 }
 
-// Must stay aligned with POKEMON_TYPE_ORDER in frontend/src/utils/cardSort.js —
-// the frontend renders compartments in this order and the backend places cards
-// by it; a mismatch makes the REC SPOT ghost point at the wrong slot.
-// Pokémon energy types first, then MTG colors in WUBRG order, then Multicolor.
-// Both games share the one 'type-name' scheme so a mixed binder files each card
-// deterministically. Must stay aligned with TYPE_ORDER in
-// frontend/src/utils/cardSort.js so the REC SPOT ghost points at the right slot.
+// Must stay aligned with POKEMON_TYPE_ORDER / TYPE_ORDER in
+// frontend/src/utils/cardSort.js — the frontend renders compartments in this
+// order and the backend places cards by it; a mismatch makes the REC SPOT ghost
+// point at the wrong slot. Pokémon energy types first, then MTG colors in WUBRG
+// order, then Multicolor. Both games share the one 'type-name' scheme so a mixed
+// binder files each card deterministically.
 const POKEMON_TYPE_ORDER = {
   'Grass': 1, 'Fire': 2, 'Water': 3, 'Lightning': 4, 'Psychic': 5,
   'Fighting': 6, 'Darkness': 7, 'Metal': 8, 'Fairy': 9, 'Dragon': 10, 'Colorless': 11, 'Trainer': 12, 'Energy': 13,
@@ -171,6 +170,9 @@ function sortCards(cards, sortOrder, foilSorting) {
       const dirMult = c.dir === 'desc' ? -1 : 1;
       let cmp = 0;
       switch (c.by) {
+        case 'favorite':
+          cmp = (a.favorite ? 1 : 0) - (b.favorite ? 1 : 0);
+          break;
         case 'name':
           cmp = (a.name || '').localeCompare(b.name || '');
           break;
@@ -243,10 +245,15 @@ function sortCards(cards, sortOrder, foilSorting) {
   return sorted;
 }
 
+// A binder-family container numbers its compartments as Pages; everything else
+// (boxes, deck boxes, etc.) numbers them as Rows.
+function isBinderType(type) {
+  return type === 'Binder' || type === 'Toploader Binder';
+}
+
 function compartmentLabel(compartment, locationType) {
   if (compartment.label) return compartment.label;
-  const isBinder = locationType === 'Binder' || locationType === 'Toploader Binder';
-  return isBinder ? `Page ${compartment.idx}` : `Row ${compartment.idx}`;
+  return isBinderType(locationType) ? `Page ${compartment.idx}` : `Row ${compartment.idx}`;
 }
 
 function getSortCategory(card, sortOrder) {
@@ -387,7 +394,7 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
 
   // 1. Get all cards in this location to check which sets are currently in which compartments
   const allLocationCards = await db.all(`
-    SELECT c.id as entry_id, c.compartment_id, c.printing, c.language, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
+    SELECT c.id as entry_id, c.compartment_id, c.printing, c.language, c.favorite, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
            cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
     FROM collection c
     JOIN card_cache cc ON c.card_id = cc.id
@@ -584,6 +591,7 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
 
   const newCard = {
     entry_id: -1,
+    favorite: cardMetadata.favorite ? 1 : 0,
     printing: cardMetadata.printing || 'Normal',
     language: cardMetadata.language || 'English',
     name: cardMetadata.name || '',
@@ -628,22 +636,34 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
     ? (overrideCompartments.find(oc => oc.id === c.id)?.count || 0)
     : (cardsByCompId.get(c.id) || []).length;
 
+  // The global targetIndex only picks WHICH compartment the card flows into.
+  // The slot WITHIN that compartment must come from the card's sorted position
+  // among that compartment's ACTUAL cards — not `targetIndex - cursor`, which
+  // assumes every earlier compartment is packed to capacity. A partly-filled
+  // row otherwise reports a slot far past its real cards (e.g. "Slot 92" in a
+  // 50-card row), padding the recommendation with phantom empty slots.
+  const localSeq = (comp) => {
+    const cc = cardsByCompId.get(comp.id) || [];
+    const ls = sortCards([...cc, newCard], location.sort_order, location.foil_sorting);
+    const idx = ls.findIndex(c => c.entry_id === -1);
+    return idx === -1 ? cc.length : idx; // fall back to append
+  };
+
   let cursor = 0;
   for (let i = 0; i < pool.length; i++) {
     const compartment = pool[i];
     if (targetIndex < cursor + compartment.capacity) {
       let target = compartment;
-      let seq = targetIndex - cursor;
-      // The capacity-window walk assumes every earlier compartment is packed
-      // to capacity, which isn't true when pages/rows have gaps. If the card
-      // sorts into a compartment that's already full, spill it to the start of
-      // the next pool compartment with room instead of overfilling this one —
-      // the auto-placement path trusts this result without a capacity recheck.
+      let seq = localSeq(target);
+      // If the card sorts into a compartment that's already full, spill it to
+      // the start of the next pool compartment with room instead of overfilling
+      // this one — the auto-placement path trusts this result without a
+      // capacity recheck.
       if (countOf(target) >= target.capacity) {
         const spill = pool.slice(i + 1).find(c => countOf(c) < c.capacity);
         if (!spill) return null;
         target = spill;
-        seq = countOf(spill); // append after the cards already there
+        seq = localSeq(spill);
       }
       let reason = `Sorted by ${scheme}`;
       if (prevCard) reason += `, right after ${prevCard.name}`;
@@ -678,7 +698,7 @@ async function rebalanceCompartmentByScheme(db, compartmentId, userId, location)
     return rebalanceCompartmentPositions(db, compartmentId, userId);
   }
   const cards = await db.all(`
-    SELECT c.id, c.printing, c.language, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
+    SELECT c.id, c.printing, c.language, c.favorite, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
            cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
     FROM collection c JOIN card_cache cc ON c.card_id = cc.id
     WHERE c.compartment_id = ? AND c.user_id = ?
@@ -693,4 +713,4 @@ async function rebalanceCompartmentByScheme(db, compartmentId, userId, location)
   }
 }
 
-module.exports = { sortCards, compartmentLabel, loadCompartments, recommendSlot, rebalanceCompartmentByScheme, locationAcceptsCard, loadSetsCache, getSortCategory };
+module.exports = { sortCards, compartmentLabel, isBinderType, loadCompartments, recommendSlot, rebalanceCompartmentByScheme, locationAcceptsCard, compartmentAcceptsCard, loadSetsCache, getSortCategory };

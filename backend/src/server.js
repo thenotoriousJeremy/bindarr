@@ -12,6 +12,9 @@ const authRoutes = require('./routes/auth');
 const sharedRoutes = require('./routes/shared');
 const adminRoutes = require('./routes/admin');
 const collectionRoutes = require('./routes/collection');
+const storageRoutes = require('./routes/storage');
+const statsRoutes = require('./routes/stats');
+const importExportRoutes = require('./routes/importExport');
 const setsRoutes = require('./routes/sets');
 const decksRoutes = require('./routes/decks');
 const settingsRoutes = require('./routes/settings');
@@ -30,24 +33,19 @@ if (process.env.TRUST_PROXY) {
   app.set('trust proxy', tp === 'true' ? true : (Number.isNaN(Number(tp)) ? tp : Number(tp)));
 }
 
-// Content Security Policy. Shipped in Report-Only mode: the scanner runs
-// Tesseract.js, whose default recognize() pulls its worker/core/wasm and
-// language traineddata from CDNs (unpkg / jsDelivr / tessdata.projectnaptha.com)
-// and needs blob: workers + wasm-unsafe-eval. Card images load directly from
-// images.pokemontcg.io. Enforcing this before verifying the mobile camera+OCR
-// path could silently break the headline feature, so violations are only
-// reported (console) for now.
-// ponytail: Report-Only ceiling. Flip `reportOnly` to false to enforce once
-// the mobile scan + OCR flow has been verified against these directives (and
-// tighten/remove any CDN hosts that turn out to be unused).
+// Content Security Policy. Card identification is server-side (the client just
+// POSTs a photo to /api/scan-match), so the browser needs nothing beyond the
+// app's own bundle plus the card-image hosts. Kept Report-Only for now: flip
+// `reportOnly` to false to enforce once a production smoke test confirms the
+// scan flow and card images load cleanly under these directives.
+// ponytail: Report-Only ceiling — enforce after a prod verification pass.
 app.use(helmet({
   contentSecurityPolicy: {
     reportOnly: true,
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'wasm-unsafe-eval'", 'blob:', 'https://cdn.jsdelivr.net', 'https://unpkg.com'],
-      workerSrc: ["'self'", 'blob:'],
-      connectSrc: ["'self'", 'https://cdn.jsdelivr.net', 'https://unpkg.com', 'https://tessdata.projectnaptha.com'],
+      scriptSrc: ["'self'"],
+      connectSrc: ["'self'"],
       imgSrc: ["'self'", 'data:', 'blob:', 'https://images.pokemontcg.io', 'https://cards.scryfall.io', 'https://c1.scryfall.com', 'https://img.scryfall.com'],
       styleSrc: ["'self'", "'unsafe-inline'"],
       fontSrc: ["'self'", 'data:'],
@@ -168,6 +166,9 @@ app.use('/api/auth', authRoutes);
 app.use('/api/shared', sharedRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api', collectionRoutes);
+app.use('/api', storageRoutes);
+app.use('/api', statsRoutes);
+app.use('/api', importExportRoutes);
 app.use('/api/sets', setsRoutes);
 app.use('/api/decks', decksRoutes);
 app.use('/api/settings', settingsRoutes);

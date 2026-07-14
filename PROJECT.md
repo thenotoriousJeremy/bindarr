@@ -62,8 +62,8 @@ Regenerable/large artifacts live in `backend/data/` (scan embeddings, ORB indexe
 
 ### Request lifecycle
 
-`server.js` wires Helmet (with a CSP that allow-lists the card-image CDNs and the
-Tesseract-era worker origins), JSON body limits, the API routers, then serves the
+`server.js` wires Helmet (with a Report-Only CSP that allow-lists the card-image
+hosts), JSON body limits, the API routers, then serves the
 built SPA and a SPA fallback. `GET /api/health` is unauthenticated and backs the
 Docker `HEALTHCHECK`. On first startup with an empty DB it creates the default
 `admin` user and prints the generated password once (or uses `DEFAULT_ADMIN_PASSWORD`).

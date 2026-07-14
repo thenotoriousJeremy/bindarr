@@ -1,5 +1,6 @@
 const axios = require('axios');
 const db = require('./db');
+const { parseCardRow } = require('./utils/priceHelpers');
 
 const API_BASE_URL = 'https://api.pokemontcg.io/v2';
 const API_KEY = process.env.POKEMON_TCG_API_KEY || ''; // Optional user key
@@ -204,7 +205,7 @@ function getStringSimilarity(str1, str2) {
 
 // Search cards locally first, then hit API if not found or empty
 async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiKey = '', scope = 'database', userId = null) {
-  // Sanitize the name query: drop pure-noise tokens (OCR garbage with no letters)
+  // Sanitize the name query: drop pure-noise tokens (junk with no letters)
   // and normalize everything else to Title Case, so typed-lowercase input like
   // "pikachu" is treated the same as "Pikachu" instead of being silently dropped.
   let cleanName = '';
@@ -261,11 +262,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
 
     collSql += ` GROUP BY cc.id LIMIT 50`;
     let collResults = await db.all(collSql, collParams);
-    return collResults.map(r => ({
-      ...r,
-      subtypes: JSON.parse(r.subtypes || '[]'),
-      types: JSON.parse(r.types || '[]')
-    }));
+    return collResults.map(parseCardRow);
   }
 
   // 2. Try local search first (if not forcing internet)
@@ -315,11 +312,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
         })();
       }
 
-      return localResults.map(r => ({
-        ...r,
-        subtypes: JSON.parse(r.subtypes || '[]'),
-        types: JSON.parse(r.types || '[]')
-      }));
+      return localResults.map(parseCardRow);
     }
   }
 
@@ -433,11 +426,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
     }
     console.error('Error fetching cards from Pokémon TCG API:', error.message);
     // Return whatever local matches we have if API fails
-    return localResults.map(r => ({
-      ...r,
-      subtypes: JSON.parse(r.subtypes || '[]'),
-      types: JSON.parse(r.types || '[]')
-    }));
+    return localResults.map(parseCardRow);
   }
 }
 
@@ -449,19 +438,13 @@ async function getCardById(id, apiKey = '') {
   // Pokémon TCG API — never query pokemontcg.io for them (it would 404). Return
   // whatever is cached (Scryfall refreshes MTG prices on search).
   if (id && id.startsWith('mtg-')) {
-    return cached
-      ? { ...cached, subtypes: JSON.parse(cached.subtypes || '[]'), types: JSON.parse(cached.types || '[]') }
-      : null;
+    return cached ? parseCardRow(cached) : null;
   }
 
   // If cached and fresh (e.g. within 3 days), return it
   const cacheAgeLimit = 1000 * 60 * 60 * 24 * 3; // 3 days
   if (cached && (new Date() - new Date(cached.last_updated) < cacheAgeLimit)) {
-    return {
-      ...cached,
-      subtypes: JSON.parse(cached.subtypes || '[]'),
-      types: JSON.parse(cached.types || '[]')
-    };
+    return parseCardRow(cached);
   }
 
   try {
@@ -508,11 +491,7 @@ async function getCardById(id, apiKey = '') {
 
   // Fallback to cached if available
   if (cached) {
-    return {
-      ...cached,
-      subtypes: JSON.parse(cached.subtypes || '[]'),
-      types: JSON.parse(cached.types || '[]')
-    };
+    return parseCardRow(cached);
   }
   return null;
 }
@@ -606,5 +585,6 @@ module.exports = {
   getCardById,
   getCardsBySet,
   updateCollectionPrices,
-  fetchAndCacheSets
+  fetchAndCacheSets,
+  cacheCards
 };

@@ -3,8 +3,8 @@ import { Search, Plus, X, ShieldAlert } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { formatPrice } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
-import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
-import { translateJapaneseName } from '../utils/pokemonTranslation';
+import CardEntryFields from './CardEntryFields';
+import { translateJapaneseName } from '../utils/langHelper';
 
 
 function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
@@ -446,54 +446,10 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
             </div>
 
             <form onSubmit={handleSubmit}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-                <div className="form-group">
-                  <label>Quantity</label>
-                  <input 
-                    type="number" 
-                    className="input-control" 
-                    min="1" 
-                    value={quantity}
-                    onChange={(e) => setQuantity(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Purchase Price ($)</label>
-                  <input 
-                    type="number" 
-                    step="0.01" 
-                    className="input-control" 
-                    value={purchasePrice}
-                    onChange={(e) => setPurchasePrice(e.target.value)}
-                    placeholder="0.00"
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
-                <div className="form-group">
-                  <label>Condition</label>
-                  <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)}>
-                    {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Printing</label>
-                  <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)}>
-                    {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Language</label>
-                  <select className="select-control" value={language} onChange={(e) => setLanguage(e.target.value)}>
-                    {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
-                  </select>
-                </div>
-              </div>
+              <CardEntryFields
+                quantity={quantity} purchasePrice={purchasePrice} condition={condition} printing={printing} language={language}
+                onQuantity={setQuantity} onPurchasePrice={setPurchasePrice} onCondition={setCondition} onPrinting={setPrinting} onLanguage={setLanguage}
+              />
 
 
 

@@ -14,7 +14,7 @@ const db = require('../../src/db');
 
 async function waitForServer(port) {
   const url = `http://localhost:${port}/api/health`;
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 150; i++) {
     try {
       const res = await fetch(url);
       if (res.ok) return;
@@ -27,7 +27,7 @@ async function waitForServer(port) {
 }
 
 async function waitForDatabase() {
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 150; i++) {
     try {
       const admin = await db.get(`SELECT id FROM users WHERE username = ?`, ['admin']);
       if (admin) return admin.id;

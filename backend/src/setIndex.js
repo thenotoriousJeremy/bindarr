@@ -10,6 +10,8 @@ const path = require('path');
 const axios = require('axios');
 const sharp = require('sharp');
 const { cv } = require('opencv-wasm');
+const scryfallApi = require('./scryfallApi');
+const tcgApi = require('./tcgApi');
 
 const SETS_DIR = path.join(__dirname, '..', 'data', 'sets');
 const DESC_BYTES = 32, CAP = 500, REF_WIDTH = 500, RATIO = 0.75, RANSAC_PX = 5.0;
@@ -50,7 +52,7 @@ async function fetchMtgSet(set) {
     const r = await http.get(url);
     for (const c of r.data.data || []) {
       const img = c.image_uris?.normal || c.card_faces?.[0]?.image_uris?.normal;
-      if (img) cards.push({ name: c.name || '', set: c.set || set, number: c.collector_number || '', img });
+      if (img) cards.push({ name: c.name || '', set: c.set || set, number: c.collector_number || '', img, raw: c });
     }
     url = r.data.has_more ? r.data.next_page : null;
     await sleep(120);
@@ -71,7 +73,7 @@ async function fetchPokemonSet(set) {
     for (let attempt = 0; attempt < 5 && data === null; attempt++) {
       try {
         const r = await http.get('https://api.pokemontcg.io/v2/cards', {
-          params: { q: `set.id:${set}`, page, pageSize: 250, select: 'id,name,number,set,images' },
+          params: { q: `set.id:${set}`, page, pageSize: 250, select: 'id,name,number,set,images,rarity,supertype,subtypes,types,tcgplayer,cardmarket' },
           headers,
         });
         count = r.data.totalCount || 0;
@@ -86,7 +88,7 @@ async function fetchPokemonSet(set) {
     if (data.length === 0) break;
     for (const c of data) {
       const img = c.images?.large || c.images?.small;
-      if (img) cards.push({ name: c.name || '', set: c.set?.id || set, number: c.number || '', img });
+      if (img) cards.push({ name: c.name || '', set: c.set?.id || set, number: c.number || '', img, raw: c });
     }
     page++;
     await sleep(120);
@@ -106,6 +108,13 @@ async function buildSet(game, set) {
     if (cards.length === 0) throw new Error(`no cards for set ${set}`);
     progress[k].total = cards.length;
     progress[k].status = 'indexing';
+
+    // Cache full card data now so the post-match /api/search is an instant local
+    // card_cache hit instead of a live (throttled) provider fetch per scan.
+    try {
+      if (game === 'mtg') await scryfallApi.cacheCards(cards.map(c => scryfallApi.normalizeCard(c.raw)));
+      else await tcgApi.cacheCards(cards.map(c => c.raw));
+    } catch (e) { console.warn(`setIndex: caching ${set} cards failed: ${e.message}`); }
 
     const p = paths(game, set);
     const descFd = fs.openSync(p.desc, 'w'), kpFd = fs.openSync(p.kp, 'w');
@@ -182,6 +191,9 @@ function listBuilds() {
 
 // Snapshot of in-flight / recently finished builds, keyed by "game|set".
 function getProgress() { return progress; }
+
+// Progress for one set (or null if no build has started/tracked it).
+function setProgress(game, set) { return progress[`${game}|${norm(set)}`] || null; }
 
 // Delete a build's files and evict it from memory + progress.
 function deleteBuild(game, set) {
@@ -266,4 +278,4 @@ function matchSet(q, game, set, topK = 8) {
   return scored.slice(0, topK);
 }
 
-module.exports = { ensureSet, isReady, matchSet, listBuilds, getProgress, deleteBuild, previewSet, startBuild };
+module.exports = { ensureSet, isReady, matchSet, listBuilds, getProgress, setProgress, deleteBuild, previewSet, startBuild };

@@ -32,6 +32,21 @@ function testLanguageScheme() {
   console.log('PASS: language filing scheme orders by language then name');
 }
 
+// Pure test (no DB): favorite as primary sort key floats starred cards to the
+// front while the secondary key (name) still sub-orders within each group.
+function testFavoriteScheme() {
+  const cards = [
+    { name: 'Bravo', favorite: 0 },
+    { name: 'Alpha', favorite: 1 },
+    { name: 'Delta', favorite: 0 },
+    { name: 'Charlie', favorite: 1 },
+  ];
+  const sorted = sortCards(cards, [{ by: 'favorite', dir: 'desc' }, { by: 'name', dir: 'asc' }], 'normals_first');
+  assert.deepStrictEqual(sorted.map(c => c.name), ['Alpha', 'Charlie', 'Bravo', 'Delta'],
+    'favorites must sort to the front, sub-ordered by name');
+  console.log('PASS: favorite sort key floats starred cards to the front');
+}
+
 function cleanup() {
   try { db.dbConnection.close(); } catch { /* already closed */ }
   for (const suffix of ['', '-wal', '-shm']) {
@@ -49,6 +64,7 @@ async function insertCard(id, name) {
 
 async function main() {
   testLanguageScheme();
+  testFavoriteScheme();
   await db.initDb(); // creates schema + default admin (user id 1)
   const userId = 1;
 
@@ -98,6 +114,41 @@ async function main() {
   assert(cnt.n < comp.capacity, `recommended compartment is already full (${cnt.n}/${comp.capacity})`);
 
   console.log('PASS: recommendSlot spills a full compartment to the next with space (A1)');
+
+  // A2: a partly-filled row must recommend a DENSE slot (right after its real
+  // cards), not a slot derived from the global sorted rank. A big-capacity Box
+  // row holding 3 cards should offer Pos 4 (position 4000) for a card that
+  // sorts last — pre-fix the packed-assumption returned a slot far past the 3
+  // real cards, leaving phantom empty pockets around the recommendation.
+  await insertCard('c-boxa', 'Boxa');
+  await insertCard('c-boxb', 'Boxb');
+  await insertCard('c-boxc', 'Boxc');
+  const box = await db.run(
+    `INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ['Test Box', 'Box', 'name-asc', 'normals_first', 'any', userId]
+  );
+  const boxId = box.lastID;
+  const boxRow = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [boxId, 1, 400]);
+  // Stored positions are sparse on purpose (1000, 50000, 90000) — a real row
+  // that has churned. Dense slot must come from card count, not stored position.
+  const sparse = { 'c-boxa': 1000, 'c-boxb': 50000, 'c-boxc': 90000 };
+  for (const cid of Object.keys(sparse)) {
+    await db.run(
+      `INSERT INTO collection (card_id, quantity, condition, printing, language, location_id, compartment_id, position, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [cid, 1, 'Near Mint', 'Normal', 'English', boxId, boxRow.lastID, sparse[cid], userId]
+    );
+  }
+  const boxLoc = await db.get(`SELECT * FROM locations WHERE id = ?`, [boxId]);
+  const boxRec = await recommendSlot(db, boxLoc, {
+    name: 'Boxd', set_name: 'Set One', number: '1', types: [], printing: 'Normal', price_trend: 1
+  });
+  assert(boxRec, 'expected a box recommendation, got null');
+  assert.strictEqual(
+    boxRec.position, 4000,
+    `A2: partly-filled row must offer the dense next slot (Pos 4 = 4000), got ${boxRec.position}`
+  );
+  console.log('PASS: recommendSlot uses a dense slot in a partly-filled row (A2)');
 }
 
 main()

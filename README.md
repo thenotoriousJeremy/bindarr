@@ -285,7 +285,7 @@ These download every card image and are **heavy**: several hours of CPU + downlo
   │     │     └── utils/             # compartmentSort (filing engine), priceHelpers, authHelpers
   │     ├── scripts/                 # build-card-embeddings.mjs, build-card-orb.mjs, cardSources.js
   │     ├── data/                    # Precomputed embeddings/ORB/per-set indexes (gitignored)
-  │     ├── test/                    # Framework-free smoke tests (npm test)
+  │     ├── test/                    # Framework-free tests: unit + e2e/ runner (npm test)
   │     └── package.json
   ├── frontend/
   │     ├── src/

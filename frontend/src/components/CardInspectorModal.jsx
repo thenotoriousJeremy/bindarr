@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
-import { X, MapPin, Trash2 } from 'lucide-react';
+import { X, MapPin, Trash2, Star } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
-import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
+import CardEntryFields from './CardEntryFields';
 import PriceHistoryChart from './PriceHistoryChart';
 
 // MTG color identity pip colors (WUBRG), approximating the printed mana colors.
@@ -27,6 +27,7 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
   const [purchasePrice, setPurchasePrice] = useState(0);
   const [locationId, setLocationId] = useState('');
   const [isTrade, setIsTrade] = useState(0);
+  const [favorite, setFavorite] = useState(0);
   const [listType, setListType] = useState('collection');
 
   useEffect(() => {
@@ -46,6 +47,7 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
     setPurchasePrice(card.purchase_price || 0);
     setLocationId(card.location_id || '');
     setIsTrade(card.is_trade || 0);
+    setFavorite(card.favorite || 0);
     setListType(card.list_type || 'collection');
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card?.entry_id, startInEdit]);
@@ -66,7 +68,8 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
           purchase_price: parseFloat(purchasePrice) || 0,
           location_id: locationId ? parseInt(locationId, 10) : null,
           list_type: listType,
-          is_trade: isTrade
+          is_trade: isTrade,
+          favorite
         })
       });
       if (res.ok) {
@@ -85,8 +88,9 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
   const handleQuickToggle = async (field, value) => {
     // Optimistic UI updates
     if (field === 'is_trade') setIsTrade(value);
+    if (field === 'favorite') setFavorite(value);
     if (field === 'list_type') setListType(value);
-    
+
     // We update the backend by sending all current form state but overriding the toggled field
     const payload = {
       quantity: parseInt(q, 10),
@@ -96,7 +100,8 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
       purchase_price: parseFloat(purchasePrice) || 0,
       location_id: locationId ? parseInt(locationId, 10) : null,
       list_type: field === 'list_type' ? value : listType,
-      is_trade: field === 'is_trade' ? value : isTrade
+      is_trade: field === 'is_trade' ? value : isTrade,
+      favorite: field === 'favorite' ? value : favorite
     };
     try {
       const res = await fetch(`/api/collection/${card.entry_id}`, {
@@ -110,12 +115,14 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
       } else {
         // revert on fail
         if (field === 'is_trade') setIsTrade(isTrade);
+        if (field === 'favorite') setFavorite(favorite);
         if (field === 'list_type') setListType(listType);
         showToast && showToast('Failed to update card.');
       }
     } catch (err) {
       console.error(err);
       if (field === 'is_trade') setIsTrade(isTrade);
+      if (field === 'favorite') setFavorite(favorite);
       if (field === 'list_type') setListType(listType);
       showToast && showToast('Error updating card.');
     }
@@ -215,6 +222,11 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
                   For Trade
                 </span>
               )}
+              {favorite === 1 && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.2rem 0.5rem', borderRadius: '4px', backgroundColor: 'rgba(250, 204, 21, 0.15)', color: '#facc15', border: '1px solid rgba(250, 204, 21, 0.3)' }}>
+                  <Star size={11} fill="#facc15" /> Favorite
+                </span>
+              )}
             </div>
 
             <h3 style={{ fontSize: '1.65rem', color: '#fff', fontWeight: 800, lineHeight: 1.15, marginBottom: '0.25rem' }}>
@@ -262,37 +274,10 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
                 </div>
               )}
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
-                <div className="form-group">
-                  <label>Quantity</label>
-                  <input type="number" className="input-control" min="1" value={q} onChange={(e) => setQ(e.target.value)} required />
-                </div>
-                <div className="form-group">
-                  <label>Purchase Price ($)</label>
-                  <input type="number" step="0.01" className="input-control" value={purchasePrice} onChange={(e) => setPurchasePrice(e.target.value)} />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.6rem' }}>
-                <div className="form-group">
-                  <label>Condition</label>
-                  <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)}>
-                    {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label>Printing</label>
-                  <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)}>
-                    {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label>Language</label>
-                  <select className="select-control" value={language} onChange={(e) => setLanguage(e.target.value)}>
-                    {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
-                  </select>
-                </div>
-              </div>
+              <CardEntryFields
+                quantity={q} purchasePrice={purchasePrice} condition={condition} printing={printing} language={language}
+                onQuantity={setQ} onPurchasePrice={setPurchasePrice} onCondition={setCondition} onPrinting={setPrinting} onLanguage={setLanguage}
+              />
 
               <div className="form-group">
                 <label>Storage Container</label>
@@ -374,6 +359,14 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
 
               {/* Quick toggles row */}
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button
+                  className={`btn ${favorite === 1 ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem', flex: 1, ...(favorite === 1 ? { backgroundColor: 'rgba(250,204,21,0.2)', color: '#facc15', border: '1px solid rgba(250,204,21,0.3)' } : {}) }}
+                  onClick={() => handleQuickToggle('favorite', favorite === 1 ? 0 : 1)}
+                >
+                  <Star size={15} fill={favorite === 1 ? '#facc15' : 'none'} />
+                  {favorite === 1 ? 'Favorited' : 'Favorite'}
+                </button>
                 {card.list_type === 'wishlist' ? (
                   <button 
                     className="btn btn-primary" 

@@ -1,9 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, Trash2, Edit2, LayoutGrid, List, SlidersHorizontal, X, MousePointerClick } from 'lucide-react';
-import { getCardDisplayName } from '../utils/langHelper';
+import { getCardDisplayName, translateJapaneseName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
-import { translateJapaneseName } from '../utils/pokemonTranslation';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { sortCardsByOrder } from '../utils/cardSort';
@@ -26,6 +25,7 @@ const SORT_CRITERIA = {
   'rarity-asc': [{ by: 'rarity', dir: 'asc' }, { by: 'name', dir: 'asc' }],
   'type-asc': [{ by: 'type', dir: 'asc' }, { by: 'name', dir: 'asc' }],
   'language-asc': [{ by: 'language', dir: 'asc' }, { by: 'name', dir: 'asc' }],
+  'favorite-first': [{ by: 'favorite', dir: 'desc' }, { by: 'added_at', dir: 'desc' }],
 };
 
 // Small labelled field wrapper to keep the filter grid uniform.
@@ -76,6 +76,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const [maxPriceFilter, setMaxPriceFilter] = useState('');
   const [sortBy, setSortBy] = useState('added-newest');
   const [tradeOnly, setTradeOnly] = useState(false);
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
 
   // Stacking state
   const [stackCards, setStackCards] = useState(false);
@@ -284,14 +285,14 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter,
     setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter,
     minPriceFilter, maxPriceFilter
-  ].filter(v => v !== '').length + (tradeOnly ? 1 : 0);
+  ].filter(v => v !== '').length + (tradeOnly ? 1 : 0) + (favoriteOnly ? 1 : 0);
 
   const clearAllFilters = () => {
     setSearchFilter('');
     setGameFilter(''); setLocationFilter(''); setRarityFilter(''); setConditionFilter('');
     setPrintingFilter(''); setSetFilter(''); setTypeFilter(''); setSupertypeFilter('');
     setCmcFilter(''); setLanguageFilter(''); setMinPriceFilter('');
-    setMaxPriceFilter(''); setTradeOnly(false);
+    setMaxPriceFilter(''); setTradeOnly(false); setFavoriteOnly(false);
   };
 
   // Filter + sort
@@ -313,6 +314,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       const matchesSupertype = supertypeFilter === '' ? true : item.supertype === supertypeFilter;
       const matchesCmc = cmcFilter === '' ? true : String(item.cmc) === cmcFilter;
       const matchesLanguage = languageFilter === '' ? true : item.language === languageFilter;
+      const matchesFavorite = favoriteOnly ? item.favorite === 1 : true;
 
       const price = item.price_trend || 0;
       const matchesMinPrice = minPriceFilter === '' ? true : price >= parseFloat(minPriceFilter);
@@ -320,7 +322,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
 
       return matchesSearch && matchesGame && matchesLocation && matchesRarity && matchesCondition &&
              matchesPrinting && matchesSet && matchesType && matchesSupertype &&
-             matchesCmc && matchesLanguage && matchesMinPrice && matchesMaxPrice;
+             matchesCmc && matchesLanguage && matchesFavorite && matchesMinPrice && matchesMaxPrice;
     });
 
     if (sortBy === 'qty-desc') {
@@ -329,7 +331,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       sortCardsByOrder(result, SORT_CRITERIA[sortBy] || SORT_CRITERIA['added-newest'], undefined, setsList);
     }
     return result;
-  }, [collection, searchFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter, minPriceFilter, maxPriceFilter, sortBy, setsList]);
+  }, [collection, searchFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter, favoriteOnly, minPriceFilter, maxPriceFilter, sortBy, setsList]);
 
   // Group duplicate cards if stack option is active
   const processedCollection = useMemo(() => {
@@ -446,6 +448,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
               <option value="type-asc">Type / Color</option>
               <option value="rarity-asc">Rarity</option>
               <option value="language-asc">Language</option>
+              <option value="favorite-first">Favorites First</option>
             </select>
           </Field>
 
@@ -586,6 +589,13 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                 <input type="checkbox" id="tradeOnlyOpt" checked={tradeOnly} onChange={(e) => setTradeOnly(e.target.checked)} style={{ width: '14px', height: '14px', cursor: 'pointer' }} />
                 <label htmlFor="tradeOnlyOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--accent-yellow)', fontWeight: 600 }}>
                   For Trade Only
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input type="checkbox" id="favoriteOnlyOpt" checked={favoriteOnly} onChange={(e) => setFavoriteOnly(e.target.checked)} style={{ width: '14px', height: '14px', cursor: 'pointer' }} />
+                <label htmlFor="favoriteOnlyOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: '#facc15', fontWeight: 600 }}>
+                  Favorites Only
                 </label>
               </div>
 

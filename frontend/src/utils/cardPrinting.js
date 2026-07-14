@@ -41,7 +41,3 @@ export function getFoilOverlayClass(printing) {
   if (printing === 'Reverse Holofoil') return 'reverse-holo-shine-overlay';
   return null;
 }
-
-export function isFoil(printing) {
-  return printing === 'Holofoil' || printing === 'Reverse Holofoil';
-}

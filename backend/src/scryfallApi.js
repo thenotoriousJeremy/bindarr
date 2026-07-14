@@ -1,5 +1,6 @@
 const axios = require('axios');
 const db = require('./db');
+const { parseCardRow } = require('./utils/priceHelpers');
 
 // Scryfall needs no API key but asks callers to identify themselves and accept
 // JSON. See https://scryfall.com/docs/api. IDs from Scryfall are UUIDs / set-num
@@ -10,6 +11,25 @@ const client = axios.create({
   timeout: 6000,
   headers: { 'User-Agent': 'Bindarr/1.0', 'Accept': 'application/json' }
 });
+
+// Scryfall asks for ~10 requests/second and 429s aggressively on bursts. Search,
+// per-set fetches, and the background price refresh all hit it and can run
+// concurrently, so serialize EVERY request through one queue with a minimum gap.
+// A global limiter beats the per-caller delays that don't see each other.
+const SCRYFALL_MIN_GAP_MS = 120;
+let scryfallQueue = Promise.resolve();
+let lastScryfallAt = 0;
+function scryGet(url, config) {
+  const run = scryfallQueue.then(async () => {
+    const wait = SCRYFALL_MIN_GAP_MS - (Date.now() - lastScryfallAt);
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    lastScryfallAt = Date.now();
+    return client.get(url, config);
+  });
+  // Keep the chain alive regardless of this request's outcome.
+  scryfallQueue = run.then(() => {}, () => {});
+  return run;
+}
 
 const COLOR_NAMES = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
 const CACHE_AGE_LIMIT_MS = 1000 * 60 * 60 * 24 * 3; // 3 days
@@ -75,14 +95,6 @@ async function cacheCards(cards) {
   }
 }
 
-function parseRow(r) {
-  return {
-    ...r,
-    subtypes: JSON.parse(r.subtypes || '[]'),
-    types: JSON.parse(r.types || '[]'),
-    color_identity: JSON.parse(r.color_identity || '[]')
-  };
-}
 
 async function fetchFromScryfall(q, lang, retries = 3) {
   let url = `/cards/search?q=${encodeURIComponent(q)}`;
@@ -90,11 +102,14 @@ async function fetchFromScryfall(q, lang, retries = 3) {
   
   for (let i = 0; i < retries; i++) {
     try {
-      const resp = await client.get(url);
+      const resp = await scryGet(url);
       return (resp.data && resp.data.data) || [];
     } catch (error) {
       if (error.response && error.response.status === 429 && i < retries - 1) {
-        await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+        // Honor Retry-After when Scryfall sends it; else exponential backoff.
+        const ra = parseInt(error.response.headers?.['retry-after'], 10);
+        const backoff = Number.isFinite(ra) ? ra * 1000 : 1000 * (i + 1);
+        await new Promise(r => setTimeout(r, backoff));
         continue;
       }
       throw error;
@@ -145,7 +160,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
     if (cleanNumber) { sql += ` AND (cc.number = ? OR CAST(cc.number AS INTEGER) = CAST(? AS INTEGER))`; params.push(cleanNumber, cleanNumber); }
     if (cleanSet) { sql += ` AND (cc.set_name LIKE ? OR cc.set_id = ?)`; params.push(`%${cleanSet}%`, cleanSet); }
     sql += ` GROUP BY cc.id LIMIT 50`;
-    return (await db.all(sql, params)).map(parseRow);
+    return (await db.all(sql, params)).map(parseCardRow);
   }
 
   // 2. Local cache first
@@ -176,11 +191,11 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
           }
         })();
       }
-      return localResults.map(parseRow);
+      return localResults.map(parseCardRow);
     }
   }
 
-  // Strip leading zeros from collector numbers — OCR often reads "0488" but
+  // Strip leading zeros from collector numbers — input may arrive as "0488" but
   // Scryfall expects "488".
   const strippedNumber = cleanNumber.replace(/^0+/, '') || cleanNumber;
 
@@ -221,7 +236,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
     // Merge: exact matches first, then broad alternatives deduped.
     const seen = new Set(exact.map(c => c.id));
     const merged = [...exact, ...broad.filter(c => !seen.has(c.id))];
-    if (merged.length === 0) return localResults.map(parseRow);
+    if (merged.length === 0) return localResults.map(parseCardRow);
 
     const cards = merged.slice(0, 50);
     // Sort alternatives (after exact) by collector number.
@@ -240,7 +255,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
     return cards;
   } catch (err) {
     console.error('Scryfall search failed:', err.message);
-    return localResults.map(parseRow);
+    return localResults.map(parseCardRow);
   }
 }
 
@@ -273,7 +288,7 @@ async function fetchAndCacheSets(force = false) {
       return;
     }
     console.log('Fetching sets from Scryfall...');
-    const resp = await client.get('/sets');
+    const resp = await scryGet('/sets');
     const sets = (resp.data && resp.data.data) || [];
     for (const s of sets) {
       await db.run(

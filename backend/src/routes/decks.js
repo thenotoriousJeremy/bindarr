@@ -1,6 +1,8 @@
 const express = require('express');
 const db = require('../db');
 const tcgApi = require('../tcgApi');
+const { parseCardRow } = require('../utils/priceHelpers');
+const { compartmentLabel } = require('../utils/compartmentSort');
 const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
@@ -85,11 +87,7 @@ router.get('/:id', async (req, res) => {
     `;
     const cards = await db.all(cardsQuery, [req.user.id, id]);
 
-    const formatted = cards.map(c => ({
-      ...c,
-      subtypes: JSON.parse(c.subtypes || '[]'),
-      types: JSON.parse(c.types || '[]')
-    }));
+    const formatted = cards.map(parseCardRow);
 
     res.json({
       ...deck,
@@ -141,11 +139,9 @@ router.get('/:id/locations', async (req, res) => {
         const take = Math.min(inst.owned_qty, needed);
         needed -= take;
         
-        const isBinder = inst.location_type === 'Binder' || inst.location_type === 'Toploader Binder';
-        let compDisplay = inst.compartment_label;
-        if (!compDisplay && inst.compartment_idx !== null) {
-          compDisplay = isBinder ? `Page ${inst.compartment_idx}` : `Row ${inst.compartment_idx}`;
-        }
+        const compDisplay = inst.compartment_idx !== null
+          ? compartmentLabel({ label: inst.compartment_label, idx: inst.compartment_idx }, inst.location_type)
+          : inst.compartment_label;
 
         foundLocations.push({
           take,

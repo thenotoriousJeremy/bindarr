@@ -4,6 +4,7 @@ import { sortCardsByOrder } from '../utils/cardSort';
 import { getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder } from '../utils/cardRarity';
 import CardInspectorModal from './CardInspectorModal';
+import { isBinderType as computeIsBinder } from '../utils/cardOptions';
 import CompartmentView, { getPrimaryCategory, FocusedCardInfo } from './CompartmentView';
 import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
 import CreateContainerModal from './CreateContainerModal';
@@ -30,7 +31,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [showKebabMenu, setShowKebabMenu] = useState(false);
   const [showCategoryMap, setShowCategoryMap] = useState(false);
   const [showRulesModal, setShowRulesModal] = useState(false);
-  const [, setRuleSetSearch] = useState('');
   const [sortDraft, setSortDraft] = useState([]);
   const [filterDraft, setFilterDraft] = useState([]);
 
@@ -58,6 +58,11 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   // DB by /resort — so "Placed" just advances instead of issuing a move.
   const [filingReadOnly, setFilingReadOnly] = useState(false);
 
+  // Manual tap-to-place ("Arrange"), custom-order containers only. Pick a card
+  // (unsorted or in-container), then tap a slot to place/swap it.
+  const [moveMode, setMoveMode] = useState(false);
+  const [pickedEntryId, setPickedEntryId] = useState(null);
+
   // The recommended slot for the card currently under review in filing mode —
   // drives the ghost preview shown in the container view.
   const currentRecSpot = filingMode ? (filingQueue[filingIndex]?.recommended || null) : null;
@@ -67,7 +72,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   // isBinderType in its dependency array, which is evaluated during render —
   // a lower `const` would be in the temporal dead zone at that point.
   const selectedLoc = locations.find(l => l.id === activeLocationId);
-  const isBinderType = selectedLoc?.type === 'Binder' || selectedLoc?.type === 'Toploader Binder';
+  const isBinderType = computeIsBinder(selectedLoc?.type);
+  const isCustom = selectedLoc?.sort_order === 'custom';
 
   useEffect(() => {
     if (filingMode && filingQueue[filingIndex]?.recommended) {
@@ -92,7 +98,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       const tryScroll = () => {
         const el = document.getElementById('recommended-spot');
         if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+          el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
           el.classList.remove('flash-highlight');
           void el.offsetWidth;
           el.classList.add('flash-highlight');
@@ -137,6 +143,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     setCoverflowActiveIndex(0);
     setStorageSelectMode(false);
     setStorageSelectedIds(new Set());
+    setMoveMode(false);
+    setPickedEntryId(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLocationId]);
 
@@ -327,8 +335,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         body: JSON.stringify(fields)
       });
       if (res.ok) {
-        showToast('Container updated.');
-        await fetchLocations();
+        const data = await res.json().catch(() => ({}));
+        showToast(data.evicted ? `Container updated. ${data.evicted} card${data.evicted === 1 ? '' : 's'} moved to Unsorted.` : 'Container updated.');
+        await refreshAll();
+        onUpdate();
       } else {
         const data = await res.json().catch(() => ({}));
         showToast(data.error || 'Failed to update container.');
@@ -428,6 +438,33 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     } catch (err) { console.error(err); showToast('Error moving card.'); }
   };
 
+  // --- Manual tap-to-place (Arrange) ---
+  // Pick/unpick a card to move. Tapping the picked card again cancels.
+  const handlePickCard = (entryId) => setPickedEntryId(prev => (prev === entryId ? null : entryId));
+
+  // Place the picked card at a slot. Binder + occupied pocket = swap; otherwise
+  // send the slot and let the backend place absolutely (binder) or insert (box).
+  const handlePlaceSlot = async (compartmentId, slotNumber, occupantEntryId) => {
+    if (!pickedEntryId || occupantEntryId === pickedEntryId) { setPickedEntryId(null); return; }
+    const body = { compartment_id: compartmentId };
+    if (isBinderType && occupantEntryId) body.swap_with = occupantEntryId;
+    else body.slot = slotNumber;
+    try {
+      const res = await fetch(`/api/collection/${pickedEntryId}/place`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        showToast(body.swap_with ? 'Cards swapped.' : (data.placement?.label ? `Placed → ${data.placement.label}` : 'Card placed.'));
+        setPickedEntryId(null);
+        await refreshAll(); onUpdate();
+      } else {
+        showToast(data.error === 'COMPARTMENT_FULL' ? 'That page/row is full.' : (data.error || 'Failed to place card.'));
+      }
+    } catch (err) { console.error(err); showToast('Error placing card.'); }
+  };
+
   const handleDeleteCard = async (entryId) => {
     if (!window.confirm('Remove this card from your collection?')) return;
     try {
@@ -493,9 +530,11 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         body: JSON.stringify({ rule_config: compRuleDraft.length > 0 ? { rules: compRuleDraft } : null })
       });
       if (res.ok) {
-        showToast('Row rules updated.');
+        const data = await res.json().catch(() => ({}));
+        showToast(data.evicted ? `Row rules updated. ${data.evicted} card${data.evicted === 1 ? '' : 's'} moved to Unsorted.` : 'Row rules updated.');
         setRulesComp(null);
         await refreshAll();
+        onUpdate();
       } else {
         showToast('Failed to update row rules.');
       }
@@ -559,6 +598,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       setFilingQueue(placeable);
       setFilingIndex(0);
       setFilingMode(true);
+      setMoveMode(false);
+      setPickedEntryId(null);
       if (noRoom.length > 0) {
         showToast(`Filing ${placeable.length} card(s) into "${target?.name}". ${noRoom.length} don't fit and stay unsorted.`);
       }
@@ -712,7 +753,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           
           {selectedLoc && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            {!filingMode && (selectedLoc.total_cards || 0) > 0 && (
+            {!filingMode && !moveMode && (selectedLoc.total_cards || 0) > 0 && (
               <button
                 type="button"
                 className={`btn ${storageSelectMode ? 'btn-primary' : 'btn-secondary'}`}
@@ -721,6 +762,17 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 title="Or long-press a card to start selecting"
               >
                 {storageSelectMode ? 'Done' : 'Select'}
+              </button>
+            )}
+            {!filingMode && !storageSelectMode && isCustom && (
+              <button
+                type="button"
+                className={`btn ${moveMode ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => { setMoveMode(m => !m); setPickedEntryId(null); }}
+                style={{ fontSize: '0.7rem', padding: '0.3rem 0.6rem' }}
+                title="Tap a card, then tap a slot to place or swap it by hand"
+              >
+                {moveMode ? 'Done Arranging' : 'Arrange'}
               </button>
             )}
             <div className="kebab-menu">
@@ -771,15 +823,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       try { cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config; } catch { /* ignore */ }
                       if (cfg?.start) fDraft.push({ id: '1', action: 'include', field: 'name', operator: '>=', value: cfg.start });
                       if (cfg?.end) fDraft.push({ id: '2', action: 'include', field: 'name', operator: '<=', value: cfg.end });
-                    } else if (selectedLoc.rule_type === 'specific_sets') {
-                       let cfg = {};
-                       try { cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config; } catch { /* ignore */ }
-                       if (cfg?.sets && cfg.sets.length > 0) {
-                          // Note: UI might need a multiple select or IN operator, but our current operator doesn't have IN natively yet, so we just use equals (backend `equals` supports arrays via some logic, wait, backend `equals` checks if cValue matches rule.value. For specific_sets, rule.value was the set name. If multiple, we might need multiple rules or an array match. Let's just create an exclude/include if needed. For now, since specific_sets are converted, we can just say "contains" or "equals"). Let's leave it empty and let the user rebuild it, or migrate properly. Let's just migrate properly later, or set it to empty for now if it's too complex.
-                       }
                     }
                     setFilterDraft(fDraft);
-                    setRuleSetSearch('');
                     setShowRulesModal(true);
                   }}>
                     <Settings size={14} /> Container Settings
@@ -824,6 +869,20 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           <p style={{ color: 'var(--text-secondary)' }}>Select a container to view its compartments.</p>
         ) : (
           <>
+            {isBinderType && !isCustom && (
+              <div style={{ background: 'rgba(255, 170, 0, 0.1)', border: '1px solid #d97706', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', color: 'var(--text-primary)', lineHeight: 1.4 }}>
+                <strong>Heads up:</strong> Sorting &amp; filing renumber pocket positions, so a new card shifts every card after it and your physical binder drifts out of sync. For a fixed pocket layout, set this binder to <strong>Custom</strong> order in Container Settings, then use <strong>Arrange</strong> to place and swap cards by hand.
+              </div>
+            )}
+
+            {moveMode && (
+              <div style={{ background: 'rgba(255,71,71,0.1)', border: '1px solid var(--accent-red)', padding: '0.5rem 0.7rem', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', color: 'var(--text-primary)' }}>
+                {pickedEntryId
+                  ? (isBinderType ? 'Now tap a pocket to place it (tap a filled pocket to swap).' : 'Now tap a card to drop it in front of, or an empty slot.')
+                  : 'Tap a card here or in Unsorted to pick it up.'}
+              </div>
+            )}
+
             {isBinderType && compartments.length > 0 && availableCategories.length > 0 && (
               <div style={{ background: 'rgba(0,0,0,0.1)', padding: '0.4rem 0.6rem', borderRadius: 'var(--radius-sm)' }}>
                 <button
@@ -922,6 +981,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   onCardLongPress: armStorageSelect,
                   onCardToggle: toggleStorageSelect,
                   onEditRules: openCompartmentRules,
+                  placementMode: moveMode,
+                  pickedEntryId,
+                  onPickCard: handlePickCard,
+                  onPlaceSlot: handlePlaceSlot,
                   activeEntryId: binderActiveEntryId,
                   onActiveEntryIdChange: setBinderActiveEntryId,
                   hideFocusedCardInfo: true
@@ -1048,6 +1111,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       onCardLongPress={armStorageSelect}
                       onCardToggle={toggleStorageSelect}
                       onEditRules={openCompartmentRules}
+                      placementMode={moveMode}
+                      pickedEntryId={pickedEntryId}
+                      onPickCard={handlePickCard}
+                      onPlaceSlot={handlePlaceSlot}
                     />
                   </div>
                 );
@@ -1119,7 +1186,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         const tryScroll = () => {
                           const el = document.getElementById('recommended-spot');
                           if (el) {
-                            el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+                            el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
                             el.click(); // Rotates coverflow in Box view
                             el.classList.remove('flash-highlight');
                             void el.offsetWidth;
@@ -1205,34 +1272,42 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-              {unsortedCards.map(card => (
-                <div key={card.entry_id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.7rem', padding: '0.3rem 0', borderBottom: '1px solid var(--border-glass)' }}>
-                  <div onClick={() => setInspectorCard(card)} title="View details" style={{ position: 'relative', width: '48px', flexShrink: 0, overflow: 'hidden', borderRadius: '3px', cursor: 'pointer', ...getCardRarityBorder(card.rarity) }}>
-                    <img src={card.image_url} alt={card.name} style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', display: 'block' }} />
+              {unsortedCards.map(card => {
+                const picked = moveMode && pickedEntryId === card.entry_id;
+                const onCardTap = moveMode ? () => handlePickCard(card.entry_id) : () => setInspectorCard(card);
+                return (
+                <div key={card.entry_id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.7rem', padding: '0.3rem', borderBottom: '1px solid var(--border-glass)', ...(picked ? { background: 'rgba(255,71,71,0.18)', outline: '2px solid var(--accent-red)', borderRadius: '4px' } : {}) }}>
+                  <div onClick={onCardTap} title={moveMode ? 'Tap to pick / unpick' : 'View details'} style={{ position: 'relative', width: '48px', flexShrink: 0, overflow: 'hidden', borderRadius: '3px', cursor: 'pointer', ...getCardRarityBorder(card.rarity) }}>
+                    <img src={card.image_url} alt={card.name} loading="lazy" decoding="async" style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', display: 'block' }} />
                     {getFoilOverlayClass(card.printing) && (
                       <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '3px' }} />
                     )}
                   </div>
                   <span
-                    onClick={() => setInspectorCard(card)}
-                    title="View details"
-                    style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+                    onClick={onCardTap}
+                    title={moveMode ? 'Tap to pick / unpick' : 'View details'}
+                    style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', fontWeight: picked ? 700 : 400 }}
                   >
-                    {card.name}
+                    {picked ? '✓ ' : ''}{card.name}
                   </span>
-                  <select
-                    className="select-control" value=""
-                    onChange={(e) => { if (e.target.value) handleFileCard(card.entry_id, parseInt(e.target.value, 10)); }}
-                    style={{ fontSize: '0.6rem', padding: '0.15rem 0.25rem', maxWidth: '90px' }}
-                  >
-                    <option value="">File to...</option>
-                    {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                  </select>
-                  <button type="button" onClick={() => handleDeleteCard(card.entry_id)} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
-                    <X size={12} />
-                  </button>
+                  {!moveMode && (
+                    <select
+                      className="select-control" value=""
+                      onChange={(e) => { if (e.target.value) handleFileCard(card.entry_id, parseInt(e.target.value, 10)); }}
+                      style={{ fontSize: '0.6rem', padding: '0.15rem 0.25rem', maxWidth: '90px' }}
+                    >
+                      <option value="">File to...</option>
+                      {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                    </select>
+                  )}
+                  {!moveMode && (
+                    <button type="button" onClick={() => handleDeleteCard(card.entry_id)} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
+                      <X size={12} />
+                    </button>
+                  )}
                 </div>
-              ))}
+                );
+              })}
               {unsortedCards.length === 0 && <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Nothing unsorted.</p>}
             </div>
           </>

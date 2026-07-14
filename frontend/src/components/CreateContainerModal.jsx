@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { X, BookOpen, Box, Package, Award, LayoutGrid, Layers, Archive, HelpCircle, ArrowLeft, ArrowRight } from 'lucide-react';
 import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
+import { isBinderType } from '../utils/cardOptions';
 
 // Container types with a friendly blurb + default layout. Counts kept modest;
 // the user adjusts them on step 2. Mirrors defaultCompartmentPlan in
@@ -18,7 +19,7 @@ const TYPE_META = [
 ];
 
 function compartmentNoun(type, plural = true) {
-  const isBinder = type === 'Binder' || type === 'Toploader Binder';
+  const isBinder = isBinderType(type);
   const noun = isBinder ? 'Page' : 'Row';
   return plural ? `${noun}s` : noun;
 }

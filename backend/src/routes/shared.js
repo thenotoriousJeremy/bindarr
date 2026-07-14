@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { resolveCardPrice } = require('../utils/priceHelpers');
+const { resolveCardPrice, parseCardRow } = require('../utils/priceHelpers');
 
 const router = express.Router();
 
@@ -59,10 +59,8 @@ router.get('/:share_token', async (req, res) => {
     const rows = await db.all(query, filterParams);
 
     const formatted = rows.map(row => ({
-      ...row,
+      ...parseCardRow(row),
       price_trend: resolveCardPrice(row),
-      subtypes: JSON.parse(row.subtypes || '[]'),
-      types: JSON.parse(row.types || '[]'),
     }));
 
     // Calculate public stats

@@ -158,11 +158,11 @@ async function runTests() {
     throw err;
   }
 
-  // F2-TC8: Verify location rule config rejects non-matching MTG cards
+  // F2-TC8: Verify a compound set-restriction rule rejects non-matching cards
   try {
     const location = {
-      rule_type: 'specific_sets',
-      rule_config: JSON.stringify({ sets: ['Throne of Eldraine'] })
+      rule_type: 'compound',
+      rule_config: JSON.stringify({ rules: [{ action: 'include', field: 'set_name', operator: 'equals', value: 'Throne of Eldraine' }] })
     };
     const matchingCard = { name: 'Questing Beast', set_name: 'Throne of Eldraine', game: 'mtg' };
     const nonMatchingCard = { name: 'Black Lotus', set_name: 'Limited Edition Alpha', game: 'mtg' };

@@ -263,6 +263,14 @@ async function initDb() {
     await run(`ALTER TABLE collection ADD COLUMN is_trade INTEGER DEFAULT 0`);
   }
 
+  // Add favorite (starred) flag to collection table if missing. Per-copy
+  // boolean like is_trade; used as a sort key (favorites to front) and a view
+  // filter.
+  if (!collectionCols.some(c => c.name === 'favorite')) {
+    console.log('Adding favorite column to collection table...');
+    await run(`ALTER TABLE collection ADD COLUMN favorite INTEGER DEFAULT 0`);
+  }
+
   // Add list_type to collection table if missing
   if (!collectionCols.some(c => c.name === 'list_type')) {
     console.log('Adding list_type column to collection table...');

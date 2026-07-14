@@ -1,3 +1,7 @@
+// Single source of truth for Pokémon English<->Japanese name display and search.
+// Covers only ~45 popular species; anything unmapped falls back to English.
+// ponytail: hardcoded micro-dictionary, not a real localization source — do not
+// hand-expand it. If broad coverage is needed, replace it with a JP card dataset.
 export const POKEMON_EN_TO_JP = {
   'Dragonite': 'カイリュー',
   'Dragonair': 'ハクリュー',
@@ -48,52 +52,56 @@ export const POKEMON_EN_TO_JP = {
   'Quaxly': 'クワッス'
 };
 
+// Inverse map, derived so the two directions can never drift apart.
+const POKEMON_JP_TO_EN = Object.fromEntries(
+  Object.entries(POKEMON_EN_TO_JP).map(([en, jp]) => [jp, en])
+);
+
+// Owner/variant name prefixes (e.g. "Dark Charizard" -> "わるいリザードン").
+// Keyed English->Japanese; the search direction reads it in reverse.
+const EN_JP_PREFIX = {
+  'Dark ': 'わるい',
+  'Light ': 'やさしい',
+  'Shining ': 'ひかる',
+  "Giovanni's ": 'サカキの',
+  "Brock's ": 'タケシの',
+  "Misty's ": 'カスミの',
+  "Lt. Surge's ": 'マチスの',
+  "Erika's ": 'エリカの',
+  "Sabrina's ": 'ナツメの',
+  "Koga's ": 'キョウの',
+  "Blaine's ": 'カツラの'
+};
+
+// English card name shown in Japanese when the entry's language is Japanese.
+// Unmapped names (or a non-Japanese language) return the English name unchanged.
 export const getCardDisplayName = (englishName, language) => {
   if (language !== 'Japanese') return englishName;
+  for (const [en, jp] of Object.entries(EN_JP_PREFIX)) {
+    if (englishName.startsWith(en)) {
+      const base = POKEMON_EN_TO_JP[englishName.slice(en.length)];
+      return base ? jp + base : englishName;
+    }
+  }
+  return POKEMON_EN_TO_JP[englishName] || englishName;
+};
 
-  let name = englishName;
+// A Japanese search string mapped back to the English name the card APIs use.
+// Returns '' when nothing matches, so callers can fall back to the raw query.
+export const translateJapaneseName = (rawJpName) => {
+  let jp = rawJpName.replace(/[^\u3000-〿぀-ゟ゠-ヿ＀-￯一-龯]/g, '').trim();
+  if (!jp) return '';
+
   let prefix = '';
-  
-  if (name.startsWith('Dark ')) {
-    prefix = 'わるい';
-    name = name.substring(5);
-  } else if (name.startsWith('Light ')) {
-    prefix = 'やさしい';
-    name = name.substring(6);
-  } else if (name.startsWith('Shining ')) {
-    prefix = 'ひかる';
-    name = name.substring(8);
-  } else if (name.startsWith("Giovanni's ")) {
-    prefix = 'サカキの';
-    name = name.substring(11);
-  } else if (name.startsWith("Brock's ")) {
-    prefix = 'タケシの';
-    name = name.substring(8);
-  } else if (name.startsWith("Misty's ")) {
-    prefix = 'カスミの';
-    name = name.substring(8);
-  } else if (name.startsWith("Lt. Surge's ")) {
-    prefix = 'マチスの';
-    name = name.substring(12);
-  } else if (name.startsWith("Erika's ")) {
-    prefix = 'エリカの';
-    name = name.substring(8);
-  } else if (name.startsWith("Sabrina's ")) {
-    prefix = 'ナツメの';
-    name = name.substring(10);
-  } else if (name.startsWith("Koga's ")) {
-    prefix = 'キョウの';
-    name = name.substring(7);
-  } else if (name.startsWith("Blaine's ")) {
-    prefix = 'カツラの';
-    name = name.substring(9);
+  for (const [en, jpPrefix] of Object.entries(EN_JP_PREFIX)) {
+    if (jp.startsWith(jpPrefix)) { prefix = en; jp = jp.slice(jpPrefix.length); break; }
   }
 
-  // Check mapped name
-  const jpBase = POKEMON_EN_TO_JP[name];
-  if (jpBase) {
-    return prefix + jpBase;
+  let baseName = POKEMON_JP_TO_EN[jp];
+  if (!baseName) {
+    const foundKey = Object.keys(POKEMON_JP_TO_EN).find(k => jp.includes(k) || k.includes(jp));
+    if (foundKey) baseName = POKEMON_JP_TO_EN[foundKey];
   }
 
-  return englishName;
+  return baseName ? prefix + baseName : '';
 };

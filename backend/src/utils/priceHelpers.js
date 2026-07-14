@@ -24,6 +24,19 @@ function resolveCardPrice(card) {
   return card.price_trend || 0;
 }
 
+// Hydrate a raw card_cache row: its array columns are stored as JSON strings,
+// so parse them back to arrays. Missing columns (e.g. color_identity on a
+// Pokémon row) become []. Returns a shallow copy; the raw row is untouched.
+function parseCardRow(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    subtypes: JSON.parse(row.subtypes || '[]'),
+    types: JSON.parse(row.types || '[]'),
+    color_identity: JSON.parse(row.color_identity || '[]'),
+  };
+}
+
 // position orders cards WITHIN a single compartment (a binder page, a box
 // row) — see compartmentSort.js for how a card's compartment+position is
 // chosen in the first place.
@@ -47,6 +60,7 @@ const isVintageSet = (setId) => {
 module.exports = {
   parseSqliteUtc,
   resolveCardPrice,
+  parseCardRow,
   rebalanceCompartmentPositions,
   isVintageSet
 };

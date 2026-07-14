@@ -95,6 +95,9 @@ export function sortCardsByOrder(cards, sortOrder, foilSorting, setsList = []) {
       const dirMult = c.dir === 'desc' ? -1 : 1;
       let cmp = 0;
       switch (c.by) {
+        case 'favorite':
+          cmp = (a.favorite ? 1 : 0) - (b.favorite ? 1 : 0);
+          break;
         case 'added_at': {
           const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
           const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;

@@ -4,6 +4,7 @@ const db = require('../db');
 const tcgApi = require('../tcgApi');
 const scryfallApi = require('../scryfallApi');
 const setIndex = require('../setIndex');
+const { parseCardRow } = require('../utils/priceHelpers');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
@@ -55,12 +56,7 @@ router.post('/seed-cards', async (req, res) => {
       if (cached.length > 0) {
         console.log(`Seed: APIs failed, falling back to ${cached.length} locally cached cards.`);
         for (const r of cached) {
-          MOCK_POOL.push({
-            ...r,
-            subtypes: JSON.parse(r.subtypes || '[]'),
-            types: JSON.parse(r.types || '[]'),
-            color_identity: JSON.parse(r.color_identity || '[]')
-          });
+          MOCK_POOL.push(parseCardRow(r));
         }
       } else {
         return res.status(502).json({ error: 'Could not fetch seed card data from the card APIs, and local cache is empty. Try again shortly.' });

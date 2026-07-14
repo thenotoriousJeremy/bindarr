@@ -4,7 +4,7 @@ import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
-import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
+import CardEntryFields from './CardEntryFields';
 // Fixed centered guide box (normalized 0..1). Center the card in it; the crop
 // inside is sent to the server embedding matcher.
 const DEFAULT_RECT = { x: 0.17, y: 0.06, w: 0.66, h: 0.88 };
@@ -13,6 +13,16 @@ const DEFAULT_RECT = { x: 0.17, y: 0.06, w: 0.66, h: 0.88 };
 // Below the gate the scan shows the candidates for manual selection.
 const SCAN_MATCH_MIN_SCORE = 0.55;
 const SCAN_MATCH_MIN_INLIERS = 12;
+// Scan-detail presets (quick↔accurate slider). Higher index = more upload
+// resolution, deeper server CLIP recall + more ORB features, longer cooldown:
+// slower but more accurate. Lower = faster, less accurate. Turbo keeps ORB
+// verify but with the fewest recall candidates + features — leanest ORB pass.
+const SCAN_PROFILES = [
+  { label: 'Turbo',    uploadW: 400,  cooldown: 400,  countdown: 0, recallK: 28,  orb: 240 },
+  { label: 'Fast',     uploadW: 640,  cooldown: 1200, countdown: 1, recallK: 60,  orb: 300 },
+  { label: 'Balanced', uploadW: 900,  cooldown: 2000, countdown: 2, recallK: 120, orb: 400 },
+  { label: 'Accurate', uploadW: 1280, cooldown: 3000, countdown: 2, recallK: 250, orb: 500 },
+];
 
 function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
@@ -23,18 +33,30 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   
   // UX scan history & effects states
   const [recentScans, setRecentScans] = useState([]);
-  const [scanFlash, setScanFlash] = useState(null); // 'success', 'error', or null
+  const [scanFlash, setScanFlash] = useState(null); // 'capture', 'error', or null
   
   // Camera active states
   const [cameraActive, setCameraActive] = useState(false);
   const [hasCameraError, setHasCameraError] = useState(false);
   const [autoScan, setAutoScan] = useState(false);
   const [videoRatio, setVideoRatio] = useState(null);
+  // Scan detail level: index into SCAN_PROFILES. Persisted; default Balanced.
+  const [scanDetail, setScanDetail] = useState(() => {
+    const v = parseInt(localStorage.getItem('scan_detail'), 10);
+    return Number.isInteger(v) && v >= 0 && v < SCAN_PROFILES.length ? v : 2;
+  });
+  const profile = SCAN_PROFILES[scanDetail];
   // Torch/Flashlight control
   const [isTorchOn, setIsTorchOn] = useState(false);
+  // Manual exposure: caps ({min,max,step}) if the track exposes
+  // exposureCompensation, else null (slider hidden). value = current setting.
+  const [exposureCaps, setExposureCaps] = useState(null);
+  const [exposure, setExposure] = useState(0);
   const [cardLayout, setCardLayout] = useState(() => localStorage.getItem('default_game') === 'mtg' ? 'mtg' : 'modern');
   // Per-set index prep state for MTG set-scoped matching: 'idle'|'building'|'ready'.
   const [setPrep, setSetPrep] = useState('idle');
+  // Build progress while status==='building': { total, done, status } or null.
+  const [setBuildProgress, setSetBuildProgress] = useState(null);
   // Which game the current layout belongs to. 'mtg' is its own layout; every
   // other layout value is a Pokémon sub-layout.
   const scanGame = cardLayout === 'mtg' ? 'mtg' : 'pokemon';
@@ -60,6 +82,45 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const streamRef = useRef(null);
   const currentScanId = useRef(0);
 
+  // Auto-capture duplicate guard: a physical card lingers in frame across the
+  // 3s auto-scan cycle. lastAddedId = the card just auto-added; a repeat match
+  // of it means "same card again" — confirm a real 2nd copy vs a re-scan.
+  // resolvedDupId = a repeat we already settled; skip it silently until a
+  // different card appears (stops a re-prompt loop while it stays in view).
+  const lastAddedIdRef = useRef(null);
+  const resolvedDupIdRef = useRef(null);
+  const beepCtxRef = useRef(null); // reused AudioContext for the scan cue
+
+  // Instant feedback cue: flash the guide-box border, click, and (on mobile)
+  // vibrate. 'capture' fires the instant the photo is grabbed so the user can
+  // move the card immediately; 'error' marks a failed/no-match scan. Web Audio
+  // only (no asset/lib); no-ops if the browser blocks audio until a gesture.
+  const signal = (type) => {
+    setScanFlash(type);
+    setTimeout(() => setScanFlash(null), type === 'capture' ? 400 : 1500);
+    if (type === 'capture' && navigator.vibrate) navigator.vibrate(30);
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      const ctx = beepCtxRef.current || (beepCtxRef.current = new AC());
+      const play = () => {
+        const osc = ctx.createOscillator(), gain = ctx.createGain();
+        osc.type = type === 'capture' ? 'square' : 'sine';
+        osc.frequency.value = type === 'error' ? 300 : 660; // capture = crisp click
+        osc.connect(gain); gain.connect(ctx.destination);
+        const dur = type === 'capture' ? 0.05 : 0.15; // short = click, long = tone
+        gain.gain.setValueAtTime(0.18, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
+        osc.start(); osc.stop(ctx.currentTime + dur);
+      };
+      // Mobile auto-suspends the context between non-gesture captures; resume is
+      // async, so scheduling into a suspended context is silent. Play only once
+      // it's actually running.
+      if (ctx.state === 'suspended') ctx.resume().then(play).catch(() => {});
+      else play();
+    } catch { /* audio unavailable — visual flash still fires */ }
+  };
+
   const handleCancelScan = () => {
     currentScanId.current += 1;
     setLoading(false);
@@ -74,6 +135,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [autoAddCountdown, setAutoAddCountdown] = useState(null);
   const [autoAddTargetCard, setAutoAddTargetCard] = useState(null);
+  // Duplicate-scan confirm: set to the repeat-matched card; dupQty = copies to add.
+  const [dupConfirmCard, setDupConfirmCard] = useState(null);
+  const [dupQty, setDupQty] = useState(1);
   
   // Form states
   const [quantity, setQuantity] = useState(1);
@@ -90,7 +154,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
   // Clean up camera stream on unmount
   useEffect(() => {
-    fetchLocations();
     return () => {
       streamRef.current?.getTracks().forEach(track => track.stop());
     };
@@ -108,7 +171,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   // match within just that set (~300 cards) — accurate and fast. Polls until the
   // one-time build finishes.
   useEffect(() => {
-    if (!scanSetCode) { setSetPrep('idle'); return; }
+    if (!scanSetCode) { setSetPrep('idle'); setSetBuildProgress(null); return; }
     let cancelled = false, timer;
     const poll = async () => {
       try {
@@ -118,8 +181,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         });
         const d = await r.json();
         if (cancelled) return;
-        if (d.ready) { setSetPrep('ready'); return; }
+        if (d.ready) { setSetPrep('ready'); setSetBuildProgress(null); return; }
         setSetPrep('building');
+        setSetBuildProgress(d.progress || null);
         timer = setTimeout(poll, 3000);
       } catch { if (!cancelled) setSetPrep('idle'); }
     };
@@ -128,16 +192,21 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [scanGame, scanSetCode]);
 
-  const fetchLocations = async () => {
-    try {
-      const response = await fetch('/api/locations');
-      if (response.ok) {
-        // We no longer use locations internally here, but keep fetch alive if needed by external logic.
-      }
-    } catch (err) {
-      console.error('Error fetching locations:', err);
+  // Detect manual-exposure support on the live track. Present on most Android
+  // Chrome back cameras; absent on iOS Safari and many desktop webcams (slider
+  // then stays hidden). Reads the current value so the slider starts in place.
+  useEffect(() => {
+    const track = stream?.getVideoTracks?.()[0];
+    if (!track || typeof track.getCapabilities !== 'function') { setExposureCaps(null); return; }
+    const ec = track.getCapabilities().exposureCompensation;
+    if (ec && typeof ec.min === 'number' && typeof ec.max === 'number') {
+      setExposureCaps({ min: ec.min, max: ec.max, step: ec.step || (ec.max - ec.min) / 100 || 0.1 });
+      const cur = track.getSettings?.().exposureCompensation;
+      setExposure(typeof cur === 'number' ? cur : 0);
+    } else {
+      setExposureCaps(null);
     }
-  };
+  }, [stream]);
 
   // Bind the camera stream to the video element when both are ready
   useEffect(() => {
@@ -172,16 +241,16 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   // Auto-capture scheduler: capture frame 3s after previous capture completes
   useEffect(() => {
     let timerId;
-    if (cameraActive && autoScan && !isDrawerOpen && !loading && scanMatches.length === 0 && !autoAddTargetCard) {
+    if (cameraActive && autoScan && !isDrawerOpen && !loading && scanMatches.length === 0 && !autoAddTargetCard && !dupConfirmCard) {
       timerId = setTimeout(() => {
         handleCapture();
-      }, 3000);
+      }, profile.cooldown);
     }
     return () => {
       if (timerId) clearTimeout(timerId);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraActive, autoScan, isDrawerOpen, loading, scanMatches, autoAddTargetCard]);
+  }, [cameraActive, autoScan, isDrawerOpen, loading, scanMatches, autoAddTargetCard, dupConfirmCard, scanDetail]);
 
   const updateAdvancedConstraints = (track, newAdvancedProps) => {
     try {
@@ -230,6 +299,14 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     }
   };
 
+  // Manual exposure override. exposureMode:'manual' is required before the
+  // compensation value takes effect on Android Chrome.
+  const changeExposure = (val) => {
+    setExposure(val);
+    const track = stream?.getVideoTracks?.()[0];
+    if (track) updateAdvancedConstraints(track, { exposureMode: 'manual', exposureCompensation: val });
+  };
+
   const startCamera = async () => {
     setHasCameraError(false);
     setScanMatches([]);
@@ -276,7 +353,11 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setVideoRatio(null);
   };
 
-  const autoAddCard = async (card) => {
+  const autoAddCard = async (card, qty = 1) => {
+    // Mark the dup guard BEFORE the await: a fast cooldown can fire the next
+    // capture before this POST resolves, and a match of the same card must hit
+    // the duplicate path instead of auto-adding a second time.
+    lastAddedIdRef.current = card.id;
     try {
       const autoPrinting = (card.rarity || '').toLowerCase().includes('holo') ? 'Holofoil' : 'Normal';
       const response = await fetch('/api/collection', {
@@ -284,7 +365,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           card_id: card.id,
-          quantity: 1,
+          quantity: qty,
           condition: 'Near Mint',
           printing: autoPrinting,
           language: 'English',
@@ -298,19 +379,18 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
       if (response.ok) {
         const data = await response.json();
+        const qtyLabel = qty > 1 ? `${qty}× ` : '';
         const placementLabel = data.placement?.label || null;
         if (placementLabel) {
-          showToast(`Added: ${card.name} → ${placementLabel}`);
+          showToast(`Added: ${qtyLabel}${card.name} → ${placementLabel}`);
         } else if (data.container_full) {
-          showToast(`Added: ${card.name} — container full, left Unsorted`);
+          showToast(`Added: ${qtyLabel}${card.name} — container full, left Unsorted`);
         } else {
-          showToast(`Auto-Added: ${card.name} (${card.set_name})`);
+          showToast(`Auto-Added: ${qtyLabel}${card.name} (${card.set_name})`);
         }
 
         // Append to recent scans history log
         setRecentScans(prev => [{ ...card, placementLabel }, ...prev].slice(0, 10));
-        setScanFlash('success');
-        setTimeout(() => setScanFlash(null), 1500);
 
         // Brief confetti blast for ultra-rares
         const rarity = (card.rarity || '').toLowerCase();
@@ -321,14 +401,12 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         onAddSuccess(); // Refresh stats
       } else {
         showToast(`Failed to auto-add ${card.name}`);
-        setScanFlash('error');
-        setTimeout(() => setScanFlash(null), 1500);
+        signal('error');
       }
     } catch (err) {
       console.error('Auto-add error:', err);
       showToast('Error auto-adding card.');
-      setScanFlash('error');
-      setTimeout(() => setScanFlash(null), 1500);
+      signal('error');
     }
   };
 
@@ -369,8 +447,8 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     return canvas;
   };
 
-  // Present search results the same way whether they came from image match or OCR:
-  // show the picker, and on a single result take the fast path (auto-add / quick-
+  // Present the image-match results: show the picker, and on a single result
+  // take the fast path (auto-add / quick-
   // add per mode). autoSingle lets the caller allow the fast path for a single MTG
   // result too — used when the image match is confident and the printing is
   // unambiguous (only one printing, or the set code narrowed it to one). Ambiguous
@@ -378,18 +456,43 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const applyMatches = async (matches, notFoundMsg, autoSingle = false) => {
     setScanMatches(matches);
     if (matches.length === 0) {
+      // Nothing in frame — the resolved-duplicate card has left, so clear the
+      // skip guard; re-presenting it later should prompt again, not skip forever.
+      resolvedDupIdRef.current = null;
       setScanStatus(notFoundMsg);
-      setScanFlash('error');
-      setTimeout(() => setScanFlash(null), 1500);
+      signal('error');
       return;
     }
     setScanStatus(`Found ${matches.length} matching card(s)!`);
-    setScanFlash('success');
-    setTimeout(() => setScanFlash(null), 1500);
     if (matches.length === 1 && (scanGame !== 'mtg' || autoSingle)) {
       if (autoScan) {
-        setAutoAddTargetCard(matches[0]);
-        setAutoAddCountdown(2);
+        const id = matches[0].id;
+        if (id === resolvedDupIdRef.current) {
+          // Same card we already handled, still sitting in frame — wait for a
+          // different card before doing anything.
+          setScanMatches([]);
+          setScanStatus('Same card still in view — swap in the next card.');
+          return;
+        }
+        if (id === lastAddedIdRef.current) {
+          // Repeat of the card just auto-added: could be a real second copy or
+          // just the same card lingering. Make the user decide.
+          setDupConfirmCard(matches[0]);
+          setDupQty(1);
+          setScanMatches([]);
+          return;
+        }
+        // A different card is now in frame — clear the skip guard so the old
+        // resolved-duplicate card is scannable again later.
+        resolvedDupIdRef.current = null;
+        // countdown 0 (Turbo): add immediately, no confirm-modal idle. Higher
+        // tiers show the countdown overlay so the user can cancel a mis-scan.
+        if (profile.countdown === 0) {
+          autoAddCard(matches[0]);
+        } else {
+          setAutoAddTargetCard(matches[0]);
+          setAutoAddCountdown(profile.countdown);
+        }
         setScanMatches([]);
       } else {
         stopCamera();
@@ -417,6 +520,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
     // 1. Capture and correctly orient the video frame onto a canvas
     const orientedCanvas = getOrientedVideoCanvas(video);
+    // Picture is now taken — fire the instant cue (click + vibrate + flash) so
+    // the user can move the card immediately, before the server lookup runs.
+    signal('capture');
 
     try {
       // Identify by image (server-side). Send the WHOLE oriented frame (downscaled)
@@ -428,7 +534,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           // Downscale the frame for upload; server auto-crops the card. Keep it
           // fairly high-res so a far/small card still has enough pixels to match.
           const up = document.createElement('canvas');
-          const s = Math.min(1, 1280 / orientedCanvas.width);
+          const s = Math.min(1, profile.uploadW / orientedCanvas.width);
           up.width = Math.round(orientedCanvas.width * s);
           up.height = Math.round(orientedCanvas.height * s);
           up.getContext('2d').drawImage(orientedCanvas, 0, 0, up.width, up.height);
@@ -438,7 +544,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
             const resp = await fetch('/api/scan-match', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ game: scanGame, image: imageData, set: scanSetCode }),
+              body: JSON.stringify({ game: scanGame, image: imageData, set: scanSetCode, recallK: profile.recallK, orb: profile.orb }),
             });
             if (scanId !== currentScanId.current) return;
             if (resp.ok) {
@@ -452,25 +558,27 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
               if (candidates && candidates.length > 0) {
                 if (confident) {
                   // Uses the DETECTED game (auto-detect may override the UI mode).
-                  const usedSet = matchGame === scanGame && scanSetCode;
-                  const buildParams = (withSet) => {
-                    const p = new URLSearchParams({ game: matchGame, prints: '1' });
-                    if (top.name) p.append('name', top.name);
-                    if (withSet) p.append('set', scanSetCode);
-                    return p;
-                  };
-                  let searchResponse = await fetch(`/api/search?${buildParams(usedSet).toString()}`);
+                  // Query the MATCHED card's exact set + number (top.set/top.number),
+                  // not just its name — otherwise search returns some other printing
+                  // of the same name instead of the card ORB actually identified.
+                  const exact = new URLSearchParams({ game: matchGame });
+                  if (top.name) exact.append('name', top.name);
+                  if (top.set) exact.append('set', top.set);
+                  if (top.number) exact.append('number', top.number);
+                  let searchResponse = await fetch(`/api/search?${exact.toString()}`);
                   if (scanId !== currentScanId.current) return;
                   let matches = searchResponse.ok ? await searchResponse.json() : [];
-                  // Set code didn't match this card (wrong box / card not in that
-                  // set) — retry across all printings so the user can still pick.
-                  if (usedSet && matches.length === 0) {
-                    searchResponse = await fetch(`/api/search?${buildParams(false).toString()}`);
+                  // Fallback: exact set/number isn't cached/known — offer all
+                  // printings by name so the user can still pick.
+                  if (matches.length === 0) {
+                    const byName = new URLSearchParams({ game: matchGame, prints: '1' });
+                    if (top.name) byName.append('name', top.name);
+                    searchResponse = await fetch(`/api/search?${byName.toString()}`);
                     if (scanId !== currentScanId.current) return;
                     matches = searchResponse.ok ? await searchResponse.json() : [];
                   }
-                  // Confident image match: a single result is unambiguous (one
-                  // printing, or set code narrowed it), so take the fast path.
+                  // Confident image match on an exact set+number is unambiguous, so
+                  // take the fast path (single result auto-adds).
                   if (matches.length) { await applyMatches(matches, '', true); return; }
                 }
 
@@ -504,8 +612,10 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       }
 
       setScanStatus('No confident match. Try again or search manually.');
-      setScanFlash('error');
-      setTimeout(() => setScanFlash(null), 1500);
+      // Frame no longer shows a recognizable card — clear the skip guard so the
+      // resolved-duplicate card isn't skipped forever once re-presented.
+      resolvedDupIdRef.current = null;
+      signal('error');
     } catch (err) {
       console.error('Scan match failed:', err);
       if (scanId === currentScanId.current) setScanStatus('Scan failed. Please search manually.');
@@ -672,7 +782,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
               >
                 {isTorchOn ? <Zap size={18} /> : <ZapOff size={18} />}
               </button>
-            
+
             {/* Outline Box Guides */}
             <div className="camera-overlay">
               <style>{`
@@ -684,6 +794,10 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   0%, 100% { border-color: rgba(255, 255, 255, 0.4); box-shadow: none; }
                   30%, 70% { border-color: var(--accent-red); box-shadow: 0 0 25px var(--accent-red-glow); }
                 }
+                @keyframes border-flash-capture {
+                  0%, 100% { border-color: rgba(255, 255, 255, 0.4); box-shadow: none; }
+                  50% { border-color: #fff; box-shadow: 0 0 30px rgba(255, 255, 255, 0.9); }
+                }
               `}</style>
               {(() => { const r = DEFAULT_RECT; return (
               <div
@@ -694,20 +808,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   top: `${r.y * 100}%`,
                   width: `${r.w * 100}%`,
                   height: `${r.h * 100}%`,
-                  animation: scanFlash === 'success' ? 'border-flash-success 1.5s ease-in-out' : scanFlash === 'error' ? 'border-flash-error 1.5s ease-in-out' : 'none'
+                  animation: scanFlash === 'capture' ? 'border-flash-capture 0.4s ease-in-out' : scanFlash === 'error' ? 'border-flash-error 1.5s ease-in-out' : 'none'
                 }}
               >
-                {/* Name Guide */}
-                <div className="scan-region-title" />
-
-                {/* Left Number Guide. MTG puts the set code + collector number in
-                    the bottom-left corner, so its box sits low-left and is taller
-                    to catch its two lines. */}
-                <div
-                  className="scan-region-number-left"
-                  style={cardLayout === 'mtg' ? { left: '4%', bottom: '4%', width: '45%', height: '11%' } : {}}
-                />
-
                 {loading && <div className="scan-line"></div>}
               </div>
               ); })()}
@@ -715,7 +818,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           </div>
 
           {/* Scanner controls: game + set (needed for matching) and auto-capture. */}
-          <div className="glass-panel" style={{ width: '100%', padding: '1rem', background: 'rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '0.25rem' }}>
+          <div className="glass-panel" style={{ width: '100%', padding: '1rem', background: 'rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '0.25rem', position: 'relative', zIndex: setSearchOpen ? 40 : undefined }}>
             <div className="sub-nav-tabs" style={{ marginBottom: 0 }}>
               {[['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([g, label]) => (
                 <button
@@ -734,15 +837,34 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 for accurate one-step scans. Free text also works as an
                 exact-id escape hatch for sets not yet cached. */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', position: 'relative' }}>
-              <p style={{ fontSize: '0.7rem', color: !scanSetCode ? 'var(--accent-yellow)' : setPrep === 'ready' ? 'var(--type-grass)' : 'var(--text-secondary)', margin: 0, textAlign: 'center', fontWeight: 600 }}>
-                {!scanSetCode
-                  ? 'Tip: search your box’s set for accurate one-step scans of that set.'
-                  : setPrep === 'building'
-                    ? `Preparing set ${scanSetCode}… (one-time, ~1 min). Scans work meanwhile.`
-                    : setPrep === 'ready'
-                      ? `Set ${scanSetCode} ready: exact matches, no set to pick.`
-                      : `Set ${scanSetCode}.`}
-              </p>
+              {(() => {
+                const bp = setBuildProgress;
+                const pct = bp && bp.total > 0 ? Math.round((bp.done / bp.total) * 100) : null;
+                let text;
+                if (!scanSetCode) {
+                  text = 'Highly recommended: pick your set below. Scans are far more accurate scoped to one set — without it we search every set and may misidentify the card.';
+                } else if (setPrep === 'building') {
+                  text = pct === null
+                    ? `Preparing set ${scanSetCode}… fetching card list (one-time). Scans work meanwhile.`
+                    : `Building set ${scanSetCode}: ${bp.done}/${bp.total} cards (${pct}%). One-time; scans work meanwhile.`;
+                } else if (setPrep === 'ready') {
+                  text = `Set ${scanSetCode} ready: exact matches, no set to pick.`;
+                } else {
+                  text = `Set ${scanSetCode}.`;
+                }
+                return (
+                  <>
+                    <p style={{ fontSize: '0.7rem', color: !scanSetCode ? 'var(--accent-yellow)' : setPrep === 'ready' ? 'var(--type-grass)' : 'var(--text-secondary)', margin: 0, textAlign: 'center', fontWeight: 600 }}>
+                      {text}
+                    </p>
+                    {setPrep === 'building' && pct !== null && (
+                      <div style={{ height: '4px', width: '100%', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, background: 'var(--accent-red)', transition: 'width 0.3s ease' }} />
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Set</label>
                 <input
@@ -750,7 +872,15 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   value={scanSetCode}
                   onChange={(e) => { setScanSetCode(e.target.value); setSetSearchOpen(true); }}
                   onFocus={() => setSetSearchOpen(true)}
-                  onBlur={() => setTimeout(() => setSetSearchOpen(false), 150)}
+                  onBlur={() => setTimeout(() => {
+                    setSetSearchOpen(false);
+                    // Snap typed name/code to the same canonical code the dropdown
+                    // produces, so "Foundations" and "FDN" don't build twice.
+                    const q = scanSetCode.trim().toLowerCase();
+                    if (!q) return;
+                    const m = setList.find(s => [s.id, s.ptcgo_code, s.name].some(v => (v || '').toLowerCase() === q));
+                    if (m) { const code = setScanCode(m); if (code && code !== scanSetCode) setScanSetCode(code); }
+                  }, 150)}
                   placeholder={scanGame === 'mtg' ? 'Search set name or code (e.g. Foundations, FDN)' : 'Search set name or id (e.g. Surging Sparks, sv8)'}
                   style={{ flex: 1, padding: '0.3rem 0.5rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.06)', border: `1px solid ${scanSetCode ? 'var(--type-grass)' : 'var(--border-glass)'}`, borderRadius: 'var(--radius-sm)', color: '#fff' }}
                 />
@@ -787,10 +917,69 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 {autoScan ? 'ON' : 'OFF'}
               </button>
             </div>
+
+            {/* Scan Detail: quick↔accurate tradeoff. Lower = faster upload,
+                shorter cooldown, shallower server match; higher = more accurate. */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Scan Detail</span>
+                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-red)' }}>{profile.label}</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max={SCAN_PROFILES.length - 1}
+                step="1"
+                value={scanDetail}
+                onChange={(e) => { const v = parseInt(e.target.value, 10); setScanDetail(v); localStorage.setItem('scan_detail', String(v)); }}
+                style={{ width: '100%', accentColor: 'var(--accent-red)' }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                <span>Quick &amp; less accurate</span>
+                <span>Slow &amp; accurate</span>
+              </div>
+            </div>
+
+            {/* Manual exposure: only rendered when the camera track supports it
+                (Android Chrome back cams). Auto-exposure stays default until you
+                move this. */}
+            {exposureCaps && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Exposure</span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.6rem', padding: '0.15rem 0.4rem' }}
+                    onClick={() => {
+                      const track = stream?.getVideoTracks?.()[0];
+                      if (track) updateAdvancedConstraints(track, { exposureMode: 'continuous', exposureCompensation: null });
+                      const cur = track?.getSettings?.().exposureCompensation;
+                      setExposure(typeof cur === 'number' ? cur : 0);
+                    }}
+                  >
+                    Auto
+                  </button>
+                </div>
+                <input
+                  type="range"
+                  min={exposureCaps.min}
+                  max={exposureCaps.max}
+                  step={exposureCaps.step}
+                  value={exposure}
+                  onChange={(e) => changeExposure(parseFloat(e.target.value))}
+                  style={{ width: '100%', accentColor: 'var(--accent-red)' }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                  <span>Darker</span>
+                  <span>Brighter</span>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* OCR Crop Results — only render when we actually have crop feeds,
-              so an empty dashed box doesn't eat vertical space on phone. */}
+          {/* Scan crop + candidate diagnostics — only render when we actually have
+              a crop/candidates, so an empty dashed box doesn't eat vertical space on phone. */}
           {cameraActive && (debugHashImg || debugCandidates.length > 0) && (
             <div className="glass-panel" style={{ width: '100%', padding: '0.75rem 1rem', background: 'rgba(0,0,0,0.3)', border: '1px dashed var(--border-glass-hover)', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.25rem' }}>
               {/* Hash-match diagnostics: what was cropped + the ranked candidates. */}
@@ -844,7 +1033,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         </div>
       )}
 
-      {/* OCR Scan Status Log */}
+      {/* Scan Status Log */}
       {scanStatus && (
         <div className="glass-panel" style={{ width: '100%', padding: '1rem', borderLeft: '3px solid var(--accent-red)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           {loading && <div className="spinner" style={{ width: '14px', height: '14px', margin: 0, borderWidth: '2px' }}></div>}
@@ -927,6 +1116,98 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   Cancel
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Duplicate-Scan Confirm Overlay: the just-added card was scanned again. */}
+      {dupConfirmCard && (
+        <div
+          className="modal-backdrop"
+          style={{
+            position: 'fixed',
+            top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.85)',
+            backdropFilter: 'blur(5px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1100,
+            padding: '1rem'
+          }}
+        >
+          <div className="glass-panel animate-fade-in" style={{ maxWidth: '420px', width: '100%', padding: '1.75rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', alignItems: 'center', textAlign: 'center', border: '1px solid var(--accent-yellow)' }}>
+            <div>
+              <span style={{ fontSize: '0.75rem', color: 'var(--accent-yellow)', textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 800 }}>Same card scanned again</span>
+              <h3 style={{ fontSize: '1.25rem', color: '#fff', margin: '0.25rem 0 0.5rem 0' }}>{dupConfirmCard.name}</h3>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: 0 }}>{dupConfirmCard.set_name} • #{dupConfirmCard.number}</p>
+            </div>
+
+            <img src={dupConfirmCard.image_url} alt={dupConfirmCard.name} style={{ width: '110px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '6px', boxShadow: 'var(--shadow-glow)' }} />
+
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0 }}>
+              Just added this card. Still holding it in front of the camera? If this is another physical copy, choose how many more to add. Otherwise discard it as a repeat scan.
+            </p>
+
+            {/* Quantity stepper: number of ADDITIONAL copies to add now. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setDupQty(q => Math.max(1, q - 1))}
+                style={{ width: '36px', padding: '0.35rem 0', fontSize: '1rem', fontWeight: 800 }}
+              >−</button>
+              <span style={{ minWidth: '2.5rem', fontSize: '1.4rem', fontWeight: 900, color: '#fff' }}>{dupQty}</span>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setDupQty(q => Math.min(99, q + 1))}
+                style={{ width: '36px', padding: '0.35rem 0', fontSize: '1rem', fontWeight: 800 }}
+              >+</button>
+            </div>
+
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  const card = dupConfirmCard;
+                  const qty = dupQty;
+                  // Mark handled so the same card lingering in frame won't re-prompt.
+                  resolvedDupIdRef.current = card.id;
+                  setDupConfirmCard(null);
+                  autoAddCard(card, qty);
+                }}
+                style={{ width: '100%', fontSize: '0.85rem', padding: '0.55rem 0' }}
+              >
+                Add {dupQty} more {dupQty === 1 ? 'copy' : 'copies'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  resolvedDupIdRef.current = dupConfirmCard.id;
+                  setDupConfirmCard(null);
+                  showToast('Discarded repeat scan — same card.');
+                }}
+                style={{ width: '100%', fontSize: '0.8rem', padding: '0.45rem 0' }}
+              >
+                Discard — same card, keep scanning
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  resolvedDupIdRef.current = dupConfirmCard.id;
+                  setDupConfirmCard(null);
+                  setAutoScan(false);
+                  showToast('Done — that was a second photo of the same card.');
+                }}
+                style={{ width: '100%', fontSize: '0.8rem', padding: '0.45rem 0' }}
+              >
+                Done — that was another photo of the same card
+              </button>
             </div>
           </div>
         </div>
@@ -1037,13 +1318,14 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 <RefreshCw size={14} />
                 <span>Rescan / Try Again</span>
               </button>
-              <button 
-                className="btn btn-secondary" 
+              <button
+                className="btn btn-secondary"
                 onClick={() => {
                   setScanMatches([]);
                   setScanStatus('');
+                  setAutoScan(false);
                   startCamera();
-                }} 
+                }}
                 style={{ flex: 1 }}
               >
                 Cancel
@@ -1137,54 +1419,11 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                   <div className="quick-add-section-title">Card Properties</div>
                   
-                  <div className="quick-add-fields-group">
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>Quantity</label>
-                      <input 
-                        type="number" 
-                        className="input-control" 
-                        min="1" 
-                        value={quantity}
-                        onChange={(e) => setQuantity(e.target.value)}
-                        required
-                      />
-                    </div>
-
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>Purchase Price ($)</label>
-                      <input 
-                        type="number" 
-                        step="0.01" 
-                        className="input-control" 
-                        value={purchasePrice}
-                        onChange={(e) => setPurchasePrice(e.target.value)}
-                        placeholder="0.00"
-                      />
-                    </div>
-
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>Condition</label>
-                      <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)}>
-                        {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </div>
-
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>Printing</label>
-                      <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)}>
-                        {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
-                      </select>
-                    </div>
-
-                    <div className="form-group quick-add-full-width" style={{ marginBottom: 0 }}>
-                      <label>Language</label>
-                      <select className="select-control" value={language} onChange={(e) => setLanguage(e.target.value)}>
-                        {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
-                      </select>
-                    </div>
-
-
-                  </div>
+                  <CardEntryFields
+                    variant="stacked"
+                    quantity={quantity} purchasePrice={purchasePrice} condition={condition} printing={printing} language={language}
+                    onQuantity={setQuantity} onPurchasePrice={setPurchasePrice} onCondition={setCondition} onPrinting={setPrinting} onLanguage={setLanguage}
+                  />
                 </div>
               </div>
 
