@@ -215,6 +215,9 @@ export default function CompartmentView({
   // Per-compartment filing rules editor (optional)
   onEditRules = null,
 
+  // Lock toggle (optional): a locked row/page is skipped by auto-filing.
+  onToggleLock = null,
+
   // Manual tap-to-place ("Arrange"). placementMode arms it; a picked card is
   // placed/swapped when a slot is tapped. onPlaceSlot(compartmentId, slot,
   // occupantEntryId|null); onPickCard(entryId).
@@ -361,6 +364,12 @@ export default function CompartmentView({
             {onEditRules && (
               <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title="Set which cards this page accepts" style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: '#fff' } : {}) }}>
                 {acceptsLabel}
+              </button>
+            )}
+
+            {onToggleLock && (
+              <button type="button" className="btn btn-secondary" onClick={onToggleLock} title={compartment.locked ? 'Locked — filing skips this page. Click to unlock.' : 'Lock so filing skips this page'} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem', ...(compartment.locked ? { borderColor: 'var(--accent-yellow)', color: 'var(--accent-yellow)' } : {}) }}>
+                {compartment.locked ? '🔒 Locked' : '🔓 Lock'}
               </button>
             )}
 
@@ -653,6 +662,12 @@ export default function CompartmentView({
             {onEditRules && (
               <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title="Set which cards this row accepts" style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: '#fff' } : {}) }}>
                 {acceptsLabel}
+              </button>
+            )}
+
+            {onToggleLock && (
+              <button type="button" className="btn btn-secondary" onClick={onToggleLock} title={compartment.locked ? 'Locked — filing skips this row. Click to unlock.' : 'Lock so filing skips this row'} style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem', ...(compartment.locked ? { borderColor: 'var(--accent-yellow)', color: 'var(--accent-yellow)' } : {}) }}>
+                {compartment.locked ? '🔒 Locked' : '🔓 Lock'}
               </button>
             )}
           </div>

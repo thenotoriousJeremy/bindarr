@@ -92,7 +92,7 @@ router.get('/locations/:id', async (req, res) => {
 
 router.put('/locations/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, type, sort_order, foil_sorting, rule_type, rule_config, game } = req.body;
+  const { name, type, sort_order, foil_sorting, rule_type, rule_config, game, locked } = req.body;
   if (rule_type !== undefined && !RULE_TYPES.includes(rule_type)) {
     return res.status(400).json({ error: 'Invalid rule_type' });
   }
@@ -127,9 +127,10 @@ router.put('/locations/:id', async (req, res) => {
         foil_sorting = COALESCE(?, foil_sorting),
         rule_type = COALESCE(?, rule_type),
         rule_config = COALESCE(?, rule_config),
-        game = COALESCE(?, game)
+        game = COALESCE(?, game),
+        locked = COALESCE(?, locked)
       WHERE id = ? AND user_id = ?
-    `, [name, type, sort_order, foil_sorting, rule_type, ruleConfigJson, game, id, req.user.id]);
+    `, [name, type, sort_order, foil_sorting, rule_type, ruleConfigJson, game, locked === undefined ? null : (locked ? 1 : 0), id, req.user.id]);
 
     let evicted = 0;
     if (rule_type !== undefined || rule_config !== undefined || game !== undefined) {
@@ -212,7 +213,7 @@ router.post('/locations/:id/compartments', async (req, res) => {
 
 router.put('/locations/:id/compartments/:comp_id', async (req, res) => {
   const { id, comp_id } = req.params;
-  const { label, capacity, rule_config, assignedFilters } = req.body;
+  const { label, capacity, rule_config, assignedFilters, locked } = req.body;
   try {
     const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) return res.status(404).json({ error: 'Location not found' });
@@ -231,6 +232,7 @@ router.put('/locations/:id/compartments/:comp_id', async (req, res) => {
     if (label !== undefined) { updates.push('label = ?'); params.push(label || null); }
     if (capacity !== undefined) { updates.push('capacity = ?'); params.push(Math.max(1, parseInt(capacity, 10) || 1)); }
     if (rule_config !== undefined) { updates.push('rule_config = ?'); params.push(ruleConfigJson); }
+    if (locked !== undefined) { updates.push('locked = ?'); params.push(locked ? 1 : 0); }
 
     if (updates.length > 0) {
       params.push(comp_id, id);

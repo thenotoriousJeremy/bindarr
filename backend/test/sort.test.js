@@ -149,6 +149,37 @@ async function main() {
     `A2: partly-filled row must offer the dense next slot (Pos 4 = 4000), got ${boxRec.position}`
   );
   console.log('PASS: recommendSlot uses a dense slot in a partly-filled row (A2)');
+
+  // LOCK: a locked compartment is skipped by filing (card spills to an unlocked
+  // one), and a locked location accepts nothing at all.
+  const lockBox = await db.run(
+    `INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ['Lock Test Box', 'Box', 'name-asc', 'normals_first', 'any', userId]
+  );
+  const lockBoxId = lockBox.lastID;
+  const rowA = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [lockBoxId, 1, 2]);
+  const rowB = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [lockBoxId, 2, 2]);
+  // Lock row A; a card that would normally land in row 1 must skip to row B.
+  await db.run(`UPDATE compartments SET locked = 1 WHERE id = ?`, [rowA.lastID]);
+  const lockLoc = await db.get(`SELECT * FROM locations WHERE id = ?`, [lockBoxId]);
+  const lockedCompRec = await recommendSlot(db, lockLoc, {
+    name: 'Aaa', set_name: 'Set One', number: '1', types: [], printing: 'Normal', price_trend: 1
+  });
+  assert(lockedCompRec, 'expected a recommendation into the unlocked row, got null');
+  assert.strictEqual(
+    lockedCompRec.compartment_id, rowB.lastID,
+    `LOCK: filing must skip a locked compartment (got ${lockedCompRec.compartment_id}, expected unlocked ${rowB.lastID})`
+  );
+  console.log('PASS: recommendSlot skips a locked compartment');
+
+  // Now lock the whole container: it must accept nothing.
+  await db.run(`UPDATE locations SET locked = 1 WHERE id = ?`, [lockBoxId]);
+  const lockedLoc = await db.get(`SELECT * FROM locations WHERE id = ?`, [lockBoxId]);
+  const lockedLocRec = await recommendSlot(db, lockedLoc, {
+    name: 'Aaa', set_name: 'Set One', number: '1', types: [], printing: 'Normal', price_trend: 1
+  });
+  assert.strictEqual(lockedLocRec, null, 'LOCK: a locked container must recommend nothing (got a slot)');
+  console.log('PASS: recommendSlot returns null for a locked container');
 }
 
 main()

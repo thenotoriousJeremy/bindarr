@@ -303,7 +303,11 @@ const SORT_SCHEME_LABELS = {
 
 async function recommendSlot(database, location, cardMetadata, overrideCompartments = null, mockCards = []) {
   const dbClient = database || db;
-  const compartments = overrideCompartments || await loadCompartments(dbClient, location.id, location.user_id);
+  // A locked container accepts no auto-filed cards at all.
+  if (location.locked) return null;
+  // Drop locked compartments so filing never targets them; their existing cards
+  // stay put and manual moves still work.
+  const compartments = (overrideCompartments || await loadCompartments(dbClient, location.id, location.user_id)).filter(c => !c.locked);
   if (compartments.length === 0) return null;
 
   if (!locationAcceptsCard(location, cardMetadata)) {
@@ -344,7 +348,7 @@ async function recommendSlot(database, location, cardMetadata, overrideCompartme
 
   if (allCompartmentsFull) {
     const otherLocations = await dbClient.all(
-      `SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, game, user_id FROM locations WHERE user_id = ? AND id != ? ORDER BY id ASC`,
+      `SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, game, user_id FROM locations WHERE user_id = ? AND id != ? AND locked = 0 ORDER BY id ASC`,
       [location.user_id, location.id]
     );
     for (const otherLoc of otherLocations) {

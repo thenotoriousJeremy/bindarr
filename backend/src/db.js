@@ -344,6 +344,18 @@ async function initDb() {
     await run(`ALTER TABLE deck_cards ADD COLUMN checked_out INTEGER DEFAULT 0`);
   }
 
+  // Lock flags: a locked compartment/location is skipped by auto-filing
+  // (recommendSlot) so it never receives new cards; existing cards stay put and
+  // manual moves still work.
+  const compartmentsCols = await all(`PRAGMA table_info(compartments)`);
+  if (!compartmentsCols.some(c => c.name === 'locked')) {
+    await run(`ALTER TABLE compartments ADD COLUMN locked INTEGER NOT NULL DEFAULT 0`);
+  }
+  const locationsLockCols = await all(`PRAGMA table_info(locations)`);
+  if (!locationsLockCols.some(c => c.name === 'locked')) {
+    await run(`ALTER TABLE locations ADD COLUMN locked INTEGER NOT NULL DEFAULT 0`);
+  }
+
   // --- PERFORMANCE INDEXES ---
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_comp_user_qty ON collection(compartment_id, user_id, quantity)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_loc_pos ON collection(location_id, position)`);

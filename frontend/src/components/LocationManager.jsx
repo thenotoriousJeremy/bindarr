@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Trash2, X, MoreVertical, Settings, LayoutList, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, X, MoreVertical, Settings, LayoutList, RefreshCw, Lock, Unlock } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder } from '../utils/cardRarity';
@@ -366,6 +366,32 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       if (res.ok) { showToast('Compartment removed.'); await Promise.all([fetchCompartments(activeLocationId), fetchLocations()]); }
       else showToast(data.error || 'Failed to remove compartment.');
     } catch (err) { console.error(err); showToast('Error removing compartment.'); }
+  };
+
+  // Lock/unlock a row/page: filing skips locked ones (existing cards stay).
+  // Uses the working /locations/:id/compartments/:comp_id route.
+  const handleToggleCompartmentLock = async (compartmentId, locked) => {
+    if (!activeLocationId) return;
+    try {
+      const res = await fetch(`/api/locations/${activeLocationId}/compartments/${compartmentId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locked })
+      });
+      if (res.ok) { showToast(locked ? 'Row locked — filing will skip it.' : 'Row unlocked.'); await fetchCompartments(activeLocationId); }
+      else showToast('Failed to update lock.');
+    } catch (err) { console.error(err); showToast('Error updating lock.'); }
+  };
+
+  // Lock/unlock a whole container: filing (and overflow) skip it entirely.
+  const handleToggleContainerLock = async () => {
+    if (!selectedLoc) return;
+    const next = !selectedLoc.locked;
+    try {
+      const res = await fetch(`/api/locations/${selectedLoc.id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locked: next })
+      });
+      if (res.ok) { showToast(next ? `"${selectedLoc.name}" locked — filing will skip it.` : `"${selectedLoc.name}" unlocked.`); await fetchLocations(); }
+      else showToast('Failed to update lock.');
+    } catch (err) { console.error(err); showToast('Error updating lock.'); }
   };
 
   const handleRenameCompartment = async (compartmentId, label) => {
@@ -797,6 +823,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   <button className="kebab-item" onClick={() => { setShowKebabMenu(false); startResort(); }} disabled={(selectedLoc.total_cards || 0) === 0}>
                     <RefreshCw size={14} /> Re-sort Container
                   </button>
+                  <button className="kebab-item" onClick={() => { setShowKebabMenu(false); handleToggleContainerLock(); }} title="A locked container is skipped by Sort & File / Auto-File">
+                    {selectedLoc.locked ? <Unlock size={14} /> : <Lock size={14} />} {selectedLoc.locked ? 'Unlock Container' : 'Lock Container'}
+                  </button>
                   <button className="kebab-item" onClick={() => {
                     setShowKebabMenu(false);
                     let sDraft = [];
@@ -966,6 +995,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   onRename: (label) => handleRenameCompartment(c.id, label),
                   onSetCapacity: (cap) => handleSetCapacity(c.id, cap),
                   onRemove: () => handleRemoveCompartment(c.id),
+                  onToggleLock: () => handleToggleCompartmentLock(c.id, !c.locked),
                   onCardClick: setInspectorCard,
                   onDeleteCard: handleDeleteCard,
                   onMoveCard: handleMoveCard,
@@ -1095,6 +1125,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       onRename={(label) => handleRenameCompartment(activeComp.id, label)}
                       onSetCapacity={(cap) => handleSetCapacity(activeComp.id, cap)}
                       onRemove={() => handleRemoveCompartment(activeComp.id)}
+                      onToggleLock={() => handleToggleCompartmentLock(activeComp.id, !activeComp.locked)}
                       onDeleteCard={handleDeleteCard}
                       onMoveCard={handleMoveCard}
                       recommendedSpot={currentRecSpot && currentRecSpot.compartment_id === activeComp.id ? {
