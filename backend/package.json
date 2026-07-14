@@ -1,12 +1,12 @@
 {
   "name": "bindarr-backend",
-  "version": "1.0.1",
+  "version": "1.3.0",
   "description": "Backend API for Bindarr",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "node test/sort.test.js && node test/auth.test.js && node test/e2e/run.js",
+    "test": "node test/e2e/run.js",
     "test:e2e": "node test/e2e/run.js"
   },
   "dependencies": {

@@ -16,15 +16,7 @@ const dbConnection = new sqlite3.Database(dbPath, (err) => {
     console.error('Error opening database:', err.message);
   } else {
     console.log('Database connection established successfully.');
-    // sqlite3 does not enforce FOREIGN KEY constraints unless explicitly enabled per-connection.
     dbConnection.run('PRAGMA foreign_keys = ON');
-    // Default rollback-journal mode locks the whole file per writer and fails
-    // instantly (SQLITE_BUSY) on any concurrent write instead of waiting. This
-    // app has frequent background writers (price history recording, the
-    // startup/weekly price updater, session purging) that otherwise collide
-    // with user-triggered writes like adding a card or seeding test data.
-    // WAL lets readers and writers coexist; busy_timeout makes writers retry
-    // for a few seconds instead of failing immediately.
     dbConnection.run('PRAGMA journal_mode = WAL');
     dbConnection.run('PRAGMA busy_timeout = 5000');
   }
@@ -58,10 +50,22 @@ function all(sql, params = []) {
   });
 }
 
-// Password hashing utility. The iteration count is stored alongside the hash
-// (rather than hardcoded at verify-time) so it can be raised in the future
-// without invalidating passwords hashed under a lower count.
+async function withTransaction(dbOrFn, asyncFn) {
+  const fn = typeof dbOrFn === 'function' ? dbOrFn : asyncFn;
+  const tx = { run, get, all, withTransaction };
+  await run('BEGIN IMMEDIATE TRANSACTION');
+  try {
+    const result = await fn(tx);
+    await run('COMMIT');
+    return result;
+  } catch (error) {
+    await run('ROLLBACK');
+    throw error;
+  }
+}
+
 const PBKDF2_ITERATIONS = 210000;
+
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, 64, 'sha512').toString('hex');
@@ -70,12 +74,6 @@ function hashPassword(password) {
 
 // Initialize tables
 async function initDb() {
-  // One-time reset for the storage-system redesign: sub_location_1/2 strings
-  // and location-wide shape columns (max_rows, page_style, etc.) are being
-  // replaced by real compartments + compartment_set_assignments tables. No
-  // real user collections exist on this schema version yet (dev/seed data
-  // only), so this drops and lets the statements below recreate clean rather
-  // than carrying forward a second, parallel migration path.
   const existingCollectionCols = await all(`PRAGMA table_info(collection)`).catch(() => []);
   if (existingCollectionCols.some(c => c.name === 'sub_location_1')) {
     console.log('Resetting locations/collection tables for the new compartment-based storage schema...');
@@ -108,9 +106,6 @@ async function initDb() {
     )
   `);
 
-  // Single-row instance-wide settings (currently just the public base URL
-  // used for collection share links behind a reverse proxy). id is pinned
-  // to 1 since there's only ever one row.
   await run(`
     CREATE TABLE IF NOT EXISTS app_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -119,9 +114,6 @@ async function initDb() {
   `);
   await run(`INSERT OR IGNORE INTO app_settings (id, public_base_url) VALUES (1, '')`);
 
-  // Create locations table. Physical shape (how many pages/rows, their
-  // capacity, which sets they hold) lives entirely in the compartments table
-  // below — a location is just an identity + a sort scheme, not a shape.
   await run(`
     CREATE TABLE IF NOT EXISTS locations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -135,11 +127,6 @@ async function initDb() {
     )
   `);
 
-  // A compartment is one physical unit a card can be placed in: a binder page,
-  // a box row, or (for single-compartment containers like a Deck Box) the
-  // container's whole interior. Real capacity and set assignment live here
-  // instead of being inferred from location-wide columns or parsed out of a
-  // free-text sub_location string.
   await run(`
     CREATE TABLE IF NOT EXISTS compartments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,6 +134,7 @@ async function initDb() {
       idx INTEGER NOT NULL,
       label TEXT,
       capacity INTEGER NOT NULL DEFAULT 40,
+      rule_config TEXT,
       UNIQUE(location_id, idx)
     )
   `);
@@ -159,7 +147,6 @@ async function initDb() {
     )
   `);
 
-  // Create sets table
   await run(`
     CREATE TABLE IF NOT EXISTS sets (
       id TEXT PRIMARY KEY,
@@ -170,18 +157,18 @@ async function initDb() {
       release_date TEXT,
       ptcgo_code TEXT,
       symbol_url TEXT,
-      logo_url TEXT
+      logo_url TEXT,
+      game TEXT DEFAULT 'pokemon'
     )
   `);
 
-  // Create card metadata cache
   await run(`
     CREATE TABLE IF NOT EXISTS card_cache (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       supertype TEXT,
-      subtypes TEXT,      -- Store JSON string
-      types TEXT,         -- Store JSON string
+      subtypes TEXT,
+      types TEXT,
       rarity TEXT,
       set_id TEXT,
       set_name TEXT,
@@ -191,13 +178,16 @@ async function initDb() {
       price_normal REAL,
       price_holofoil REAL,
       price_reverse_holofoil REAL,
+      price_avg1 REAL,
+      price_avg7 REAL,
+      price_avg30 REAL,
       cmc REAL,
-      color_identity TEXT, -- Store JSON string
+      color_identity TEXT,
+      game TEXT DEFAULT 'pokemon',
       last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
-  // Create collection table
   await run(`
     CREATE TABLE IF NOT EXISTS collection (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -209,6 +199,11 @@ async function initDb() {
       purchase_price REAL,
       location_id INTEGER,
       compartment_id INTEGER,
+      position REAL DEFAULT 0,
+      favorite INTEGER DEFAULT 0,
+      is_trade INTEGER DEFAULT 0,
+      list_type TEXT DEFAULT 'collection',
+      game TEXT DEFAULT 'pokemon',
       added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(location_id) REFERENCES locations(id) ON DELETE SET NULL,
       FOREIGN KEY(compartment_id) REFERENCES compartments(id) ON DELETE SET NULL,
@@ -216,7 +211,56 @@ async function initDb() {
     )
   `);
 
-  // Create price_history table
+  await run(`
+    CREATE TABLE IF NOT EXISTS tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      color TEXT DEFAULT '#3B82F6',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id, name)
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS collection_tags (
+      collection_id INTEGER NOT NULL,
+      tag_id INTEGER NOT NULL,
+      PRIMARY KEY (collection_id, tag_id),
+      FOREIGN KEY (collection_id) REFERENCES collection(id) ON DELETE CASCADE,
+      FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      action_type TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER,
+      before_state TEXT,
+      after_state TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS saved_filter_presets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      filter_config TEXT NOT NULL,
+      sort_config TEXT NOT NULL,
+      is_default INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id, name)
+    )
+  `);
+
   await run(`
     CREATE TABLE IF NOT EXISTS price_history (
       card_id TEXT NOT NULL,
@@ -226,207 +270,83 @@ async function initDb() {
     )
   `);
 
-  // Create decks table
   await run(`
     CREATE TABLE IF NOT EXISTS decks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
       name TEXT NOT NULL,
       description TEXT,
+      checked_out INTEGER DEFAULT 0,
+      checked_out_at DATETIME,
+      game TEXT DEFAULT 'pokemon',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
 
-  // Create deck_cards table
   await run(`
     CREATE TABLE IF NOT EXISTS deck_cards (
       deck_id INTEGER NOT NULL,
       card_id TEXT NOT NULL,
       quantity INTEGER DEFAULT 1,
+      checked_out INTEGER DEFAULT 0,
       PRIMARY KEY(deck_id, card_id),
       FOREIGN KEY(deck_id) REFERENCES decks(id) ON DELETE CASCADE
     )
   `);
 
   // --- MIGRATIONS ---
-  // 1. Add user_id to collection table if missing
   const collectionCols = await all(`PRAGMA table_info(collection)`);
   if (!collectionCols.some(c => c.name === 'user_id')) {
-    console.log('Adding user_id column to collection table...');
     await run(`ALTER TABLE collection ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`);
   }
-
-  // Add is_trade to collection table if missing
   if (!collectionCols.some(c => c.name === 'is_trade')) {
-    console.log('Adding is_trade column to collection table...');
     await run(`ALTER TABLE collection ADD COLUMN is_trade INTEGER DEFAULT 0`);
   }
-
-  // Add favorite (starred) flag to collection table if missing. Per-copy
-  // boolean like is_trade; used as a sort key (favorites to front) and a view
-  // filter.
   if (!collectionCols.some(c => c.name === 'favorite')) {
-    console.log('Adding favorite column to collection table...');
     await run(`ALTER TABLE collection ADD COLUMN favorite INTEGER DEFAULT 0`);
   }
-
-  // Add list_type to collection table if missing
   if (!collectionCols.some(c => c.name === 'list_type')) {
-    console.log('Adding list_type column to collection table...');
     await run(`ALTER TABLE collection ADD COLUMN list_type TEXT DEFAULT 'collection'`);
   }
-
-  // Add game to collection table if missing (multi-game support: 'pokemon' | 'mtg')
+  if (!collectionCols.some(c => c.name === 'compartment_id')) {
+    await run(`ALTER TABLE collection ADD COLUMN compartment_id INTEGER REFERENCES compartments(id) ON DELETE SET NULL`);
+  }
+  if (!collectionCols.some(c => c.name === 'position')) {
+    await run(`ALTER TABLE collection ADD COLUMN position REAL DEFAULT 0`);
+  }
   if (!collectionCols.some(c => c.name === 'game')) {
-    console.log('Adding game column to collection table...');
     await run(`ALTER TABLE collection ADD COLUMN game TEXT DEFAULT 'pokemon'`);
   }
 
-  // 2. Add user_id to locations table if missing
   const locationsCols = await all(`PRAGMA table_info(locations)`);
   if (!locationsCols.some(c => c.name === 'user_id')) {
-    console.log('Adding user_id column to locations table...');
     await run(`ALTER TABLE locations ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`);
   }
   if (!locationsCols.some(c => c.name === 'sort_order')) {
-    console.log('Adding sort_order column to locations table...');
     await run(`ALTER TABLE locations ADD COLUMN sort_order TEXT DEFAULT '[{"by":"name","dir":"asc"}]'`);
   }
   if (!locationsCols.some(c => c.name === 'foil_sorting')) {
-    console.log('Adding foil_sorting column to locations table...');
     await run(`ALTER TABLE locations ADD COLUMN foil_sorting TEXT DEFAULT 'normals_first'`);
   }
-  if (!locationsCols.some(c => c.name === 'rule_type')) {
-    console.log('Adding rule_type column to locations table...');
-    await run(`ALTER TABLE locations ADD COLUMN rule_type TEXT DEFAULT 'any'`);
-  }
-  if (!locationsCols.some(c => c.name === 'rule_config')) {
-    console.log('Adding rule_config column to locations table...');
-    await run(`ALTER TABLE locations ADD COLUMN rule_config TEXT`);
-  }
-  // Restrict a container to one game's cards. 'any' accepts both; 'pokemon' /
-  // 'mtg' reject the other game during filing (keeps mixed collections apart).
-  if (!locationsCols.some(c => c.name === 'game')) {
-    console.log('Adding game column to locations table...');
-    await run(`ALTER TABLE locations ADD COLUMN game TEXT DEFAULT 'any'`);
-  }
 
-  // Add position column to collection table if missing (ordering within a
-  // compartment — fractional so inserts between two cards don't need to
-  // renumber everything, see rebalanceCompartmentPositions).
-  if (!collectionCols.some(c => c.name === 'position')) {
-    console.log('Adding position column to collection table...');
-    await run(`ALTER TABLE collection ADD COLUMN position REAL DEFAULT 0`);
-  }
-  if (!collectionCols.some(c => c.name === 'compartment_id')) {
-    console.log('Adding compartment_id column to collection table...');
-    await run(`ALTER TABLE collection ADD COLUMN compartment_id INTEGER REFERENCES compartments(id) ON DELETE SET NULL`);
-  }
-
-  // Per-compartment filing rules (same compound {rules:[...]} shape as
-  // locations.rule_config). Lets a single row/page accept only cards matching
-  // its own include/exclude rules, independent of the container-level rule.
-  const compartmentsCols = await all(`PRAGMA table_info(compartments)`);
-  if (!compartmentsCols.some(c => c.name === 'rule_config')) {
-    console.log('Adding rule_config column to compartments table...');
-    await run(`ALTER TABLE compartments ADD COLUMN rule_config TEXT`);
-  }
-
-  // 3. Remove UNIQUE constraint on locations name per user (optional, but let's make sure it's not unique across users)
-  // SQLite doesn't easily support dropping constraints, but we can manage name checking in routes.
-
-  // 4. Add tcg_api_key column to users table if missing
   const usersCols = await all(`PRAGMA table_info(users)`);
   if (!usersCols.some(c => c.name === 'tcg_api_key')) {
-    console.log('Adding tcg_api_key column to users table...');
     await run(`ALTER TABLE users ADD COLUMN tcg_api_key TEXT DEFAULT ''`);
   }
 
-  // 5. Add price_normal, price_holofoil, price_reverse_holofoil columns to card_cache table if missing
-  const cardCacheCols = await all(`PRAGMA table_info(card_cache)`);
-  if (!cardCacheCols.some(c => c.name === 'price_normal')) {
-    console.log('Adding price_normal column to card_cache table...');
-    await run(`ALTER TABLE card_cache ADD COLUMN price_normal REAL`);
-  }
-  if (!cardCacheCols.some(c => c.name === 'price_holofoil')) {
-    console.log('Adding price_holofoil column to card_cache table...');
-    await run(`ALTER TABLE card_cache ADD COLUMN price_holofoil REAL`);
-  }
-  if (!cardCacheCols.some(c => c.name === 'price_reverse_holofoil')) {
-    console.log('Adding price_reverse_holofoil column to card_cache table...');
-    await run(`ALTER TABLE card_cache ADD COLUMN price_reverse_holofoil REAL`);
-  }
-  // Cardmarket's real 1-day/7-day/30-day rolling averages — the only genuine
-  // historical price data the API exposes (nothing older is available from
-  // any source). avg1 is kept alongside avg7/avg30 so "now vs. then" trend
-  // comparisons stay within the same marketplace instead of comparing
-  // against price_trend, which prioritizes TCGPlayer — a different
-  // marketplace with a structurally different price than Cardmarket's.
-  if (!cardCacheCols.some(c => c.name === 'price_avg1')) {
-    console.log('Adding price_avg1 column to card_cache table...');
-    await run(`ALTER TABLE card_cache ADD COLUMN price_avg1 REAL`);
-  }
-  if (!cardCacheCols.some(c => c.name === 'price_avg7')) {
-    console.log('Adding price_avg7 column to card_cache table...');
-    await run(`ALTER TABLE card_cache ADD COLUMN price_avg7 REAL`);
-  }
-  if (!cardCacheCols.some(c => c.name === 'price_avg30')) {
-    console.log('Adding price_avg30 column to card_cache table...');
-    await run(`ALTER TABLE card_cache ADD COLUMN price_avg30 REAL`);
-  }
-  // Game tag so a single card_cache holds both Pokémon (tcgApi) and MTG
-  // (scryfallApi) cards. Search filters on it; collections derive their game
-  // from the cached card. Existing rows default to 'pokemon'.
-  if (!cardCacheCols.some(c => c.name === 'game')) {
-    console.log('Adding game column to card_cache table...');
-    await run(`ALTER TABLE card_cache ADD COLUMN game TEXT DEFAULT 'pokemon'`);
+  const deckCardsCols = await all(`PRAGMA table_info(deck_cards)`);
+  if (!deckCardsCols.some(c => c.name === 'checked_out')) {
+    await run(`ALTER TABLE deck_cards ADD COLUMN checked_out INTEGER DEFAULT 0`);
   }
 
-  // Support MTG-specific sorting and filtering
-  if (!cardCacheCols.some(c => c.name === 'cmc')) {
-    console.log('Adding cmc column to card_cache table...');
-    await run(`ALTER TABLE card_cache ADD COLUMN cmc REAL`);
-  }
-  if (!cardCacheCols.some(c => c.name === 'color_identity')) {
-    console.log('Adding color_identity column to card_cache table...');
-    await run(`ALTER TABLE card_cache ADD COLUMN color_identity TEXT`);
-  }
-
-  // Game tag on cached sets so Pokémon (pokemontcg.io) and MTG (Scryfall) sets
-  // coexist; drives chronological set sorting and the rule-builder set picker.
-  const setsCols = await all(`PRAGMA table_info(sets)`);
-  if (!setsCols.some(c => c.name === 'game')) {
-    console.log('Adding game column to sets table...');
-    await run(`ALTER TABLE sets ADD COLUMN game TEXT DEFAULT 'pokemon'`);
-  }
-
-  // 6. Add checked_out columns to decks table if missing
-  const decksCols = await all(`PRAGMA table_info(decks)`);
-  if (!decksCols.some(c => c.name === 'checked_out')) {
-    console.log('Adding checked_out column to decks table...');
-    await run(`ALTER TABLE decks ADD COLUMN checked_out INTEGER DEFAULT 0`);
-  }
-  if (!decksCols.some(c => c.name === 'checked_out_at')) {
-    console.log('Adding checked_out_at column to decks table...');
-    await run(`ALTER TABLE decks ADD COLUMN checked_out_at DATETIME`);
-  }
-  // Which game a deck is for; drives the deck's card-search default. Existing
-  // decks default to pokemon.
-  if (!decksCols.some(c => c.name === 'game')) {
-    console.log('Adding game column to decks table...');
-    await run(`ALTER TABLE decks ADD COLUMN game TEXT DEFAULT 'pokemon'`);
-  }
-
-  // 7. One-time repair: the dev-only admin seed route used to build image_url
-  // with a typo'd "_hier.png" suffix instead of the real pokemontcg.io CDN
-  // path ("<number>.png"), so every seeded card showed a broken image. Fix
-  // any rows still carrying that bad suffix; they'll re-fetch correctly from
-  // the API on next lookup if the fix below doesn't already cover it.
-  const brokenSeedImages = await run(`UPDATE card_cache SET image_url = REPLACE(image_url, '_hier.png', '.png') WHERE image_url LIKE '%_hier.png'`);
-  if (brokenSeedImages.changes > 0) {
-    console.log(`Repaired ${brokenSeedImages.changes} card_cache row(s) with broken seed image URLs.`);
-  }
+  // --- PERFORMANCE INDEXES ---
+  await run(`CREATE INDEX IF NOT EXISTS idx_collection_comp_user_qty ON collection(compartment_id, user_id, quantity)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_collection_loc_pos ON collection(location_id, position)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_card_cache_set_num ON card_cache(set_id, number)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_deck_cards_checkout ON deck_cards(deck_id, checked_out)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_collection_tags_tag_id ON collection_tags(tag_id)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_audit_logs_user_date ON audit_logs(user_id, created_at DESC)`);
 
   // --- SEED DATA & MIGRATION TO DEFAULT ADMIN ---
   const userCount = await get(`SELECT COUNT(*) as count FROM users`);
@@ -453,36 +373,26 @@ async function initDb() {
     }
   }
 
-  // Assign existing orphan rows (with NULL user_id) to default admin
   if (adminId) {
-    const collectionMigrated = await run(`UPDATE collection SET user_id = ? WHERE user_id IS NULL`, [adminId]);
-    const locationsMigrated = await run(`UPDATE locations SET user_id = ? WHERE user_id IS NULL`, [adminId]);
-    if (collectionMigrated.changes > 0 || locationsMigrated.changes > 0) {
-      console.log(`Migrated ${collectionMigrated.changes} collection items and ${locationsMigrated.changes} locations to admin user.`);
-    }
+    await run(`UPDATE collection SET user_id = ? WHERE user_id IS NULL`, [adminId]);
+    await run(`UPDATE locations SET user_id = ? WHERE user_id IS NULL`, [adminId]);
   }
 
-  // Insert default locations if locations table is empty
   const locCount = await get(`SELECT COUNT(*) as count FROM locations`);
   if (locCount.count === 0 && adminId) {
     console.log('Populating default locations for admin user...');
     const binder = await run(`INSERT INTO locations (name, type, user_id) VALUES (?, ?, ?)`, [
       'Main Binder', 'Binder', adminId
     ]);
-    await createCompartments(binder.lastID, 10, 9); // 10 pages, 9 pockets each (3x3)
+    await createCompartments(binder.lastID, 10, 9);
 
     const box = await run(`INSERT INTO locations (name, type, user_id) VALUES (?, ?, ?)`, [
       'Bulk Storage Box 1', 'Box', adminId
     ]);
-    await createCompartments(box.lastID, 2, 100); // 2 rows, 100 cards each
+    await createCompartments(box.lastID, 2, 100);
   }
 }
 
-// Bulk-creates N compartments for a location (e.g. binder pages or box rows),
-// each with the given capacity. Used at location creation and here for
-// default seed data — the single place compartment numbering/labels default
-// from, so a page/row's implicit label ("Page 3", "Row 2") always agrees
-// between however the location was created.
 async function createCompartments(locationId, count, capacity) {
   for (let i = 1; i <= count; i++) {
     await run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [locationId, i, capacity]);
@@ -494,8 +404,8 @@ module.exports = {
   run,
   get,
   all,
+  withTransaction,
   initDb,
   createCompartments,
-  hashPassword // Export for server.js usage
+  hashPassword
 };
-

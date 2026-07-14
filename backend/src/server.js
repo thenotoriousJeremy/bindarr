@@ -18,6 +18,9 @@ const importExportRoutes = require('./routes/importExport');
 const setsRoutes = require('./routes/sets');
 const decksRoutes = require('./routes/decks');
 const settingsRoutes = require('./routes/settings');
+const tagsRoutes = require('./routes/tags');
+const { getAuditLogs, revertAuditEvent } = require('./utils/auditLogger');
+
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -169,6 +172,9 @@ app.use('/api', collectionRoutes);
 app.use('/api', storageRoutes);
 app.use('/api', statsRoutes);
 app.use('/api', importExportRoutes);
+app.use('/api', tagsRoutes);
+app.get('/api/audit-logs', getAuditLogs);
+app.post('/api/audit-logs/:id/revert', revertAuditEvent);
 app.use('/api/sets', setsRoutes);
 app.use('/api/decks', decksRoutes);
 app.use('/api/settings', settingsRoutes);
