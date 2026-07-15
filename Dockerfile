@@ -11,6 +11,8 @@ RUN npm ci
 
 # Copy frontend source files
 COPY frontend/ ./
+# Shared JSON tables imported via ../../../shared/*.json (resolves to /app/shared)
+COPY shared/ /app/shared/
 # Build production bundles
 RUN npm run build
 
@@ -39,6 +41,10 @@ RUN npm ci --omit=dev
 
 # Copy backend source files
 COPY backend/src/ ./src/
+
+# Shared JSON tables required at runtime by backend/src/utils/compartmentSort.js
+# via ../../../shared/*.json (resolves to /app/shared)
+COPY shared/ /app/shared/
 
 # Copy compiled frontend assets from Stage 1 to the location server.js expects
 # (../../frontend/dist relative to backend/src, i.e. /app/frontend/dist)
