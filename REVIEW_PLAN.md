@@ -58,7 +58,7 @@ This document defines the architectural review, bug fix plan, performance refact
 |---|---|---|---|
 | `backend/src/db.js` | SQLite Schema & Migrations | `initDb`, `run`, `get`, `all` | Data access layer, table DDL, WAL & FK setup |
 | `backend/src/routes/collection.js` | Collection Management API | `GET /`, `POST /`, `PUT /:id`, `POST /bulk` | CRUD actions, filtering, bulk operations |
-| `backend/src/routes/storage.js` | Storage & Location Management API | `GET /locations`, `POST /locations/:id/resort`, `POST /auto-assign-categories` | Container lifecycle, capacity maintenance, filing |
+| `backend/src/routes/storage.js` | Storage & Location Management API | `GET /locations`, `POST /locations/:id/resort` | Container lifecycle, capacity maintenance, filing |
 | `backend/src/utils/collectionHelpers.js` | Allocation & Pricing Business Logic | `resolveCompartmentAndPosition`, `checkedOutAllocation`, `resolveCardPrice` | Physical slot resolution & deck checkout calculations |
 | `backend/src/utils/compartmentSort.js` | Recommendation & Sorting Engine | `sortCards`, `recommendSlot`, `rebalanceCompartmentByScheme` | Sorting algorithms, category matching, slot predictions |
 | `backend/src/routes/importExport.js` | Bulk CSV & JSON Processing | `POST /import/csv`, `GET /export/csv` | File ingestion and export rendering |

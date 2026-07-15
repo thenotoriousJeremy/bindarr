@@ -85,7 +85,7 @@ collection/location/deck-adjacent route requires a valid session.
 | Mount | File | Responsibility |
 |-------|------|----------------|
 | `/api/auth` | auth.js | `register`, `login`, `logout`, `me`, `PUT /settings` (per-user, e.g. `tcg_api_key`) |
-| `/api` | collection.js | Card `search`, `scan-match`, `prepare-set`; `collection` CRUD + `bulk`; `locations` & `compartments` CRUD; category auto-assign, `recommend(-batch)`, `apply-all`, `resort`; `stats`, `stats/history`, `export`, `import`; `cards/:id/price-history` |
+| `/api` | collection.js | Card `search`, `scan-match`, `prepare-set`; `collection` CRUD + `bulk`; `locations` & `compartments` CRUD; `recommend(-batch)`, `apply-all`, `resort`; `stats`, `stats/history`, `export`, `import`; `cards/:id/price-history` |
 | `/api/decks` | decks.js | Deck CRUD, `:id/cards`, `:id/checkout`, `:id/return`, `:id/locations` (checkout/check-in locator payload) |
 | `/api/sets` | sets.js | Set catalog (used for set dividers and set-scoped scan) |
 | `/api/settings` | settings.js | App-wide settings (read any; write requires admin) |
