@@ -50,6 +50,11 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [binderActiveEntryId, setBinderActiveEntryId] = useState(null);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  // Stacked = single-column layout (matches the 1024px CSS breakpoint). Below it,
+  // the detail panel and Unsorted queue are shown one at a time via a segmented
+  // toggle instead of stacked, so you don't scroll between them.
+  const [isStacked, setIsStacked] = useState(window.innerWidth <= 1024);
+  const [mobilePane, setMobilePane] = useState('container'); // 'container' | 'unsorted'
 
   const [filingMode, setFilingMode] = useState(false);
   const [filingQueue, setFilingQueue] = useState([]);
@@ -130,7 +135,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   };
 
   useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    const handleResize = () => { setIsMobile(window.innerWidth <= 768); setIsStacked(window.innerWidth <= 1024); };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
@@ -147,6 +152,23 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     setPickedEntryId(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLocationId]);
+
+  // During filing, follow the recommended slot so it blinks in view on the same
+  // screen as the filing bar (no manual paging / "locate" tap needed).
+  useEffect(() => {
+    if (!filingMode || !currentRecSpot) return;
+    if (currentRecSpot.location_id && currentRecSpot.location_id !== activeLocationId) {
+      setActiveLocationId(currentRecSpot.location_id); // effect re-runs once compartments reload
+      return;
+    }
+    if (isBinderType) {
+      const idx = compartments.findIndex(c => c.id === currentRecSpot.compartment_id);
+      if (idx !== -1) setActivePageIndex(idx);
+    } else {
+      setActiveCompartmentId(currentRecSpot.compartment_id);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filingMode, filingIndex, currentRecSpot?.compartment_id, currentRecSpot?.location_id, compartments.length, isBinderType, activeLocationId]);
 
   useEffect(() => {
     if (compartments.length > 0) {
@@ -435,21 +457,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     } catch (err) { console.error(err); showToast('Error assigning category.'); }
   };
 
-  const handleAutoAssignCategories = async () => {
-    if (!selectedLoc) return;
-    if (!window.confirm(`Auto-distribute your owned categories across "${selectedLoc.name}"'s compartments by size? This replaces current assignments.`)) return;
-    try {
-      const res = await fetch(`/api/locations/${selectedLoc.id}/auto-assign-categories`, { method: 'POST' });
-      const data = await res.json();
-      if (res.ok) {
-        showToast(data.skipped.length ? `Assigned categories. Didn't fit: ${data.skipped.join(', ')}` : 'Categories auto-assigned.');
-        await fetchCompartments(selectedLoc.id);
-      } else {
-        showToast(data.error || 'Failed to auto-assign categories.');
-      }
-    } catch (err) { console.error(err); showToast('Error auto-assigning categories.'); }
-  };
-
   const handleMoveCard = async (entryId, compartmentId) => {
     try {
       const res = await fetch(`/api/collection/${entryId}`, {
@@ -624,6 +631,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       setFilingQueue(placeable);
       setFilingIndex(0);
       setFilingMode(true);
+      setMobilePane('container'); // keep the binder visible on mobile; guide is the pinned bar
       setMoveMode(false);
       setPickedEntryId(null);
       if (noRoom.length > 0) {
@@ -674,6 +682,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         setFilingIndex(0);
         setFilingReadOnly(true);
         setFilingMode(true);
+        setMobilePane('container'); // keep the binder visible on mobile; guide is the pinned bar
         setActiveLocationId(selectedLoc.id);
         showToast('Container re-sorted. Follow the guide to re-file.');
       } else {
@@ -738,6 +747,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </div>
             )}
 
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+              How cards order inside this container. Remove all rules for manual (custom) order, then use <strong>Arrange</strong> to place and swap cards by hand.
+            </span>
             <SortBuilder value={sortDraft} onChange={setSortDraft} />
             <FilterBuilder value={filterDraft} onChange={setFilterDraft} setsList={setsList} fieldOptions={filterFieldOptions} />
 
@@ -745,7 +757,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               <button className="btn btn-secondary" onClick={() => setShowRulesModal(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={() => {
                 handleUpdateLocationFields({
-                  sort_order: JSON.stringify(sortDraft),
+                  sort_order: sortDraft.length > 0 ? JSON.stringify(sortDraft) : 'custom',
                   rule_type: filterDraft.length > 0 ? 'compound' : 'any',
                   rule_config: filterDraft.length > 0 ? JSON.stringify({ rules: filterDraft }) : null
                 });
@@ -756,8 +768,17 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         </div>
       )}
 
-      {/* Selected location detail */}
-      <div className="glass-panel" style={{ padding: '0.9rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', overflowY: 'auto' }}>
+      {isStacked && !filingMode && (
+        <div className="sub-nav-tabs" style={{ gridColumn: '1 / -1', marginBottom: 0, position: 'sticky', top: 0, zIndex: 50 }}>
+          <button type="button" className={`sub-nav-tab ${mobilePane === 'container' ? 'active' : ''}`} onClick={() => setMobilePane('container')}>Container</button>
+          <button type="button" className={`sub-nav-tab ${mobilePane === 'unsorted' ? 'active' : ''}`} onClick={() => setMobilePane('unsorted')}>Unsorted ({unsortedCards.length})</button>
+        </div>
+      )}
+
+      {/* Selected location detail. During mobile filing the binder stays visible
+          (the recommended slot blinks in it); the compact filing bar is pinned
+          at the bottom of the screen. */}
+      <div className="glass-panel" style={{ padding: '0.9rem', display: (isStacked && !filingMode && mobilePane !== 'container') ? 'none' : 'flex', flexDirection: 'column', gap: '0.75rem', overflowY: 'auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <select
@@ -816,9 +837,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           title="Only the last empty row/page can be removed"
                   >
                     <Trash2 size={14} /> {isBinderType ? 'Remove Last Page' : 'Remove Last Compartment'}
-                  </button>
-                  <button className="kebab-item" onClick={() => { setShowKebabMenu(false); handleAutoAssignCategories(); }}>
-                    <LayoutList size={14} /> Auto-Assign Categories
                   </button>
                   <button className="kebab-item" onClick={() => { setShowKebabMenu(false); startResort(); }} disabled={(selectedLoc.total_cards || 0) === 0}>
                     <RefreshCw size={14} /> Re-sort Container
@@ -900,7 +918,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           <>
             {isBinderType && !isCustom && (
               <div style={{ background: 'rgba(255, 170, 0, 0.1)', border: '1px solid #d97706', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', color: 'var(--text-primary)', lineHeight: 1.4 }}>
-                <strong>Heads up:</strong> Sorting &amp; filing renumber pocket positions, so a new card shifts every card after it and your physical binder drifts out of sync. For a fixed pocket layout, set this binder to <strong>Custom</strong> order in Container Settings, then use <strong>Arrange</strong> to place and swap cards by hand.
+                <strong>Heads up:</strong> Sorting &amp; filing renumber pocket positions, so a new card shifts every card after it and your physical binder drifts out of sync. For a fixed pocket layout, open <strong>Container Settings</strong> and remove all sort rules to switch this binder to <strong>Custom</strong> order, then use <strong>Arrange</strong> to place and swap cards by hand.
               </div>
             )}
 
@@ -1156,7 +1174,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       </div>
 
       {/* Unsorted queue */}
-      <div className="glass-panel location-unsorted-col" style={{ padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto' }}>
+      <div className="glass-panel location-unsorted-col" style={{ padding: '0.75rem', display: (isStacked && (filingMode || mobilePane !== 'unsorted')) ? 'none' : 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto', maxHeight: (isStacked && !filingMode && mobilePane === 'unsorted') ? 'none' : undefined }}>
         {filingMode ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', height: '100%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1176,8 +1194,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             </div>
             
             {filingQueue[filingIndex] && (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem', marginTop: '1rem' }}>
-                <img src={filingQueue[filingIndex].entry.image_url} alt={filingQueue[filingIndex].entry.name} style={{ width: '120px', borderRadius: '5px', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }} />
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem' }}>
+                <img src={filingQueue[filingIndex].entry.image_url} alt={filingQueue[filingIndex].entry.name} style={{ width: 'min(120px, 26vh)', borderRadius: '5px', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }} />
                 
                 <div style={{ textAlign: 'center' }}>
                   <strong style={{ fontSize: '1rem', display: 'block' }}>{filingQueue[filingIndex].entry.name}</strong>
@@ -1344,6 +1362,46 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           </>
         )}
       </div>
+
+      {/* Compact filing bar (mobile): the binder shows the blinking slot; this bar
+          names the card and destination and carries Placed/Skip. Replaces the
+          full guide so binder + guide share one screen. */}
+      {isStacked && filingMode && filingQueue[filingIndex] && (
+        <div style={{ position: 'fixed', left: 0, right: 0, bottom: '4.5rem', zIndex: 90, padding: '0 0.6rem' }}>
+          <div className="glass-panel" style={{ padding: '0.55rem 0.7rem', display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--bg-secondary)', boxShadow: '0 -6px 20px rgba(0,0,0,0.5)' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: '0.58rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Filing {filingIndex + 1} / {filingQueue.length}
+              </div>
+              <div style={{ fontSize: '0.82rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {filingQueue[filingIndex].entry.name}
+              </div>
+              {currentRecSpot ? (
+                <div style={{ fontSize: '0.72rem', color: '#ffc107', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  &rarr; {currentRecSpot.label} &middot; Slot {Math.floor(currentRecSpot.position / 1000)}
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.7rem', color: 'var(--accent-red)', fontWeight: 700 }}>
+                  {filingQueue[filingIndex].rejected ? "Doesn't fit rule — Skip" : 'Container full — Skip'}
+                </div>
+              )}
+            </div>
+            <button type="button" className="btn btn-secondary" onClick={advanceFiling} style={{ padding: '0.4rem 0.7rem', fontSize: '0.72rem', flexShrink: 0 }}>Skip</button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!currentRecSpot}
+              onClick={() => handleFilingPlaced(filingQueue[filingIndex].entry.entry_id, currentRecSpot.location_id, currentRecSpot.compartment_id, currentRecSpot.position)}
+              style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem', fontWeight: 700, flexShrink: 0 }}
+            >
+              {filingReadOnly ? 'Next' : 'Placed'}
+            </button>
+            <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => { setFilingMode(false); setFilingReadOnly(false); refreshAll(); }} title="Exit filing" style={{ flexShrink: 0, width: '30px', height: '30px', padding: 0 }}>
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
 
       <CardInspectorModal
         card={inspectorCard}
