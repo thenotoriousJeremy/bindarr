@@ -7,6 +7,7 @@ import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } fro
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { sortCardsByOrder } from '../utils/cardSort';
 import CardInspectorModal from './CardInspectorModal';
+import PackPriceSplitter from './PackPriceSplitter';
 
 const labelStyle = { fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' };
 
@@ -629,6 +630,20 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('untrade', null)}>Untrade</button>
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('list_type', subTab === 'wishlist' ? 'collection' : 'wishlist', null)}>{subTab === 'wishlist' ? 'Move to Collection' : 'Move to Wishlist'}</button>
           <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
+          <select className="select-control" value="" disabled={!selectedIds.size} onChange={(e) => { if (e.target.value) runBulk('condition', e.target.value); e.target.value = ''; }} style={{ fontSize: '0.72rem', maxWidth: '150px', padding: '0.3rem 0.4rem' }}>
+            <option value="">Set condition…</option>
+            {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select className="select-control" value="" disabled={!selectedIds.size} onChange={(e) => { if (e.target.value) runBulk('printing', e.target.value); e.target.value = ''; }} style={{ fontSize: '0.72rem', maxWidth: '150px', padding: '0.3rem 0.4rem' }}>
+            <option value="">Set printing…</option>
+            {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
+          <PackPriceSplitter
+            entryIds={Array.from(selectedIds)}
+            showToast={showToast}
+            onApplied={() => { clearSelection(); onUpdate(); fetchCollection(); }}
+          />
           <select className="select-control" value={bulkMoveTarget} onChange={(e) => setBulkMoveTarget(e.target.value)} style={{ fontSize: '0.72rem', maxWidth: '170px', padding: '0.3rem 0.4rem' }}>
             <option value="">Move to container…</option>
             <option value="unassign">Unassigned Pile</option>

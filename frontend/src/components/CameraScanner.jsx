@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { Camera, RefreshCw, AlertTriangle, X, Library, Zap, ZapOff } from 'lucide-react';
+import { Camera, RefreshCw, AlertTriangle, X, Library, Zap, ZapOff, Settings } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
+import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
 import CardEntryFields from './CardEntryFields';
+import PackPriceSplitter from './PackPriceSplitter';
 // Fixed centered guide box (normalized 0..1). Center the card in it; the crop
 // inside is sent to the server embedding matcher.
 const DEFAULT_RECT = { x: 0.17, y: 0.06, w: 0.66, h: 0.88 };
@@ -42,6 +44,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [cameraActive, setCameraActive] = useState(false);
   const [hasCameraError, setHasCameraError] = useState(false);
   const [autoScan, setAutoScan] = useState(false);
+  const [showScanSettings, setShowScanSettings] = useState(false);
   const [videoRatio, setVideoRatio] = useState(null);
   // Scan detail level: index into SCAN_PROFILES. Persisted; default Balanced.
   const [scanDetail, setScanDetail] = useState(() => {
@@ -146,6 +149,11 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [autoAddCountdown, setAutoAddCountdown] = useState(null);
   const [autoAddTargetCard, setAutoAddTargetCard] = useState(null);
+  // Tap the countdown popup to pause auto-add and tweak these before adding
+  // (slower tiers only — Turbo adds instantly with no overlay).
+  const [autoAddEditing, setAutoAddEditing] = useState(false);
+  const [autoAddCond, setAutoAddCond] = useState('Near Mint');
+  const [autoAddPrint, setAutoAddPrint] = useState('Normal');
   // Duplicate-scan confirm: set to the repeat-matched card; dupQty = copies to add.
   const [dupConfirmCard, setDupConfirmCard] = useState(null);
   const [dupQty, setDupQty] = useState(1);
@@ -235,7 +243,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   // Auto-Add Countdown Effect
   useEffect(() => {
     let intervalId;
-    if (autoAddCountdown !== null && autoAddCountdown > 0) {
+    if (autoAddEditing) {
+      // Paused for manual edit: freeze the countdown, don't fire.
+    } else if (autoAddCountdown !== null && autoAddCountdown > 0) {
       intervalId = setInterval(() => {
         setAutoAddCountdown(prev => prev - 1);
       }, 1000);
@@ -249,7 +259,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       if (intervalId) clearInterval(intervalId);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoAddCountdown, autoAddTargetCard]);
+  }, [autoAddCountdown, autoAddTargetCard, autoAddEditing]);
 
   // Fixed-cadence metronome (Turbo): fire a capture every profile.cadence ms
   // with a visible countdown, independent of scan timing. `loading` is NOT a
@@ -398,20 +408,21 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setVideoRatio(null);
   };
 
-  const autoAddCard = async (card, qty = 1) => {
+  const autoAddCard = async (card, qty = 1, overrides = null) => {
     // Mark the dup guard BEFORE the await: a fast cooldown can fire the next
     // capture before this POST resolves, and a match of the same card must hit
     // the duplicate path instead of auto-adding a second time.
     lastAddedIdRef.current = card.id;
     try {
-      const autoPrinting = (card.rarity || '').toLowerCase().includes('holo') ? 'Holofoil' : 'Normal';
+      const autoPrinting = overrides?.printing || ((card.rarity || '').toLowerCase().includes('holo') ? 'Holofoil' : 'Normal');
+      const autoCondition = overrides?.condition || 'Near Mint';
       const response = await fetch('/api/collection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           card_id: card.id,
           quantity: qty,
-          condition: 'Near Mint',
+          condition: autoCondition,
           printing: autoPrinting,
           language: 'English',
           // price_trend is whichever finish the TCG API returned first (usually
@@ -434,8 +445,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           showToast(`Auto-Added: ${qtyLabel}${card.name} (${card.set_name})`);
         }
 
-        // Append to recent scans history log
-        setRecentScans(prev => [{ ...card, placementLabel }, ...prev].slice(0, 10));
+        // Append to recent scans history log. entry_id (the last inserted row)
+        // lets the recent-scans price splitter target these exact entries.
+        setRecentScans(prev => [{ ...card, placementLabel, entry_id: data.id }, ...prev].slice(0, 10));
 
         // Brief confetti blast for ultra-rares
         const rarity = (card.rarity || '').toLowerCase();
@@ -600,8 +612,17 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
               setDebugCandidates((candidates || []).map(c => ({ ...c, verified })));
               const top = candidates && candidates[0];
               const confident = top && (verified ? top.inliers >= SCAN_MATCH_MIN_INLIERS : top.score >= SCAN_MATCH_MIN_SCORE);
+              // Printing ambiguity: basic lands (and other low-art cards) share one
+              // big symbol + frame, so ORB scores nearly tie across every printing
+              // of the same card. A near-tied same-name runner-up means the image
+              // can't tell the printings apart — so DON'T auto-add the top pick's
+              // set; fall through to the picker and let the user choose the set.
+              const second = candidates && candidates[1];
+              const ambiguousPrinting = top && second && top.name === second.name
+                && (top.set !== second.set || top.number !== second.number)
+                && (verified ? second.inliers >= top.inliers * 0.7 : second.score >= top.score - 0.02);
               if (candidates && candidates.length > 0) {
-                if (confident) {
+                if (confident && !ambiguousPrinting) {
                   // Uses the DETECTED game (auto-detect may override the UI mode).
                   // Query the MATCHED card's exact set + number (top.set/top.number),
                   // not just its name — otherwise search returns some other printing
@@ -893,18 +914,30 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
           {/* Scanner controls: game + set (needed for matching) and auto-capture. */}
           <div className="glass-panel" style={{ width: '100%', padding: '1rem', background: 'rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '0.25rem', position: 'relative', zIndex: setSearchOpen ? 40 : undefined }}>
-            <div className="sub-nav-tabs" style={{ marginBottom: 0 }}>
-              {[['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([g, label]) => (
-                <button
-                  key={g}
-                  type="button"
-                  className={`sub-nav-tab ${scanGame === g ? 'active' : ''}`}
-                  style={{ padding: '0.5rem', fontSize: '0.8rem', fontWeight: 700 }}
-                  onClick={() => setCardLayout(g === 'mtg' ? 'mtg' : 'modern')}
-                >
-                  {label}
-                </button>
-              ))}
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'stretch' }}>
+              <div className="sub-nav-tabs" style={{ marginBottom: 0, flex: 1 }}>
+                {[['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([g, label]) => (
+                  <button
+                    key={g}
+                    type="button"
+                    className={`sub-nav-tab ${scanGame === g ? 'active' : ''}`}
+                    style={{ padding: '0.5rem', fontSize: '0.8rem', fontWeight: 700 }}
+                    onClick={() => setCardLayout(g === 'mtg' ? 'mtg' : 'modern')}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className={`btn ${showScanSettings ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setShowScanSettings(s => !s)}
+                title="Scan detail & exposure settings"
+                aria-label="Scan settings"
+                style={{ padding: '0 0.7rem', flexShrink: 0 }}
+              >
+                <Settings size={16} />
+              </button>
             </div>
 
             {/* Set search (both games): pick a set to build a per-set index
@@ -992,6 +1025,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
               </button>
             </div>
 
+            {showScanSettings && (<>
             {/* Scan Detail: quick↔accurate tradeoff. Lower = faster upload,
                 shorter cooldown, shallower server match; higher = more accurate. */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
@@ -1050,6 +1084,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 </div>
               </div>
             )}
+            </>)}
           </div>
 
           {/* Scan crop + candidate diagnostics — only render when we actually have
@@ -1115,10 +1150,11 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         </div>
       )}
 
-      {/* Auto Add Countdown Overlay */}
-      {autoAddTargetCard && autoAddCountdown !== null && (
-        <div 
-          className="modal-backdrop" 
+      {/* Auto Add Countdown Overlay. Tap the card (before the countdown ends) to
+          pause auto-add and adjust condition/printing before it's saved. */}
+      {autoAddTargetCard && (autoAddCountdown !== null || autoAddEditing) && (
+        <div
+          className="modal-backdrop"
           style={{
             position: 'fixed',
             top: 0, left: 0, right: 0, bottom: 0,
@@ -1133,64 +1169,126 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         >
           <div className="glass-panel animate-fade-in" style={{ maxWidth: '420px', width: '100%', padding: '1.75rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', alignItems: 'center', textAlign: 'center', border: '1px solid var(--accent-red)' }}>
             <div>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 800 }}>Exact Match Identified!</span>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 800 }}>{autoAddEditing ? 'Adjust & Add' : 'Exact Match Identified!'}</span>
               <h3 style={{ fontSize: '1.25rem', color: '#fff', margin: '0.25rem 0 0.5rem 0' }}>{autoAddTargetCard.name}</h3>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: 0 }}>{autoAddTargetCard.set_name} • #{autoAddTargetCard.number}</p>
             </div>
 
-            <div style={{ position: 'relative', width: '115px', aspectRatio: 0.718, margin: '0.5rem 0' }}>
+            <div
+              onClick={() => {
+                if (autoAddEditing) return;
+                // Pause and open the editor with sensible defaults.
+                setAutoAddCond('Near Mint');
+                setAutoAddPrint((autoAddTargetCard.rarity || '').toLowerCase().includes('holo') ? 'Holofoil' : 'Normal');
+                setAutoAddEditing(true);
+              }}
+              style={{ position: 'relative', width: '115px', aspectRatio: 0.718, margin: '0.5rem 0', cursor: autoAddEditing ? 'default' : 'pointer' }}
+              title={autoAddEditing ? undefined : 'Tap to change condition/foil'}
+            >
               <img src={autoAddTargetCard.image_url} alt={autoAddTargetCard.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '6px', boxShadow: 'var(--shadow-glow)' }} />
-              <div style={{
-                position: 'absolute',
-                top: '-10px',
-                right: '-10px',
-                width: '32px',
-                height: '32px',
-                borderRadius: '50%',
-                backgroundColor: 'var(--accent-red)',
-                border: '2px solid #fff',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#fff',
-                fontWeight: 900,
-                fontSize: '1rem',
-                boxShadow: '0 4px 10px rgba(0,0,0,0.5)'
-              }}>
-                {autoAddCountdown}
-              </div>
+              {!autoAddEditing && (
+                <div style={{
+                  position: 'absolute',
+                  top: '-10px',
+                  right: '-10px',
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  backgroundColor: 'var(--accent-red)',
+                  border: '2px solid #fff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#fff',
+                  fontWeight: 900,
+                  fontSize: '1rem',
+                  boxShadow: '0 4px 10px rgba(0,0,0,0.5)'
+                }}>
+                  {autoAddCountdown}
+                </div>
+              )}
             </div>
 
-            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Auto-adding to collection in {autoAddCountdown}s...</span>
-              <div style={{ display: 'flex', gap: '0.5rem', width: '100%', marginTop: '0.5rem' }}>
-                <button 
-                  type="button"
-                  className="btn btn-primary" 
-                  onClick={() => {
-                    const card = autoAddTargetCard;
-                    setAutoAddTargetCard(null);
-                    setAutoAddCountdown(null);
-                    autoAddCard(card);
-                  }}
-                  style={{ flex: 1.5, fontSize: '0.75rem', padding: '0.45rem 0' }}
-                >
-                  Add Now
-                </button>
-                <button 
-                  type="button"
-                  className="btn btn-secondary" 
-                  onClick={() => {
-                    setAutoAddTargetCard(null);
-                    setAutoAddCountdown(null);
-                    showToast('Auto-add cancelled.');
-                  }}
-                  style={{ flex: 1, fontSize: '0.75rem', padding: '0.45rem 0' }}
-                >
-                  Cancel
-                </button>
+            {autoAddEditing ? (
+              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', gap: '0.6rem' }}>
+                  <div className="form-group" style={{ marginBottom: 0, flex: 1, textAlign: 'left' }}>
+                    <label>Condition</label>
+                    <select className="select-control" value={autoAddCond} onChange={(e) => setAutoAddCond(e.target.value)}>
+                      {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0, flex: 1, textAlign: 'left' }}>
+                    <label>Printing</label>
+                    <select className="select-control" value={autoAddPrint} onChange={(e) => setAutoAddPrint(e.target.value)}>
+                      {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => {
+                      const card = autoAddTargetCard;
+                      const overrides = { condition: autoAddCond, printing: autoAddPrint };
+                      setAutoAddTargetCard(null);
+                      setAutoAddCountdown(null);
+                      setAutoAddEditing(false);
+                      autoAddCard(card, 1, overrides);
+                    }}
+                    style={{ flex: 1.5, fontSize: '0.75rem', padding: '0.45rem 0' }}
+                  >
+                    Add to Collection
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setAutoAddTargetCard(null);
+                      setAutoAddCountdown(null);
+                      setAutoAddEditing(false);
+                      showToast('Auto-add cancelled.');
+                    }}
+                    style={{ flex: 1, fontSize: '0.75rem', padding: '0.45rem 0' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Auto-adding to collection in {autoAddCountdown}s...</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Tap the card to change condition/foil</span>
+                <div style={{ display: 'flex', gap: '0.5rem', width: '100%', marginTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => {
+                      const card = autoAddTargetCard;
+                      setAutoAddTargetCard(null);
+                      setAutoAddCountdown(null);
+                      autoAddCard(card);
+                    }}
+                    style={{ flex: 1.5, fontSize: '0.75rem', padding: '0.45rem 0' }}
+                  >
+                    Add Now
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setAutoAddTargetCard(null);
+                      setAutoAddCountdown(null);
+                      showToast('Auto-add cancelled.');
+                    }}
+                    style={{ flex: 1, fontSize: '0.75rem', padding: '0.45rem 0' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1416,6 +1514,16 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
             <span>Recent Scans</span>
             <button className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={() => setRecentScans([])}>Clear History</button>
           </h3>
+          {/* Split the total paid for this batch (a pack/deck) across the cards
+              just scanned. Only entries with a known entry_id can be updated. */}
+          {(() => {
+            const ids = recentScans.map(s => s.entry_id).filter(Boolean);
+            return ids.length > 0 ? (
+              <div style={{ marginBottom: '0.85rem', padding: '0.5rem 0.6rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                <PackPriceSplitter entryIds={ids} showToast={showToast} onApplied={onAddSuccess} />
+              </div>
+            ) : null;
+          })()}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {recentScans.map((item, idx) => (
               <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>

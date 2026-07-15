@@ -1,0 +1,23 @@
+{
+  "_comment": "Canonical category orderings shared by backend/src/utils/compartmentSort.js (filing) and frontend/src/utils/cardSort.js (display) so placement and display never drift. WUBRG is the universal MTG color order; pokemonType follows the official TCG energy-type order. Unknown/absent keys fall back to a high rank in code (sort last).",
+  "pokemonType": {
+    "Grass": 1, "Fire": 2, "Water": 3, "Lightning": 4, "Psychic": 5,
+    "Fighting": 6, "Darkness": 7, "Metal": 8, "Fairy": 9, "Dragon": 10,
+    "Colorless": 11, "Trainer": 12, "Energy": 13,
+    "White": 20, "Blue": 21, "Black": 22, "Red": 23, "Green": 24,
+    "Multicolor": 25, "Unknown": 100
+  },
+  "printingNormalsFirst": {
+    "Normal": 1, "Reverse Holofoil": 2, "Holofoil": 3, "1st Edition": 4, "Promo": 5
+  },
+  "printingFoilsFirst": {
+    "Reverse Holofoil": 1, "Holofoil": 2, "Normal": 3, "1st Edition": 4, "Promo": 5
+  },
+  "language": {
+    "English": 1, "Japanese": 2, "German": 3, "French": 4, "Spanish": 5, "Italian": 6
+  },
+  "wubrg": {
+    "White": 1, "W": 1, "Blue": 2, "U": 2, "Black": 3, "B": 3,
+    "Red": 4, "R": 4, "Green": 5, "G": 5, "Multicolor": 6, "Colorless": 7
+  }
+}

@@ -1,30 +1,13 @@
 import { getRarityRank } from './cardRarity';
+import cardOrder from '../../../shared/cardOrder.json';
+import sortSchemes from '../../../shared/sortSchemes.json';
 
 // Shared comparator logic for ordering collection cards. Previously copy-pasted
 // across autoSortContainerCards, findNextRecommendedSlot, the sorting assistant
 // queue, and the unsorted list view in LocationManager.jsx.
-// Pokémon energy types first, then MTG colors (WUBRG), then Multicolor. Must
-// stay aligned with POKEMON_TYPE_ORDER in backend/src/utils/compartmentSort.js.
-export const POKEMON_TYPE_ORDER = {
-  'Grass': 1,
-  'Fire': 2,
-  'Water': 3,
-  'Lightning': 4,
-  'Psychic': 5,
-  'Fighting': 6,
-  'Darkness': 7,
-  'Metal': 8,
-  'Fairy': 9,
-  'Dragon': 10,
-  'Colorless': 11,
-  'White': 20,
-  'Blue': 21,
-  'Black': 22,
-  'Red': 23,
-  'Green': 24,
-  'Multicolor': 25,
-  'Unknown': 100
-};
+// Category orderings come from shared/cardOrder.json so display order matches
+// the backend filing engine (compartmentSort.js) exactly.
+export const POKEMON_TYPE_ORDER = cardOrder.pokemonType;
 
 // Mirrors typeCategory in the backend: multi-color MTG cards bucket together.
 export function typeCategory(types) {
@@ -33,30 +16,12 @@ export function typeCategory(types) {
   return t[0] || 'Colorless';
 }
 
-const PRINTING_ORDER_NORMALS_FIRST = {
-  'Normal': 1,
-  'Reverse Holofoil': 2,
-  'Holofoil': 3,
-  '1st Edition': 4,
-  'Promo': 5
-};
-
-const PRINTING_ORDER_FOILS_FIRST = {
-  'Reverse Holofoil': 1,
-  'Holofoil': 2,
-  'Normal': 3,
-  '1st Edition': 4,
-  'Promo': 5
-};
-
 export function getPrintingRank(printing, foilSorting) {
-  const order = foilSorting === 'foils_first' ? PRINTING_ORDER_FOILS_FIRST : PRINTING_ORDER_NORMALS_FIRST;
+  const order = foilSorting === 'foils_first' ? cardOrder.printingFoilsFirst : cardOrder.printingNormalsFirst;
   return order[printing] || 10;
 }
 
-// Filing order for the 'language' scheme. Mirrors LANGUAGE_ORDER in
-// backend/src/utils/compartmentSort.js so display order matches placement.
-export const LANGUAGE_ORDER = { 'English': 1, 'Japanese': 2, 'German': 3, 'French': 4, 'Spanish': 5, 'Italian': 6 };
+export const LANGUAGE_ORDER = cardOrder.language;
 
 // Sorts `cards` in place (and returns it) according to `sortOrder`. `foilSorting`
 // only affects the 'set-number-printing' order. Unrecognized/'custom' orders are
@@ -75,14 +40,7 @@ export function sortCardsByOrder(cards, sortOrder, foilSorting, setsList = []) {
     if (sortOrder.startsWith('[')) {
       try { criteria = JSON.parse(sortOrder); } catch { /* ignore malformed sortOrder */ }
     } else {
-      if (sortOrder === 'scanned-desc') criteria = [{by:'added_at', dir:'desc'}, {by:'entry_id', dir:'desc'}];
-      else if (sortOrder === 'scanned-asc') criteria = [{by:'added_at', dir:'asc'}, {by:'entry_id', dir:'asc'}];
-      else if (sortOrder === 'name-asc') criteria = [{by:'name', dir:'asc'}];
-      else if (sortOrder === 'price-desc') criteria = [{by:'price', dir:'desc'}];
-      else if (sortOrder === 'set-number') criteria = [{by:'set', dir:'asc'}];
-      else if (sortOrder === 'set-number-printing') criteria = [{by:'set', dir:'asc'}, {by:'printing', dir:'asc'}];
-      else if (sortOrder === 'type-name') criteria = [{by:'type', dir:'asc'}, {by:'name', dir:'asc'}];
-      else if (sortOrder === 'language') criteria = [{by:'language', dir:'asc'}, {by:'name', dir:'asc'}];
+      criteria = sortSchemes[sortOrder] || [];
     }
   } else if (Array.isArray(sortOrder)) {
     criteria = sortOrder;
@@ -164,8 +122,7 @@ export function sortCardsByOrder(cards, sortOrder, foilSorting, setsList = []) {
           } else if (Array.isArray(b.color_identity) && b.color_identity.length > 0) {
             cB = b.color_identity[0];
           }
-          const wubrg = { 'W': 1, 'White': 1, 'U': 2, 'Blue': 2, 'B': 3, 'Black': 3, 'R': 4, 'Red': 4, 'G': 5, 'Green': 5, 'Colorless': 6 };
-          cmp = (wubrg[cA] || 99) - (wubrg[cB] || 99);
+          cmp = (cardOrder.wubrg[cA] || 99) - (cardOrder.wubrg[cB] || 99);
           if (cmp === 0) cmp = cA.localeCompare(cB);
           break;
         }

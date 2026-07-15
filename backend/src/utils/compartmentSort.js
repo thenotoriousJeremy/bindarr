@@ -1,5 +1,5 @@
 const db = require('../db');
-const { resolveCardPrice, rebalanceCompartmentPositions } = require('./priceHelpers');
+const { resolveCardPrice } = require('./priceHelpers');
 
 let setsCache = [];
 async function loadSetsCache(database) {
@@ -100,31 +100,20 @@ function locationAcceptsCard(location, cardMetadata) {
   return true;
 }
 
-const POKEMON_TYPE_ORDER = {
-  'Grass': 1, 'Fire': 2, 'Water': 3, 'Lightning': 4, 'Psychic': 5,
-  'Fighting': 6, 'Darkness': 7, 'Metal': 8, 'Fairy': 9, 'Dragon': 10, 'Colorless': 11, 'Trainer': 12, 'Energy': 13,
-  'White': 20, 'Blue': 21, 'Black': 22, 'Red': 23, 'Green': 24, 'Multicolor': 25
-};
+// Canonical category orderings shared with the frontend. See shared/cardOrder.json.
+const cardOrder = require('../../../shared/cardOrder.json');
+const sortSchemes = require('../../../shared/sortSchemes.json');
+const POKEMON_TYPE_ORDER = cardOrder.pokemonType;
+const PRINTING_ORDER_NORMALS_FIRST = cardOrder.printingNormalsFirst;
+const PRINTING_ORDER_FOILS_FIRST = cardOrder.printingFoilsFirst;
+const LANGUAGE_ORDER = cardOrder.language;
+const WUBRG_ORDER = cardOrder.wubrg;
 
 function typeCategory(types) {
   const t = Array.isArray(types) ? types : safeJsonParse(types, []);
   if (t.length > 1) return 'Multicolor';
   return t[0] || 'Colorless';
 }
-
-const PRINTING_ORDER_NORMALS_FIRST = { 'Normal': 1, 'Reverse Holofoil': 2, 'Holofoil': 3, '1st Edition': 4, 'Promo': 5 };
-const PRINTING_ORDER_FOILS_FIRST = { 'Reverse Holofoil': 1, 'Holofoil': 2, 'Normal': 3, '1st Edition': 4, 'Promo': 5 };
-const LANGUAGE_ORDER = { 'English': 1, 'Japanese': 2, 'German': 3, 'French': 4, 'Spanish': 5, 'Italian': 6 };
-
-const WUBRG_ORDER = {
-  'White': 1, 'W': 1,
-  'Blue': 2, 'U': 2,
-  'Black': 3, 'B': 3,
-  'Red': 4, 'R': 4,
-  'Green': 5, 'G': 5,
-  'Multicolor': 6,
-  'Colorless': 7
-};
 
 function getColorCategory(card) {
   if (!card) return 'Colorless';
@@ -159,12 +148,7 @@ function sortCards(cards, sortOrder, foilSorting) {
     if (sortOrder.startsWith('[')) {
       try { criteria = JSON.parse(sortOrder); } catch(e){}
     } else {
-      if (sortOrder === 'name-asc') criteria = [{by:'name', dir:'asc'}];
-      else if (sortOrder === 'price-desc') criteria = [{by:'price', dir:'desc'}];
-      else if (sortOrder === 'set-number') criteria = [{by:'set', dir:'asc'}];
-      else if (sortOrder === 'set-number-printing') criteria = [{by:'set', dir:'asc'}, {by:'printing', dir:'asc'}];
-      else if (sortOrder === 'type-name') criteria = [{by:'type', dir:'asc'}, {by:'name', dir:'asc'}];
-      else if (sortOrder === 'language') criteria = [{by:'language', dir:'asc'}, {by:'name', dir:'asc'}];
+      criteria = sortSchemes[sortOrder] || [];
     }
   } else if (Array.isArray(sortOrder)) {
     criteria = sortOrder;

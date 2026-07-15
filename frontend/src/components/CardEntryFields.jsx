@@ -15,7 +15,19 @@ export default function CardEntryFields({
   const stacked = variant === 'stacked';
   const groupStyle = stacked ? { marginBottom: 0 } : undefined;
 
-  const Quantity = (
+  const stepQty = (delta) => onQuantity(String(Math.max(1, (parseInt(quantity, 10) || 1) + delta)));
+  const Quantity = stacked ? (
+    // Scanner quick-add: quantity is the most-changed field, so give it big
+    // tap targets instead of a bare number input.
+    <div className="form-group quick-add-full-width" style={groupStyle}>
+      <label>Quantity</label>
+      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'stretch' }}>
+        <button type="button" className="btn btn-secondary" onClick={() => stepQty(-1)} aria-label="Decrease quantity" style={{ padding: '0 1.1rem', fontSize: '1.3rem', flexShrink: 0 }}>&minus;</button>
+        <input type="number" className="input-control" min="1" value={quantity} onChange={(e) => onQuantity(e.target.value)} required style={{ flex: 1, minWidth: 0, textAlign: 'center', fontWeight: 700 }} />
+        <button type="button" className="btn btn-secondary" onClick={() => stepQty(1)} aria-label="Increase quantity" style={{ padding: '0 1.1rem', fontSize: '1.3rem', flexShrink: 0 }}>+</button>
+      </div>
+    </div>
+  ) : (
     <div className="form-group" style={groupStyle}>
       <label>Quantity</label>
       <input type="number" className="input-control" min="1" value={quantity} onChange={(e) => onQuantity(e.target.value)} required />
@@ -53,9 +65,11 @@ export default function CardEntryFields({
   );
 
   if (stacked) {
+    // Language omitted here: scanner defaults to English and it's rarely changed
+    // on a quick add. Still editable later in the card inspector.
     return (
       <div className="quick-add-fields-group">
-        {Quantity}{Price}{Condition}{Printing}{Language}
+        {Quantity}{Price}{Condition}{Printing}
       </div>
     );
   }

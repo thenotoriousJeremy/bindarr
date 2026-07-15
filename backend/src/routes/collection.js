@@ -8,6 +8,7 @@ const { authenticateToken, searchLimiter } = require('../middleware/auth');
 const { resolveCardPrice, parseCardRow } = require('../utils/priceHelpers');
 const { compartmentLabel, isBinderType, rebalanceCompartmentByScheme } = require('../utils/compartmentSort');
 const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement } = require('../utils/collectionHelpers');
+const { splitPrice } = require('../utils/splitPrice');
 
 const router = express.Router();
 
@@ -418,7 +419,10 @@ router.delete('/collection/:id', async (req, res) => {
 });
 
 // 5b. Bulk actions
-const BULK_ACTIONS = ['delete', 'move', 'trade', 'untrade', 'list_type'];
+const BULK_ACTIONS = ['delete', 'move', 'trade', 'untrade', 'list_type', 'condition', 'printing', 'purchase_split'];
+// Allowed field values mirror the collection table CHECK constraints in db.js.
+const BULK_CONDITIONS = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged'];
+const BULK_PRINTINGS = ['Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition', 'Promo'];
 router.post('/collection/bulk', async (req, res) => {
   const { entry_ids = [], action, value } = req.body;
   if (!Array.isArray(entry_ids) || entry_ids.length === 0) {
@@ -446,6 +450,39 @@ router.post('/collection/bulk', async (req, res) => {
       if (!['collection', 'wishlist'].includes(value)) return res.status(400).json({ error: 'Invalid list_type' });
       const result = await db.run(`UPDATE collection SET list_type = ? WHERE id IN (${placeholders}) AND user_id = ?`, [value, ...ids, req.user.id]);
       return res.json({ message: `Moved ${result.changes} card(s) to ${value}`, affected: result.changes });
+    }
+
+    if (action === 'condition' || action === 'printing') {
+      const allowed = action === 'condition' ? BULK_CONDITIONS : BULK_PRINTINGS;
+      if (!allowed.includes(value)) return res.status(400).json({ error: `Invalid ${action}` });
+      // Column name is action, drawn from the BULK_ACTIONS whitelist (not user
+      // input), so it is safe to interpolate.
+      const result = await db.run(`UPDATE collection SET ${action} = ? WHERE id IN (${placeholders}) AND user_id = ?`, [value, ...ids, req.user.id]);
+      return res.json({ message: `Set ${action} on ${result.changes} card(s)`, affected: result.changes });
+    }
+
+    // Distribute a total price paid (a pack/deck) across the selected entries,
+    // writing each entry's per-card purchase_price. method 'weighted' splits
+    // proportional to market value (price_trend); 'equal' splits evenly. Weighted
+    // falls back to equal when no selected card has a market price.
+    if (action === 'purchase_split') {
+      const total = parseFloat(value && value.total);
+      const method = value && value.method === 'equal' ? 'equal' : 'weighted';
+      if (!(total >= 0)) return res.status(400).json({ error: 'total must be a non-negative number' });
+      const rows = await db.all(
+        `SELECT c.id, COALESCE(cc.price_trend, 0) AS price FROM collection c
+         LEFT JOIN card_cache cc ON cc.id = c.card_id
+         WHERE c.id IN (${placeholders}) AND c.user_id = ?`,
+        [...ids, req.user.id]
+      );
+      if (rows.length === 0) return res.status(400).json({ error: 'No valid entries' });
+      const sum = rows.reduce((s, r) => s + (r.price || 0), 0);
+      const weighted = method === 'weighted' && sum > 0;
+      const shares = splitPrice(rows.map(r => r.price || 0), total, method);
+      for (let i = 0; i < rows.length; i++) {
+        await db.run(`UPDATE collection SET purchase_price = ? WHERE id = ? AND user_id = ?`, [shares[i], rows[i].id, req.user.id]);
+      }
+      return res.json({ message: `Split $${total.toFixed(2)} across ${rows.length} card(s) (${weighted ? 'by value' : 'evenly'})`, affected: rows.length });
     }
 
     const locationId = value ? parseInt(value, 10) : null;

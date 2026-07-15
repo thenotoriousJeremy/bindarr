@@ -1002,7 +1002,7 @@ button, input, select, textarea {
     gap: 0.85rem;
   }
   .camera-preview-wrapper.camera-active {
-    height: min(58dvh, 480px);
+    height: min(50dvh, 440px);
     width: auto;
     max-width: 100%;
     aspect-ratio: 3 / 4;
@@ -2052,7 +2052,7 @@ button, input, select, textarea {
   justify-content: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  border: none;
+  border: 1px solid transparent; /* reserve space so .active border doesn't resize the tab */
   background: transparent;
   color: var(--text-secondary);
   border-radius: var(--radius-sm);

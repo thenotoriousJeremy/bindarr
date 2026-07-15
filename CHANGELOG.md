@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-07-15
+
+### Features
+- Bulk-set condition and printing on selected cards from the collection long-press/select bar (`POST /api/collection/bulk` actions `condition` and `printing`).
+- Split a total price paid for a pack or deck across cards into per-card `purchase_price` (`bulk` action `purchase_split`), weighted by market value or evenly, chosen at apply time. Integer-cent math keeps the parts summing to the exact total (`backend/src/utils/splitPrice.js`). Available in the collection bulk bar and the scanner's Recent Scans panel.
+
+### Scanner
+- Tap the auto-add countdown popup (Fast/Balanced/Accurate tiers) to pause and adjust condition/printing before the card is saved; ignoring it lets the normal auto-add proceed. Turbo remains instant.
+- Quick-add fields: larger +/- quantity stepper; the rarely-changed Language field is dropped from the scanner quick-add.
+- Tighter camera preview height on small screens.
+
+### Storage
+- Mobile filing: below 1024px, view the container detail and Unsorted queue one at a time via a segmented toggle; during filing the binder stays on screen (recommended slot blinks) with a compact pinned filing bar for Placed/Skip, and the view auto-follows the recommended slot.
+- Custom (manual) container order is saved when all sort rules are removed; guidance text updated accordingly.
+- Removed the Auto-Assign Categories action.
+
 ## [1.3.0] - 2026-07-14
 
 ### Fixed
