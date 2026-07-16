@@ -1,9 +1,9 @@
 name: Build Mobile Apps
 
-# Builds the Android APK and (when Apple signing secrets are present) a signed
-# iOS .ipa, then attaches both to the GitHub Release for the tag and uploads
-# them as workflow artifacts. Store uploads (Google Play / TestFlight) are NOT
-# done here yet — the packages just land on GitHub.
+# workflow_dispatch -> build only: uploads packages as workflow artifacts (test).
+# push a v* tag  -> release: also uploads Android .aab to Google Play (internal
+# track) and the iOS .ipa to TestFlight, and attaches both to the GitHub Release.
+# Store-upload steps are gated on the tag event, so dispatch never touches a store.
 on:
   push:
     tags: [ "v*" ]
@@ -34,7 +34,7 @@ jobs:
           npm run build
           npx cap sync android
 
-      - name: Build APK
+      - name: Build APK + AAB
         working-directory: frontend/android
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -48,8 +48,9 @@ jobs:
           if [ -n "$KEYSTORE_B64" ]; then
             echo "$KEYSTORE_B64" | base64 -d > release.keystore
             export BINDARR_KEYSTORE_FILE="$PWD/release.keystore"
-            ./gradlew assembleRelease
+            ./gradlew bundleRelease assembleRelease
             echo "APK=frontend/android/app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_ENV"
+            echo "AAB=frontend/android/app/build/outputs/bundle/release/app-release.aab" >> "$GITHUB_ENV"
           else
             echo "No keystore secret set — building a debug APK (installable, debug-signed)."
             ./gradlew assembleDebug
@@ -60,6 +61,21 @@ jobs:
         with:
           name: android-apk
           path: ${{ env.APK }}
+
+      - uses: actions/upload-artifact@v4
+        if: env.AAB != ''
+        with:
+          name: android-aab
+          path: ${{ env.AAB }}
+
+      - name: Upload to Google Play (internal track)
+        if: github.ref_type == 'tag' && env.AAB != ''
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.bindarr.app
+          releaseFiles: ${{ env.AAB }}
+          track: internal
 
       - name: Attach APK to release
         if: github.ref_type == 'tag'
@@ -154,6 +170,19 @@ jobs:
         with:
           name: ios-ipa
           path: ${{ runner.temp }}/export/*.ipa
+
+      - name: Upload to TestFlight
+        if: steps.gate.outputs.ready == 'true' && github.ref_type == 'tag'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$ASC_API_KEY_BASE64" | base64 -d > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          IPA=$(ls "$RUNNER_TEMP"/export/*.ipa | head -1)
+          xcrun altool --upload-app --type ios --file "$IPA" \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
 
       - name: Attach IPA to release
         if: steps.gate.outputs.ready == 'true' && github.ref_type == 'tag'
