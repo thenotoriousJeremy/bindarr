@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { User, Lock, ArrowRight, Eye, EyeOff, Server } from 'lucide-react';
 import { isNative, getServerUrl, setServerUrl } from '../apiBase';
+import Logo from './Logo';
 
 function Login({ onLoginSuccess }) {
   const [isRegister, setIsRegister] = useState(false);
@@ -95,17 +96,9 @@ function Login({ onLoginSuccess }) {
         {/* Logo/Icon */}
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
           <div style={{ width: '84px', height: '84px', margin: '0 auto 1rem auto', filter: 'drop-shadow(0 0 12px var(--accent-red-glow))' }}>
-            <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Bindarr logo" style={{ width: '100%', height: '100%' }}>
-              <rect x="4" y="9" width="32" height="24" rx="2.5" fill="#ff4747" stroke="#111" strokeWidth="1.6" />
-              <rect x="7" y="12" width="10" height="18" rx="1.5" fill="#ffd0d0" stroke="#111" strokeWidth="1.2" />
-              <rect x="23" y="12" width="10" height="18" rx="1.5" fill="#fff" stroke="#111" strokeWidth="1.2" />
-              <rect x="18.5" y="9" width="3" height="24" fill="#c92f2f" stroke="#111" strokeWidth="1" />
-              <path d="M17.88 17.12 A3 3 0 1 1 22.12 17.12" fill="none" stroke="#fff" strokeWidth="1.7" />
-              <path d="M17.88 23.12 A3 3 0 1 1 22.12 23.12" fill="none" stroke="#fff" strokeWidth="1.7" />
-              <path d="M17.88 29.12 A3 3 0 1 1 22.12 29.12" fill="none" stroke="#fff" strokeWidth="1.7" />
-            </svg>
+            <Logo />
           </div>
-          <h2 style={{ fontSize: '1.8rem', color: '#fff', fontWeight: 800 }}>
+          <h2 style={{ fontSize: '1.8rem', color: 'var(--text-strong)', fontWeight: 800 }}>
             Bind<span style={{ color: 'var(--accent-red)' }}>arr</span>
           </h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>

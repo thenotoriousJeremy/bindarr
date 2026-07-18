@@ -18,7 +18,7 @@ router.get('/stats', async (req, res) => {
     const query = `
       SELECT
         c.quantity, c.purchase_price, c.added_at, c.printing, c.condition, c.card_id,
-        cc.types, cc.rarity, cc.set_name, cc.set_id, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil,
+        cc.types, cc.subtypes, cc.supertype, cc.game, cc.rarity, cc.set_name, cc.set_id, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil,
         cc.price_avg1, cc.price_avg7, cc.price_avg30,
         l.name as location_name
       FROM collection c
@@ -89,11 +89,27 @@ router.get('/stats', async (req, res) => {
 
       // Parse types
       const types = JSON.parse(row.types || '[]');
-      types.forEach(t => {
-        typeCounts[t] = (typeCounts[t] || 0) + qty;
-      });
-      if (types.length === 0) {
-        typeCounts['Colorless'] = (typeCounts['Colorless'] || 0) + qty;
+      const subtypes = JSON.parse(row.subtypes || '[]');
+      const isMtg = row.game === 'mtg' || row.supertype === 'MTG';
+
+      if (isMtg) {
+        const isLand = subtypes.includes('Land') || row.supertype === 'Land' || (types.length === 0 && subtypes.some(s => ['Plains','Island','Swamp','Mountain','Forest','Land'].includes(s)));
+        if (isLand) {
+          typeCounts['Land'] = (typeCounts['Land'] || 0) + qty;
+        } else if (types.length === 0) {
+          typeCounts['Colorless'] = (typeCounts['Colorless'] || 0) + qty;
+        } else {
+          types.forEach(t => {
+            typeCounts[t] = (typeCounts[t] || 0) + qty;
+          });
+        }
+      } else {
+        types.forEach(t => {
+          typeCounts[t] = (typeCounts[t] || 0) + qty;
+        });
+        if (types.length === 0) {
+          typeCounts['Colorless'] = (typeCounts['Colorless'] || 0) + qty;
+        }
       }
 
       // Rarity
@@ -255,16 +271,18 @@ router.get('/stats', async (req, res) => {
 // 7b. Get Collection Net Worth Timeline History
 router.get('/stats/history', async (req, res) => {
   try {
-    const { period = '30d' } = req.query;
+    const { period = '30d', game } = req.query;
+    const gameFilter = game ? ` AND cc.game = ?` : '';
+    const params = game ? [req.user.id, game] : [req.user.id];
 
     // Retrieve all collection items to compute history
     const query = `
       SELECT c.quantity, c.added_at, c.printing, cc.id as card_id, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
-      WHERE c.user_id = ?
+      WHERE c.user_id = ?${gameFilter}
     `;
-    const items = await db.all(query, [req.user.id]);
+    const items = await db.all(query, params);
 
     // Real recorded price snapshots for every card this user owns, oldest
     // first, so each item's price at any past point can be looked up without

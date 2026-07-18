@@ -345,7 +345,7 @@ function AdminPanel({ showToast }) {
       {/* Header Info */}
       <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h2 style={{ fontSize: '1.25rem', color: '#fff' }}>Trainer Administration</h2>
+          <h2 style={{ fontSize: '1.25rem', color: 'var(--text-strong)' }}>Trainer Administration</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Maintain users, assign roles, reset passwords, and monitor system metrics.</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -368,7 +368,7 @@ function AdminPanel({ showToast }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '1.5rem' }} className="admin-grid-layout">
         {/* Registration Panel */}
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          <h3 style={{ color: '#fff', fontSize: '1.1rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <UserPlus size={18} style={{ color: 'var(--accent-red)' }} />
             Register New Trainer
           </h3>
@@ -418,7 +418,7 @@ function AdminPanel({ showToast }) {
 
         {/* Instance Settings Panel */}
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          <h3 style={{ color: '#fff', fontSize: '1.1rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Globe size={18} style={{ color: 'var(--accent-red)' }} />
             Instance Settings
           </h3>
@@ -448,7 +448,7 @@ function AdminPanel({ showToast }) {
 
         {/* Set Index Builds Panel */}
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          <h3 style={{ color: '#fff', fontSize: '1.1rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Database size={18} style={{ color: 'var(--accent-red)' }} />
             Set Scan Indexes
           </h3>
@@ -485,7 +485,7 @@ function AdminPanel({ showToast }) {
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem', background: 'rgba(255,193,71,0.05)', border: '1px solid var(--border-glass)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem' }}>
               <AlertTriangle size={16} style={{ color: 'var(--accent-yellow)', flexShrink: 0 }} />
               <span style={{ flex: 1, minWidth: '180px', color: 'var(--text-secondary)' }}>
-                <strong style={{ color: '#fff' }}>{preview.cardCount}</strong> printings, up to <strong style={{ color: '#fff' }}>{formatBytes(preview.estBytes)}</strong> on disk. Downloads one image per card; can take several minutes.
+                <strong style={{ color: 'var(--text-strong)' }}>{preview.cardCount}</strong> printings, up to <strong style={{ color: 'var(--text-strong)' }}>{formatBytes(preview.estBytes)}</strong> on disk. Downloads one image per card; can take several minutes.
               </span>
               <button type="button" className="btn btn-primary" onClick={() => handleBuild(preview.game, preview.set, preview.cardCount)} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                 <Play size={14} /> Build Set
@@ -523,7 +523,7 @@ function AdminPanel({ showToast }) {
                       return (
                         <tr key={b.key}>
                           <td style={{ textTransform: 'uppercase', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{b.game}</td>
-                          <td style={{ fontWeight: 700, color: '#fff' }}>{b.set}</td>
+                          <td style={{ fontWeight: 700, color: 'var(--text-strong)' }}>{b.set}</td>
                           <td>{b.cardCount || (p && p.total) || '-'}</td>
                           <td style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{b.sizeBytes ? formatBytes(b.sizeBytes) : '-'}</td>
                           <td style={{ minWidth: '160px' }}>
@@ -575,7 +575,7 @@ function AdminPanel({ showToast }) {
         {/* User Maintenance Table */}
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <h3 style={{ color: '#fff', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Shield size={18} style={{ color: 'var(--accent-yellow)' }} />
               Manage Users
             </h3>
@@ -615,7 +615,7 @@ function AdminPanel({ showToast }) {
                 <tbody>
                   {filteredUsers.map(user => (
                     <tr key={user.id}>
-                      <td style={{ fontWeight: 700, color: '#fff' }}>{user.username}</td>
+                      <td style={{ fontWeight: 700, color: 'var(--text-strong)' }}>{user.username}</td>
                       <td>
                         <span style={{
                           display: 'inline-flex',
@@ -677,7 +677,7 @@ function AdminPanel({ showToast }) {
 
       {/* Change Password Dialog Overlay */}
       {targetUser && (
-        <div style={{
+        <div className="modal-overlay" style={{
           position: 'fixed',
           top: 0, left: 0, right: 0, bottom: 0,
           backgroundColor: 'rgba(0,0,0,0.6)',
@@ -685,12 +685,11 @@ function AdminPanel({ showToast }) {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 999,
-          padding: '1rem'
+          zIndex: 999
         }}>
           <div className="glass-panel" style={{ maxWidth: '380px', width: '100%', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <div>
-              <h3 style={{ color: '#fff', fontSize: '1.1rem' }}>Reset Password</h3>
+              <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>Reset Password</h3>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Change password for user: <strong>{targetUser.username}</strong></p>
             </div>
             <form onSubmit={handleChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>

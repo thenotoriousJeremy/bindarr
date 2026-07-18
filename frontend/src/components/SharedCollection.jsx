@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend } from 'recharts';
 import { Search, Trophy, Compass, Library, ShieldAlert, Sparkles, X } from 'lucide-react';
+import Logo from './Logo';
 import { formatPrice } from '../utils/formatPrice';
 import { PRINTINGS } from '../utils/cardOptions';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
@@ -82,14 +83,14 @@ function SharedCollection({ shareToken }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '80vh', padding: '1rem' }}>
         <div className="glass-panel" style={{ textAlign: 'center', maxWidth: '400px', width: '100%', padding: '2.5rem 1.5rem', border: '1px solid rgba(255, 71, 71, 0.2)' }}>
           <ShieldAlert size={48} style={{ color: 'var(--accent-red)', marginBottom: '1rem' }} />
-          <h2 style={{ color: '#fff', fontSize: '1.25rem', marginBottom: '0.5rem' }}>Collection Unavailable</h2>
+          <h2 style={{ color: 'var(--text-strong)', fontSize: '1.25rem', marginBottom: '0.5rem' }}>Collection Unavailable</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{error}</p>
           <a href="/" style={{
             display: 'inline-block',
             marginTop: '1.5rem',
             padding: '0.5rem 1.5rem',
             backgroundColor: 'var(--accent-red)',
-            color: '#fff',
+            color: 'var(--text-strong)',
             textDecoration: 'none',
             fontWeight: 700,
             borderRadius: 'var(--radius-sm)',
@@ -139,7 +140,7 @@ function SharedCollection({ shareToken }) {
       {/* Header */}
       <header className="app-header" style={{ marginBottom: '1.5rem', paddingBottom: '1rem', borderBottom: '1px solid var(--border-glass)' }}>
         <div className="logo-section">
-          <div className="logo-icon"><img src="/logo.svg" alt="" aria-hidden="true" /></div>
+          <div className="logo-icon"><Logo /></div>
           <h1 className="logo-text">Poke<span>Keep</span></h1>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
@@ -175,7 +176,7 @@ function SharedCollection({ shareToken }) {
 
       {/* Title block based on active share view */}
       <div className="glass-panel" style={{ marginBottom: '1.5rem' }}>
-        <h2 style={{ fontSize: '1.25rem', color: '#fff', textTransform: 'capitalize' }}>
+        <h2 style={{ fontSize: '1.25rem', color: 'var(--text-strong)', textTransform: 'capitalize' }}>
           {owner}&apos;s {listType === 'trade' ? 'Trade Binder' : listType === 'wishlist' ? 'Wanted Wishlist' : 'Pokémon Collection'}
         </h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
@@ -367,7 +368,7 @@ function SharedCollection({ shareToken }) {
 
       {/* Card Detail Inspector Modal (Shared Readonly View) */}
       {activeCard && (
-        <div style={{
+        <div className="modal-overlay" style={{
           position: 'fixed',
           top: 0, left: 0, right: 0, bottom: 0,
           backgroundColor: 'rgba(0,0,0,0.7)',
@@ -375,8 +376,7 @@ function SharedCollection({ shareToken }) {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 999,
-          padding: '1.5rem'
+          zIndex: 999
         }} onClick={() => setActiveCard(null)}>
           <div className="glass-panel" style={{
             maxWidth: '680px',
@@ -430,7 +430,7 @@ function SharedCollection({ shareToken }) {
                 }}>
                   {activeCard.rarity || 'Common'}
                 </span>
-                <h3 style={{ fontSize: '1.5rem', color: '#fff', lineHeight: 1.2 }}>{activeCard.name}</h3>
+                <h3 style={{ fontSize: '1.5rem', color: 'var(--text-strong)', lineHeight: 1.2 }}>{activeCard.name}</h3>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{activeCard.set_name} • Card #{activeCard.number}</p>
               </div>
 
@@ -443,7 +443,7 @@ function SharedCollection({ shareToken }) {
                 </div>
                 <div>
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>OWNED QUANTITY</div>
-                  <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#fff' }}>
+                  <div style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--text-strong)' }}>
                     x{activeCard.quantity}
                   </div>
                 </div>
@@ -454,24 +454,24 @@ function SharedCollection({ shareToken }) {
                   <strong>Card Details:</strong>
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.8rem' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Supertype:</span> <span style={{ color: '#fff' }}>{activeCard.supertype}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>Supertype:</span> <span style={{ color: 'var(--text-strong)' }}>{activeCard.supertype}</span>
                   {activeCard.types.length > 0 && (
                     <>
                       <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>Types:</span> 
-                      <span style={{ color: '#fff' }}>{activeCard.types.join(', ')}</span>
+                      <span style={{ color: 'var(--text-strong)' }}>{activeCard.types.join(', ')}</span>
                     </>
                   )}
                   {activeCard.subtypes.length > 0 && (
                     <>
                       <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>Subtypes:</span> 
-                      <span style={{ color: '#fff' }}>{activeCard.subtypes.join(', ')}</span>
+                      <span style={{ color: 'var(--text-strong)' }}>{activeCard.subtypes.join(', ')}</span>
                     </>
                   )}
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.8rem', marginTop: '0.25rem' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Condition:</span> <span style={{ color: '#fff' }}>{activeCard.condition}</span>
-                  <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>Printing:</span> <span style={{ color: '#fff' }}>{activeCard.printing}</span>
-                  <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>Language:</span> <span style={{ color: '#fff' }}>{activeCard.language}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>Condition:</span> <span style={{ color: 'var(--text-strong)' }}>{activeCard.condition}</span>
+                  <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>Printing:</span> <span style={{ color: 'var(--text-strong)' }}>{activeCard.printing}</span>
+                  <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>Language:</span> <span style={{ color: 'var(--text-strong)' }}>{activeCard.language}</span>
                 </div>
               </div>
             </div>

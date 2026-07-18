@@ -1,6 +1,7 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords } from 'lucide-react';
 import Login from './components/Login';
+import Logo from './components/Logo';
 import { pushBackGuard } from './utils/useBackGuard';
 
 // View components are code-split so heavy deps (recharts in the chart views)
@@ -28,7 +29,7 @@ class ErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: '2rem', color: '#fff', background: 'rgba(255,0,0,0.1)', border: '1px solid red', borderRadius: '8px', margin: '2rem' }}>
+        <div style={{ padding: '2rem', color: 'var(--text-strong)', background: 'rgba(255,0,0,0.1)', border: '1px solid red', borderRadius: '8px', margin: '2rem' }}>
           <h2 style={{ fontSize: '1.2rem', marginBottom: '1rem', color: 'var(--accent-red)' }}>Something went wrong.</h2>
           <pre style={{ whiteSpace: 'pre-wrap', color: '#ff8888', background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '4px', fontSize: '0.85rem' }}>{this.state.error && this.state.error.toString()}</pre>
           <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.75rem', marginTop: '1rem', color: 'var(--text-secondary)' }}>{this.state.error && this.state.error.stack}</pre>
@@ -251,7 +252,7 @@ function App() {
       <header className="app-header" style={{ position: 'relative' }}>
         <div className="logo-section">
           <div className="logo-icon">
-            <img src="/logo.svg" alt="" aria-hidden="true" />
+            <Logo />
           </div>
           <h1 className="logo-text">Bind<span>arr</span></h1>
         </div>
@@ -315,7 +316,7 @@ function App() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
             <Sparkles size={14} style={{ color: 'var(--accent-yellow)' }} />
-            <span>Hello, <strong style={{ color: '#fff' }}>{user.username}</strong> ({user.role})</span>
+            <span>Hello, <strong style={{ color: 'var(--text-strong)' }}>{user.username}</strong> ({user.role})</span>
           </div>
           <button
             onClick={handleLogout}

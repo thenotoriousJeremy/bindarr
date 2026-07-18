@@ -18,6 +18,10 @@ router.get('/', async (req, res) => {
         d.name,
         d.description,
         d.game,
+        d.format,
+        d.category,
+        d.accent_color,
+        d.target_size,
         d.created_at,
         d.checked_out,
         d.checked_out_at,
@@ -39,18 +43,52 @@ router.get('/', async (req, res) => {
 
 // Create Deck
 router.post('/', async (req, res) => {
-  const { name, description = '', game = 'pokemon' } = req.body;
+  const { 
+    name, 
+    description = '', 
+    game = 'pokemon',
+    format = 'Standard',
+    category = 'Competitive',
+    accent_color = '#eab308',
+    target_size = 60,
+    decklist_text = ''
+  } = req.body;
+  
   if (!name) {
     return res.status(400).json({ error: 'Deck name is required' });
   }
   const deckGame = ['pokemon', 'mtg'].includes(game) ? game : 'pokemon';
+  const targetSizeNum = parseInt(target_size, 10) || 60;
 
   try {
     const result = await db.run(
-      `INSERT INTO decks (name, description, game, user_id) VALUES (?, ?, ?, ?)`,
-      [name, description, deckGame, req.user.id]
+      `INSERT INTO decks (name, description, game, format, category, accent_color, target_size, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [name, description, deckGame, format, category, accent_color, targetSizeNum, req.user.id]
     );
-    res.status(201).json({ message: 'Deck created successfully', id: result.lastID });
+    const newDeckId = result.lastID;
+
+    // Optional decklist import
+    if (decklist_text && typeof decklist_text === 'string') {
+      const lines = decklist_text.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const match = trimmed.match(/^(\d+)x?\s+(.+)$/i);
+        if (match) {
+          const qty = parseInt(match[1], 10);
+          const cardName = match[2].trim();
+          const card = await db.get(`SELECT id FROM card_cache WHERE LOWER(name) = LOWER(?) AND game = ? LIMIT 1`, [cardName, deckGame]);
+          if (card) {
+            await db.run(
+              `INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, ?, ?) ON CONFLICT(deck_id, card_id) DO UPDATE SET quantity = quantity + EXCLUDED.quantity`,
+              [newDeckId, card.id, qty]
+            );
+          }
+        }
+      }
+    }
+
+    res.status(201).json({ message: 'Deck created successfully', id: newDeckId });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to create deck' });

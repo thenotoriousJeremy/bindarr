@@ -44,6 +44,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const [collection, setCollection] = useState([]);
   const [locations, setLocations] = useState([]);
   const [setsList, setSetsList] = useState([]);
+  const [userDecks, setUserDecks] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -95,8 +96,18 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     fetchCollection();
     fetchLocations();
     fetchSets();
+    fetchDecks();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statsTrigger, subTab, tradeOnly]);
+
+  const fetchDecks = async () => {
+    try {
+      const res = await fetch('/api/decks');
+      if (res.ok) setUserDecks(await res.json());
+    } catch (err) {
+      console.error('Error fetching decks:', err);
+    }
+  };
 
   const fetchCollection = async () => {
     try {
@@ -396,7 +407,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
             <SlidersHorizontal size={15} />
             Filters
             {activeFilterCount > 0 && (
-              <span style={{ background: 'var(--accent-red)', color: '#fff', fontSize: '0.65rem', fontWeight: 900, borderRadius: '999px', padding: '1px 7px', minWidth: '18px', textAlign: 'center' }}>
+              <span style={{ background: 'var(--accent-red)', color: 'var(--text-strong)', fontSize: '0.65rem', fontWeight: 900, borderRadius: '999px', padding: '1px 7px', minWidth: '18px', textAlign: 'center' }}>
                 {activeFilterCount}
               </span>
             )}
@@ -498,7 +509,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
             <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <input type="checkbox" id="stackCardsOpt" checked={stackCards} onChange={(e) => setStackCards(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
-                <label htmlFor="stackCardsOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.8rem', fontWeight: 700, color: '#fff' }}>
+                <label htmlFor="stackCardsOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-strong)' }}>
                   Stack Duplicates
                 </label>
               </div>
@@ -548,7 +559,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       {/* Result summary bar */}
       {!loading && !selectMode && (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', fontSize: '0.78rem', color: 'var(--text-secondary)', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <span><strong style={{ color: '#fff' }}>{displayCards.length}</strong> {displayCards.length === 1 ? 'card' : 'cards'}</span>
+          <span><strong style={{ color: 'var(--text-strong)' }}>{displayCards.length}</strong> {displayCards.length === 1 ? 'card' : 'cards'}</span>
           <span>Total value <strong style={{ color: 'var(--accent-yellow)' }}>${formatPrice(totalValue)}</strong></span>
         </div>
       )}
@@ -556,7 +567,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       {/* Bulk action bar */}
       {selectMode && (
         <div className="glass-panel" style={{ marginBottom: '1rem', padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', position: 'sticky', top: '0.5rem', zIndex: 30 }}>
-          <span style={{ fontWeight: 800, color: '#fff', fontSize: '0.85rem' }}>{selectedIds.size} selected</span>
+          <span style={{ fontWeight: 800, color: 'var(--text-strong)', fontSize: '0.85rem' }}>{selectedIds.size} selected</span>
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={() => setSelectedIds(new Set(filteredCollection.map(i => i.entry_id)))}>Select all ({filteredCollection.length})</button>
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={clearSelection}>Clear</button>
           <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
@@ -585,6 +596,11 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
             {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
           </select>
           <button className="btn btn-primary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!bulkMoveTarget || !selectedIds.size} onClick={() => runBulk('move', bulkMoveTarget === 'unassign' ? null : bulkMoveTarget)}>Apply Move</button>
+          <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
+          <select className="select-control" value="" disabled={!selectedIds.size} onChange={(e) => { if (e.target.value) runBulk('add_to_deck', e.target.value); e.target.value = ''; }} style={{ fontSize: '0.72rem', maxWidth: '160px', padding: '0.3rem 0.4rem' }}>
+            <option value="">Add to Deck…</option>
+            {userDecks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem', marginLeft: 'auto' }} onClick={exitSelectMode}>Done</button>
         </div>
       )}
@@ -612,7 +628,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
               >
                 <div className="tcg-card-inner" style={{ ...rarityStyle, ...(selected ? { outline: '3px solid var(--accent-red)', outlineOffset: '2px' } : {}) }}>
                   {selectMode && (
-                    <div style={{ position: 'absolute', top: '6px', right: '6px', zIndex: 20, width: '22px', height: '22px', borderRadius: '50%', background: selected ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.8rem', fontWeight: 900 }}>{selected ? '✓' : ''}</div>
+                    <div style={{ position: 'absolute', top: '6px', right: '6px', zIndex: 20, width: '22px', height: '22px', borderRadius: '50%', background: selected ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-strong)', fontSize: '0.8rem', fontWeight: 900 }}>{selected ? '✓' : ''}</div>
                   )}
                   <img src={item.image_url} alt={item.name} className="tcg-card-image" loading="lazy" draggable={false} />
                   {getFoilOverlayClass(item.printing) && (
@@ -657,7 +673,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                       padding: '2px 5px',
                       borderRadius: '3px',
                       background: 'rgba(0, 0, 0, 0.75)',
-                      color: '#fff',
+                      color: 'var(--text-strong)',
                       border: '1px solid rgba(255, 255, 255, 0.1)',
                       textTransform: 'uppercase'
                     }}>
@@ -728,7 +744,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                           )}
                         </div>
                         <div style={{ minWidth: 0, flex: 1 }}>
-                          <div onClick={() => activateCard(item)} {...pressHandlers(item.entry_id)} style={{ fontWeight: 700, color: '#fff', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{getCardDisplayName(item.name, item.language)}</div>
+                          <div onClick={() => activateCard(item)} {...pressHandlers(item.entry_id)} style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{getCardDisplayName(item.name, item.language)}</div>
                           <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                             <span>{item.set_name} • #{item.number}</span>
                             <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 3px', borderRadius: '3px', flexShrink: 0, ...getRarityBadgeStyle(item.rarity) }}>
@@ -753,7 +769,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                     </td>
                     <td style={{ textAlign: 'right', verticalAlign: 'top', paddingTop: '0.6rem' }}>
                       {item.quantity > 1 && (
-                        <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.85rem' }}>x{item.quantity}</div>
+                        <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.85rem' }}>x{item.quantity}</div>
                       )}
                       <div style={{ fontSize: '0.7rem', color: 'var(--accent-yellow)', fontWeight: 600 }}>${formatPrice(item.price_trend)}</div>
                     </td>

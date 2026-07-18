@@ -7,7 +7,8 @@ const {
   loadCompartments,
   locationAcceptsCard,
   compartmentAcceptsCard,
-  sortCards
+  sortCards,
+  rebalanceCompartmentByScheme
 } = require('../utils/compartmentSort');
 const { defaultCompartmentPlan, normalizeRuleConfig } = require('../utils/collectionHelpers');
 
@@ -18,16 +19,18 @@ router.use(authenticateToken);
 // 1. Get Storage Locations with Compartment Summaries
 router.get('/locations', async (req, res) => {
   try {
+    // Subqueries, not a joined SUM: joining compartments to collection fans each
+    // compartment row out once per card, which inflated total_capacity by the
+    // card count. Correlated aggregates keep each sum independent.
     const locations = await db.all(`
       SELECT l.*,
-             COUNT(DISTINCT cp.id) as compartment_count,
-             COALESCE(SUM(cp.capacity), 0) as total_capacity,
-             COALESCE(SUM(c.quantity), 0) as total_cards
+             (SELECT COUNT(*) FROM compartments WHERE location_id = l.id) as compartment_count,
+             (SELECT COALESCE(SUM(capacity), 0) FROM compartments WHERE location_id = l.id) as total_capacity,
+             (SELECT COALESCE(SUM(quantity), 0) FROM collection
+                WHERE user_id = l.user_id
+                  AND compartment_id IN (SELECT id FROM compartments WHERE location_id = l.id)) as total_cards
       FROM locations l
-      LEFT JOIN compartments cp ON l.id = cp.location_id
-      LEFT JOIN collection c ON cp.id = c.compartment_id AND c.user_id = l.user_id
       WHERE l.user_id = ?
-      GROUP BY l.id
     `, [req.user.id]);
     res.json(locations);
   } catch (error) {
@@ -106,7 +109,7 @@ router.put('/locations/:id', async (req, res) => {
     return res.status(400).json({ error: 'rule_config must be valid JSON' });
   }
   try {
-    const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    const loc = await db.get(`SELECT id, sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) {
       return res.status(404).json({ error: 'Location not found' });
     }
@@ -115,6 +118,17 @@ router.put('/locations/:id', async (req, res) => {
       const dup = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ? AND id != ?`, [name, req.user.id, id]);
       if (dup) {
         return res.status(400).json({ error: 'A location with this name already exists' });
+      }
+    }
+
+    // Switching to Custom: bake the outgoing scheme into stored positions so the
+    // manual order starts from the currently-sorted layout instead of stale
+    // positions (which would render jumbled). Must run before the UPDATE, while
+    // loc.sort_order still holds the old scheme.
+    if (sort_order === 'custom' && loc.sort_order && loc.sort_order !== 'custom') {
+      const comps = await db.all(`SELECT id FROM compartments WHERE location_id = ?`, [id]);
+      for (const c of comps) {
+        await rebalanceCompartmentByScheme(db, c.id, loc.sort_order, foil_sorting || loc.foil_sorting);
       }
     }
 
@@ -273,6 +287,97 @@ router.delete('/locations/:id/compartments/:comp_id', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to delete compartment' });
+  }
+});
+
+// Flat compartment routes (compartment id is globally unique). The storage UI
+// edits rows/pages by bare compartment id; resolve the owning location for auth.
+async function getOwnedCompartment(compId, userId) {
+  return db.get(`
+    SELECT cp.*, l.id AS loc_id, l.type AS loc_type, l.sort_order, l.foil_sorting
+    FROM compartments cp JOIN locations l ON cp.location_id = l.id
+    WHERE cp.id = ? AND l.user_id = ?`, [compId, userId]);
+}
+
+router.patch('/compartments/:id', async (req, res) => {
+  const { id } = req.params;
+  const updateAll = req.query.updateAll === 'true';
+  const { label, capacity, rule_config, locked } = req.body;
+  try {
+    const comp = await getOwnedCompartment(id, req.user.id);
+    if (!comp) return res.status(404).json({ error: 'Compartment not found' });
+
+    let ruleConfigJson;
+    if (rule_config !== undefined) {
+      try { ruleConfigJson = normalizeRuleConfig(rule_config); }
+      catch { return res.status(400).json({ error: 'rule_config must be valid JSON' }); }
+    }
+
+    if (capacity !== undefined) {
+      const cap = Math.max(1, parseInt(capacity, 10) || 1);
+      if (updateAll) await db.run(`UPDATE compartments SET capacity = ? WHERE location_id = ?`, [cap, comp.loc_id]);
+      else await db.run(`UPDATE compartments SET capacity = ? WHERE id = ?`, [cap, id]);
+    }
+    if (label !== undefined) await db.run(`UPDATE compartments SET label = ? WHERE id = ?`, [label || null, id]);
+    if (locked !== undefined) await db.run(`UPDATE compartments SET locked = ? WHERE id = ?`, [locked ? 1 : 0, id]);
+    if (rule_config !== undefined) await db.run(`UPDATE compartments SET rule_config = ? WHERE id = ?`, [ruleConfigJson, id]);
+
+    // Evict cards this row/page no longer accepts after a rule change.
+    let evicted = 0;
+    if (rule_config !== undefined) {
+      const cfg = ruleConfigJson ? JSON.parse(ruleConfigJson) : null;
+      const compForCheck = { ruleConfig: cfg };
+      const stored = await db.all(`
+        SELECT c.id AS entry_id, c.printing, c.language,
+               cc.name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.game,
+               cc.price_trend, cc.cmc, cc.color_identity
+        FROM collection c JOIN card_cache cc ON c.card_id = cc.id
+        WHERE c.compartment_id = ? AND c.user_id = ?`, [id, req.user.id]);
+      for (const entry of stored) {
+        try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
+        if (!compartmentAcceptsCard(compForCheck, entry)) {
+          await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE id = ? AND user_id = ?`, [entry.entry_id, req.user.id]);
+          evicted++;
+        }
+      }
+    }
+    res.json({ message: 'Compartment updated', evicted });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to update compartment' });
+  }
+});
+
+router.delete('/compartments/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const comp = await getOwnedCompartment(id, req.user.id);
+    if (!comp) return res.status(404).json({ error: 'Compartment not found' });
+    const total = await db.get(`SELECT COUNT(*) AS count FROM compartments WHERE location_id = ?`, [comp.loc_id]);
+    if (total.count <= 1) return res.status(400).json({ error: 'Cannot delete the last compartment of a location' });
+    await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE compartment_id = ? AND user_id = ?`, [id, req.user.id]);
+    await db.run(`DELETE FROM compartments WHERE id = ?`, [id]);
+    res.json({ message: 'Compartment deleted (cards inside moved to Unsorted)' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to delete compartment' });
+  }
+});
+
+router.put('/compartments/:id/filters', async (req, res) => {
+  const { id } = req.params;
+  const { filters } = req.body;
+  try {
+    const comp = await getOwnedCompartment(id, req.user.id);
+    if (!comp) return res.status(404).json({ error: 'Compartment not found' });
+    await db.run(`DELETE FROM compartment_assignments WHERE compartment_id = ?`, [id]);
+    for (const filterVal of (Array.isArray(filters) ? filters : [])) {
+      if (filterVal) await db.run(`INSERT OR IGNORE INTO compartment_assignments (compartment_id, filter_value) VALUES (?, ?)`, [id, filterVal]);
+    }
+    res.json({ message: 'Filters updated' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to update filters' });
   }
 });
 

@@ -1050,7 +1050,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 <button
                   type="button"
                   onClick={resetGuide}
-                  style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', pointerEvents: 'auto', zIndex: 10, fontSize: '0.68rem', fontWeight: 700, color: '#fff', background: 'rgba(0,0,0,0.6)', border: '1px solid rgba(255,255,255,0.4)', borderRadius: 999, padding: '0.25rem 0.7rem', cursor: 'pointer' }}
+                  style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', pointerEvents: 'auto', zIndex: 10, fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-strong)', background: 'rgba(0,0,0,0.6)', border: '1px solid rgba(255,255,255,0.4)', borderRadius: 999, padding: '0.25rem 0.7rem', cursor: 'pointer' }}
                 >
                   Reset box
                 </button>
@@ -1125,7 +1125,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                     if (m) { const code = setScanCode(m); if (code && code !== scanSetCode) setScanSetCode(code); }
                   }, 150)}
                   placeholder={scanGame === 'mtg' ? 'Search set name or code (e.g. Foundations, FDN)' : 'Search set name or id (e.g. Surging Sparks, sv8)'}
-                  style={{ flex: 1, padding: '0.3rem 0.5rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.06)', border: `1px solid ${scanSetCode ? 'var(--type-grass)' : 'var(--border-glass)'}`, borderRadius: 'var(--radius-sm)', color: '#fff' }}
+                  style={{ flex: 1, padding: '0.3rem 0.5rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.06)', border: `1px solid ${scanSetCode ? 'var(--type-grass)' : 'var(--border-glass)'}`, borderRadius: 'var(--radius-sm)', color: 'var(--text-strong)' }}
                 />
                 {scanSetCode && (
                   <button type="button" className="btn btn-secondary" style={{ fontSize: '0.6rem', padding: '0.2rem 0.4rem' }} onClick={() => { setScanSetCode(''); setSetSearchOpen(false); }}>Clear</button>
@@ -1138,7 +1138,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                       key={s.id}
                       type="button"
                       onMouseDown={() => { setScanSetCode(setScanCode(s)); setSetSearchOpen(false); }}
-                      style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', width: '100%', padding: '0.4rem 0.6rem', background: 'none', border: 'none', color: '#fff', fontSize: '0.75rem', textAlign: 'left', cursor: 'pointer' }}
+                      style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', width: '100%', padding: '0.4rem 0.6rem', background: 'none', border: 'none', color: 'var(--text-strong)', fontSize: '0.75rem', textAlign: 'left', cursor: 'pointer' }}
                     >
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
                       <span style={{ color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0 }}>{setScanCode(s)}</span>
@@ -1294,7 +1294,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
       {scanStatus && (
         <div className="glass-panel" style={{ width: '100%', padding: '1rem', borderLeft: '3px solid var(--accent-red)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           {loading && <div className="spinner" style={{ width: '14px', height: '14px', margin: 0, borderWidth: '2px' }}></div>}
-          <span style={{ fontSize: '0.85rem', color: '#fff', fontWeight: 500 }}>{scanStatus}</span>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-strong)', fontWeight: 500 }}>{scanStatus}</span>
         </div>
       )}
 
@@ -1318,7 +1318,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
           <div className="glass-panel animate-fade-in" style={{ maxWidth: '420px', width: '100%', padding: '1.75rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', alignItems: 'center', textAlign: 'center', border: '1px solid var(--accent-red)' }}>
             <div>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 800 }}>{autoAddEditing ? 'Adjust & Add' : 'Exact Match Identified!'}</span>
-              <h3 style={{ fontSize: '1.25rem', color: '#fff', margin: '0.25rem 0 0.5rem 0' }}>{autoAddTargetCard.name}</h3>
+              <h3 style={{ fontSize: '1.25rem', color: 'var(--text-strong)', margin: '0.25rem 0 0.5rem 0' }}>{autoAddTargetCard.name}</h3>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: 0 }}>{autoAddTargetCard.set_name} • #{autoAddTargetCard.number}</p>
             </div>
 
@@ -1347,7 +1347,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: '#fff',
+                  color: 'var(--text-strong)',
                   fontWeight: 900,
                   fontSize: '1rem',
                   boxShadow: '0 4px 10px rgba(0,0,0,0.5)'
@@ -1460,7 +1460,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
           <div className="glass-panel animate-fade-in" style={{ maxWidth: '420px', width: '100%', padding: '1.75rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', alignItems: 'center', textAlign: 'center', border: '1px solid var(--accent-yellow)' }}>
             <div>
               <span style={{ fontSize: '0.75rem', color: 'var(--accent-yellow)', textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 800 }}>Same card scanned again</span>
-              <h3 style={{ fontSize: '1.25rem', color: '#fff', margin: '0.25rem 0 0.5rem 0' }}>{dupConfirmCard.name}</h3>
+              <h3 style={{ fontSize: '1.25rem', color: 'var(--text-strong)', margin: '0.25rem 0 0.5rem 0' }}>{dupConfirmCard.name}</h3>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: 0 }}>{dupConfirmCard.set_name} • #{dupConfirmCard.number}</p>
             </div>
 
@@ -1478,7 +1478,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 onClick={() => setDupQty(q => Math.max(1, q - 1))}
                 style={{ width: '36px', padding: '0.35rem 0', fontSize: '1rem', fontWeight: 800 }}
               >−</button>
-              <span style={{ minWidth: '2.5rem', fontSize: '1.4rem', fontWeight: 900, color: '#fff' }}>{dupQty}</span>
+              <span style={{ minWidth: '2.5rem', fontSize: '1.4rem', fontWeight: 900, color: 'var(--text-strong)' }}>{dupQty}</span>
               <button
                 type="button"
                 className="btn btn-secondary"
@@ -1548,7 +1548,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
         }}>
           <div className="glass-panel" style={{ maxWidth: '560px', width: '100%', padding: '1.75rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
-              <h3 style={{ fontSize: '1.1rem', color: '#fff', margin: 0 }}>Identified Cards Found</h3>
+              <h3 style={{ fontSize: '1.1rem', color: 'var(--text-strong)', margin: 0 }}>Identified Cards Found</h3>
               <button 
                 className="btn btn-secondary btn-icon-only" 
                 onClick={() => {
@@ -1617,7 +1617,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                     <img src={card.image_url} alt={card.name} className="tcg-card-image" />
                   </div>
                   <div className="tcg-card-info" style={{ textAlign: 'center', marginTop: '0.5rem' }}>
-                    <div className="tcg-card-name" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#fff' }}>{card.name}</div>
+                    <div className="tcg-card-name" style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-strong)' }}>{card.name}</div>
                     <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{card.set_name} • #{card.number}</div>
                     <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-yellow)', marginTop: '0.2rem' }}>${formatPrice(card.price_trend)}</div>
                   </div>
@@ -1658,7 +1658,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
       {/* Recent Scans History Panel */}
       {recentScans.length > 0 && (
         <div className="glass-panel" style={{ width: '100%', marginTop: '1rem' }}>
-          <h3 style={{ fontSize: '1rem', color: '#fff', marginBottom: '0.85rem', borderLeft: '3px solid var(--accent-red)', paddingLeft: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h3 style={{ fontSize: '1rem', color: 'var(--text-strong)', marginBottom: '0.85rem', borderLeft: '3px solid var(--accent-red)', paddingLeft: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span>Recent Scans</span>
             {recentSelect.selectMode
               ? <button className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={recentSelect.exitSelectMode}>Done</button>
@@ -1668,7 +1668,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
           {/* Bulk action bar (select mode). Same actions/endpoint as the collection page. */}
           {recentSelect.selectMode && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center', marginBottom: '0.6rem' }}>
-              <span style={{ fontWeight: 800, color: '#fff', fontSize: '0.8rem', marginRight: '0.25rem' }}>{recentSelect.selectedIds.size} selected</span>
+              <span style={{ fontWeight: 800, color: 'var(--text-strong)', fontSize: '0.8rem', marginRight: '0.25rem' }}>{recentSelect.selectedIds.size} selected</span>
               <button className="btn btn-danger" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!recentSelect.selectedIds.size} onClick={() => recentSelect.runBulk('delete', null, `Delete ${recentSelect.selectedIds.size} selected card(s)? This cannot be undone.`)}>Delete</button>
               <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!recentSelect.selectedIds.size} onClick={() => recentSelect.runBulk('trade', null)}>Mark Trade</button>
               <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!recentSelect.selectedIds.size} onClick={() => recentSelect.runBulk('list_type', 'wishlist')}>Move to Wishlist</button>
@@ -1722,7 +1722,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
               <div>
-                <h3 style={{ color: '#fff', fontSize: '1.25rem', margin: 0 }}>Add Scanned Card</h3>
+                <h3 style={{ color: 'var(--text-strong)', fontSize: '1.25rem', margin: 0 }}>Add Scanned Card</h3>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0 }}>{getCardDisplayName(selectedCard.name, language)} ({selectedCard.set_name} • #{selectedCard.number})</p>
               </div>
               <button className="btn btn-secondary btn-icon-only" onClick={closeDrawer} style={{ borderRadius: '50%' }}>
@@ -1747,7 +1747,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                       ${formatPrice(resolveCardPrice(selectedCard, printing))}
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                      Rarity: <span style={{ color: '#fff', fontWeight: 600 }}>{selectedCard.rarity || 'Common'}</span>
+                      Rarity: <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{selectedCard.rarity || 'Common'}</span>
                     </div>
                   </div>
                 </div>

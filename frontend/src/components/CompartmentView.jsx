@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Lock, Edit3 } from 'lucide-react';
 import { getPrintingBadgeStyle, getPrintingBadgeLabel, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { formatPrice } from '../utils/formatPrice';
@@ -170,12 +171,12 @@ export function FocusedCardInfo({ card, slotNumber, moveSelect = null }) {
               </span>
             )}
             {card.printing === 'Normal' && <span style={infoChipStyle}>Normal</span>}
-            {card.supertype && <span style={{ ...infoChipStyle, color: '#fff' }} title="Supertype">{card.supertype}</span>}
+            {card.supertype && <span style={{ ...infoChipStyle, color: 'var(--text-strong)' }} title="Supertype">{card.supertype}</span>}
             {(card.types || []).length > 0 && <span style={infoChipStyle} title="Types">{card.types.join(' / ')}</span>}
             {(card.subtypes || []).length > 0 && <span style={infoChipStyle} title="Subtypes">{card.subtypes.join(' / ')}</span>}
             {card.condition && <span style={infoChipStyle}>{card.condition}</span>}
             {card.language && card.language !== 'English' && <span style={infoChipStyle}>{card.language}</span>}
-            {card.quantity > 1 && <span style={{ ...infoChipStyle, color: '#fff' }}>x{card.quantity}</span>}
+            {card.quantity > 1 && <span style={{ ...infoChipStyle, color: 'var(--text-strong)' }}>x{card.quantity}</span>}
             {card.price_trend > 0 && (
               <span style={{ ...infoChipStyle, color: 'var(--accent-yellow)', marginLeft: 'auto' }}>
                 Value ${formatPrice(card.price_trend)}
@@ -199,13 +200,16 @@ export default function CompartmentView({
   highlightEntryIds = [], // Cards to highlight by entry_id (exact, packing-independent)
   targetActiveIndex = null,
   onCardClick = null,
-  
+  pulledEntryIds = [], // pull-mode: cards already pulled (show the checkout banner)
+  pullMode = false, // single click fires onCardClick directly (no select-first)
+
   // Lifted state for binder active card
   activeEntryId = undefined,
   onActiveEntryIdChange = null,
   hideFocusedCardInfo = false,
 
   // Storage Management Props (can be omitted for read-only view)
+  hideHeader = false,
   onRename = null,
   onSetCapacity = null,
   onRemove = null,
@@ -226,6 +230,9 @@ export default function CompartmentView({
 
   // Lock toggle (optional): a locked row/page is skipped by auto-filing.
   onToggleLock = null,
+  // When the whole container is locked, every row/page is skipped regardless of
+  // its own lock. Shows the per-row toggle as effectively-locked and disabled.
+  containerLocked = false,
 
   // Manual tap-to-place ("Arrange"). placementMode arms it; a picked card is
   // placed/swapped when a slot is tapped. onPlaceSlot(compartmentId, slot,
@@ -238,6 +245,10 @@ export default function CompartmentView({
   const isBinder = isBinderType(locationType);
   const isSelected = (entryId) => !!(selectedIds && selectedIds.has(entryId));
   const highlightSet = new Set(highlightEntryIds);
+  const pulledSet = new Set(pulledEntryIds);
+  // Pull mode: cards that aren't part of this pull (neither to-pull nor pulled)
+  // are context only — greyed out and inert.
+  const isGrey = (id) => pullMode && !highlightSet.has(id) && !pulledSet.has(id);
 
   // Long-press-to-arm selection, mirrors CollectionList. Coexists with the
   // swipe/coverflow touch handlers because a >10px move cancels the timer.
@@ -314,11 +325,15 @@ export default function CompartmentView({
     
   const [coverflowActiveIndex, setCoverflowActiveIndex] = useState(0);
   const lastTargetActiveRef = useRef(null);
+  const totalCardsRef = useRef(0);
 
   const touchStartRef = useRef({ x: 0, y: 0 });
   const lastWheelTimeRef = useRef(0);
   const isDraggingRef = useRef(false);
   const dragStartXRef = useRef(0);
+  // True when the last pointer gesture was a drag-scroll, so the trailing click
+  // doesn't also open the card popup (drag to scroll would otherwise pop a modal).
+  const draggedRef = useRef(false);
 
   const handleCoverflowTouchStart = (e) => {
     touchStartRef.current = {
@@ -342,10 +357,14 @@ export default function CompartmentView({
     }
   };
 
-  const coverflowContainerRef = useRef(null);
-
-  useEffect(() => {
-    const el = coverflowContainerRef.current;
+  // Callback ref (not useEffect): the coverflow div is absent on first render
+  // (cards load async, so an empty row renders first). A []-dep effect would bind
+  // to a null ref and never re-run, leaving wheel-scroll dead on desktop. A
+  // callback ref binds the non-passive wheel listener whenever the node mounts.
+  // Non-passive is required so preventDefault can stop the page from scrolling.
+  const wheelCleanup = useRef(null);
+  const coverflowContainerRef = useCallback((el) => {
+    if (wheelCleanup.current) { wheelCleanup.current(); wheelCleanup.current = null; }
     if (!el) return;
 
     const onWheel = (e) => {
@@ -356,8 +375,9 @@ export default function CompartmentView({
       const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
       if (Math.abs(delta) < 8) return;
 
+      const maxIdx = Math.max(0, totalCardsRef.current - 1);
       if (delta > 0) {
-        setCoverflowActiveIndex(prev => prev + 1);
+        setCoverflowActiveIndex(prev => Math.min(maxIdx, prev + 1));
         lastWheelTimeRef.current = now;
       } else if (delta < 0) {
         setCoverflowActiveIndex(prev => Math.max(0, prev - 1));
@@ -366,20 +386,25 @@ export default function CompartmentView({
     };
 
     el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
+    wheelCleanup.current = () => el.removeEventListener('wheel', onWheel);
   }, []);
 
   const handleCoverflowMouseDown = (e) => {
     isDraggingRef.current = true;
+    draggedRef.current = false;
     dragStartXRef.current = e.clientX;
+    // Focus the coverflow so its arrow-key handler works. Nothing else focuses
+    // this tabIndex=0 div on desktop, so keys were dead until now. preventScroll
+    // stops the page from jumping to it.
+    e.currentTarget.focus({ preventScroll: true });
   };
 
   const handleCoverflowMouseUp = (e, totalCards) => {
     if (!isDraggingRef.current) return;
     isDraggingRef.current = false;
     const diff = dragStartXRef.current - e.clientX;
-    if (diff > 35) setCoverflowActiveIndex(prev => Math.min(totalCards - 1, prev + 1));
-    else if (diff < -35) setCoverflowActiveIndex(prev => Math.max(0, prev - 1));
+    if (diff > 35) { draggedRef.current = true; setCoverflowActiveIndex(prev => Math.min(totalCards - 1, prev + 1)); }
+    else if (diff < -35) { draggedRef.current = true; setCoverflowActiveIndex(prev => Math.max(0, prev - 1)); }
   };
 
   const handleCoverflowKeyDown = (e, totalCards) => {
@@ -485,14 +510,14 @@ export default function CompartmentView({
             )}
 
             {onEditRules && (
-              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title="Set which cards this page accepts" style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem', marginLeft: 'auto', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: '#fff' } : {}) }}>
+              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title="Set which cards this page accepts" style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem', marginLeft: 'auto', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: 'var(--text-strong)' } : {}) }}>
                 {acceptsLabel}
               </button>
             )}
 
             {onToggleLock && (
-              <button type="button" className="btn btn-secondary" onClick={onToggleLock} title={compartment.locked ? 'Locked — filing skips this page. Click to unlock.' : 'Lock so filing skips this page'} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem', ...(compartment.locked ? { borderColor: 'var(--accent-yellow)', color: 'var(--accent-yellow)' } : {}) }}>
-                {compartment.locked ? '🔒 Locked' : '🔓 Lock'}
+              <button type="button" className="btn btn-secondary" onClick={onToggleLock} disabled={containerLocked} title={containerLocked ? 'Container is locked — every page is skipped by filing.' : compartment.locked ? 'Locked — filing skips this page. Click to unlock.' : 'Lock so filing skips this page'} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.55rem', padding: '0.15rem 0.4rem', opacity: containerLocked ? 0.5 : 1, ...((compartment.locked || containerLocked) ? { borderColor: 'var(--accent-yellow)', color: 'var(--accent-yellow)' } : {}) }}>
+                <Lock size={11} /> {compartment.locked ? 'Locked' : 'Lock'}
               </button>
             )}
 
@@ -578,7 +603,8 @@ export default function CompartmentView({
                     } : {}),
                     ...(card.entry_id === currentActiveId ? { border: '2.5px solid var(--accent-yellow)', boxShadow: '0 0 10px rgba(250,204,21,0.5)' } : {}),
                     ...(isSelected(card.entry_id) ? selectedOutline : {}),
-                    ...(placementMode && pickedEntryId === card.entry_id ? selectedOutline : {})
+                    ...(placementMode && pickedEntryId === card.entry_id ? selectedOutline : {}),
+                    ...(isGrey(card.entry_id) ? { opacity: 0.3, filter: 'grayscale(1) brightness(0.5)' } : {})
                   }}
                   {...pressHandlers(card.entry_id)}
                   onClick={() => {
@@ -588,6 +614,11 @@ export default function CompartmentView({
                       return;
                     }
                     if (handleSelectClick(card.entry_id)) return;
+                    if (pullMode) {
+                      // Only cards that belong to this pull are actionable.
+                      if (onCardClick && (highlightSet.has(card.entry_id) || pulledSet.has(card.entry_id))) onCardClick(card);
+                      return;
+                    }
                     if (card.entry_id === currentActiveId) onCardClick && onCardClick(card);
                     else setCurrentActiveId(card.entry_id);
                   }}
@@ -595,15 +626,15 @@ export default function CompartmentView({
                   <img src={card.image_url} alt={card.name} title={card.name} loading="lazy" decoding="async" />
                   {getFoilOverlayClass(card.printing) && <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4px' }} />}
                   <PrintingBadge printing={card.printing} />
-                  {card.checked_out_qty > 0 && (
+                  {(pullMode ? pulledSet.has(card.entry_id) : card.checked_out_qty > 0) && (
                     <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.62)', borderRadius: '4px', zIndex: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-                      <span style={{ fontSize: '0.5rem', fontWeight: 900, letterSpacing: '0.04em', color: '#fff', background: 'var(--accent-red)', padding: '2px 5px', borderRadius: '4px', transform: 'rotate(-8deg)', textTransform: 'uppercase' }}>
-                        {card.checked_out_qty < card.quantity ? `${card.checked_out_qty}/${card.quantity} Out` : 'In Play'}
+                      <span style={{ fontSize: '0.5rem', fontWeight: 900, letterSpacing: '0.04em', color: 'var(--text-strong)', background: 'var(--accent-red)', padding: '2px 5px', borderRadius: '4px', transform: 'rotate(-8deg)', textTransform: 'uppercase' }}>
+                        {pullMode ? 'Pulled' : (card.checked_out_qty < card.quantity ? `${card.checked_out_qty}/${card.quantity} Out` : 'In Play')}
                       </span>
                     </div>
                   )}
                   {selectMode && (
-                    <div style={{ position: 'absolute', top: '3px', left: '3px', zIndex: 25, width: '18px', height: '18px', borderRadius: '50%', background: isSelected(card.entry_id) ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.65rem', fontWeight: 900 }}>{isSelected(card.entry_id) ? '✓' : ''}</div>
+                    <div style={{ position: 'absolute', top: '3px', left: '3px', zIndex: 25, width: '18px', height: '18px', borderRadius: '50%', background: isSelected(card.entry_id) ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-strong)', fontSize: '0.65rem', fontWeight: 900 }}>{isSelected(card.entry_id) ? '✓' : ''}</div>
                   )}
                   {newDividers.length > 0 && (
                     <div style={{ position: 'absolute', top: 0, left: 0, transform: 'translateY(-100%)', display: 'flex', flexDirection: 'column', gap: '2px', paddingBottom: '2px', zIndex: 20 }}>
@@ -726,11 +757,17 @@ export default function CompartmentView({
       slotCounter++;
     }
 
+    totalCardsRef.current = renderedCards.length;
     let actualActiveIndex = coverflowActiveIndex;
     if (focusEntryId) {
       const targetIdx = renderedCards.findIndex(c => c.entry_id === focusEntryId);
       if (targetIdx !== -1) {
-        actualActiveIndex = targetIdx;
+        const focusKey = `focus-${focusEntryId}`;
+        if (lastTargetActiveRef.current !== focusKey) {
+          lastTargetActiveRef.current = focusKey;
+          actualActiveIndex = targetIdx;
+          setTimeout(() => setCoverflowActiveIndex(targetIdx), 0);
+        }
       }
     } else if (targetActiveIndex !== null && targetActiveIndex !== undefined) {
       // Map slot index (or recommended ghost) to renderedCards index
@@ -764,7 +801,7 @@ export default function CompartmentView({
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%', overflow: 'hidden' }}>
-        {onRename && (
+        {!hideHeader && onRename && (
           <div className="row-flash" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', background: 'rgba(0,0,0,0.1)', padding: '0.4rem 0.6rem', borderRadius: 'var(--radius-sm)', flexWrap: 'wrap' }}>
             {editingLabel ? (
               <input
@@ -780,19 +817,24 @@ export default function CompartmentView({
                 style={{ padding: '0.15rem 0.4rem', fontSize: '0.8rem', width: '150px' }}
               />
             ) : (
-              <strong onDoubleClick={() => { setLabelDraft(compartment.label || ''); setEditingLabel(true); }} title="Double-click to rename" style={{ cursor: 'pointer', fontSize: '0.85rem' }}>
-                {compartment.display_label}
-              </strong>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                <strong onDoubleClick={() => { setLabelDraft(compartment.label || ''); setEditingLabel(true); }} title="Double-click to rename" style={{ cursor: 'pointer', fontSize: '0.85rem' }}>
+                  {compartment.display_label}
+                </strong>
+                <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => { setLabelDraft(compartment.label || ''); setEditingLabel(true); }} style={{ padding: 0, width: '20px', height: '20px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} title="Rename page/row">
+                  <Edit3 size={11} />
+                </button>
+              </div>
             )}
             {onEditRules && (
-              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title="Set which cards this row accepts" style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem', marginLeft: 'auto', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: '#fff' } : {}) }}>
+              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title="Set which cards this row accepts" style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem', marginLeft: 'auto', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: 'var(--text-strong)' } : {}) }}>
                 {acceptsLabel}
               </button>
             )}
 
             {onToggleLock && (
-              <button type="button" className="btn btn-secondary" onClick={onToggleLock} title={compartment.locked ? 'Locked — filing skips this row. Click to unlock.' : 'Lock so filing skips this row'} style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem', ...(compartment.locked ? { borderColor: 'var(--accent-yellow)', color: 'var(--accent-yellow)' } : {}) }}>
-                {compartment.locked ? '🔒 Locked' : '🔓 Lock'}
+              <button type="button" className="btn btn-secondary" onClick={onToggleLock} disabled={containerLocked} title={containerLocked ? 'Container is locked — every row is skipped by filing.' : compartment.locked ? 'Locked — filing skips this row. Click to unlock.' : 'Lock so filing skips this row'} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.6rem', padding: '0.2rem 0.5rem', opacity: containerLocked ? 0.5 : 1, ...((compartment.locked || containerLocked) ? { borderColor: 'var(--accent-yellow)', color: 'var(--accent-yellow)' } : {}) }}>
+                <Lock size={12} /> {compartment.locked ? 'Locked' : 'Lock'}
               </button>
             )}
           </div>
@@ -883,10 +925,10 @@ export default function CompartmentView({
                       style={{ transform, zIndex, opacity, filter: 'none', background: card.color || 'var(--accent-red)', border: `1px solid ${card.color || 'var(--accent-red)'}`, display: 'flex', flexDirection: 'column', overflow: 'visible' }}
                       onClick={() => setCoverflowActiveIndex(i)}
                     >
-                      <div style={{ position: 'absolute', top: '-18px', left: '10px', background: card.color || 'var(--accent-red)', color: '#fff', padding: '2px 12px', borderRadius: '6px 6px 0 0', fontSize: '0.7rem', fontWeight: 'bold', boxShadow: '0 -2px 5px rgba(0,0,0,0.3)', whiteSpace: 'nowrap' }}>
+                      <div style={{ position: 'absolute', top: '-18px', left: '10px', background: card.color || 'var(--accent-red)', color: 'var(--text-strong)', padding: '2px 12px', borderRadius: '6px 6px 0 0', fontSize: '0.7rem', fontWeight: 'bold', boxShadow: '0 -2px 5px rgba(0,0,0,0.3)', whiteSpace: 'nowrap' }}>
                         {card.label}
                       </div>
-                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '0.5rem', color: '#fff' }}>
+                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '0.5rem', color: 'var(--text-strong)' }}>
                         <div style={{ fontSize: '1.2rem', fontWeight: 'bold', textAlign: 'center', padding: '0 1rem' }}>{card.label}</div>
                       </div>
                     </div>
@@ -912,15 +954,23 @@ export default function CompartmentView({
                   <div
                     key={card.entry_id}
                     className={`box-coverflow-card ${offset === 0 ? 'active' : ''}`}
-                    style={{ transform, zIndex, opacity, filter, ...highlightStyle, ...getCardRarityBorder(card.rarity), ...(isSelected(card.entry_id) ? selectedOutline : {}), ...(placementMode && pickedEntryId === card.entry_id ? selectedOutline : {}) }}
+                    style={{ transform, zIndex, opacity, filter, ...highlightStyle, ...getCardRarityBorder(card.rarity), ...(isSelected(card.entry_id) ? selectedOutline : {}), ...(placementMode && pickedEntryId === card.entry_id ? selectedOutline : {}), ...(isGrey(card.entry_id) ? { opacity: opacity * 0.3, filter: 'grayscale(1) brightness(0.5)' } : {}) }}
                     {...pressHandlers(card.entry_id)}
                     onClick={() => {
+                      if (draggedRef.current) { draggedRef.current = false; return; }
                       if (placementMode) {
                         if (pickedEntryId && pickedEntryId !== card.entry_id) onPlaceSlot(compartment.id, card.__slotNumber, card.entry_id);
                         else onPickCard(card.entry_id);
                         return;
                       }
                       if (handleSelectClick(card.entry_id)) return;
+                      if (pullMode) {
+                        // Off-center: bring it forward. Centered: only actionable
+                        // if it's part of this pull.
+                        if (offset !== 0) { setCoverflowActiveIndex(i); return; }
+                        if (onCardClick && (highlightSet.has(card.entry_id) || pulledSet.has(card.entry_id))) onCardClick(card);
+                        return;
+                      }
                       if (offset === 0 && onCardClick) onCardClick(card);
                       else setCoverflowActiveIndex(i);
                     }}
@@ -928,15 +978,15 @@ export default function CompartmentView({
                     {absOffset <= IMG_WINDOW && <img src={card.image_url} alt={card.name} decoding="async" />}
                     {getFoilOverlayClass(card.printing) && <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4.5px' }} />}
                     <PrintingBadge printing={card.printing} />
-                    {card.checked_out_qty > 0 && (
+                    {(pullMode ? pulledSet.has(card.entry_id) : card.checked_out_qty > 0) && (
                       <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.62)', borderRadius: '5px', zIndex: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-                        <span style={{ fontSize: '0.7rem', fontWeight: 900, letterSpacing: '0.04em', color: '#fff', background: 'var(--accent-red)', padding: '3px 8px', borderRadius: '4px', transform: 'rotate(-8deg)', textTransform: 'uppercase' }}>
-                          {card.checked_out_qty < card.quantity ? `${card.checked_out_qty}/${card.quantity} Out` : 'In Play'}
+                        <span style={{ fontSize: '0.7rem', fontWeight: 900, letterSpacing: '0.04em', color: 'var(--text-strong)', background: 'var(--accent-red)', padding: '3px 8px', borderRadius: '4px', transform: 'rotate(-8deg)', textTransform: 'uppercase' }}>
+                          {pullMode ? 'Pulled' : (card.checked_out_qty < card.quantity ? `${card.checked_out_qty}/${card.quantity} Out` : 'In Play')}
                         </span>
                       </div>
                     )}
                     {selectMode && (
-                      <div style={{ position: 'absolute', top: '4px', left: '4px', zIndex: 25, width: '20px', height: '20px', borderRadius: '50%', background: isSelected(card.entry_id) ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.7rem', fontWeight: 900 }}>{isSelected(card.entry_id) ? '✓' : ''}</div>
+                      <div style={{ position: 'absolute', top: '4px', left: '4px', zIndex: 25, width: '20px', height: '20px', borderRadius: '50%', background: isSelected(card.entry_id) ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-strong)', fontSize: '0.7rem', fontWeight: 900 }}>{isSelected(card.entry_id) ? '✓' : ''}</div>
                     )}
                     
                     {isTarget && (

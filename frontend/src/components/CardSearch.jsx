@@ -239,7 +239,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       {/* Search Header Panel */}
       <div className="glass-panel" style={{ marginBottom: '2rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem' }}>
-          <h2 style={{ fontSize: '1.25rem', margin: 0, color: '#fff' }}>Search {game === 'mtg' ? 'Magic: The Gathering' : 'Pokémon'} Cards</h2>
+          <h2 style={{ fontSize: '1.25rem', margin: 0, color: 'var(--text-strong)' }}>Search {game === 'mtg' ? 'Magic: The Gathering' : 'Pokémon'} Cards</h2>
           <div className="sub-nav-tabs" style={{ margin: 0 }}>
             {[['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([val, label]) => (
               <button
@@ -428,7 +428,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
-                <h3 style={{ color: '#fff', fontSize: '1.25rem' }}>Add Card to Collection</h3>
+                <h3 style={{ color: 'var(--text-strong)', fontSize: '1.25rem' }}>Add Card to Collection</h3>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{selectedCard.name} ({selectedCard.set_name} • #{selectedCard.number})</p>
               </div>
               <button className="btn btn-secondary btn-icon-only" onClick={closeDrawer} style={{ borderRadius: '50%' }}>
@@ -441,7 +441,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
               <div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>TCG MARKET PRICE ({printing})</div>
                 <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>${formatPrice(resolveCardPrice(selectedCard, printing))}</div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Rarity: <span style={{ color: '#fff', fontWeight: 600 }}>{selectedCard.rarity}</span></div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Rarity: <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{selectedCard.rarity}</span></div>
               </div>
             </div>
 

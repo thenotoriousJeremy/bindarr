@@ -344,6 +344,20 @@ async function initDb() {
     await run(`ALTER TABLE deck_cards ADD COLUMN checked_out INTEGER DEFAULT 0`);
   }
 
+  const decksCols = await all(`PRAGMA table_info(decks)`);
+  if (!decksCols.some(c => c.name === 'format')) {
+    await run(`ALTER TABLE decks ADD COLUMN format TEXT DEFAULT 'Standard'`);
+  }
+  if (!decksCols.some(c => c.name === 'category')) {
+    await run(`ALTER TABLE decks ADD COLUMN category TEXT DEFAULT 'Competitive'`);
+  }
+  if (!decksCols.some(c => c.name === 'accent_color')) {
+    await run(`ALTER TABLE decks ADD COLUMN accent_color TEXT DEFAULT '#eab308'`);
+  }
+  if (!decksCols.some(c => c.name === 'target_size')) {
+    await run(`ALTER TABLE decks ADD COLUMN target_size INTEGER DEFAULT 60`);
+  }
+
   // Lock flags: a locked compartment/location is skipped by auto-filing
   // (recommendSlot) so it never receives new cards; existing cards stay put and
   // manual moves still work.

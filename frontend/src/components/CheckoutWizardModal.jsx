@@ -26,13 +26,15 @@ const COPY = {
 // it and where it returns). Located pages render their compartment layout with
 // the cards highlighted by entry_id. Select-all works per page, per container,
 // and globally.
-const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose }) => {
+const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose, onCancel }) => {
   const copy = COPY[mode] || COPY.checkout;
+  const cancel = onCancel || onClose; // X / overlay / back = cancel (revert the toggle)
   const [done, setDone] = useState(new Set());
+  const [expanded, setExpanded] = useState({}); // container.key -> user forced open after auto-collapse
   const [setsList, setSetsList] = useState([]);
   const [grids, setGrids] = useState({}); // page.key -> { compartment, cards, locationType, sortOrder }
 
-  useBackGuard(true, onClose);
+  useBackGuard(true, cancel);
 
   // Flatten to pulls, then build container -> page tree plus a flat page list.
   const { containers, pagesFlat, missing, totalPulls, allEntryIds } = useMemo(() => {
@@ -189,7 +191,7 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose }) => {
               {isDone && <Check size={14} color="#000" strokeWidth={3} />}
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ color: '#fff', fontSize: '0.9rem', fontWeight: 600, textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.6 : 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{ color: 'var(--text-strong)', fontSize: '0.9rem', fontWeight: 600, textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.6 : 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {pull.card_name}
               </div>
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
@@ -210,16 +212,23 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose }) => {
   const renderGrid = (page) => {
     const grid = grids[page.key];
     if (!grid) return null;
+    // Still-to-pull cards stay highlighted; pulled ones drop the highlight and
+    // fade darker, in place. No forced focus so the view doesn't jump around.
+    const undoneIds = page.pulls.filter(p => !done.has(p.entry_id)).map(p => p.entry_id);
+    const doneIds = page.pulls.filter(p => done.has(p.entry_id)).map(p => p.entry_id);
     return (
-      <div style={{ background: 'rgba(0,0,0,0.25)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-md)', padding: '0.85rem', marginBottom: '0.6rem', pointerEvents: 'none', overflow: 'hidden' }}>
+      <div style={{ background: 'rgba(0,0,0,0.25)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-md)', padding: '0.85rem', marginBottom: '0.6rem', overflow: 'hidden' }}>
         <CompartmentView
           compartment={grid.compartment}
           cards={grid.cards}
           locationType={grid.locationType}
           sortOrder={grid.sortOrder}
           setsList={setsList}
-          highlightEntryIds={page.pulls.map(p => p.entry_id)}
-          focusEntryId={page.pulls[0]?.entry_id}
+          highlightEntryIds={undoneIds}
+          pulledEntryIds={doneIds}
+          focusEntryId={undoneIds[0]}
+          pullMode
+          onCardClick={(card) => toggleOne(card.entry_id)}
           hideFocusedCardInfo
         />
       </div>
@@ -228,8 +237,9 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose }) => {
 
   return (
     <div
-      style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}
-      onClick={onClose}
+      className="modal-overlay"
+      style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+      onClick={cancel}
     >
       <div
         className="glass-panel"
@@ -240,10 +250,10 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose }) => {
         <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border-glass)', flexShrink: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
             <div>
-              <h2 style={{ fontSize: '1.35rem', color: '#fff', fontWeight: 800, margin: '0 0 0.25rem 0' }}>{copy.title}</h2>
+              <h2 style={{ fontSize: '1.35rem', color: 'var(--text-strong)', fontWeight: 800, margin: '0 0 0.25rem 0' }}>{copy.title}</h2>
               <p style={{ color: 'var(--text-secondary)', margin: 0, fontSize: '0.85rem' }}>{copy.subtitle}</p>
             </div>
-            <button className="btn btn-secondary btn-icon-only" onClick={onClose} aria-label="Close">
+            <button className="btn btn-secondary btn-icon-only" onClick={cancel} aria-label="Cancel">
               <X size={16} />
             </button>
           </div>
@@ -280,24 +290,31 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose }) => {
 
           {containers.map(container => {
             const singlePage = container.pages.length === 1;
+            const complete = container.entryIds.length > 0 && container.entryIds.every(id => done.has(id));
+            const collapsed = complete && !expanded[container.key];
+            const toggleExpand = () => setExpanded(prev => ({ ...prev, [container.key]: !prev[container.key] }));
             return (
               <div key={container.key} style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                 {/* Container header (with container-level select-all) */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                  <div style={{ width: '32px', height: '32px', borderRadius: '8px', flexShrink: 0, background: container.unassigned ? 'rgba(148,163,184,0.15)' : 'rgba(59,130,246,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: container.unassigned ? 'var(--text-muted)' : 'var(--accent-blue)' }}>
-                    {container.unassigned ? <Package size={16} /> : <MapPin size={16} />}
+                <div
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: complete ? 'pointer' : 'default' }}
+                  onClick={complete ? toggleExpand : undefined}
+                >
+                  <div style={{ width: '32px', height: '32px', borderRadius: '8px', flexShrink: 0, background: complete ? 'var(--accent-green)' : container.unassigned ? 'rgba(148,163,184,0.15)' : 'rgba(59,130,246,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: complete ? '#000' : container.unassigned ? 'var(--text-muted)' : 'var(--accent-blue)' }}>
+                    {complete ? <Check size={16} strokeWidth={3} /> : container.unassigned ? <Package size={16} /> : <MapPin size={16} />}
                   </div>
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ color: '#fff', fontWeight: 700, fontSize: '0.95rem' }}>{container.location_name}</div>
-                    {singlePage && container.pages[0].compartment_display && (
+                    <div style={{ color: 'var(--text-strong)', fontWeight: 700, fontSize: '0.95rem' }}>{container.location_name}</div>
+                    {collapsed ? (
+                      <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{container.entryIds.length} {copy.verb} · tap to show</div>
+                    ) : singlePage && container.pages[0].compartment_display && (
                       <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{container.pages[0].compartment_display}</div>
                     )}
                   </div>
-                  <SelectAll ids={container.entryIds} />
+                  {!collapsed && <SelectAll ids={container.entryIds} />}
                 </div>
 
-                {/* Single-page container: grid + rows directly under the header */}
-                {singlePage ? (
+                {collapsed ? null : singlePage ? (
                   <>
                     {!container.unassigned && renderGrid(container.pages[0])}
                     {renderRows(container.pages[0].pulls)}
@@ -322,7 +339,7 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose }) => {
 
         {/* Footer */}
         <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid var(--border-glass)', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', flexShrink: 0 }}>
-          <button className="btn btn-primary" onClick={onClose}>{allComplete ? 'Done' : 'Close'}</button>
+          <button className="btn btn-primary" onClick={onClose} disabled={totalPulls > 0 && !allComplete}>Done</button>
         </div>
       </div>
     </div>

@@ -1,0 +1,87 @@
+name: Build Server EXE
+
+# push a v* tag -> build the Windows server .exe and attach the zip to the
+# GitHub Release. workflow_dispatch -> build only, uploaded as a workflow
+# artifact (test). The exe is a Node Single Executable App (stdlib, no third-
+# party packager) whose blob is just backend/launch.js; the real server ships
+# beside it under app/ (backend src + node_modules + frontend build). Embedding
+# DBs (backend/data) and .env are gitignored, so they are NOT bundled: the
+# server runs, and card-image matching stays inert until the operator builds
+# embeddings and drops a .env in app/backend.
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      # Prod deps only, compiled natively for win-x64 by this Windows runner.
+      - name: Install backend deps (prod)
+        working-directory: backend
+        run: npm ci --omit=dev
+
+      # Build the SEA blob from the launcher, copy node.exe, inject the blob.
+      - name: Build server exe (Node SEA)
+        shell: pwsh
+        run: |
+          $root = "build/bindarr-server"
+          New-Item -ItemType Directory -Force $root | Out-Null
+          '{ "main": "backend/launch.js", "output": "sea-prep.blob" }' | Out-File -Encoding utf8 sea-config.json
+          node --experimental-sea-config sea-config.json
+          $exe = "$root/bindarr-server.exe"
+          Copy-Item (Get-Command node).Source $exe
+          npx --yes postject $exe NODE_SEA_BLOB sea-prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+
+      # Assemble the release tree beside the exe. server.js expects
+      # app/backend/src/../../frontend/dist, so mirror that layout.
+      - name: Assemble release tree
+        shell: pwsh
+        run: |
+          $root = "build/bindarr-server"
+          New-Item -ItemType Directory -Force "$root/app/backend","$root/app/frontend" | Out-Null
+          Copy-Item backend/src          "$root/app/backend/src"          -Recurse
+          Copy-Item backend/node_modules "$root/app/backend/node_modules" -Recurse
+          Copy-Item backend/package.json "$root/app/backend/package.json"
+          Copy-Item frontend/dist        "$root/app/frontend/dist"        -Recurse
+          Copy-Item .env.example         "$root/app/backend/.env.example"
+          @"
+          Bindarr self-hosted server (Windows).
+
+          Run: double-click bindarr-server.exe, then open http://localhost:3001
+          Config: copy app\backend\.env.example to app\backend\.env and edit.
+          Card-image scan matching needs embedding DBs in app\backend\data
+          (built with backend/scripts/build-card-embeddings.mjs); without them
+          the server runs but scan matches return nothing.
+          "@ | Out-File -Encoding utf8 "$root/README.txt"
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path build/bindarr-server/* -DestinationPath build/bindarr-server-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bindarr-server-windows-x64
+          path: build/bindarr-server-windows-x64.zip
+
+      - name: Attach to release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/bindarr-server-windows-x64.zip

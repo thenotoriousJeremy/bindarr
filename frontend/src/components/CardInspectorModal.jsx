@@ -21,6 +21,7 @@ const MTG_COLOR_FG = {
 function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onViewStorage, startInEdit = false }) {
   const [mode, setMode] = useState('view');
   const [locations, setLocations] = useState([]);
+  const [userDecks, setUserDecks] = useState([]);
   const [q, setQ] = useState(1);
   const [condition, setCondition] = useState('Near Mint');
   const [printing, setPrinting] = useState('Normal');
@@ -38,6 +39,10 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     fetch('/api/locations')
       .then(r => r.ok ? r.json() : [])
       .then(setLocations)
+      .catch(() => {});
+    fetch('/api/decks')
+      .then(r => r.ok ? r.json() : [])
+      .then(setUserDecks)
       .catch(() => {});
   }, []);
 
@@ -156,6 +161,22 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     }
   };
 
+  const handleAddToDeck = async (deckId) => {
+    if (!targetEntryId || !deckId) return;
+    try {
+      const res = await fetch('/api/collection/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entry_ids: [targetEntryId], action: 'add_to_deck', value: deckId })
+      });
+      const data = await res.json().catch(() => ({}));
+      showToast && showToast(res.ok ? (data.message || 'Added to deck.') : (data.error || 'Failed to add to deck.'));
+    } catch (err) {
+      console.error(err);
+      showToast && showToast('Error adding to deck.');
+    }
+  };
+
   const handleDelete = async () => {
     if (!targetEntryId) return;
     if (!window.confirm(`Are you sure you want to delete ${card.name} from your collection?`)) return;
@@ -178,7 +199,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
   const cardNumber = card.number || card.collector_number || card.card_number || '';
 
   return (
-    <div style={{
+    <div className="modal-overlay" style={{
       position: 'fixed',
       top: 0, left: 0, right: 0, bottom: 0,
       backgroundColor: 'rgba(0,0,0,0.75)',
@@ -186,8 +207,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      zIndex: 999,
-      padding: '1.5rem'
+      zIndex: 999
     }} onClick={handleClose}>
       <div className="glass-panel card-inspector" onClick={(e) => e.stopPropagation()}>
         <button className="btn btn-secondary btn-icon-only" onClick={handleClose} style={{
@@ -218,7 +238,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
 
           {/* Quantities indicator badge */}
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
-            <span className="badge" style={{ padding: '0.4rem 0.8rem', background: 'rgba(255, 255, 255, 0.05)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', color: '#fff', fontSize: '0.75rem', fontWeight: 700 }}>
+            <span className="badge" style={{ padding: '0.4rem 0.8rem', background: 'rgba(255, 255, 255, 0.05)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', color: 'var(--text-strong)', fontSize: '0.75rem', fontWeight: 700 }}>
               Owned: x{card.quantity}
             </span>
             <span className="badge" style={{ padding: '0.4rem 0.8rem', background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.2)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-yellow)', fontSize: '0.75rem', fontWeight: 700 }}>
@@ -243,7 +263,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               )}
             </div>
 
-            <h3 style={{ fontSize: '1.65rem', color: '#fff', fontWeight: 800, lineHeight: 1.15, marginBottom: '0.25rem' }}>
+            <h3 style={{ fontSize: '1.65rem', color: 'var(--text-strong)', fontWeight: 800, lineHeight: 1.15, marginBottom: '0.25rem' }}>
               {getCardDisplayName(card.name, card.language)}
             </h3>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 500 }}>
@@ -284,7 +304,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               ) : (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.02)', padding: '0.6rem 0.9rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
                   <input type="checkbox" checked={isTrade === 1} onChange={(e) => setIsTrade(e.target.checked ? 1 : 0)} id="isTrade" style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
-                  <label htmlFor="isTrade" style={{ cursor: 'pointer', margin: 0, fontWeight: 700, color: '#fff', fontSize: '0.85rem' }}>
+                  <label htmlFor="isTrade" style={{ cursor: 'pointer', margin: 0, fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.85rem' }}>
                     Listed in Trade Binder
                   </label>
                 </div>
@@ -322,7 +342,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 </div>
                 <div>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>EST. PURCHASE VALUE</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#fff', marginTop: '0.15rem' }}>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-strong)', marginTop: '0.15rem' }}>
                     ${formatPrice(card.purchase_price)}
                   </div>
                 </div>
@@ -333,10 +353,10 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
 
               {/* Specifications Details Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem 1rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-glass)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem' }}>
-                <div><span style={{ color: 'var(--text-muted)' }}>Condition:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{card.condition}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>Printing:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{card.printing}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>Language:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{card.language}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>Supertype:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{card.supertype}</span></div>
+                <div><span style={{ color: 'var(--text-muted)' }}>Condition:</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{card.condition}</span></div>
+                <div><span style={{ color: 'var(--text-muted)' }}>Printing:</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{card.printing}</span></div>
+                <div><span style={{ color: 'var(--text-muted)' }}>Language:</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{card.language}</span></div>
+                <div><span style={{ color: 'var(--text-muted)' }}>Supertype:</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{card.supertype}</span></div>
               </div>
 
               {/* Storage Container details (clickable to view in storage) */}
@@ -355,7 +375,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                   <MapPin size={14} style={{ color: 'var(--accent-red)', flexShrink: 0 }} />
                   <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                     <span style={{ color: 'var(--text-muted)' }}>Location: </span>
-                    <strong style={{ color: '#fff' }}>
+                    <strong style={{ color: 'var(--text-strong)' }}>
                       {card.location_name ? `${card.location_name}${card.location_type ? ` (${card.location_type})` : ''}` : 'Unassigned Pile'}
                     </strong>
                     {card.location_name && card.compartment_display_label && (
@@ -369,10 +389,22 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               )}
 
               {/* Main Actions Row: Edit Card + Icon buttons for Favorite & Delete */}
-              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
                 <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => setMode('edit')}>
                   Edit Card
                 </button>
+
+                {userDecks && userDecks.length > 0 && (
+                  <select
+                    className="select-control"
+                    value=""
+                    onChange={(e) => { if (e.target.value) handleAddToDeck(e.target.value); e.target.value = ''; }}
+                    style={{ fontSize: '0.8rem', padding: '0.45rem 0.5rem', maxWidth: '140px' }}
+                  >
+                    <option value="">+ Add to Deck…</option>
+                    {userDecks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                )}
 
                 {card.list_type === 'wishlist' && (
                   <button 

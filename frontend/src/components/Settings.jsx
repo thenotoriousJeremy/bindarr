@@ -16,6 +16,7 @@ function Settings({ user, onUpdateUser, showToast }) {
 
   const [publicBaseUrl, setPublicBaseUrl] = useState('');
 
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   const [defaultGame, setDefaultGame] = useState(() => localStorage.getItem('default_game') || 'pokemon');
   const [autoConfirm, setAutoConfirm] = useState(() => localStorage.getItem('scanner_auto_confirm') === '1');
 
@@ -245,7 +246,7 @@ function Settings({ user, onUpdateUser, showToast }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
       {/* Title Panel */}
       <div className="glass-panel">
-        <h2 style={{ fontSize: '1.25rem', color: '#fff' }}>Trainer Settings</h2>
+        <h2 style={{ fontSize: '1.25rem', color: 'var(--text-strong)' }}>Trainer Settings</h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Manage your account security and collection sharing options.</p>
       </div>
 
@@ -254,12 +255,12 @@ function Settings({ user, onUpdateUser, showToast }) {
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
             <Share2 size={20} style={{ color: 'var(--accent-red)' }} />
-            <h3 style={{ color: '#fff', fontSize: '1.1rem' }}>Collection Sharing</h3>
+            <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>Collection Sharing</h3>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
             <div>
-              <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.95rem' }}>Share My Library</div>
+              <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.95rem' }}>Share My Library</div>
               <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Allow anyone with your link to view your collection.</div>
             </div>
             <label className="switch-control" style={{ position: 'relative', display: 'inline-block', width: '46px', height: '24px' }}>
@@ -372,7 +373,7 @@ function Settings({ user, onUpdateUser, showToast }) {
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
             <KeyRound size={20} style={{ color: 'var(--accent-yellow)' }} />
-            <h3 style={{ color: '#fff', fontSize: '1.1rem' }}>Security</h3>
+            <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>Security</h3>
           </div>
 
           <form onSubmit={handlePasswordChange} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -441,7 +442,7 @@ function Settings({ user, onUpdateUser, showToast }) {
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
             <KeyRound size={20} style={{ color: 'var(--accent-red)' }} />
-            <h3 style={{ color: '#fff', fontSize: '1.1rem' }}>Pokémon TCG API Key</h3>
+            <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>Pokémon TCG API Key</h3>
           </div>
 
           <form onSubmit={handleApiKeyChange} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -493,7 +494,7 @@ function Settings({ user, onUpdateUser, showToast }) {
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
             <Database size={20} style={{ color: 'var(--accent-red)' }} />
-            <h3 style={{ color: '#fff', fontSize: '1.1rem' }}>Collection Backup & Data</h3>
+            <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>Collection Backup & Data</h3>
           </div>
 
           <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-glass)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
@@ -540,7 +541,30 @@ function Settings({ user, onUpdateUser, showToast }) {
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
             <SlidersHorizontal size={20} style={{ color: 'var(--accent-yellow)' }} />
-            <h3 style={{ color: '#fff', fontSize: '1.1rem' }}>Preferences</h3>
+            <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>Preferences</h3>
+          </div>
+
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label htmlFor="settings-theme">Theme</label>
+            <select
+              id="settings-theme"
+              className="select-control"
+              value={theme}
+              onChange={(e) => {
+                const val = e.target.value;
+                setTheme(val);
+                localStorage.setItem('theme', val);
+                document.documentElement.setAttribute('data-theme', val);
+                showToast(`Theme set to ${val === 'lcars' ? 'LCARS' : val.charAt(0).toUpperCase() + val.slice(1)}.`);
+              }}
+            >
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+              <option value="lcars">LCARS</option>
+            </select>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>
+              Changes the app&apos;s color scheme instantly.
+            </div>
           </div>
 
           <div className="form-group" style={{ marginBottom: 0 }}>
@@ -566,7 +590,7 @@ function Settings({ user, onUpdateUser, showToast }) {
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
             <div>
-              <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.95rem' }}>Scanner Auto-Confirm</div>
+              <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.95rem' }}>Scanner Auto-Confirm</div>
               <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Add high-confidence single matches automatically, skipping the confirm dialog.</div>
             </div>
             <label className="switch-control" style={{ position: 'relative', display: 'inline-block', width: '46px', height: '24px', flexShrink: 0 }}>

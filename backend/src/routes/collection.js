@@ -419,7 +419,7 @@ router.delete('/collection/:id', async (req, res) => {
 });
 
 // 5b. Bulk actions
-const BULK_ACTIONS = ['delete', 'move', 'trade', 'untrade', 'list_type', 'condition', 'printing', 'purchase_split'];
+const BULK_ACTIONS = ['delete', 'move', 'trade', 'untrade', 'list_type', 'condition', 'printing', 'purchase_split', 'add_to_deck'];
 // Allowed field values mirror the collection table CHECK constraints in db.js.
 const BULK_CONDITIONS = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged'];
 const BULK_PRINTINGS = ['Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition', 'Promo'];
@@ -436,6 +436,31 @@ router.post('/collection/bulk', async (req, res) => {
   const placeholders = ids.map(() => '?').join(',');
 
   try {
+    if (action === 'add_to_deck') {
+      const deckId = parseInt(value, 10);
+      if (!deckId) return res.status(400).json({ error: 'Invalid deck_id' });
+      const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [deckId, req.user.id]);
+      if (!deck) return res.status(404).json({ error: 'Deck not found' });
+
+      const rows = await db.all(
+        `SELECT card_id, SUM(quantity) as total_qty FROM collection WHERE id IN (${placeholders}) AND user_id = ? GROUP BY card_id`,
+        [...ids, req.user.id]
+      );
+
+      let added = 0;
+      for (const row of rows) {
+        const existing = await db.get(`SELECT quantity FROM deck_cards WHERE deck_id = ? AND card_id = ?`, [deckId, row.card_id]);
+        const newQty = (existing ? existing.quantity : 0) + row.total_qty;
+        await db.run(
+          `INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, ?, ?)
+           ON CONFLICT(deck_id, card_id) DO UPDATE SET quantity = excluded.quantity`,
+          [deckId, row.card_id, newQty]
+        );
+        added += row.total_qty;
+      }
+      return res.json({ message: `Added ${added} card(s) to deck`, affected: added });
+    }
+
     if (action === 'delete') {
       const result = await db.run(`DELETE FROM collection WHERE id IN (${placeholders}) AND user_id = ?`, [...ids, req.user.id]);
       return res.json({ message: `Deleted ${result.changes} card(s)`, affected: result.changes });

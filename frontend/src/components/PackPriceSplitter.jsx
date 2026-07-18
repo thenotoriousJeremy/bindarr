@@ -39,7 +39,7 @@ export default function PackPriceSplitter({ entryIds, onApplied, showToast, styl
         onChange={(e) => setTotal(e.target.value)}
         placeholder="0.00"
         onKeyDown={(e) => { if (e.key === 'Enter') apply(); }}
-        style={{ width: '5.5rem', fontSize: '0.72rem', padding: '0.3rem 0.4rem', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', color: '#fff' }}
+        style={{ width: '5.5rem', fontSize: '0.72rem', padding: '0.3rem 0.4rem', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', color: 'var(--text-strong)' }}
       />
       <select
         className="select-control" value={method} onChange={(e) => setMethod(e.target.value)}

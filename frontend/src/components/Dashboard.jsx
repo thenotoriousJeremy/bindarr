@@ -22,7 +22,13 @@ const TYPE_COLORS = {
   'Metal': '#94a3b8',
   'Dragon': '#a855f7',
   'Fairy': '#f472b6',
-  'Colorless': '#cbd5e1'
+  'Colorless': '#cbd5e1',
+  'White': '#fef08a',
+  'Blue': '#3b82f6',
+  'Black': '#334155',
+  'Red': '#ef4444',
+  'Green': '#10b981',
+  'Land': '#d97706'
 };
 
 function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEntryId, onUpdate, showToast }) {
@@ -49,7 +55,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
       fetchTimelineHistory();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timePeriod, stats]);
+  }, [timePeriod, stats, gameFilter]);
 
   const fetchStats = async () => {
     try {
@@ -71,7 +77,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
   const fetchTimelineHistory = async () => {
     try {
       setLoadingHistory(true);
-      const response = await fetch(`/api/stats/history?period=${timePeriod}`);
+      const response = await fetch(`/api/stats/history?period=${timePeriod}${gameFilter ? `&game=${gameFilter}` : ''}`);
       if (response.ok) {
         const data = await response.json();
         setHistoryData(data);
@@ -82,6 +88,24 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
       setLoadingHistory(false);
     }
   };
+
+  const renderGameTabs = () => (
+    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+      <div className="sub-nav-tabs" style={{ margin: 0 }}>
+        {[['', 'All'], ['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([val, label]) => (
+          <button
+            key={val || 'all'}
+            type="button"
+            className={`sub-nav-tab ${gameFilter === val ? 'active' : ''}`}
+            style={{ padding: '0.35rem 0.85rem', fontSize: '0.75rem' }}
+            onClick={() => setGameFilter(val)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 
   if (loading) {
     return <div className="spinner"></div>;
@@ -97,17 +121,25 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
   }
 
   if (!stats || stats.summary.totalCards === 0) {
+    const isFiltered = Boolean(gameFilter);
+    const gameName = gameFilter === 'pokemon' ? 'Pokémon' : gameFilter === 'mtg' ? 'MTG' : '';
     return (
-      <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem 1.5rem', color: 'var(--text-secondary)' }}>
-        <TrendingUp size={48} style={{ color: 'var(--accent-red)', marginBottom: '1.5rem', opacity: 0.8 }} />
-        <h2 style={{ color: '#fff', marginBottom: '0.5rem' }}>Welcome to Bindarr!</h2>
-        <p style={{ maxWidth: '400px', margin: '0 auto 1.5rem auto' }}>
-          Your collection database is currently empty. Start scanning cards with your phone camera or search cards manually to build your binder!
-        </p>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
-          <div style={{ display: 'inline-block' }}>
-            <span style={{ fontSize: '0.85rem', display: 'block', marginBottom: '0.25rem' }}>Scan with Camera</span>
-            <button className="btn btn-primary" onClick={() => onNavigate && onNavigate('add-cards')}>Go to Add Cards</button>
+      <div>
+        {renderGameTabs()}
+        <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem 1.5rem', color: 'var(--text-secondary)' }}>
+          <TrendingUp size={48} style={{ color: 'var(--accent-red)', marginBottom: '1.5rem', opacity: 0.8 }} />
+          <h2 style={{ color: 'var(--text-strong)', marginBottom: '0.5rem' }}>
+            {isFiltered ? `No ${gameName} Cards` : 'Welcome to Bindarr!'}
+          </h2>
+          <p style={{ maxWidth: '400px', margin: '0 auto 1.5rem auto' }}>
+            {isFiltered
+              ? `You don't have any ${gameName} cards in your collection yet.`
+              : 'Your collection database is currently empty. Start scanning cards with your phone camera or search cards manually to build your binder!'}
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
+            <div style={{ display: 'inline-block' }}>
+              <button className="btn btn-primary" onClick={() => onNavigate && onNavigate('add-cards')}>Go to Add Cards</button>
+            </div>
           </div>
         </div>
       </div>
@@ -129,22 +161,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
 
   return (
     <div>
-      {/* Game filter: scopes every metric below to one game (or all). */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
-        <div className="sub-nav-tabs" style={{ margin: 0 }}>
-          {[['', 'All'], ['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([val, label]) => (
-            <button
-              key={val || 'all'}
-              type="button"
-              className={`sub-nav-tab ${gameFilter === val ? 'active' : ''}`}
-              style={{ padding: '0.35rem 0.85rem', fontSize: '0.75rem' }}
-              onClick={() => setGameFilter(val)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      {renderGameTabs()}
 
       {/* Metrics Summary Grid */}
       <div className="metrics-grid">
@@ -167,7 +184,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
                     border: 'none',
                     borderRadius: '3px',
                     background: timePeriod === p ? 'var(--type-grass)' : 'transparent',
-                    color: '#fff',
+                    color: 'var(--text-strong)',
                     cursor: 'pointer',
                     fontWeight: 700,
                     transition: 'all 0.15s ease'
@@ -424,7 +441,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
                 >
                   <img src={card.image_url} alt={card.name} style={{ width: '56px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '5px', boxShadow: '0 2px 6px rgba(0,0,0,0.4)' }} />
                   <div style={{ flex: 1, overflow: 'hidden' }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-strong)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {getCardDisplayName(card.name, card.language)}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
@@ -464,7 +481,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
                   >
                     <img src={card.image_url} alt={card.name} style={{ width: '48px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '5px', boxShadow: '0 2px 6px rgba(0,0,0,0.4)' }} />
                     <div style={{ flex: 1, overflow: 'hidden' }}>
-                      <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-strong)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {getCardDisplayName(card.name, card.language)}
                       </div>
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
@@ -494,7 +511,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
                 {setProgress.map((set, idx) => (
                   <div key={idx} className="set-progress-item">
                     <div className="set-progress-header">
-                      <span style={{ color: '#fff' }}>{set.setName}</span>
+                      <span style={{ color: 'var(--text-strong)' }}>{set.setName}</span>
                       <span style={{ color: 'var(--text-secondary)' }}>{set.ownedUnique} / {set.totalCards} ({set.percent}%)</span>
                     </div>
                     <div className="set-progress-bar-bg">

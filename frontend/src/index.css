@@ -32,6 +32,28 @@
   --type-fairy: #f472b6;
   --type-colorless: #cbd5e1;
 
+  /* Semantic surface/foreground tokens. These back the values components used
+     to hardcode (#fff text, white overlay fills, dark input bg) so themes can
+     re-map them. Dark theme keeps the original literals, so dark is unchanged. */
+  --text-strong: #fff;                    /* strongest foreground on panels */
+  --text-on-accent: #fff;                 /* text/icons on saturated buttons */
+  --surface-1: rgba(255, 255, 255, 0.03); /* faint fill */
+  --surface-2: rgba(255, 255, 255, 0.05); /* hover fill */
+  --surface-3: rgba(255, 255, 255, 0.08); /* raised chip */
+  --input-bg: rgba(15, 23, 42, 0.6);
+  --input-bg-focus: rgba(15, 23, 42, 0.85);
+  --bg-gradient:
+    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(239, 68, 68, 0.1) 0px, transparent 50%),
+    radial-gradient(at 50% 50%, rgba(20, 28, 47, 0.95) 0px, var(--bg-primary) 100%);
+
+  --logo-cover: #ff4747;
+  --logo-spine: #c92f2f;
+  --logo-page-left: #ffd0d0;
+  --logo-page-right: #ffffff;
+  --logo-ring-stroke: #111111;
+  --logo-ring-inner: #ffffff;
+
   /* Shadows and Transitions */
   --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
   --shadow-accent: 0 0 15px var(--accent-red-glow);
@@ -40,6 +62,174 @@
   --radius-md: 16px;
   --radius-lg: 24px;
 }
+
+/* ------------------------------------------------------------------ THEMES */
+/* Themes only re-map the tokens above; layout/structure is shared. Set via
+   document.documentElement.dataset.theme (see index.html init + Settings). */
+
+/* Light */
+:root[data-theme="light"] {
+  --bg-primary: #eef2f7;
+  --bg-secondary: #ffffff;
+  --bg-glass: rgba(255, 255, 255, 0.75);
+  --border-glass: rgba(15, 23, 42, 0.1);
+  --border-glass-hover: rgba(15, 23, 42, 0.22);
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --text-strong: #0f172a;
+  --text-on-accent: #ffffff;
+
+  --logo-cover: #ef4444;
+  --logo-spine: #dc2626;
+  --logo-page-left: #fee2e2;
+  --logo-page-right: #ffffff;
+  --logo-ring-stroke: #1e293b;
+  --logo-ring-inner: #ffffff;
+
+  --surface-1: rgba(15, 23, 42, 0.03);
+  --surface-2: rgba(15, 23, 42, 0.06);
+  --surface-3: rgba(15, 23, 42, 0.09);
+  --input-bg: rgba(15, 23, 42, 0.04);
+  --input-bg-focus: rgba(15, 23, 42, 0.07);
+
+  --shadow-glow: 0 8px 32px 0 rgba(15, 23, 42, 0.12);
+  --bg-gradient:
+    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.1) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(239, 68, 68, 0.07) 0px, transparent 50%),
+    radial-gradient(at 50% 50%, #ffffff 0px, var(--bg-primary) 100%);
+}
+
+/* LCARS (Star Trek) — palette + font reskin on the current layout. Amber text
+   on black, colored accents, condensed uppercase headings, pill radii. */
+:root[data-theme="lcars"] {
+  --font-main: 'Antonio', 'Outfit', system-ui, sans-serif;
+
+  --bg-primary: #000000;
+  --bg-secondary: #0d0d0d;
+  --bg-glass: rgba(18, 18, 18, 0.72);
+  --border-glass: rgba(255, 153, 0, 0.35);
+  --border-glass-hover: #ff9900;
+
+  --text-primary: #ff9900;
+  --text-secondary: #cc99cc;
+  --text-muted: #9999cc;
+  --text-strong: #ffcc99;
+  --text-on-accent: #000000;
+
+  --accent-red: #cc6666;
+  --accent-red-glow: rgba(204, 102, 102, 0.4);
+  --accent-blue: #9999ff;
+  --accent-blue-glow: rgba(153, 153, 255, 0.4);
+  --accent-yellow: #ffcc00;
+  --accent-yellow-glow: rgba(255, 204, 0, 0.4);
+
+  --logo-cover: #ff9900;
+  --logo-spine: #cc6633;
+  --logo-page-left: #ffcc99;
+  --logo-page-right: #ffcc99;
+  --logo-ring-stroke: #000000;
+  --logo-ring-inner: #ffcc00;
+
+  --surface-1: rgba(255, 153, 0, 0.06);
+  --surface-2: rgba(255, 153, 0, 0.1);
+  --surface-3: rgba(255, 153, 0, 0.16);
+  --input-bg: rgba(255, 153, 0, 0.06);
+  --input-bg-focus: rgba(255, 153, 0, 0.12);
+
+  --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.6);
+  --radius-sm: 4px;
+  --radius-md: 10px;
+  --radius-lg: 999px;
+  --bg-gradient: none;
+}
+
+:root[data-theme="lcars"] .logo-icon svg,
+:root[data-theme="lcars"] .logo-icon img {
+  filter: drop-shadow(0 0 10px rgba(255, 153, 0, 0.6));
+}
+
+:root[data-theme="lcars"] .logo-text {
+  background: linear-gradient(135deg, #ffcc99 40%, #ff9900 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+:root[data-theme="lcars"] .logo-text span {
+  color: #ff9900;
+  -webkit-text-fill-color: #ff9900;
+}
+
+:root[data-theme="lcars"] h1,
+:root[data-theme="lcars"] h2,
+:root[data-theme="lcars"] h3 {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+:root[data-theme="lcars"] select,
+:root[data-theme="lcars"] .select-control {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  font-family: var(--font-main);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-primary);
+  background-color: var(--bg-secondary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23ff9900' d='M0 0l6 8 6-8z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2.2rem !important;
+  border: 1.5px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0 8px rgba(255, 153, 0, 0.15);
+  transition: all 0.2s ease;
+}
+
+:root[data-theme="lcars"] select:focus,
+:root[data-theme="lcars"] .select-control:focus {
+  border-color: var(--border-glass-hover);
+  box-shadow: 0 0 12px rgba(255, 153, 0, 0.4);
+  background-color: var(--bg-primary);
+}
+
+:root[data-theme="lcars"] select option,
+:root[data-theme="lcars"] .select-control option {
+  background-color: #0d0d0d;
+  color: #ff9900;
+  font-family: var(--font-main);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.5rem;
+}
+
+:root[data-theme="lcars"] .kebab-dropdown,
+:root[data-theme="lcars"] .dropdown-menu {
+  background-color: #0d0d0d;
+  border: 1.5px solid var(--border-glass-hover);
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 16px rgba(255, 153, 0, 0.35);
+}
+
+:root[data-theme="lcars"] .kebab-item,
+:root[data-theme="lcars"] .dropdown-item {
+  font-family: var(--font-main);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-primary);
+}
+
+:root[data-theme="lcars"] .kebab-item:hover,
+:root[data-theme="lcars"] .dropdown-item:hover {
+  background: rgba(255, 153, 0, 0.2);
+  color: var(--text-strong);
+}
+
 
 * {
   box-sizing: border-box;
@@ -50,10 +240,7 @@
 
 body {
   background-color: var(--bg-primary);
-  background-image: 
-    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(239, 68, 68, 0.1) 0px, transparent 50%),
-    radial-gradient(at 50% 50%, rgba(20, 28, 47, 0.95) 0px, var(--bg-primary) 100%);
+  background-image: var(--bg-gradient);
   color: var(--text-primary);
   font-family: var(--font-main);
   min-height: 100vh;
@@ -97,13 +284,33 @@ button, input, select, textarea {
   min-height: 100vh;
   max-width: 100%;
   margin: 0 auto;
-  padding: 1rem 1.5rem 6rem 1.5rem; /* bottom padding for mobile navigation bar */
+  /* Safe-area insets so the header/content clear the notch + status bar and the
+     bottom clears the pinned nav bar + home indicator (viewport-fit=cover). */
+  padding:
+    calc(1rem + env(safe-area-inset-top))
+    calc(1.5rem + env(safe-area-inset-right))
+    calc(6rem + env(safe-area-inset-bottom))
+    calc(1.5rem + env(safe-area-inset-left));
 }
 
 @media (min-width: 769px) {
   .app-container {
     padding: 1.5rem 2rem;
   }
+}
+
+/* Shared full-screen modal backdrop. Safe-area padding keeps the centered
+   dialog clear of the notch/status bar and home indicator inside the Capacitor
+   webview (full-bleed, unlike a mobile browser). Each modal keeps its own
+   inline background/blur/z-index; this only supplies the padding + box-sizing.
+   On desktop the env() insets are 0, so it collapses to a flat 1rem. */
+.modal-overlay {
+  box-sizing: border-box;
+  padding:
+    max(1rem, env(safe-area-inset-top))
+    max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom))
+    max(1rem, env(safe-area-inset-left));
 }
 
 /* Glassmorphic Panel Component */
@@ -173,7 +380,7 @@ button, input, select, textarea {
 .logo-text {
   font-size: 1.8rem;
   font-weight: 800;
-  background: linear-gradient(135deg, #fff 40%, var(--accent-red) 100%);
+  background: linear-gradient(135deg, var(--text-strong) 40%, var(--accent-red) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   display: flex;
@@ -203,7 +410,7 @@ button, input, select, textarea {
 
 .btn-primary {
   background: linear-gradient(135deg, var(--accent-red) 0%, #d32f2f 100%);
-  color: #fff;
+  color: var(--text-on-accent);
   box-shadow: 0 4px 15px rgba(255, 71, 71, 0.3);
 }
 
@@ -220,7 +427,7 @@ button, input, select, textarea {
 }
 
 .btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--surface-2);
   border-color: var(--border-glass-hover);
   transform: translateY(-2px);
 }
@@ -259,7 +466,7 @@ button, input, select, textarea {
 }
 
 .input-control, .select-control {
-  background: rgba(15, 23, 42, 0.6);
+  background: var(--input-bg);
   border: 1px solid var(--border-glass);
   border-radius: var(--radius-sm);
   padding: 0.75rem 1rem;
@@ -282,7 +489,7 @@ button, input, select, textarea {
 .input-control:focus, .select-control:focus {
   border-color: var(--accent-red);
   box-shadow: 0 0 10px rgba(255, 71, 71, 0.15);
-  background: rgba(15, 23, 42, 0.85);
+  background: var(--input-bg-focus);
 }
 
 .select-control option {
@@ -326,12 +533,12 @@ button, input, select, textarea {
 
 .nav-tab:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--surface-1);
 }
 
 .nav-tab.active {
   color: var(--text-primary);
-  background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(30, 41, 59, 0.9) 100%);
+  background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-glass) 100%);
   border: 1px solid var(--border-glass-hover);
   box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
@@ -370,9 +577,11 @@ button, input, select, textarea {
     border-right: none;
     border-bottom: none;
     z-index: 1000;
-    background: rgba(10, 15, 29, 0.92);
+    background: var(--bg-glass);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
+    /* Clear the home indicator / gesture bar under the pinned tab bar. */
+    padding-bottom: env(safe-area-inset-bottom);
   }
 }
 
@@ -1718,9 +1927,9 @@ button, input, select, textarea {
 }
 
 .advanced-config-header:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.15);
+  background: var(--surface-3);
+  color: var(--text-strong);
+  border-color: var(--border-glass-hover);
 }
 
 .advanced-config-content {
@@ -2004,15 +2213,15 @@ button, input, select, textarea {
 }
 
 .row-tab-btn:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--surface-2);
   border-color: var(--border-glass-hover);
-  color: #fff;
+  color: var(--text-strong);
 }
 
 .row-tab-btn.active {
   background: rgba(255, 71, 71, 0.15);
   border-color: var(--accent-red);
-  color: #fff;
+  color: var(--text-strong);
   box-shadow: 0 0 10px rgba(255, 71, 71, 0.2);
 }
 
@@ -2232,7 +2441,7 @@ button, input, select, textarea {
 
 .tab-count-badge.has-unsorted {
   background: var(--accent-red);
-  color: #ffffff;
+  color: var(--text-on-accent);
   border-color: rgba(255, 71, 71, 0.6);
   box-shadow: 0 0 10px var(--accent-red-glow);
 }
@@ -2245,7 +2454,7 @@ button, input, select, textarea {
 
 .sub-nav-tab.active {
   color: var(--text-primary);
-  background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(30, 41, 59, 0.9) 100%);
+  background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-glass) 100%);
   border: 1px solid var(--border-glass-hover);
   box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
