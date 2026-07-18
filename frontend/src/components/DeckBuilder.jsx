@@ -233,7 +233,7 @@ function DeckBuilder({ showToast }) {
         return;
       }
       
-      if (!isBasicEnergy(card) && deckCountByName(activeDeck.cards, card.name) >= 4) {
+      if (!isBasicEnergyOrLand(card, activeDeck.game) && deckCountByName(activeDeck.cards, card.name) >= 4) {
         showToast(`Cannot have more than 4 copies of ${card.name}.`);
         return;
       }

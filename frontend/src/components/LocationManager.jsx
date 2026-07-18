@@ -894,7 +894,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             });
           }
         } else if (targetCount < compartments.length) {
-          const toRemove = compartments.length - targetCount;
           const trailing = compartments.slice(targetCount);
           for (const comp of trailing) {
             await fetch(`/api/locations/${selectedLoc.id}/compartments/${comp.id}`, { method: 'DELETE' });
