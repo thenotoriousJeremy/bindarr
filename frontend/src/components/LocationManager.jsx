@@ -265,6 +265,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       await Promise.all([fetchLocations(), fetchAllCards()]);
       setLoading(false);
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- length reads only gate the first-load spinner; adding them would loop on refetch
   }, [statsTrigger]);
 
   useEffect(() => {

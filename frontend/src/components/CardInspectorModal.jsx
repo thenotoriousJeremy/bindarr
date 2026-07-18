@@ -59,6 +59,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     setIsTrade(card.is_trade ? 1 : 0);
     setFavorite(card.favorite ? 1 : 0);
     setListType(card.list_type || 'collection');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset form only when the entry changes, not on every card mutation
   }, [targetEntryId, startInEdit]);
 
   const handleClose = () => {
