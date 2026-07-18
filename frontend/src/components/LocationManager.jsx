@@ -276,8 +276,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     if (selectedLocationId) {
       if (selectedLocationId === 'unsorted' || selectedLocationId === 'unassigned') {
         setActiveLocationId(null);
+        setMobilePane('unsorted'); // deterministically show the Unsorted pane, not the focus effect's job
       } else {
         setActiveLocationId(selectedLocationId);
+        setMobilePane('container');
       }
       setSelectedLocationId(null);
     }
@@ -332,10 +334,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   useEffect(() => {
     // If the storage tab is opened without a specific container URL (selectedLocationId is falsy),
     // and there are locations available, auto-select the first one.
-    if (!selectedLocationId && !activeLocationId && !focusEntryId && locations.length > 0) {
+    if (!selectedLocationId && !activeLocationId && !focusEntryId && mobilePane !== 'unsorted' && locations.length > 0) {
       setActiveLocationId(locations[0].id);
     }
-  }, [locations, selectedLocationId, activeLocationId, focusEntryId]);
+  }, [locations, selectedLocationId, activeLocationId, focusEntryId, mobilePane]);
 
   const unsortedCards = useMemo(() => {
     let cards = allCards.filter(c => !c.location_id && (

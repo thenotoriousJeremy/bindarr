@@ -935,45 +935,60 @@ button, input, select, textarea {
 }
 
 @media (max-width: 768px) {
+  /* Keep the card image beside the info (row, not stacked) so the popup is
+     short enough to fit without the whole card height adding to the dialog. */
   .card-inspector {
-    padding: 1.1rem 0.9rem !important;
-    gap: 0.85rem !important;
-    max-height: 90vh !important;
-    flex-direction: column !important;
-    align-items: center !important;
-    max-width: 440px !important;
-    width: 92vw !important;
+    padding: 1rem 0.9rem !important;
+    gap: 0.9rem !important;
+    max-height: 92vh !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: flex-start !important;
+    max-width: 460px !important;
+    width: 94vw !important;
     box-sizing: border-box !important;
     overflow-x: hidden !important;
     border-radius: var(--radius-md) !important;
   }
   .card-inspector .ci-image-col {
-    flex: 0 0 auto !important;
-    max-width: 210px !important;
-    width: 100% !important;
+    flex: 0 0 38% !important;
+    max-width: 150px !important;
     align-items: center !important;
-    gap: 0.6rem !important;
+    gap: 0.5rem !important;
   }
   .card-inspector .ci-image-wrap {
-    max-width: 190px !important;
+    max-width: 140px !important;
     width: 100% !important;
   }
   .card-inspector .ci-info-col {
     flex: 1 1 auto !important;
-    width: 100% !important;
-    gap: 0.85rem !important;
+    min-width: 0 !important; /* let the column shrink instead of overflowing */
+    width: auto !important;
+    gap: 0.7rem !important;
   }
   .card-inspector .ci-info-col h3 {
-    font-size: 1.35rem !important;
+    font-size: 1.2rem !important;
     line-height: 1.2 !important;
-    text-align: center !important;
-  }
-  .card-inspector .ci-info-col p {
-    text-align: center !important;
   }
   .card-entry-fields-row-3 {
     grid-template-columns: repeat(2, 1fr) !important;
     gap: 0.5rem !important;
+  }
+}
+
+/* Very narrow phones: fall back to stacked so the info column isn't crushed. */
+@media (max-width: 400px) {
+  .card-inspector {
+    flex-direction: column !important;
+    align-items: center !important;
+  }
+  .card-inspector .ci-image-col {
+    flex: 0 0 auto !important;
+    width: 100% !important;
+  }
+  .card-inspector .ci-info-col h3,
+  .card-inspector .ci-info-col p {
+    text-align: center !important;
   }
 }
 
