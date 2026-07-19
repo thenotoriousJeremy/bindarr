@@ -341,10 +341,11 @@ function App() {
 
       {/* Main Content Area */}
       <main style={{ flex: 1, marginTop: '1rem' }}>
-        <ErrorBoundary>
-          {/* key on activeTab replays the mount animation for a smooth
-              transition instead of a hard swap between views */}
-          <div key={activeTab} className="view-transition">
+        {/* key on activeTab remounts the boundary per tab, so a crash in one
+            view clears when you navigate away instead of persisting until a
+            manual reload. */}
+        <ErrorBoundary key={activeTab}>
+          <div className="view-transition">
             <Suspense fallback={<ChunkFallback />}>
               {renderContent()}
             </Suspense>

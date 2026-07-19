@@ -50,7 +50,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   useBackGuard(!!rulesComp, () => setRulesComp(null));
   useBackGuard(showRulesModal, () => setShowRulesModal(false));
   useBackGuard(!!capacityUpdatePending, () => setCapacityUpdatePending(null));
-  useBackGuard(filingMode, () => { setFilingMode(false); setFilingReadOnly(false); refreshAll(); });
   useBackGuard(!!selectedLocationId, () => setSelectedLocationId && setSelectedLocationId(null));
   const [compRuleDraft, setCompRuleDraft] = useState([]);
 
@@ -108,6 +107,11 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [filingReadOnly, setFilingReadOnly] = useState(false);
   // Collapse the mobile filing bar to a slim strip so it stops covering the binder.
   const [filingBarCollapsed, setFilingBarCollapsed] = useState(false);
+
+  // Back gesture exits filing mode. Declared HERE, after filingMode/filingReadOnly:
+  // useBackGuard reads filingMode during render, so placing it above the useState
+  // above would hit the temporal dead zone (crashes the whole view on mount).
+  useBackGuard(filingMode, () => { setFilingMode(false); setFilingReadOnly(false); refreshAll(); });
 
   // Manual tap-to-place ("Arrange"), custom-order containers only. Pick a card
   // (unsorted or in-container), then tap a slot to place/swap it.
