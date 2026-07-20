@@ -41,10 +41,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   const [inspectorCard, setInspectorCard] = useState(null);
 
-  // Multi-select over cards inside the open container.
-  const [storageSelectMode, setStorageSelectMode] = useState(false);
-  const [storageSelectedIds, setStorageSelectedIds] = useState(() => new Set());
-
   // Binder "sorting renumbers pockets" heads-up: dismissible, and stays dismissed
   // across sessions so it doesn't permanently occupy screen space.
   const [binderTipDismissed, setBinderTipDismissed] = useState(
@@ -85,6 +81,14 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       onUpdate && onUpdate();
       refreshAll();
     }
+  });
+
+  // Multi-select over cards inside the open container. A locked container blocks
+  // arming and bulk actions (guard); a successful action exits select mode.
+  const storage = useMultiSelect({
+    showToast,
+    guard: () => selectedLoc?.locked ? 'Container is locked. Unlock it first to modify stored cards.' : null,
+    onChanged: () => { storage.exitSelectMode(); refreshAll(); onUpdate(); },
   });
 
   const activateUnsortedCard = (card) => {
@@ -218,8 +222,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     setBinderActiveEntryId(null);
     if (!filingReadOnly) setFilingQueue([]);
     setCoverflowActiveIndex(0);
-    setStorageSelectMode(false);
-    setStorageSelectedIds(new Set());
+    storage.exitSelectMode();
     setMoveMode(false);
     setPickedEntryId(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -671,48 +674,11 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     } catch (err) { console.error(err); showToast('Error removing card.'); }
   };
 
-  // --- Multi-select over the open container ---
-  const toggleStorageSelect = (entryId) => {
-    setStorageSelectedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(entryId)) next.delete(entryId); else next.add(entryId);
-      return next;
-    });
-  };
-  const armStorageSelect = (entryId) => {
-    if (selectedLoc?.locked) {
-      showToast('Container is locked. Unlock it first to select cards.');
-      return;
-    }
-    setStorageSelectMode(true);
-    setStorageSelectedIds(prev => new Set(prev).add(entryId));
-  };
-  const exitStorageSelect = () => { setStorageSelectMode(false); setStorageSelectedIds(new Set()); };
-
   // Cards physically in the open container (any compartment).
   const cardsInActiveLocation = useMemo(
     () => allCards.filter(c => c.location_id === activeLocationId),
     [allCards, activeLocationId]
   );
-
-  const runStorageBulk = async (action, value, confirmMsg) => {
-    if (selectedLoc?.locked) {
-      showToast('Container is locked. Unlock it first to modify stored cards.');
-      return;
-    }
-    const ids = Array.from(storageSelectedIds);
-    if (ids.length === 0) { showToast('No cards selected.'); return; }
-    if (confirmMsg && !window.confirm(confirmMsg)) return;
-    try {
-      const res = await fetch('/api/collection/bulk', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entry_ids: ids, action, value })
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) { showToast(data.message || 'Done.'); exitStorageSelect(); await refreshAll(); onUpdate(); }
-      else showToast(data.error || 'Bulk action failed.');
-    } catch (err) { console.error(err); showToast('Error performing bulk action.'); }
-  };
 
   const openCompartmentRules = (comp) => {
     let draft = [];
@@ -1095,16 +1061,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             {!filingMode && !moveMode && (selectedLoc.total_cards || 0) > 0 && (
               <button
                 type="button"
-                className={`btn ${storageSelectMode ? 'btn-primary' : 'btn-secondary'}`}
+                className={`btn ${storage.selectMode ? 'btn-primary' : 'btn-secondary'}`}
                 disabled={!!selectedLoc.locked}
-                onClick={() => (storageSelectMode ? exitStorageSelect() : setStorageSelectMode(true))}
+                onClick={() => (storage.selectMode ? storage.exitSelectMode() : storage.setSelectMode(true))}
                 style={{ fontSize: '0.7rem', padding: '0.3rem 0.6rem' }}
                 title={selectedLoc.locked ? 'Container is locked — unlock to select cards' : 'Or long-press a card to start selecting'}
               >
-                {storageSelectMode ? 'Done' : 'Select'}
+                {storage.selectMode ? 'Done' : 'Select'}
               </button>
             )}
-            {!filingMode && !storageSelectMode && isCustom && (
+            {!filingMode && !storage.selectMode && isCustom && (
               <button
                 type="button"
                 className={`btn ${moveMode ? 'btn-primary' : 'btn-secondary'}`}
@@ -1187,29 +1153,29 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           )}
         </div>
 
-        {storageSelectMode && (
+        {storage.selectMode && (
           <div className="glass-panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', background: 'rgba(255,71,71,0.08)' }}>
-            <span style={{ fontWeight: 800, color: 'var(--text-strong)', fontSize: '0.8rem' }}>{storageSelectedIds.size} selected</span>
-            <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem' }} onClick={() => setStorageSelectedIds(new Set(cardsInActiveLocation.map(c => c.entry_id)))}>Select all ({cardsInActiveLocation.length})</button>
-            <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem' }} onClick={() => setStorageSelectedIds(new Set())}>Clear</button>
+            <span style={{ fontWeight: 800, color: 'var(--text-strong)', fontSize: '0.8rem' }}>{storage.selectedIds.size} selected</span>
+            <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem' }} onClick={() => storage.setSelectedIds(new Set(cardsInActiveLocation.map(c => c.entry_id)))}>Select all ({cardsInActiveLocation.length})</button>
+            <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem' }} onClick={() => storage.setSelectedIds(new Set())}>Clear</button>
             <div style={{ width: '1px', height: '20px', background: 'var(--border-glass)' }} />
             <button
               className="btn btn-primary"
               style={{ fontSize: '0.68rem', padding: '0.25rem 0.6rem' }}
-              disabled={!storageSelectedIds.size}
-              onClick={() => runStorageBulk('move', null, `Remove ${storageSelectedIds.size} card(s) from this container? They move to Unsorted.`)}
+              disabled={!storage.selectedIds.size}
+              onClick={() => storage.runBulk('move', null, `Remove ${storage.selectedIds.size} card(s) from this container? They move to Unsorted.`)}
             >
               Remove from Storage
             </button>
             <button
               className="btn btn-danger"
               style={{ fontSize: '0.68rem', padding: '0.25rem 0.6rem' }}
-              disabled={!storageSelectedIds.size}
-              onClick={() => runStorageBulk('delete', null, `Delete ${storageSelectedIds.size} card(s) from your collection? This cannot be undone.`)}
+              disabled={!storage.selectedIds.size}
+              onClick={() => storage.runBulk('delete', null, `Delete ${storage.selectedIds.size} card(s) from your collection? This cannot be undone.`)}
             >
               Delete
             </button>
-            <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem', marginLeft: 'auto' }} onClick={exitStorageSelect}>Done</button>
+            <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem', marginLeft: 'auto' }} onClick={storage.exitSelectMode}>Done</button>
           </div>
         )}
 
@@ -1354,10 +1320,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     card: recCard
                   } : null,
                   focusEntryId,
-                  selectMode: storageSelectMode,
-                  selectedIds: storageSelectedIds,
-                  onCardLongPress: armStorageSelect,
-                  onCardToggle: toggleStorageSelect,
+                  selectMode: storage.selectMode,
+                  selectedIds: storage.selectedIds,
+                  onCardLongPress: storage.arm,
+                  onCardToggle: storage.toggleSelect,
                   onEditRules: openCompartmentRules,
                   placementMode: moveMode,
                   pickedEntryId,
@@ -1532,10 +1498,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       focusEntryId={focusEntryId}
                       targetActiveIndex={currentRecSpot && currentRecSpot.compartment_id === activeComp.id ? Math.floor(currentRecSpot.position / 1000) - 1 : null}
                       canRemove={compartments.length > 1 && (cardsByCompartment.get(activeComp.id) || []).length === 0}
-                      selectMode={storageSelectMode}
-                      selectedIds={storageSelectedIds}
-                      onCardLongPress={armStorageSelect}
-                      onCardToggle={toggleStorageSelect}
+                      selectMode={storage.selectMode}
+                      selectedIds={storage.selectedIds}
+                      onCardLongPress={storage.arm}
+                      onCardToggle={storage.toggleSelect}
                       onEditRules={openCompartmentRules}
                       placementMode={moveMode}
                       pickedEntryId={pickedEntryId}

@@ -1,21 +1,18 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState } from 'react';
+import { useLongPress } from './useLongPress';
 
 // Long-press-to-arm multi-select + bulk actions over collection entries. Shared
 // by CollectionList and the scanner's recent-scans strip so both get the same
 // UX and hit the same /api/collection/bulk endpoint. onChanged({ ids, action,
 // value }) runs after a successful bulk action; the caller refreshes its own
 // data (refetch, or prune a local list). Selection is cleared before onChanged,
-// so the acted-on ids are passed along.
-export function useMultiSelect({ showToast, onChanged }) {
+// so the acted-on ids are passed along. Optional `guard()` returns a message
+// string to block arming/bulk (e.g. a locked container) or a falsy value to
+// allow it; the message is shown as a toast.
+export function useMultiSelect({ showToast, onChanged, guard } = {}) {
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [bulkMoveTarget, setBulkMoveTarget] = useState('');
-
-  const longPressTimer = useRef(null);
-  const longPressFired = useRef(false);
-  const pointerStart = useRef(null);
-
-  useEffect(() => () => clearTimeout(longPressTimer.current), []);
 
   const toggleSelect = (entryId) => {
     setSelectedIds(prev => {
@@ -27,35 +24,22 @@ export function useMultiSelect({ showToast, onChanged }) {
   const clearSelection = () => setSelectedIds(new Set());
   const exitSelectMode = () => { setSelectMode(false); clearSelection(); setBulkMoveTarget(''); };
 
-  // --- Long-press handlers (mouse + touch via pointer events) ---
-  const beginPress = (e, entryId) => {
-    longPressFired.current = false;
-    pointerStart.current = { x: e.clientX, y: e.clientY };
-    clearTimeout(longPressTimer.current);
-    longPressTimer.current = setTimeout(() => {
-      longPressFired.current = true;
-      setSelectMode(true);
-      setSelectedIds(prev => new Set(prev).add(entryId));
-      if (navigator.vibrate) navigator.vibrate(25);
-    }, 450);
+  // Enter select mode and select `entryId`. Exposed so callers that own the
+  // long-press elsewhere (CompartmentView) can arm the same state.
+  const arm = (entryId) => {
+    const blocked = guard && guard();
+    if (blocked) { showToast(blocked); return; }
+    setSelectMode(true);
+    setSelectedIds(prev => new Set(prev).add(entryId));
   };
-  const movePress = (e) => {
-    if (!pointerStart.current) return;
-    if (Math.abs(e.clientX - pointerStart.current.x) > 10 || Math.abs(e.clientY - pointerStart.current.y) > 10) {
-      clearTimeout(longPressTimer.current);
-    }
-  };
-  const endPress = () => { clearTimeout(longPressTimer.current); pointerStart.current = null; };
-  const pressHandlers = (entryId) => ({
-    onPointerDown: (e) => beginPress(e, entryId),
-    onPointerMove: movePress,
-    onPointerUp: endPress,
-    onPointerLeave: endPress,
-    onContextMenu: (e) => e.preventDefault(), // suppress mobile long-press image popup
-  });
+
+  // Long-press arms select mode and selects the held card (shared gesture).
+  const { handlers: pressHandlers, fired: longPressFired } = useLongPress(arm);
 
   // Runs one bulk action against every selected entry via the bulk endpoint.
   const runBulk = async (action, value, confirmMsg) => {
+    const blocked = guard && guard();
+    if (blocked) { showToast(blocked); return; }
     const ids = Array.from(selectedIds);
     if (ids.length === 0) { showToast('No cards selected.'); return; }
     if (confirmMsg && !window.confirm(confirmMsg)) return;
@@ -80,7 +64,7 @@ export function useMultiSelect({ showToast, onChanged }) {
   };
 
   return {
-    selectMode, setSelectMode, selectedIds, setSelectedIds, toggleSelect, clearSelection, exitSelectMode,
+    selectMode, setSelectMode, selectedIds, setSelectedIds, toggleSelect, clearSelection, exitSelectMode, arm,
     bulkMoveTarget, setBulkMoveTarget, pressHandlers, longPressFired, runBulk,
   };
 }

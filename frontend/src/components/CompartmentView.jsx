@@ -5,6 +5,7 @@ import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '.
 import { formatPrice } from '../utils/formatPrice';
 import { typeCategory } from '../utils/cardSort';
 import { isBinderType } from '../utils/cardOptions';
+import { useLongPress } from '../utils/useLongPress';
 
 const infoChipStyle = { fontSize: '0.6rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)', whiteSpace: 'nowrap' };
 
@@ -250,38 +251,10 @@ export default function CompartmentView({
   // are context only — greyed out and inert.
   const isGrey = (id) => pullMode && !highlightSet.has(id) && !pulledSet.has(id);
 
-  // Long-press-to-arm selection, mirrors CollectionList. Coexists with the
-  // swipe/coverflow touch handlers because a >10px move cancels the timer.
-  const longPressTimer = useRef(null);
-  const longPressFired = useRef(false);
-  const pointerStart = useRef(null);
-  useEffect(() => () => clearTimeout(longPressTimer.current), []);
-
-  const beginPress = (e, entryId) => {
-    if (!onCardLongPress) return;
-    longPressFired.current = false;
-    pointerStart.current = { x: e.clientX, y: e.clientY };
-    clearTimeout(longPressTimer.current);
-    longPressTimer.current = setTimeout(() => {
-      longPressFired.current = true;
-      onCardLongPress(entryId);
-      if (navigator.vibrate) navigator.vibrate(25);
-    }, 450);
-  };
-  const movePress = (e) => {
-    if (!pointerStart.current) return;
-    if (Math.abs(e.clientX - pointerStart.current.x) > 10 || Math.abs(e.clientY - pointerStart.current.y) > 10) {
-      clearTimeout(longPressTimer.current);
-    }
-  };
-  const endPress = () => { clearTimeout(longPressTimer.current); pointerStart.current = null; };
-  const pressHandlers = (entryId) => ({
-    onPointerDown: (e) => beginPress(e, entryId),
-    onPointerMove: movePress,
-    onPointerUp: endPress,
-    onPointerLeave: endPress,
-    onContextMenu: (e) => e.preventDefault(),
-  });
+  // Long-press arms selection (shared gesture, mirrors CollectionList). Coexists
+  // with the swipe/coverflow touch handlers because a >10px move cancels it. A
+  // null onCardLongPress disables arming (selection is optional here).
+  const { handlers: pressHandlers, fired: longPressFired } = useLongPress(onCardLongPress);
   // Returns true if the click was consumed by selection (caller should stop).
   const handleSelectClick = (entryId) => {
     if (longPressFired.current) { longPressFired.current = false; return true; }

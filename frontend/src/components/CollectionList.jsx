@@ -8,6 +8,7 @@ import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '.
 import { sortCardsByOrder } from '../utils/cardSort';
 import { useMultiSelect } from '../utils/useMultiSelect';
 import CardInspectorModal from './CardInspectorModal';
+import AddToDeckSelect from './AddToDeckSelect';
 import PackPriceSplitter from './PackPriceSplitter';
 
 const labelStyle = { fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' };
@@ -44,7 +45,6 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const [collection, setCollection] = useState([]);
   const [locations, setLocations] = useState([]);
   const [setsList, setSetsList] = useState([]);
-  const [userDecks, setUserDecks] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -96,18 +96,8 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     fetchCollection();
     fetchLocations();
     fetchSets();
-    fetchDecks();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statsTrigger, subTab, tradeOnly]);
-
-  const fetchDecks = async () => {
-    try {
-      const res = await fetch('/api/decks');
-      if (res.ok) setUserDecks(await res.json());
-    } catch (err) {
-      console.error('Error fetching decks:', err);
-    }
-  };
 
   const fetchCollection = async () => {
     try {
@@ -597,10 +587,11 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
           </select>
           <button className="btn btn-primary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!bulkMoveTarget || !selectedIds.size} onClick={() => runBulk('move', bulkMoveTarget === 'unassign' ? null : bulkMoveTarget)}>Apply Move</button>
           <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
-          <select className="select-control" value="" disabled={!selectedIds.size} onChange={(e) => { if (e.target.value) runBulk('add_to_deck', e.target.value); e.target.value = ''; }} style={{ fontSize: '0.72rem', maxWidth: '160px', padding: '0.3rem 0.4rem' }}>
-            <option value="">Add to Deck…</option>
-            {userDecks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
+          <AddToDeckSelect
+            onAdd={(id) => runBulk('add_to_deck', id)}
+            disabled={!selectedIds.size}
+            style={{ fontSize: '0.72rem', maxWidth: '160px', padding: '0.3rem 0.4rem' }}
+          />
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem', marginLeft: 'auto' }} onClick={exitSelectMode}>Done</button>
         </div>
       )}

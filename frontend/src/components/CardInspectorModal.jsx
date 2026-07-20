@@ -4,6 +4,7 @@ import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import CardEntryFields from './CardEntryFields';
 import PriceHistoryChart from './PriceHistoryChart';
+import AddToDeckSelect from './AddToDeckSelect';
 import { useBackGuard } from '../utils/useBackGuard';
 
 // MTG color identity pip colors (WUBRG), approximating the printed mana colors.
@@ -21,7 +22,6 @@ const MTG_COLOR_FG = {
 function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onViewStorage, startInEdit = false }) {
   const [mode, setMode] = useState('view');
   const [locations, setLocations] = useState([]);
-  const [userDecks, setUserDecks] = useState([]);
   const [q, setQ] = useState(1);
   const [condition, setCondition] = useState('Near Mint');
   const [printing, setPrinting] = useState('Normal');
@@ -42,10 +42,6 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     fetch('/api/locations')
       .then(r => r.ok ? r.json() : [])
       .then(setLocations)
-      .catch(() => {});
-    fetch('/api/decks')
-      .then(r => r.ok ? r.json() : [])
-      .then(setUserDecks)
       .catch(() => {});
   }, []);
 
@@ -414,17 +410,11 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                   Edit Card
                 </button>
 
-                {userDecks && userDecks.length > 0 && (
-                  <select
-                    className="select-control"
-                    value=""
-                    onChange={(e) => { if (e.target.value) handleAddToDeck(e.target.value); e.target.value = ''; }}
-                    style={{ fontSize: '0.8rem', padding: '0.45rem 0.5rem', maxWidth: '140px' }}
-                  >
-                    <option value="">+ Add to Deck…</option>
-                    {userDecks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                  </select>
-                )}
+                <AddToDeckSelect
+                  onAdd={handleAddToDeck}
+                  placeholder="+ Add to Deck…"
+                  style={{ fontSize: '0.8rem', padding: '0.45rem 0.5rem', maxWidth: '140px' }}
+                />
 
                 {card.list_type === 'wishlist' && (
                   <button 
