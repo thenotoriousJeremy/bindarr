@@ -307,7 +307,11 @@ router.put('/collection/:id', async (req, res) => {
     const updates = [];
     const params = [];
 
-    if (quantity !== undefined) { updates.push('quantity = ?'); params.push(quantity); }
+    // One physical card = one row. The edited entry always stays quantity 1;
+    // a quantity > 1 in the payload means "make this many copies" and is
+    // fulfilled below by inserting extra single-card rows (auto-split).
+    const requestedQty = quantity !== undefined ? Math.max(1, parseInt(quantity, 10) || 1) : 1;
+    if (quantity !== undefined) { updates.push('quantity = ?'); params.push(1); }
     if (condition !== undefined) { updates.push('condition = ?'); params.push(condition); }
     if (printing !== undefined) { updates.push('printing = ?'); params.push(printing); }
     if (language !== undefined) { updates.push('language = ?'); params.push(language); }
@@ -333,6 +337,29 @@ router.put('/collection/:id', async (req, res) => {
     if (isMoving && entry.compartment_id && entry.compartment_id !== finalCompartmentId) {
       const oldLoc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [entry.location_id, req.user.id]);
       if (oldLoc) await rebalanceCompartmentByScheme(db, entry.compartment_id, oldLoc.sort_order, oldLoc.foil_sorting);
+    }
+
+    // Auto-split: create the extra copies as their own single-card rows, mirroring
+    // the edited entry's final placement so each copy occupies its own slot.
+    if (requestedQty > 1) {
+      const row = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+      if (row) {
+        for (let i = 1; i < requestedQty; i++) {
+          await db.run(`
+            INSERT INTO collection (
+              card_id, user_id, quantity, condition, printing, language, purchase_price,
+              location_id, compartment_id, position, is_trade, favorite, list_type, game
+            ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [
+            row.card_id, req.user.id, row.condition, row.printing, row.language, row.purchase_price,
+            row.location_id, row.compartment_id, (row.position || 0) + i * 0.001, row.is_trade, row.favorite, row.list_type, row.game
+          ]);
+        }
+        if (row.compartment_id && row.location_id) {
+          const loc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [row.location_id, req.user.id]);
+          if (loc) await rebalanceCompartmentByScheme(db, row.compartment_id, loc.sort_order, loc.foil_sorting);
+        }
+      }
     }
 
     const finalPlacement = isMoving && finalCompartmentId ? await describePlacement(db, id, req.user.id) : null;

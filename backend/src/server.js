@@ -111,6 +111,13 @@ app.use(express.json({ limit: '15mb' }));
 db.initDb()
   .then(async () => {
     console.log('Database tables verified/created successfully.');
+
+    // Un-stack legacy multi-quantity entries so every copy is its own row (one
+    // physical card = one storage slot). No-op once migrated.
+    const { splitStackedEntries } = require('./utils/collectionHelpers');
+    const splitCount = await splitStackedEntries(db);
+    if (splitCount > 0) console.log(`Split ${splitCount} stacked collection copies into individual rows.`);
+
     // Sync sets on startup (both games)
     await tcgApi.fetchAndCacheSets();
     await scryfallApi.fetchAndCacheSets();

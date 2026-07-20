@@ -157,6 +157,37 @@ async function getCompartmentOccupancy(database, compartmentId) {
   return row ? row.total_cards : 0;
 }
 
+// One physical card = one row. Split any legacy stacked entry (quantity > 1)
+// into that many single-card rows so every copy takes its own storage slot,
+// gets its own popup, and can be added to a deck individually. Idempotent:
+// once run there are no quantity>1 rows, so a re-run is a no-op.
+// ponytail: split copies keep the original's compartment with fractional
+// position offsets (same as the add path). A page that overflows its capacity
+// shows extra pockets; a manual re-sort redistributes if desired.
+async function splitStackedEntries(database) {
+  const dbClient = database || db;
+  const stacked = await dbClient.all(`SELECT * FROM collection WHERE quantity > 1`);
+  if (stacked.length === 0) return 0;
+  let created = 0;
+  for (const e of stacked) {
+    const copies = e.quantity;
+    await dbClient.run(`UPDATE collection SET quantity = 1 WHERE id = ?`, [e.id]);
+    for (let i = 1; i < copies; i++) {
+      await dbClient.run(`
+        INSERT INTO collection (
+          card_id, user_id, quantity, condition, printing, language, purchase_price,
+          location_id, compartment_id, position, is_trade, favorite, list_type, game
+        ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        e.card_id, e.user_id, e.condition, e.printing, e.language, e.purchase_price,
+        e.location_id, e.compartment_id, (e.position || 0) + i * 0.001, e.is_trade, e.favorite, e.list_type, e.game
+      ]);
+      created++;
+    }
+  }
+  return created;
+}
+
 module.exports = {
   getCompartmentOccupancy,
   defaultCompartmentPlan,
@@ -164,4 +195,5 @@ module.exports = {
   resolveCompartmentAndPosition,
   describePlacement,
   normalizeRuleConfig,
+  splitStackedEntries,
 };
