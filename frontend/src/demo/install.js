@@ -41,3 +41,28 @@ window.fetch = (input, opts = {}) => {
   }
   return Promise.resolve(json({ message: 'Demo mode: changes are not saved.' }));
 };
+
+// Persistent, dismissible banner so it's always clear this is a sample build and
+// which features are inert. Injected via DOM (not React) so it needs no
+// component wiring and survives tab changes.
+function banner() {
+  if (document.getElementById('demo-banner')) return;
+  const el = document.createElement('div');
+  el.id = 'demo-banner';
+  el.innerHTML =
+    '<span><strong>Demo</strong> &mdash; sample data, nothing you change is saved. '
+    + 'Live features (card scanner, add/search, import &amp; export, price sync) are disabled.</span>'
+    + '<button aria-label="Dismiss">×</button>';
+  el.style.cssText =
+    'position:fixed;left:0;right:0;bottom:0;z-index:9999;display:flex;gap:1rem;'
+    + 'align-items:center;justify-content:center;padding:0.6rem 1rem;font-size:0.85rem;'
+    + 'background:#eab308;color:#1a1a1a;font-weight:600;'
+    + 'box-shadow:0 -2px 12px rgba(0,0,0,0.4)';
+  const btn = el.querySelector('button');
+  btn.style.cssText = 'background:rgba(0,0,0,0.15);border:none;color:#1a1a1a;'
+    + 'font-size:1.1rem;line-height:1;cursor:pointer;border-radius:4px;padding:0 0.5rem';
+  btn.onclick = () => el.remove();
+  document.body.appendChild(el);
+}
+if (document.body) banner();
+else document.addEventListener('DOMContentLoaded', banner);
