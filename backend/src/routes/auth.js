@@ -58,7 +58,8 @@ router.post('/register', authLimiter, async (req, res) => {
         username: cleanUsername,
         role: 'member',
         share_token: shareToken,
-        share_enabled: 0
+        share_enabled: 0,
+        share_locations: 0
       }
     });
   } catch (error) {
@@ -92,6 +93,7 @@ router.post('/login', authLimiter, async (req, res) => {
         role: user.role,
         share_token: user.share_token,
         share_enabled: user.share_enabled,
+        share_locations: user.share_locations,
         tcg_api_key: user.tcg_api_key || ''
       }
     });
@@ -124,7 +126,7 @@ router.get('/me', authenticateToken, (req, res) => {
 
 // Update settings (password, sharing)
 router.put('/settings', authenticateToken, async (req, res) => {
-  const { current_password, password, share_enabled, regenerate_share_token, tcg_api_key } = req.body;
+  const { current_password, password, share_enabled, share_locations, regenerate_share_token, tcg_api_key } = req.body;
 
   try {
     if (password !== undefined) {
@@ -143,6 +145,10 @@ router.put('/settings', authenticateToken, async (req, res) => {
       await db.run(`UPDATE users SET share_enabled = ? WHERE id = ?`, [share_enabled ? 1 : 0, req.user.id]);
     }
 
+    if (share_locations !== undefined) {
+      await db.run(`UPDATE users SET share_locations = ? WHERE id = ?`, [share_locations ? 1 : 0, req.user.id]);
+    }
+
     if (tcg_api_key !== undefined) {
       await db.run(`UPDATE users SET tcg_api_key = ? WHERE id = ?`, [tcg_api_key.trim(), req.user.id]);
     }
@@ -154,7 +160,7 @@ router.put('/settings', authenticateToken, async (req, res) => {
     }
 
     // Retrieve updated info
-    const updatedUser = await db.get(`SELECT username, role, share_token, share_enabled, tcg_api_key FROM users WHERE id = ?`, [req.user.id]);
+    const updatedUser = await db.get(`SELECT username, role, share_token, share_enabled, share_locations, tcg_api_key FROM users WHERE id = ?`, [req.user.id]);
     res.json({
       message: 'Settings updated successfully',
       user: {
@@ -162,6 +168,7 @@ router.put('/settings', authenticateToken, async (req, res) => {
         role: updatedUser.role,
         share_token: updatedUser.share_token,
         share_enabled: updatedUser.share_enabled,
+        share_locations: updatedUser.share_locations,
         tcg_api_key: updatedUser.tcg_api_key || ''
       }
     });

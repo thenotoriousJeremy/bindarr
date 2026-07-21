@@ -10,7 +10,7 @@ router.get('/:share_token', async (req, res) => {
   const listType = req.query.list || 'collection';
 
   try {
-    const owner = await db.get(`SELECT id, username, share_enabled FROM users WHERE share_token = ?`, [share_token]);
+    const owner = await db.get(`SELECT id, username, share_enabled, share_locations FROM users WHERE share_token = ?`, [share_token]);
     if (!owner || owner.share_enabled === 0) {
       return res.status(404).json({ error: 'This card collection is private or does not exist.' });
     }
@@ -51,18 +51,28 @@ router.get('/:share_token', async (req, res) => {
         cc.price_trend,
         cc.price_normal,
         cc.price_holofoil,
-        cc.price_reverse_holofoil
+        cc.price_reverse_holofoil,
+        l.name AS location_name
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
+      LEFT JOIN locations l ON c.location_id = l.id
       ${filterSql}
       ORDER BY c.added_at DESC
     `;
     const rows = await db.all(query, filterParams);
 
-    const formatted = rows.map(row => ({
-      ...parseCardRow(row),
-      price_trend: resolveCardPrice(row),
-    }));
+    const shareLocations = owner.share_locations === 1;
+    const formatted = rows.map(row => {
+      const card = {
+        ...parseCardRow(row),
+        price_trend: resolveCardPrice(row),
+      };
+      // Card locations are private by default; only expose when the owner has
+      // opted in, and strip the raw column otherwise.
+      delete card.location_name;
+      if (shareLocations) card.location = row.location_name || 'Unsorted';
+      return card;
+    });
 
     // Calculate public stats
     let totalCards = 0;
@@ -99,6 +109,7 @@ router.get('/:share_token', async (req, res) => {
 
     res.json({
       owner: owner.username,
+      shareLocations,
       collection: formatted,
       stats: {
         summary: {

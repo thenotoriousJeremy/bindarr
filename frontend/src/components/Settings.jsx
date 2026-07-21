@@ -9,6 +9,7 @@ function Settings({ user, onUpdateUser, showToast }) {
   const [passwordLoading, setPasswordLoading] = useState(false);
   
   const [shareEnabled, setShareEnabled] = useState(user?.share_enabled === 1);
+  const [shareLocations, setShareLocations] = useState(user?.share_locations === 1);
   const [shareLoading, setShareLoading] = useState(false);
 
   const [tcgApiKey, setTcgApiKey] = useState(user?.tcg_api_key || '');
@@ -78,6 +79,7 @@ function Settings({ user, onUpdateUser, showToast }) {
   useEffect(() => {
     if (user) {
       setShareEnabled(user.share_enabled === 1 || user.share_enabled === true);
+      setShareLocations(user.share_locations === 1 || user.share_locations === true);
       setTcgApiKey(user.tcg_api_key || '');
     }
   }, [user]);
@@ -166,6 +168,32 @@ function Settings({ user, onUpdateUser, showToast }) {
       console.error(err);
       setShareEnabled(!checked);
       showToast('Error updating sharing settings.');
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const handleLocationsToggle = async (checked) => {
+    setShareLocations(checked);
+    setShareLoading(true);
+    try {
+      const response = await fetch('/api/auth/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ share_locations: checked })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        onUpdateUser(data.user);
+        showToast(checked ? 'Card locations now visible on your share page.' : 'Card locations hidden from your share page.');
+      } else {
+        setShareLocations(!checked);
+        showToast('Failed to update location sharing.');
+      }
+    } catch (err) {
+      console.error(err);
+      setShareLocations(!checked);
+      showToast('Error updating location sharing.');
     } finally {
       setShareLoading(false);
     }
@@ -347,10 +375,45 @@ function Settings({ user, onUpdateUser, showToast }) {
                 </div>
               </div>
 
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.95rem' }}>Show Card Locations</div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Reveal which binder or box each card is stored in.</div>
+                </div>
+                <label className="switch-control" style={{ position: 'relative', display: 'inline-block', width: '46px', height: '24px' }}>
+                  <input
+                    type="checkbox"
+                    checked={shareLocations}
+                    onChange={(e) => handleLocationsToggle(e.target.checked)}
+                    disabled={shareLoading}
+                    style={{ opacity: 0, width: 0, height: 0 }}
+                  />
+                  <span className={`switch-slider ${shareLocations ? 'active' : ''}`} style={{
+                    position: 'absolute',
+                    cursor: 'pointer',
+                    top: 0, left: 0, right: 0, bottom: 0,
+                    backgroundColor: shareLocations ? 'var(--type-grass)' : '#334155',
+                    transition: '0.3s',
+                    borderRadius: '24px'
+                  }}>
+                    <span style={{
+                      position: 'absolute',
+                      height: '18px', width: '18px',
+                      left: shareLocations ? '24px' : '4px',
+                      bottom: '3px',
+                      backgroundColor: '#fff',
+                      transition: '0.3s',
+                      borderRadius: '50%',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
+                    }}></span>
+                  </span>
+                </label>
+              </div>
+
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-                <button 
-                  className="btn btn-secondary" 
-                  onClick={handleRegenerateToken} 
+                <button
+                  className="btn btn-secondary"
+                  onClick={handleRegenerateToken}
                   disabled={shareLoading}
                   style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
                 >

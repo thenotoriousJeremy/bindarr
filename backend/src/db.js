@@ -338,6 +338,9 @@ async function initDb() {
   if (!usersCols.some(c => c.name === 'tcg_api_key')) {
     await run(`ALTER TABLE users ADD COLUMN tcg_api_key TEXT DEFAULT ''`);
   }
+  if (!usersCols.some(c => c.name === 'share_locations')) {
+    await run(`ALTER TABLE users ADD COLUMN share_locations INTEGER DEFAULT 0`);
+  }
 
   const deckCardsCols = await all(`PRAGMA table_info(deck_cards)`);
   if (!deckCardsCols.some(c => c.name === 'checked_out')) {

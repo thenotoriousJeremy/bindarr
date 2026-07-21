@@ -14,7 +14,7 @@ async function authenticateToken(req, res, next) {
 
   try {
     const session = await db.get(`
-      SELECT s.user_id, u.username, u.role, u.share_token, u.share_enabled, u.tcg_api_key
+      SELECT s.user_id, u.username, u.role, u.share_token, u.share_enabled, u.share_locations, u.tcg_api_key
       FROM sessions s
       JOIN users u ON s.user_id = u.id
       WHERE s.token = ? AND s.expires_at > DATETIME('now')
@@ -30,6 +30,7 @@ async function authenticateToken(req, res, next) {
       role: session.role,
       share_token: session.share_token,
       share_enabled: session.share_enabled,
+      share_locations: session.share_locations,
       tcg_api_key: session.tcg_api_key || ''
     };
     next();
