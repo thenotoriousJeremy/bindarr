@@ -81,7 +81,7 @@ function SharedCollection({ shareToken }) {
     fetchSharedData();
   }, [shareToken, listType]);
 
-  const collection = data?.collection || [];
+  const collection = useMemo(() => data?.collection || [], [data]);
   const shareLocations = data?.shareLocations;
 
   const uniqueRarities = useMemo(() => Array.from(new Set(collection.map(c => c.rarity).filter(Boolean))), [collection]);
