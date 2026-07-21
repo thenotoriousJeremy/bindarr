@@ -29,6 +29,8 @@ RUN apk add --no-cache python3 make g++
 ENV NODE_ENV=production
 ENV PORT=3001
 ENV DB_PATH=/app/database/pokemon_cards.db
+# Set indexes live on the persisted volume too, else they rebuild every redeploy
+ENV SETS_DIR=/app/database/sets
 
 # Create database volume mount target directory
 RUN mkdir -p /app/database

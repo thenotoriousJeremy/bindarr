@@ -13,7 +13,7 @@ const { cv } = require('opencv-wasm');
 // scryfallApi/tcgApi are lazy-required inside the build/preview paths only — they
 // pull in the DB module, which verify-only worker threads must not load.
 
-const SETS_DIR = path.join(__dirname, '..', 'data', 'sets');
+const SETS_DIR = process.env.SETS_DIR || path.join(__dirname, '..', 'data', 'sets');
 const DESC_BYTES = 32, CAP = 500, REF_WIDTH = 500, RATIO = 0.75, RANSAC_PX = 5.0;
 
 const http = axios.create({ timeout: 30000, headers: { 'User-Agent': 'Bindarr/1.0', 'Accept': 'application/json' } });
