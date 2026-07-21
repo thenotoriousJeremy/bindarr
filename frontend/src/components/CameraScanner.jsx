@@ -64,9 +64,6 @@ function CameraScanner({ onAddSuccess, showToast }) {
   
   // Camera active states
   const [cameraActive, setCameraActive] = useState(false);
-  // Displayed stream aspect (w/h), set on loadedmetadata, so the preview box
-  // matches the camera exactly — no object-fit:contain letterbox bars.
-  const [videoAspect, setVideoAspect] = useState(null);
   const [hasCameraError, setHasCameraError] = useState(false);
   const [autoScan, setAutoScan] = useState(false);
   const [showScanSettings, setShowScanSettings] = useState(false);
@@ -441,12 +438,13 @@ function CameraScanner({ onAddSuccess, showToast }) {
     }
   };
 
-  // Manual exposure override. exposureMode:'manual' is required before the
-  // compensation value takes effect on Android Chrome.
+  // Exposure bias. exposureCompensation is an EV offset on top of continuous
+  // auto-exposure; in 'manual' mode the camera drives exposure by exposureTime/ISO
+  // and ignores the compensation, so the slider must stay in continuous mode.
   const changeExposure = (val) => {
     setExposure(val);
     const track = stream?.getVideoTracks?.()[0];
-    if (track) updateAdvancedConstraints(track, { exposureMode: 'manual', exposureCompensation: val });
+    if (track) updateAdvancedConstraints(track, { exposureMode: 'continuous', exposureCompensation: val });
   };
 
   const startCamera = async () => {
@@ -675,9 +673,9 @@ function CameraScanner({ onAddSuccess, showToast }) {
     const oc = orientedCanvas;
     const videoRect = video.getBoundingClientRect();
     const guideRect = guideElement.getBoundingClientRect();
-    // Contain-transform mapping from displayed video px to oriented-canvas px
-    // (matches object-fit:contain on the preview; letterbox offsets handled below).
-    const k = Math.min(videoRect.width / oc.width, videoRect.height / oc.height);
+    // Cover-transform mapping from displayed video px to oriented-canvas px
+    // (matches object-fit:cover on the preview; overflow crop offsets handled below).
+    const k = Math.max(videoRect.width / oc.width, videoRect.height / oc.height);
     const offX = (videoRect.width - oc.width * k) / 2;
     const offY = (videoRect.height - oc.height * k) / 2;
     // Box center (rotation is about the element center, so the rotated AABB
@@ -953,22 +951,13 @@ function CameraScanner({ onAddSuccess, showToast }) {
         </div>
       ) : (
         <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <div className="camera-preview-wrapper camera-active" style={{ aspectRatio: videoAspect || undefined }}>
+          <div className="camera-preview-wrapper camera-active">
             <video
               ref={videoRef}
               autoPlay
               playsInline
               muted
               className="camera-video"
-              onLoadedMetadata={(e) => {
-                const v = e.currentTarget;
-                if (!v.videoWidth || !v.videoHeight) return;
-                const raw = v.videoWidth / v.videoHeight;
-                // A landscape sensor in a portrait viewport is shown rotated
-                // (upright/portrait) by mobile browsers — flip the aspect to match.
-                const portraitViewport = window.innerHeight >= window.innerWidth;
-                setVideoAspect(raw > 1 && portraitViewport ? 1 / raw : raw);
-              }}
             />
             
             {/* Torch Toggle Overlay Button */}
@@ -1061,7 +1050,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
           {/* Settings panel (toggled by the gear in the action row): game, set,
               scan detail, exposure. Kept off the camera view so it stays clean. */}
           {showScanSettings && (
-          <div className="glass-panel" style={{ width: '100%', padding: '1rem', background: 'rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '0.25rem', position: 'relative', zIndex: setSearchOpen ? 40 : undefined }}>
+          <div className="glass-panel" style={{ width: '100%', padding: '1rem', background: 'rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.25rem', order: 2, position: 'relative', zIndex: setSearchOpen ? 40 : undefined }}>
             <div className="sub-nav-tabs" style={{ marginBottom: 0 }}>
               {[['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([g, label]) => (
                 <button

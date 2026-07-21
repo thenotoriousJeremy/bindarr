@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.20] - 2026-07-21
+
+### Fixed
+- **Scan settings panel shifted the buttons when toggled.** Opening the gear panel pushed the whole action row (Stop / Auto / Capture / gear) down, so the gear moved out from under your finger. The panel now expands below the button row (`order: 2`); the buttons stay put whether settings are open or closed.
+- **Manual exposure slider did nothing until you moved it *and* pressed Auto.** `changeExposure` set `exposureMode: 'manual'`, but `exposureCompensation` is an EV bias that only applies on top of continuous auto-exposure — in manual mode the camera drives exposure by exposureTime/ISO and ignores the compensation. The slider now applies compensation in `'continuous'` mode, so it takes effect live on the first move (Android back cameras).
+
+### Changed
+- **Camera preview is a consistent size across devices and the packaged app.** An inline `aspectRatio` override made the preview box jump to each camera stream's own ratio once it loaded, so the box was a different size on every device. Removed the override so the box stays locked to the trading-card 5/7 ratio, and switched `.camera-video` to `object-fit: cover` (with the crop mapping switched from `min` to `max` to match) so the live video fills the card box edge-to-edge with no letterbox bars.
+
 ## [1.4.18] - 2026-07-20
 
 ### Fixed

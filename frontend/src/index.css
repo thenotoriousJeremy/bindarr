@@ -921,7 +921,7 @@ button, input, select, textarea {
 .camera-video {
   width: 100%;
   height: 100%;
-  object-fit: contain; /* show the WHOLE camera frame (widest angle, no FOV cropped); letterbox where the stream aspect != box. Crop mapping mirrors this with a min (contain) scale. */
+  object-fit: cover; /* fill the fixed card box edge-to-edge, no letterbox; crops FOV where stream aspect != box. Crop mapping mirrors this with a max (cover) scale. */
   display: block;
 }
 
