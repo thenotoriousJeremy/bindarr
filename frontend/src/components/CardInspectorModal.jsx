@@ -32,6 +32,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
   const [isTrade, setIsTrade] = useState(0);
   const [favorite, setFavorite] = useState(0);
   const [listType, setListType] = useState('collection');
+  const [notes, setNotes] = useState('');
   const [isFullScreen, setIsFullScreen] = useState(false);
   const hasToggledRef = useRef(false);
 
@@ -59,6 +60,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     setIsTrade(card.is_trade ? 1 : 0);
     setFavorite(card.favorite ? 1 : 0);
     setListType(card.list_type || 'collection');
+    setNotes(card.notes || '');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset form only when the entry changes, not on every card mutation
   }, [targetEntryId, startInEdit]);
 
@@ -89,7 +91,8 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
           location_id: locationId ? parseInt(locationId, 10) : null,
           list_type: listType,
           is_trade: isTrade ? 1 : 0,
-          favorite: favorite ? 1 : 0
+          favorite: favorite ? 1 : 0,
+          notes
         })
       });
       if (res.ok) {
@@ -102,6 +105,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         card.list_type = listType;
         card.is_trade = isTrade ? 1 : 0;
         card.favorite = favorite ? 1 : 0;
+        card.notes = notes;
         showToast && showToast('Card entry updated.');
         onUpdate && onUpdate();
         onClose();
@@ -342,6 +346,18 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 </select>
               </div>
 
+              <div className="form-group">
+                <label>Notes</label>
+                <textarea
+                  className="input-control"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="Provenance, condition details, trade plans..."
+                  rows={3}
+                  style={{ resize: 'vertical', fontFamily: 'inherit' }}
+                />
+              </div>
+
               <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.25rem' }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setMode('view')} style={{ flex: 1 }}>Cancel</button>
                 <button type="submit" className="btn btn-primary" style={{ flex: 2 }}>Save Changes</button>
@@ -420,6 +436,12 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                       </span>
                     )}
                   </div>
+                </div>
+              )}
+
+              {card.notes && (
+                <div style={{ background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '0.6rem 0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {card.notes}
                 </div>
               )}
 

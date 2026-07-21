@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.25] - 2026-07-21
+
+### Added
+- **Notes** — a standalone notebook tab for free-form notes (wishlist ideas, deals, trade plans), separate from card entries. Create, edit (saves on blur), pin to top, and delete. Includes client-side search over title/body and sort by recently updated, recently created, or title.
+- **Per-card notes** — collection entries now carry an optional free-text note (provenance, condition details, trade plans), editable in the card inspector and shown on the card's detail view.
+
 ## [1.4.21] - 2026-07-21
 
 ### Fixed

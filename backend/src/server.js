@@ -19,6 +19,7 @@ const setsRoutes = require('./routes/sets');
 const decksRoutes = require('./routes/decks');
 const settingsRoutes = require('./routes/settings');
 const tagsRoutes = require('./routes/tags');
+const notesRoutes = require('./routes/notes');
 const { getAuditLogs, revertAuditEvent } = require('./utils/auditLogger');
 
 
@@ -183,6 +184,7 @@ app.use('/api', storageRoutes);
 app.use('/api', statsRoutes);
 app.use('/api', importExportRoutes);
 app.use('/api', tagsRoutes);
+app.use('/api', notesRoutes);
 app.get('/api/audit-logs', getAuditLogs);
 app.post('/api/audit-logs/:id/revert', revertAuditEvent);
 app.use('/api/sets', setsRoutes);

@@ -106,6 +106,7 @@ router.get('/collection', async (req, res) => {
         c.is_trade,
         c.favorite,
         c.list_type,
+        c.notes,
         cc.name,
         cc.supertype,
         cc.subtypes,
@@ -272,7 +273,7 @@ router.put('/collection/:id', async (req, res) => {
   const { id } = req.params;
   const {
     quantity, condition, printing, language, purchase_price,
-    location_id, compartment_id, list_type, is_trade, favorite, game
+    location_id, compartment_id, list_type, is_trade, favorite, game, notes
   } = req.body;
 
   try {
@@ -329,6 +330,7 @@ router.put('/collection/:id', async (req, res) => {
     if (is_trade !== undefined) { updates.push('is_trade = ?'); params.push(is_trade ? 1 : 0); }
     if (favorite !== undefined) { updates.push('favorite = ?'); params.push(favorite ? 1 : 0); }
     if (game !== undefined) { updates.push('game = ?'); params.push(game); }
+    if (notes !== undefined) { updates.push('notes = ?'); params.push(notes); }
 
     if (updates.length > 0) {
       params.push(id, req.user.id);

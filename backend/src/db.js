@@ -296,6 +296,19 @@ async function initDb() {
     )
   `);
 
+  await run(`
+    CREATE TABLE IF NOT EXISTS notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      title TEXT DEFAULT '',
+      body TEXT DEFAULT '',
+      pinned INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
   // --- MIGRATIONS ---
   const collectionCols = await all(`PRAGMA table_info(collection)`);
   if (!collectionCols.some(c => c.name === 'user_id')) {
@@ -318,6 +331,9 @@ async function initDb() {
   }
   if (!collectionCols.some(c => c.name === 'game')) {
     await run(`ALTER TABLE collection ADD COLUMN game TEXT DEFAULT 'pokemon'`);
+  }
+  if (!collectionCols.some(c => c.name === 'notes')) {
+    await run(`ALTER TABLE collection ADD COLUMN notes TEXT DEFAULT ''`);
   }
 
   const locationsCols = await all(`PRAGMA table_info(locations)`);
