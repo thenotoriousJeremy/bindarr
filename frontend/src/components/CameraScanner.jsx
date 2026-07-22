@@ -9,6 +9,7 @@ import CardEntryFields from './CardEntryFields';
 import CardInspectorModal from './CardInspectorModal';
 import { useBackGuard } from '../utils/useBackGuard';
 import { useMultiSelect } from '../utils/useMultiSelect';
+import { isNative } from '../apiBase';
 // Centered card-shaped guide box, styled in CSS (.scan-card-guide): card ratio
 // with margin, centered by the overlay's flex. The crop maps the box's on-screen
 // rect (getBoundingClientRect) into the frame, so its size is driven by CSS.
@@ -573,9 +574,11 @@ function CameraScanner({ onAddSuccess, showToast }) {
     const streamRatio = videoWidth / videoHeight;
     const visualRatio = videoRect.width / videoRect.height;
 
-    // Detect if browser displays stream rotated relative to raw texture resolution
-    // (If stream is landscape but display container is portrait, or vice versa)
-    const isRotated = (streamRatio > 1.0 && visualRatio < 1.0) || (streamRatio < 1.0 && visualRatio > 1.0);
+    // Stream orientation rotation applies to mobile devices (iOS/Android)
+    // where physical camera sensors deliver landscape raw frames while displayed in portrait.
+    // Desktop webcams deliver unrotated frames matching the screen layout.
+    const isMobile = isNative || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    const isRotated = isMobile && ((streamRatio > 1.0 && visualRatio < 1.0) || (streamRatio < 1.0 && visualRatio > 1.0));
 
     // Oriented output dimensions, then an optional uniform downscale.
     const outW = isRotated ? videoHeight : videoWidth;
