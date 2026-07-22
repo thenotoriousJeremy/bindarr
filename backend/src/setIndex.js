@@ -44,6 +44,12 @@ function orbExtract(orb, rgba, w, h) {
   return out;
 }
 
+let sharedOrb = null;
+function extractCard(rgba, w, h) {
+  if (!sharedOrb) sharedOrb = new cv.ORB(CAP);
+  return orbExtract(sharedOrb, rgba, w, h);
+}
+
 // MTG: page Scryfall by set code. Returns [{ name, set, number, img }].
 async function fetchMtgSet(set) {
   const scryfallApi = require('./scryfallApi');
@@ -119,23 +125,37 @@ async function buildSet(game, set) {
 
     const p = paths(game, set);
     const descFd = fs.openSync(p.desc, 'w'), kpFd = fs.openSync(p.kp, 'w');
-    const orb = new cv.ORB(CAP);
+    const scanPool = require('./scanPool');
+    const workers = scanPool.getPool();
+    const concurrency = Math.max(4, workers.length || 4);
     const meta = [];
     let offset = 0;
-    for (const c of cards) {
-      try {
-        const buf = Buffer.from((await http.get(c.img, { responseType: 'arraybuffer', timeout: 30000 })).data);
-        const { data, info } = await sharp(buf).resize({ width: REF_WIDTH, withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-        const f = orbExtract(orb, new Uint8ClampedArray(data), info.width, info.height);
+
+    for (let i = 0; i < cards.length; i += concurrency) {
+      const chunk = cards.slice(i, i + concurrency);
+      const results = await Promise.all(chunk.map(async (c) => {
+        try {
+          const buf = Buffer.from((await http.get(c.img, { responseType: 'arraybuffer', timeout: 30000 })).data);
+          const { data, info } = await sharp(buf).resize({ width: REF_WIDTH, withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+          const raw = new Uint8ClampedArray(data);
+          let f = await scanPool.extract(raw, info.width, info.height);
+          if (!f) f = extractCard(raw, info.width, info.height);
+          return { card: c, f };
+        } catch {
+          return null;
+        }
+      }));
+
+      for (const res of results) {
+        progress[k].done++;
+        if (!res || !res.f) continue;
+        const { card: c, f } = res;
         fs.writeSync(descFd, Buffer.from(f.desc.buffer, 0, f.desc.length), 0, f.desc.length, offset * DESC_BYTES);
         fs.writeSync(kpFd, Buffer.from(f.kp.buffer, 0, f.kp.byteLength), 0, f.kp.byteLength, offset * 2 * 4);
         meta.push([c.name, c.set, c.number, offset, f.count]);
         offset += f.count;
-      } catch (e) { /* skip a bad image */ }
-      progress[k].done++;
-      await sleep(60);
+      }
     }
-    orb.delete();
     fs.closeSync(descFd); fs.closeSync(kpFd);
     fs.writeFileSync(p.meta, JSON.stringify({ set, cards: meta }));
     console.log(`setIndex: ${set} indexed ${meta.length} cards`);
@@ -317,4 +337,4 @@ async function matchSet(q, game, set, topK = 8) {
   return scored.slice(0, topK);
 }
 
-module.exports = { ensureSet, isReady, matchSet, verifySlice, listBuilds, getProgress, setProgress, deleteBuild, previewSet, startBuild };
+module.exports = { ensureSet, isReady, matchSet, verifySlice, extractCard, listBuilds, getProgress, setProgress, deleteBuild, previewSet, startBuild };

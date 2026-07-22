@@ -29,7 +29,7 @@ function getPool() {
       const p = w._pending.get(m.id);
       if (!p) return;
       w._pending.delete(m.id);
-      m.error ? p.reject(new Error(m.error)) : p.resolve(m.scored);
+      m.error ? p.reject(new Error(m.error)) : p.resolve(m.out !== undefined ? m.out : m.scored);
     });
     w.on('error', (e) => { for (const p of w._pending.values()) p.reject(e); w._pending.clear(); });
     pool.push(w);
@@ -44,6 +44,18 @@ function job(w, payload) {
     w._pending.set(id, { resolve, reject });
     w.postMessage({ id, ...payload });
   });
+}
+
+let extractRr = 0;
+
+// Dispatch single-card ORB extraction to a worker thread. Returns extracted
+// features object { desc, kp, count }, or null if pool is disabled.
+async function extract(rgba, width, height) {
+  const workers = getPool();
+  if (workers.length === 0) return null;
+  const w = workers[extractRr % workers.length];
+  extractRr = (extractRr + 1) % workers.length;
+  return job(w, { type: 'extract', rgba, width, height });
 }
 
 // Verify all `total` cards of a set across the pool. qDesc/qKp are plain typed
@@ -64,4 +76,4 @@ async function verify(game, set, qDesc, qRows, qKp, total) {
   return results.flat();
 }
 
-module.exports = { verify, getPool };
+module.exports = { verify, extract, getPool };

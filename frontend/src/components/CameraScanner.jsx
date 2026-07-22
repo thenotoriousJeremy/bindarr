@@ -295,13 +295,10 @@ function CameraScanner({ onAddSuccess, showToast }) {
         if (d.ready) { setSetPrep('ready'); setSetBuildProgress(null); return; }
         setSetPrep('building');
         setSetBuildProgress(d.progress || null);
-        timer = setTimeout(poll, 3000);
+        timer = setTimeout(poll, 1000);
       } catch { if (!cancelled) setSetPrep('idle'); }
     };
-    // Debounce: /api/prepare-set starts a server-side set build, so firing it on
-    // every keystroke makes typing "fdn" build "f","fd","fdn" (and bursts
-    // Scryfall into 429s). Wait for a typing pause, then prepare once.
-    debounce = setTimeout(() => { setSetPrep('building'); poll(); }, 600);
+    debounce = setTimeout(() => { setSetPrep('building'); poll(); }, 200);
     return () => { cancelled = true; clearTimeout(debounce); if (timer) clearTimeout(timer); };
   }, [scanGame, scanSetParam]);
 
@@ -1080,29 +1077,45 @@ function CameraScanner({ onAddSuccess, showToast }) {
               {(() => {
                 const bp = setBuildProgress;
                 const pct = bp && bp.total > 0 ? Math.round((bp.done / bp.total) * 100) : null;
+                const isFetching = setPrep === 'building' && (pct === null || bp?.status === 'fetching');
+                const displayPct = isFetching ? 15 : (pct || 0);
+
                 let text;
                 if (!scanSetCodes.length) {
                   text = 'Highly recommended: pick your set(s) below. Scans are far more accurate scoped to your sets — without it we search every set and may misidentify the card.';
                 } else if (setPrep === 'building') {
-                  text = pct === null
-                    ? `Preparing ${setLabelJoined}… fetching card list (one-time). Scans work meanwhile.`
-                    : `Building ${setLabelJoined}: ${bp.done}/${bp.total} cards (${pct}%). One-time; scans work meanwhile.`;
+                  text = isFetching
+                    ? `Preparing ${setLabelJoined}… fetching card list. Scans work meanwhile.`
+                    : `Indexing ${setLabelJoined}: ${bp.done}/${bp.total} cards (${pct}%). Scans work meanwhile.`;
                 } else if (setPrep === 'ready') {
                   text = `${setLabelJoined} ready: exact matches within your set${scanSetCodes.length > 1 ? 's' : ''}.`;
                 } else {
                   text = setLabelJoined;
                 }
                 return (
-                  <>
-                    <p style={{ fontSize: '0.7rem', color: !scanSetCodes.length ? 'var(--accent-yellow)' : setPrep === 'ready' ? 'var(--type-grass)' : 'var(--text-secondary)', margin: 0, textAlign: 'center', fontWeight: 600 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    <p style={{ fontSize: '0.75rem', color: !scanSetCodes.length ? 'var(--accent-yellow)' : setPrep === 'ready' ? 'var(--type-grass)' : 'var(--text-secondary)', margin: 0, textAlign: 'center', fontWeight: 600 }}>
                       {text}
                     </p>
-                    {setPrep === 'building' && pct !== null && (
-                      <div style={{ height: '4px', width: '100%', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${pct}%`, background: 'var(--accent-red)', transition: 'width 0.3s ease' }} />
+                    {setPrep === 'building' && (
+                      <div style={{ padding: '0.45rem 0.65rem', background: 'rgba(0,0,0,0.35)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.12)', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-strong)' }}>
+                          <span>{isFetching ? 'Fetching Card List...' : `Indexing Cards (${bp?.done || 0}/${bp?.total || 0})`}</span>
+                          <span style={{ color: 'var(--accent-yellow)' }}>{isFetching ? 'Please wait' : `${pct}%`}</span>
+                        </div>
+                        <div style={{ height: '10px', width: '100%', background: 'rgba(255,255,255,0.08)', borderRadius: '5px', overflow: 'hidden', position: 'relative' }}>
+                          <div style={{
+                            height: '100%',
+                            width: `${displayPct}%`,
+                            background: 'linear-gradient(90deg, #ef4444, #f59e0b, #10b981)',
+                            borderRadius: '5px',
+                            transition: 'width 0.3s ease',
+                            boxShadow: '0 0 10px rgba(245, 158, 11, 0.6)'
+                          }} />
+                        </div>
                       </div>
                     )}
-                  </>
+                  </div>
                 );
               })()}
               {scanSetCodes.length > 0 && (
