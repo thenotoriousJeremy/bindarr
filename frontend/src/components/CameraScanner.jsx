@@ -677,7 +677,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
     // the preview's object-fit:cover transform, then pad it: the box is an aim
     // hint, but a card can overhang it, so crop wider so a frame-filling card
     // isn't clipped. Server auto-detects/deskews the card inside this region.
-    const CROP_PAD = 0.18; // extra margin around the box, each side
+    const CROP_PAD = 0.05; // 5% tight margin around guide box
     const oc = orientedCanvas;
     const videoRect = video.getBoundingClientRect();
     const guideRect = guideElement.getBoundingClientRect();

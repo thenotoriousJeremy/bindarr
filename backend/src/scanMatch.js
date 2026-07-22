@@ -41,33 +41,39 @@ function orderQuad(pts) {
 // falling back to a background-dominated center crop.
 function detectCard(rgbaData, w, h) {
   const src = cv.matFromImageData({ data: rgbaData, width: w, height: h });
-  const gray = new cv.Mat(), edges = new cv.Mat();
+  const gray = new cv.Mat(), blur = new cv.Mat(), thresh = new cv.Mat(), edges = new cv.Mat();
   const contours = new cv.MatVector(), hier = new cv.Mat();
   let out = null;
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
-    cv.Canny(gray, edges, 30, 120);
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+    cv.Canny(blur, edges, 20, 100);
+    cv.threshold(blur, thresh, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+
     const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-    cv.dilate(edges, edges, k); k.delete();
-    cv.findContours(edges, contours, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+    cv.dilate(edges, edges, k);
+    cv.bitwise_or(edges, thresh, edges);
+    k.delete();
+
+    // RETR_EXTERNAL retrieves only the outer card boundary, ignoring internal artwork/text
+    cv.findContours(edges, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
     const imgArea = w * h, cx = w / 2, cy = h / 2, halfDiag = Math.hypot(w, h) / 2;
     let best = null; // { score, pts }
     for (let i = 0; i < contours.size(); i++) {
       const c = contours.get(i);
       const area = cv.contourArea(c);
-      if (area >= 0.04 * imgArea) {
+      if (area >= 0.03 * imgArea && area <= 0.98 * imgArea) {
         const rect = cv.minAreaRect(c);
         let rw = rect.size.width;
         let rh = rect.size.height;
         if (rw > rh) { const tmp = rw; rw = rh; rh = tmp; } // ensure portrait aspect ratio
         const ar = rw / rh; // portrait card ~0.71 aspect
-        if (ar >= 0.50 && ar <= 0.95) {
+        if (ar >= 0.45 && ar <= 1.05) {
           const rcx = rect.center.x, rcy = rect.center.y;
           const centrality = 1 - Math.min(1, Math.hypot(rcx - cx, rcy - cy) / halfDiag);
-          const aspectFit = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.25);
-          const score = (area / imgArea) * (0.4 + 0.6 * aspectFit) * (0.5 + 0.5 * centrality);
+          const aspectFit = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.35);
+          const score = (area / imgArea) * (0.3 + 0.7 * aspectFit) * (0.4 + 0.6 * centrality);
 
           if (!best || score > best.score) {
             const ptsMat = new cv.Mat();
@@ -97,7 +103,7 @@ function detectCard(rgbaData, w, h) {
       srcTri.delete(); dstTri.delete(); M.delete(); warped.delete();
     }
   } finally {
-    src.delete(); gray.delete(); edges.delete(); contours.delete(); hier.delete();
+    src.delete(); gray.delete(); blur.delete(); thresh.delete(); edges.delete(); contours.delete(); hier.delete();
   }
   return out;
 }
