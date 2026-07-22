@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.30] - 2026-07-21
+
+### Added
+- **Default Card Stacking** — collection views now default to stacking identical cards. Added stacking toggle filters (unstack, group by condition, group by printing) to the shared collection view.
+- **Bidirectional Rarity Sort** — added `Rarity (High-Low)` and `Rarity (Low-High)` sorting to main and shared collection views.
+- **Shared Theme Support** — share links now preserve and force active theme via `?theme=` URL query parameter (e.g. `?theme=lcars` or `?theme=light`).
+
+### Fixed
+- **Chart Tooltip Text Readability** — styled Recharts chart tooltips across all themes (Dark, LCARS, Light) so hover popups are always crisp and legible.
+- **Single Card Quantity Badge** — hid the `x1` quantity tag on single cards in shared collection view.
+- **Location Slot Number in Card Inspector** — fixed card inspector pop-up to accurately display slot number across 0-indexed and multiplier position encodings (e.g., `binder • Page 1 • Slot 1`).
+
 ## [1.4.25] - 2026-07-21
 
 ### Added
