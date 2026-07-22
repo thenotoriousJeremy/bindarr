@@ -58,8 +58,6 @@ function Notes({ showToast }) {
     }
   };
 
-  if (loading) return <div className="spinner" aria-label="Loading" style={{ margin: '4rem auto' }} />;
-
   // Search + sort are client-side: the full note set is already loaded and
   // small. Pinned notes always lead, sorted among themselves by the same key.
   const visible = useMemo(() => {
@@ -74,6 +72,8 @@ function Notes({ showToast }) {
     }[sort];
     return [...filtered].sort((a, b) => (b.pinned - a.pinned) || cmp(a, b));
   }, [notes, query, sort]);
+
+  if (loading) return <div className="spinner" aria-label="Loading" style={{ margin: '4rem auto' }} />;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -110,7 +110,7 @@ function Notes({ showToast }) {
         </div>
       ) : visible.length === 0 ? (
         <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          No notes match "{query}".
+          No notes match &quot;{query}&quot;.
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
