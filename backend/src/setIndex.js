@@ -50,10 +50,30 @@ function extractCard(rgba, w, h) {
   return orbExtract(sharedOrb, rgba, w, h);
 }
 
-// MTG: page Scryfall by set code. Returns [{ name, set, number, img }].
+// A Scryfall release is split into a parent expansion plus child sets — tokens,
+// promos, art series, Commander — each with its own set code (tecl, pecl, ...),
+// linked by parent_set_code. Build a query spanning the whole family so "ecl"
+// indexes tokens/art/etc., not just the 408 main-set prints. Digital-only sets
+// (Alchemy) are skipped — no physical card to scan. include:extras stops Scryfall
+// hiding tokens/emblems; -is:digital drops any stray digital print.
+async function mtgSetFamilyQuery(set) {
+  const scryfallApi = require('./scryfallApi');
+  const code = norm(set);
+  const codes = new Set([code]);
+  try {
+    const r = await scryfallApi.scryGetRetried('https://api.scryfall.com/sets');
+    for (const s of r.data.data || []) {
+      if (s.parent_set_code === code && !s.digital) codes.add(s.code);
+    }
+  } catch { /* /sets unreachable: fall back to the main set only */ }
+  const sets = [...codes].map(c => `set:${c}`).join(' or ');
+  return `(${sets}) include:extras unique:prints -is:digital`;
+}
+
+// MTG: page Scryfall for a set family. Returns [{ name, set, number, img }].
 async function fetchMtgSet(set) {
   const scryfallApi = require('./scryfallApi');
-  let url = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(`set:${set} unique:prints`)}&order=set`;
+  let url = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(await mtgSetFamilyQuery(set))}&order=set`;
   const cards = [];
   while (url) {
     const r = await scryfallApi.scryGetRetried(url);
@@ -230,7 +250,7 @@ function deleteBuild(game, set) {
 async function previewSet(game, set) {
   if (game === 'mtg') {
     const scryfallApi = require('./scryfallApi');
-    const r = await scryfallApi.scryGetRetried(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(`set:${set} unique:prints`)}`);
+    const r = await scryfallApi.scryGetRetried(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(await mtgSetFamilyQuery(set))}`);
     return r.data.total_cards || (r.data.data ? r.data.data.length : 0);
   }
   const key = process.env.POKEMON_TCG_API_KEY || '';
