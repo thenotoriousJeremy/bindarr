@@ -86,19 +86,22 @@ function detectCard(rgbaData, w, h) {
     for (let i = 0; i < contours.size(); i++) {
       const c = contours.get(i);
       const area = cv.contourArea(c);
-      if (area >= 0.05 * imgArea && area <= 0.98 * imgArea) {
+      // Cap max area at 0.70 to reject giant outer container/lightbox frames
+      if (area >= 0.04 * imgArea && area <= 0.70 * imgArea) {
         const rect = cv.minAreaRect(c);
         let rw = rect.size.width;
         let rh = rect.size.height;
         if (rw > rh) { const tmp = rw; rw = rh; rh = tmp; } // ensure portrait
         const ar = rw / rh; // ideal card aspect = 0.714
 
-        // Tight aspect ratio window: trading cards are 0.714 aspect ratio (allow 0.62 to 0.82)
-        if (ar >= 0.62 && ar <= 0.82) {
+        // Trading cards are ~0.714 aspect ratio (allow 0.58 to 0.85)
+        if (ar >= 0.58 && ar <= 0.85) {
           const rcx = rect.center.x, rcy = rect.center.y;
           const centrality = 1 - Math.min(1, Math.hypot(rcx - cx, rcy - cy) / halfDiag);
           // Strong penalty for aspect ratio deviation from CARD_ASPECT (0.7159)
-          const aspectFit = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.10);
+          const aspectFit = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.15);
+          // Target cards filling ~20% to 50% of the cropped frame area
+          const sizeFit = 1 - Math.min(1, Math.abs(area / imgArea - 0.35) / 0.35);
 
           const perspectiveQuad = findCardQuad(c);
           let pts = perspectiveQuad;
@@ -114,7 +117,7 @@ function detectCard(rgbaData, w, h) {
             ptsMat.delete();
           }
 
-          const score = (area / imgArea) * (aspectFit * aspectFit) * (0.5 + 0.5 * centrality);
+          const score = (aspectFit * aspectFit) * (sizeFit) * (0.4 + 0.6 * centrality);
           if (!best || score > best.score) {
             best = { score, pts };
           }
