@@ -66,63 +66,71 @@ function findCardQuad(c) {
 
 function detectCard(rgbaData, w, h) {
   const src = cv.matFromImageData({ data: rgbaData, width: w, height: h });
-  const gray = new cv.Mat(), blur = new cv.Mat(), thresh = new cv.Mat(), closed = new cv.Mat();
-  const contours = new cv.MatVector(), hier = new cv.Mat();
+  const gray = new cv.Mat(), blur = new cv.Mat();
   let out = null;
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-    cv.threshold(blur, thresh, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
 
     // Large Morphological Close (3.5% of min dimension) erases all internal text, art, and symbols
     const kSize = Math.max(15, Math.round(Math.min(w, h) * 0.035));
     const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(kSize, kSize));
-    cv.morphologyEx(thresh, closed, cv.MORPH_CLOSE, k);
-    k.delete();
-
-    // RETR_EXTERNAL retrieves only the outer card boundary
-    cv.findContours(closed, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
     const imgArea = w * h, cx = w / 2, cy = h / 2, halfDiag = Math.hypot(w, h) / 2;
     let best = null; // { score, pts }
 
-    for (let i = 0; i < contours.size(); i++) {
-      const c = contours.get(i);
-      const area = cv.contourArea(c);
-      if (area >= 0.15 * imgArea && area <= 0.85 * imgArea) {
-        const rect = cv.minAreaRect(c);
-        let rw = rect.size.width;
-        let rh = rect.size.height;
-        if (rw > rh) { const tmp = rw; rw = rh; rh = tmp; } // ensure portrait
-        const ar = rw / rh; // ideal card aspect = 0.714
+    // Try both OTSU polarities so the crop works on any background: BINARY_INV
+    // isolates a card darker than a light surround (white table); BINARY isolates
+    // a card brighter than a dark surround. Whichever yields the best card-shaped
+    // region wins — the wrong polarity turns the surround into one frame-filling
+    // blob that the area cap rejects, so it doesn't produce false winners.
+    for (const polarity of [cv.THRESH_BINARY_INV, cv.THRESH_BINARY]) {
+      const thresh = new cv.Mat(), closed = new cv.Mat();
+      const contours = new cv.MatVector(), hier = new cv.Mat();
+      try {
+        cv.threshold(blur, thresh, 0, 255, polarity | cv.THRESH_OTSU);
+        cv.morphologyEx(thresh, closed, cv.MORPH_CLOSE, k);
+        cv.findContours(closed, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-        if (ar >= 0.55 && ar <= 0.88) {
-          const rcx = rect.center.x, rcy = rect.center.y;
-          const centrality = 1 - Math.min(1, Math.hypot(rcx - cx, rcy - cy) / halfDiag);
-          const aspectFit = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.15);
+        for (let i = 0; i < contours.size(); i++) {
+          const c = contours.get(i);
+          const area = cv.contourArea(c);
+          if (area >= 0.15 * imgArea && area <= 0.85 * imgArea) {
+            const rect = cv.minAreaRect(c);
+            let rw = rect.size.width;
+            let rh = rect.size.height;
+            if (rw > rh) { const tmp = rw; rw = rh; rh = tmp; } // ensure portrait
+            const ar = rw / rh; // ideal card aspect = 0.714
 
-          const perspectiveQuad = findCardQuad(c);
-          let pts = perspectiveQuad;
-          if (!pts) {
-            const ptsMat = new cv.Mat();
-            cv.boxPoints(rect, ptsMat);
-            pts = [
-              { x: ptsMat.data32F[0], y: ptsMat.data32F[1] },
-              { x: ptsMat.data32F[2], y: ptsMat.data32F[3] },
-              { x: ptsMat.data32F[4], y: ptsMat.data32F[5] },
-              { x: ptsMat.data32F[6], y: ptsMat.data32F[7] }
-            ];
-            ptsMat.delete();
+            if (ar >= 0.55 && ar <= 0.88) {
+              const rcx = rect.center.x, rcy = rect.center.y;
+              const centrality = 1 - Math.min(1, Math.hypot(rcx - cx, rcy - cy) / halfDiag);
+              const aspectFit = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.15);
+
+              const perspectiveQuad = findCardQuad(c);
+              let pts = perspectiveQuad;
+              if (!pts) {
+                const ptsMat = new cv.Mat();
+                cv.boxPoints(rect, ptsMat);
+                pts = [
+                  { x: ptsMat.data32F[0], y: ptsMat.data32F[1] },
+                  { x: ptsMat.data32F[2], y: ptsMat.data32F[3] },
+                  { x: ptsMat.data32F[4], y: ptsMat.data32F[5] },
+                  { x: ptsMat.data32F[6], y: ptsMat.data32F[7] }
+                ];
+                ptsMat.delete();
+              }
+
+              const score = (area / imgArea) * (aspectFit * aspectFit) * (0.4 + 0.6 * centrality) * (perspectiveQuad ? 1.2 : 1.0);
+              if (!best || score > best.score) {
+                best = { score, pts };
+              }
+            }
           }
-
-          const score = (area / imgArea) * (aspectFit * aspectFit) * (0.4 + 0.6 * centrality) * (perspectiveQuad ? 1.2 : 1.0);
-          if (!best || score > best.score) {
-            best = { score, pts };
-          }
+          c.delete();
         }
-      }
-      c.delete();
+      } finally { thresh.delete(); closed.delete(); contours.delete(); hier.delete(); }
     }
+    k.delete();
 
     if (best && best.pts) {
       const [tl, tr, brc, bl] = orderQuad(best.pts);
@@ -135,19 +143,24 @@ function detectCard(rgbaData, w, h) {
       srcTri.delete(); dstTri.delete(); M.delete(); warped.delete();
     }
   } finally {
-    src.delete(); gray.delete(); blur.delete(); thresh.delete(); closed.delete(); contours.delete(); hier.delete();
+    src.delete(); gray.delete(); blur.delete();
   }
   return out;
 }
 
-// Match on the client's guide-box capture directly: the user frames the card in
-// the on-screen guide box and the client sends exactly that region, so it's
-// already the crop. Server-side contour re-cropping (OTSU + morphology, see
-// detectCard) mis-fired on dark/textured surfaces — it chopped the wrong region
-// or fell back to the full frame, degrading match accuracy. Trust the client crop.
-// ponytail: detectCard left in place (exported) for a future robust deskew;
-// re-enable here only once it's reliable across backgrounds.
+// Produce the card image to match on: auto-crop + deskew to the detected card
+// outline (works on light and dark backgrounds via dual-polarity thresholding),
+// else fall back to the client's framed guide-box capture.
 async function preprocessCard(imageBuffer) {
+  try {
+    const { data, info } = await sharp(imageBuffer).resize({ width: 1200, withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const card = detectCard(new Uint8ClampedArray(data), info.width, info.height);
+    if (card) {
+      return await sharp(card.data, { raw: { width: card.width, height: card.height, channels: 4 } }).png().toBuffer();
+    }
+  } catch (e) {
+    console.warn('preprocessCard failed:', e.message);
+  }
   return await sharp(imageBuffer).png().toBuffer();
 }
 
