@@ -923,7 +923,7 @@ function AdminPanel({ showToast }) {
           justifyContent: 'center',
           zIndex: 999
         }}>
-          <div className="glass-panel" style={{ maxWidth: '380px', width: '100%', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <div className="glass-panel" style={{ maxWidth: '380px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <div>
               <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>Reset Password</h3>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Change password for user: <strong>{targetUser.username}</strong></p>
