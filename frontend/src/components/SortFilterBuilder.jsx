@@ -20,7 +20,7 @@ function SortableItem({ id, children }) {
   };
   return (
     <div ref={setNodeRef} style={style} {...attributes}>
-      <div {...listeners} style={{ cursor: 'grab', display: 'flex', alignItems: 'center' }}>
+      <div {...listeners} style={{ cursor: 'grab', display: 'flex', alignItems: 'center', touchAction: 'none' }}>
         <GripVertical size={16} color="var(--text-muted)" />
       </div>
       <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -52,8 +52,11 @@ const SORT_OPTIONS = [
 export function SortBuilder({ value, onChange }) {
   const items = Array.isArray(value) ? value : [];
   
+  // activationConstraint: touch needs a short press so a tap/scroll on the handle
+  // isn't misread as a drag; distance covers mouse. Without it (plus touch-action:
+  // none on the handle) touch drags never start on mobile.
   const sensors = useSensors(
-    useSensor(PointerSensor),
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
