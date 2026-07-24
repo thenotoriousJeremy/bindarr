@@ -4,7 +4,7 @@ import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
-import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
+import { CONDITIONS, getPrintings } from '../utils/cardOptions';
 import CardEntryFields from './CardEntryFields';
 import PackPriceSplitter from './PackPriceSplitter';
 // Fixed centered guide box (normalized 0..1). Center the card in it; the crop
@@ -1221,7 +1221,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   <div className="form-group" style={{ marginBottom: 0, flex: 1, textAlign: 'left' }}>
                     <label>Printing</label>
                     <select className="select-control" value={autoAddPrint} onChange={(e) => setAutoAddPrint(e.target.value)}>
-                      {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+                      {getPrintings(autoAddTargetCard.game || autoAddTargetCard.supertype).map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
                     </select>
                   </div>
                 </div>
@@ -1603,6 +1603,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   
                   <CardEntryFields
                     variant="stacked"
+                    game={selectedCard.game || selectedCard.supertype}
                     quantity={quantity} purchasePrice={purchasePrice} condition={condition} printing={printing} language={language}
                     onQuantity={setQuantity} onPurchasePrice={setPurchasePrice} onCondition={setCondition} onPrinting={setPrinting} onLanguage={setLanguage}
                   />

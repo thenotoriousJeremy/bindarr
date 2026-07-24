@@ -1,4 +1,4 @@
-import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
+import { CONDITIONS, getPrintings, LANGUAGES } from '../utils/cardOptions';
 
 // Shared quantity / purchase-price / condition / printing / language inputs for
 // the add-card and edit-card flows. Presentational only: the parent owns the
@@ -10,9 +10,10 @@ import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 export default function CardEntryFields({
   quantity, purchasePrice, condition, printing, language,
   onQuantity, onPurchasePrice, onCondition, onPrinting, onLanguage,
-  variant = 'grid',
+  variant = 'grid', game,
 }) {
   const stacked = variant === 'stacked';
+  const printings = getPrintings(game);
   const groupStyle = stacked ? { marginBottom: 0 } : undefined;
 
   const stepQty = (delta) => onQuantity(String(Math.max(1, (parseInt(quantity, 10) || 1) + delta)));
@@ -51,7 +52,7 @@ export default function CardEntryFields({
     <div className="form-group" style={groupStyle}>
       <label>Printing</label>
       <select className="select-control" value={printing} onChange={(e) => onPrinting(e.target.value)}>
-        {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+        {printings.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
       </select>
     </div>
   );
