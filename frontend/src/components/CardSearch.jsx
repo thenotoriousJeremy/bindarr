@@ -6,6 +6,25 @@ import { resolveCardPrice } from '../utils/resolveCardPrice';
 import CardEntryFields from './CardEntryFields';
 import { translateJapaneseName } from '../utils/langHelper';
 
+// Search failures worth explaining in-page rather than only as a toast. `keyHint`
+// marks the ones a user API key actually fixes; an upstream 5xx does not.
+const SEARCH_ERRORS = {
+  'invalid-key': {
+    title: 'Invalid API Key',
+    body: 'Your custom Pokémon TCG API key is invalid or unauthorized.',
+    keyHint: true
+  },
+  'rate-limit': {
+    title: 'Rate Limit Exceeded',
+    body: 'You have exceeded the unauthenticated search rate limits.',
+    keyHint: true
+  },
+  upstream: {
+    title: 'Card API Unavailable',
+    body: 'The card API returned an error. That is upstream of Bindarr and usually clears within a moment, so search again.',
+    keyHint: false
+  }
+};
 
 function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   const [query, setQuery] = useState('');
@@ -88,6 +107,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
           setSearchError('invalid-key');
         } else if (response.status === 429 || errData.error === 'Rate limit exceeded') {
           setSearchError('rate-limit');
+        } else if (response.status === 503) {
+          setSearchError('upstream');
         }
         showToast(errData.error || 'Search request failed.');
       }
@@ -306,15 +327,15 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         <div className="glass-panel" style={{ borderLeft: '4px solid var(--accent-red)', background: 'rgba(239, 68, 68, 0.08)', padding: '1.25rem', marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--accent-red)', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
             <ShieldAlert size={18} />
-            {searchError === 'invalid-key' ? 'Invalid API Key' : 'Rate Limit Exceeded'}
+            {SEARCH_ERRORS[searchError].title}
           </h3>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
-            {searchError === 'invalid-key' 
-              ? 'Your custom Pokémon TCG API key is invalid or unauthorized.' 
-              : 'You have exceeded the unauthenticated search rate limits.'}
-            {' '}Get a free API key at <a href="https://dev.pokemontcg.io/" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-yellow)', textDecoration: 'underline' }}>pokemontcg.io</a> and configure it in your Settings.
+            {SEARCH_ERRORS[searchError].body}
+            {SEARCH_ERRORS[searchError].keyHint && (
+              <> Get a free API key at <a href="https://dev.pokemontcg.io/" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-yellow)', textDecoration: 'underline' }}>pokemontcg.io</a> and configure it in your Settings.</>
+            )}
           </p>
-          {setActiveTab && (
+          {setActiveTab && SEARCH_ERRORS[searchError].keyHint && (
             <button 
               type="button" 
               className="btn btn-secondary" 
@@ -413,7 +434,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       )}
 
       {/* Empty State */}
-      {!loading && searching && cards.length === 0 && (
+      {!loading && searching && !searchError && cards.length === 0 && (
         <div className="glass-panel" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem 1.5rem' }}>
           <p>No cards matched your search queries. Try again with broader terms (e.g. searching &quot;Charizard&quot; without a card number).</p>
         </div>

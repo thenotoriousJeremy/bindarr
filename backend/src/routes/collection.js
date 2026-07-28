@@ -33,6 +33,9 @@ router.get('/search', searchLimiter, async (req, res) => {
     if (error.message === 'RATE_LIMIT_EXCEEDED') {
       return res.status(429).json({ error: 'Rate limit exceeded' });
     }
+    if (error.message === 'UPSTREAM_UNAVAILABLE') {
+      return res.status(503).json({ error: 'Card API is having trouble. Try again in a moment.' });
+    }
     res.status(500).json({ error: 'Search failed' });
   }
 });

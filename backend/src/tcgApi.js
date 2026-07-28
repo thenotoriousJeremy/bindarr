@@ -13,6 +13,25 @@ const tcgClient = axios.create({
   headers: API_KEY ? { 'X-Api-Key': API_KEY } : {}
 });
 
+// api.pokemontcg.io answers 5xx (and occasionally stalls past the timeout) often
+// enough that a single failed GET made searches look broken most of the time —
+// the same name searched again usually works. Retry transient failures in the
+// client so every call site (search, by-id, by-set, set index) gets it. 429 and
+// 401/403 are real answers, not transients: pass them through untouched so the
+// existing RATE_LIMIT_EXCEEDED / INVALID_API_KEY handling still fires.
+const TCG_MAX_RETRIES = 2;
+function isTransient(error) {
+  if (error.response) return error.response.status >= 500;
+  return error.code !== 'ERR_CANCELED'; // timeout / socket error / DNS
+}
+tcgClient.interceptors.response.use(null, async (error) => {
+  const cfg = error.config;
+  if (!cfg || !isTransient(error) || (cfg.__tcgRetries || 0) >= TCG_MAX_RETRIES) throw error;
+  cfg.__tcgRetries = (cfg.__tcgRetries || 0) + 1;
+  await new Promise(r => setTimeout(r, 400 * cfg.__tcgRetries));
+  return tcgClient.request(cfg);
+});
+
 // Helper: Extract a single representative price from card data
 function extractPrice(card) {
   if (card.tcgplayer && card.tcgplayer.prices) {
@@ -273,8 +292,9 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
   }
 
   // 2. Try local search first (if not forcing internet)
-  let localResults = [];
-  if (scope !== 'internet') {
+  // Kept as a closure because an internet-scope search skips it here but still
+  // needs it as a fallback when the upstream API is unreachable.
+  const queryLocal = async () => {
     let localSql = `SELECT * FROM card_cache WHERE game = 'pokemon'`;
     const localParams = [];
 
@@ -298,9 +318,13 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
     }
 
     localSql += ` LIMIT 50`;
-    
-    localResults = await db.all(localSql, localParams);
-    
+    return db.all(localSql, localParams);
+  };
+
+  let localResults = [];
+  if (scope !== 'internet') {
+    localResults = await queryLocal();
+
     // If we found local results and they are not empty, return them instantly.
     // Stale prices (older than 3 days) are updated asynchronously in the background.
     if (localResults.length > 0) {
@@ -325,6 +349,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
   }
 
   // 2. Fetch from external API
+  let upstreamFailed = false;
   const fetchCardsFromAPI = async (queryStr) => {
     try {
       const response = await tcgClient.get('/cards', {
@@ -345,7 +370,12 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
           throw new Error('INVALID_API_KEY');
         }
       }
-      console.error(`API query failed for q='${queryStr}':`, err.message);
+      // Retries are already exhausted here, so the upstream is genuinely down for
+      // this request. Remember it: returning [] alone is indistinguishable from
+      // "no such card", which is what made this look like a silent empty search.
+      upstreamFailed = true;
+      const status = err.response ? ` (HTTP ${err.response.status})` : '';
+      console.error(`API query failed for q='${queryStr}'${status}:`, err.message);
       return [];
     }
   };
@@ -378,6 +408,22 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
       cards = await fetchCardsFromAPI(queryStr);
     }
     
+    // Nothing found AND the upstream errored. Serve whatever the cache already
+    // knows before giving up: a card cached from an earlier search is still a
+    // correct answer, and failing a search for a card we already hold is the
+    // worst outcome. An internet-scope search skipped the local query above, so
+    // run it now. Only a genuinely empty cache reports the outage — the user sees
+    // "try again" rather than a wrong "no such card".
+    // Checked after both queries so the number+set fallback still gets its turn.
+    if (cards.length === 0 && upstreamFailed) {
+      const cached = scope === 'internet' ? await queryLocal() : localResults;
+      if (cached.length > 0) {
+        console.warn(`Upstream unavailable — serving ${cached.length} cached match(es) for '${cleanName || cleanNumber}'.`);
+        return cached.map(parseCardRow);
+      }
+      throw new Error('UPSTREAM_UNAVAILABLE');
+    }
+
     // Save to cache in background
     if (cards.length > 0) {
       await cacheCards(cards);
@@ -431,7 +477,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
       };
     });
   } catch (error) {
-    if (error.message === 'INVALID_API_KEY' || error.message === 'RATE_LIMIT_EXCEEDED') {
+    if (error.message === 'INVALID_API_KEY' || error.message === 'RATE_LIMIT_EXCEEDED' || error.message === 'UPSTREAM_UNAVAILABLE') {
       throw error;
     }
     console.error('Error fetching cards from Pokémon TCG API:', error.message);
@@ -596,5 +642,6 @@ module.exports = {
   getCardsBySet,
   updateCollectionPrices,
   fetchAndCacheSets,
-  cacheCards
+  cacheCards,
+  tcgClient // exported so test/tcgretry.test.js can point it at a local server
 };

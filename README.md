@@ -205,7 +205,7 @@ Prefer containers, or want it running as a restart-on-boot background service? B
          - "3001:3001"
        environment:
          # All optional. Uncomment and set as needed.
-         # - POKEMON_TCG_API_KEY=        # free key from pokemontcg.io raises rate limits
+         # - POKEMON_TCG_API_KEY=        # free key from dev.pokemontcg.io raises rate limits
          # - PUBLIC_BASE_URL=            # external URL behind a proxy, e.g. https://cards.example.com. Share links + auto-allowed as a CORS origin (proxied logins work with just this)
          # - DEFAULT_ADMIN_PASSWORD=     # pin the initial admin password (else it's auto-generated in the logs)
          # - ALLOW_REGISTRATION=         # "true" to allow open self-registration; default is invite-only
@@ -235,7 +235,7 @@ Prefer to build locally? Clone the repo — its [`docker-compose.yml`](docker-co
 You can configure Bindarr by passing these environment variables in your container configuration:
 - `PORT` (Default: `3001`) - The port the server runs on.
 - `DB_PATH` (Default: `/app/database/pokemon_cards.db`) - Location of the SQLite database.
-- `POKEMON_TCG_API_KEY` (Optional) - Your API key from [pokemontcg.io](https://pokemontcg.io). While Bindarr works without one, adding a free key increases TCG API rate limits (from 20k to 50k requests/day).
+- `POKEMON_TCG_API_KEY` (Optional) - Your free API key from the [Pokémon TCG developer portal](https://dev.pokemontcg.io/). While Bindarr works without one, a key raises the rate limit from 1,000 requests/day (and 30/minute) to 20,000/day. Note: `pokemontcg.io` now redirects to Scrydex, the team's paid successor API. The free v2 API Bindarr uses is still live and keys are still issued at `dev.pokemontcg.io`; Bindarr does not use Scrydex.
 - `DEFAULT_ADMIN_PASSWORD` (Optional) - Sets a known password for the auto-created `admin` account on first startup. If unset, a random password is generated and printed once to the server logs (see [First-Time Sign In](#first-time-sign-in)).
 - `PUBLIC_BASE_URL` (Optional) - Externally-reachable URL when running behind a reverse proxy, e.g. `https://cards.example.com`. Used to build collection share links, and its origin is automatically added to the CORS allow-list, so setting this alone is enough for logins through the proxy. Also editable from the Admin panel. (`localhost` and private-LAN origins are always allowed regardless. To whitelist *additional* public origins, set `CORS_ORIGIN` to a comma-separated list.)
 - `ALLOW_REGISTRATION` (Optional) - Set to `true` to allow open self-registration from the login screen. Default (unset) is **invite-only**: only an admin creates accounts via the Admin panel, and the Sign Up option is hidden.
