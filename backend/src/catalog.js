@@ -422,8 +422,15 @@ async function embedPhase(job) {
   // the whole app bandwidth to fix one pipeline.
   const embedUrl = (row) => row.image_url.replace(/\/low\.png$/, '/high.png');
 
+  // Added header information otherwise scryfall rejects the API call with a 400 error.
   const fetchOne = async (row) => {
-    const res = await fetch(embedUrl(row), { signal: AbortSignal.timeout(30000) });
+    const res = await fetch(embedUrl(row), {
+      signal: AbortSignal.timeout(30000),
+      headers: {
+        'User-Agent': 'Bindarr/1.0 (+https://github.com/thenotoriousJeremy/bindarr)',
+        'Accept': 'image/*',
+      },
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return Buffer.from(await res.arrayBuffer());
   };
