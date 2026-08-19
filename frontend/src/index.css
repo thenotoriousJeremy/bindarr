@@ -787,6 +787,7 @@ button, input, select, textarea {
 }
 
 .tcg-card-image {
+  display:block;
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -799,6 +800,7 @@ button, input, select, textarea {
 .collection-row-thumbnail,
 .binder-pocket img,
 .box-coverflow-card img {
+
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;

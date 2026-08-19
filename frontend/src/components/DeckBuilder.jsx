@@ -324,23 +324,39 @@ function DeckBuilder({ showToast }) {
         const res = await fetch(`/api/collection?game=${deckSearchGame}`);
         if (res.ok) {
           const data = await res.json();
-          const mapped = data.map(item => ({
-            id: item.card_id,
-            name: item.name,
-            // Carried through so the picker shows the localized name; `name` stays
-            // English because the 4-copy rule counts by it.
-            printed_name: item.printed_name,
-            set_name: item.set_name,
-            number: item.number || item.collector_number || item.card_number || '',
-            image_url: item.image_url,
-            owned_qty: item.quantity || 1,
-            supertype: item.supertype,
-            subtypes: item.subtypes,
-            types: item.types,
-            colors: item.colors,
-            cmc: item.cmc
-          }));
-          setSearchResults(mapped);
+          // /api/collection returns one row per physical entry (so N copies of
+          // a card = N rows sharing the same card_id). Unlike /api/search
+          // (which GROUPs BY card_id server-side), this endpoint doesn't
+          // aggregate — grouping here mirrors that so browse-mode results have
+          // the same one-row-per-card shape search results already have.
+          // Without this, every row for a given card_id gets marked "added"
+          // together once any one copy is added, and a second owned copy
+          // can't be added at all.
+          const byCardId = new Map();
+          for (const item of data) {
+            const existing = byCardId.get(item.card_id);
+            if (existing) {
+              existing.owned_qty += item.quantity || 1;
+            } else {
+              byCardId.set(item.card_id, {
+                id: item.card_id,
+                name: item.name,
+                // Carried through so the picker shows the localized name; `name` stays
+                // English because the 4-copy rule counts by it.
+                printed_name: item.printed_name,
+                set_name: item.set_name,
+                number: item.number || item.collector_number || item.card_number || '',
+                image_url: item.image_url,
+                owned_qty: item.quantity || 1,
+                supertype: item.supertype,
+                subtypes: item.subtypes,
+                types: item.types,
+                colors: item.colors,
+                cmc: item.cmc
+              });
+            }
+          }
+          setSearchResults(Array.from(byCardId.values()));
         }
       } else {
         const finalQuery = deckSearchGame === 'mtg' ? searchQuery : (translateJapaneseName(searchQuery) || searchQuery);

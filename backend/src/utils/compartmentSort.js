@@ -233,6 +233,7 @@ function isBinderType(type) {
 
 function compartmentLabel(comp, locationType) {
   if (!comp) return 'Unassigned';
+  if (comp.label) return comp.label;
   const noun = isBinderType(locationType) ? 'Page' : 'Row';
   return `${noun} ${comp.idx}`;
 }
