@@ -34,6 +34,7 @@ Try it without installing anything at **[thenotoriousjeremy.github.io/bindarr](h
 - **Search and bulk add** — search or browse a whole set with multi-select; pin a set and add by collector number one keystroke at a time.
 - **Dashboard** — collection value, 7/30-day trends, rarity and type breakdowns, set completion.
 - **Graded slabs** — record grader, grade and cert number per copy (PSA cert lookup fills them in), and give a slab its own value instead of the raw card's price.
+- **Cards in 11 languages** — search, scan and record Japanese, Korean, Chinese, German, French, Spanish, Italian, Portuguese and Russian printings. A copy references the printing it actually is, so it shows the name and artwork on the card while staying searchable by its English name.
 - **Exports and API** — CSV (TCGplayer-compatible) or JSON, plus a read-only API key for reading net worth from elsewhere.
 - **Multi-user** — session-token auth, admin panel for users and roles, optional public share links.
 - **11 UI languages**, community-translated.
@@ -105,7 +106,7 @@ The HTTPS certificate is self-signed and generated on first start into the volum
 | Tag | Points at |
 | --- | --- |
 | `latest` | newest release — use this |
-| `1.7`, `1.7.2` | a specific release, if you want to control upgrades |
+| `1.8`, `1.8.0` | a specific release, if you want to control upgrades |
 | `edge` | newest `main` commit, including unreleased work |
 | `sha-<short>` | one exact commit |
 
@@ -197,6 +198,20 @@ Every price source Bindarr talks to — TCGplayer, Scryfall, Cardmarket — quot
 For Pokémon slabs it can also be fetched. Put a [PokemonPriceTracker](https://www.pokemonpricetracker.com/api) key in **Settings → API Keys** and a **Fetch graded price** button appears on graded copies. It fills in what that card sells for on eBay at that grade — PSA, BGS or CGC, half grades included — and says how many sales the figure rests on. If the grade has no recorded sales it tells you which grades do, rather than guessing.
 
 One card per press, never a background sweep: each lookup spends 2 of the free tier's 100 daily credits, and a sweep over a collection would spend a week's worth on one boot. Magic slabs have no source, so they stay hand-entered.
+
+### Cards in other languages
+
+Which marketplace can price a printing depends on where it is sold, so the source follows the card:
+
+| Card | Priced from |
+| --- | --- |
+| Magic, any language | Scryfall — TCGplayer's USD price, or Cardmarket's EUR one when TCGplayer has no listing (most non-English printings) |
+| Pokémon, English or Japanese | TCGplayer, via TCGCSV, in USD |
+| Pokémon, other languages | the **English** printing's TCGplayer price, labelled as such — TCGplayer runs no German, Korean or Chinese catalogue |
+
+Prices are stored in the currency they were quoted in and never converted — an exchange rate is a live number Bindarr has no source for — so each card shows its own symbol (`$4.50`, `€4.50`) and the card inspector names the marketplace. Collection totals sum the currencies as-is; `currencies` in the API response says when a total is mixed.
+
+A price only exists once something fetched it. The Pokémon price sweep covers the sets you own cards from, so browsing a set you own nothing in shows `0.00` until a card from it lands in your collection.
 
 ## API access
 

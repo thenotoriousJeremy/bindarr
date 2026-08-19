@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file. Each
 release also carries fuller notes on its
 [GitHub release](https://github.com/thenotoriousJeremy/bindarr/releases).
 
-## [Unreleased]
+## [1.8.0] - 2026-08-19
 
 **Scanning is a different pipeline.** The perceptual-hash + bag-of-visual-words
 recall stage and the ORB verify stage are gone, replaced by two small ONNX models:
@@ -19,6 +19,14 @@ build in the scan path at all, so scanning a set needs no "preparing set" wait.
 Both models are AGPL-3.0 ([milo](https://huggingface.co/HanClinto/milo),
 [cornelius](https://huggingface.co/HanClinto/cornelius)) while Bindarr is MIT, so
 shipping them enabled is a licensing decision and not only a technical one.
+
+**A card in another language is a card, not an English card with a label.** The
+language of a copy now decides which printing it references, so it carries that
+printing's name, artwork and price rather than the English row's; the name shows as
+the card is printed everywhere it appears, while the English name stays searchable
+alongside it. Prices for those printings improved in the same pass — Cardmarket
+quotes are read where TCGplayer has no listing, the currency shown is the one the
+marketplace quoted, and a price standing in from the English printing says so.
 
 ### Added
 - **TCGdex is the Pokémon provider on a new install, and choosing is now possible.**
@@ -86,6 +94,29 @@ shipping them enabled is a licensing decision and not only a technical one.
   rejected.
 
 ### Fixed
+- **Non-English Magic cards were mostly unpriced.** Scryfall quotes `usd` from
+  TCGplayer and `eur` from Cardmarket, and only the first was read — but TCGplayer
+  lists English Magic almost completely and non-English barely at all, so whole
+  languages sat at 0.00 while a Cardmarket price existed: measured against the real
+  cache, 241 of 1,205 Spanish rows priced, 53 of 194 Italian, 11 of 61 Simplified
+  Chinese, against 96,090 of 103,656 English. A printing with no USD price now takes
+  its EUR one and records `price_currency` accordingly. Never a mix inside one row —
+  a normal price in USD beside a foil price in EUR is a pair that cannot be compared.
+  Owned cards pick this up on the next daily sweep.
+- **Prices in another currency were shown with a dollar sign.** Stored prices are not
+  converted (an exchange rate is a live number this app has no source for), so a
+  Cardmarket-priced card was quoted at €4.50 and displayed as $4.50. The symbol now
+  follows the row's `price_currency` everywhere a card price is shown, including the
+  price-history axis and tooltip. Amounts the owner typed or paid still show in the
+  app's default.
+- **A German or Korean Pokémon card was priced as if it were English.** TCGplayer
+  sells Pokémon in two catalogues, English and Japanese, so every other language is
+  matched to the English product for the same set and number. That is the closest real
+  number and better than 0.00, but it is not this printing's price — a German card
+  usually trades below the English one, and a Korean one is often not listed at all.
+  Such rows are recorded as their own price source and the card inspector now labels
+  the price "TCGplayer (English printing)" instead of presenting it as a quote for the
+  card in hand.
 - **A card added in another language kept its English name.** The copy's language and
   the printing it points at were two separate things: the localized name lives on the
   card_cache row (`printed_name`), so picking a card from an English search and then

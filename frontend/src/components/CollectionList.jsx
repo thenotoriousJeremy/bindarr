@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Search, Trash2, Edit2, LayoutGrid, List, SlidersHorizontal, X, MousePointerClick } from 'lucide-react';
 import { getCardDisplayName, translateJapaneseName } from '../utils/langHelper';
-import { formatPrice } from '../utils/formatPrice';
+import { formatPrice, priceText } from '../utils/formatPrice';
 import { CONDITIONS, PRINTINGS, GRADERS } from '../utils/cardOptions';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
@@ -735,7 +735,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                   <div className="tcg-card-name">{getCardDisplayName(item.name, item.language, item.printed_name)}</div>
                   <div className="tcg-card-meta">
                     <span style={{ fontSize: '0.7rem' }}>{item.set_name} • #{item.number}</span>
-                    <span className="tcg-card-price">${formatPrice(item.price_trend)}</span>
+                    <span className="tcg-card-price">{priceText(item.price_trend, item.price_currency)}</span>
                   </div>
                 </div>
               </div>
@@ -806,7 +806,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                       {item.quantity > 1 && (
                         <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.85rem' }}>x{item.quantity}</div>
                       )}
-                      <div style={{ fontSize: '0.7rem', color: 'var(--accent-yellow)', fontWeight: 600 }}>${formatPrice(item.price_trend)}</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--accent-yellow)', fontWeight: 600 }}>{priceText(item.price_trend, item.price_currency)}</div>
                     </td>
                   </tr>
                   );

@@ -144,6 +144,28 @@ never re-derived from the language: four call sites once derived it themselves a
 four of them disagreed, which is how 21,828 rows were cached with the wrong
 normalizer and ended up with no image and no collector number.
 
+#### Two names per card, and which is which
+
+`card_cache.name` is the **searchable** name and `printed_name` is the name **on the
+card**. Display reads `printed_name || name` (`utils/languages.displayName`,
+`langHelper.getCardDisplayName`); search reads both columns (`utils/cardSearchSql`,
+`CollectionList`'s filter); logic that must not split a card across languages — the
+four-copy deck rule, CSV export, marketplace links — reads `name` only.
+
+Scryfall hands over both for free. TCGdex publishes one name per language, so
+`normalizeCard` writes the localized name into both columns and
+`tcgdexApi.learnEnglishName` fills `name` in from the card's own English printing
+when a card is added (plus a backfill on the price sweep). A Japan-exclusive set has
+no English printing and keeps the localized name in both columns.
+
+A copy's language is chosen separately from the card that was picked — Quick Add's
+dropdown, or a scan the English catalog answered — so `cardApi.printingInLanguage`
+swaps the row for that language's printing inside `addCardToCollection`, which every
+add path routes through. MTG resolves by set + collector number (language-invariant),
+TCGdex by the language segment in its id. Null means keep what was picked: a card
+never printed in that language, or a pokemontcg.io id, which is English-only and
+whose set numbering does not map to TCGdex's.
+
 ### Image identification pipeline
 
 Image-only, no OCR. Two ONNX models, both game-independent — a card is a card to
@@ -345,6 +367,34 @@ query whose result reaches it must select `c.market_value` alongside the
 `cc.price_*` columns, or a graded copy silently reverts to the raw card's price
 in that one view — the failure is invisible, it just reads low.
 
+Where the provider price itself comes from depends on the game AND the language,
+because it depends on which marketplace sells that printing:
+
+| Rows | Source | `price_source` | Currency |
+|------|--------|----------------|----------|
+| MTG, any language | Scryfall `prices.usd`, else `prices.eur` | `scryfall` | USD or EUR |
+| Pokémon English / Japanese | TCGCSV (TCGplayer categories 3 / 85) | `tcgcsv` | USD |
+| Pokémon other languages | the **English** TCGplayer product | `tcgcsv-en` | USD |
+| Pokémon fallback | TCGdex's Cardmarket block | `tcgdex` | EUR |
+
+Two rules hold that together. **A row is never mixed**: if a printing's USD price is
+missing, the EUR normal *and* foil prices are used together, because a USD normal
+next to a EUR foil is a pair nothing can compare. And **nothing is converted** — an
+exchange rate is a live number this app has no source for, and a stale hardcoded one
+misprices a collection silently — so `price_currency` travels with the row and the UI
+prints the matching symbol (`utils/formatPrice.priceText`). Collection totals sum the
+currencies as-is; `/api/stats/networth` reports `currencies` so a consumer can tell.
+
+`tcgcsv-en` exists because TCGplayer has no German, Korean or Chinese Pokémon
+catalogue: those cards are priced off the English product for the same set and
+number. That is the closest real quote and much better than 0.00, but it is not the
+printing the user owns, so the inspector labels it "TCGplayer (English printing)"
+rather than presenting it as this card's price.
+
+Coverage is a function of the sweep's scope, not of the cache: `tcgcsvApi`'s daily
+sweep runs over sets the user owns cards from (`scope: 'owned'`, one request per
+set), so a browsed-but-unowned set reads 0.00 until a card from it is added.
+
 `market_value` is written from two places and read as one number: the owner types
 it (`PUT /collection/:id`, source `manual`) or fetches it
 (`POST /collection/:id/market-value/fetch`, source `pokemonpricetracker`). The
@@ -370,7 +420,7 @@ for cards not yet saved.
 |-------|-----------------------|
 | `users` | `id`, `username`, `password_hash` (PBKDF2, iterations embedded), `role`, `share_token`, `share_enabled`, `tcg_api_key`, `psa_api_token`, `graded_price_api_key`, `api_key` (read-only external credential) |
 | `sessions` | `user_id`, `token`, `expires_at` — Bearer-token auth |
-| `card_cache` | Normalized card metadata keyed by provider `id`: `name`, `set_id`/`set_name`, `number`, `image_url`, `types`/`subtypes`/`supertype`, `rarity`, `cmc`, `color_identity`, `price_*`, `game` |
+| `card_cache` | Normalized card metadata keyed by provider `id`: `name` (searchable) and `printed_name` (as printed), `language`, `set_id`/`set_name`, `number`, `image_url`, `types`/`subtypes`/`supertype`, `rarity`, `cmc`, `color_identity`, `price_*` with `price_source`/`price_currency`, `tcgplayer_product_id`, `tcgplayer_url`/`cardmarket_url`, `game`, `last_updated`. Written only through `utils/cardCache.cacheNormalizedCards`, which upserts — `INSERT OR REPLACE` re-created the row and reset every column outside the provider's own list |
 | `collection` | One row per owned stack: `id` (entry_id), `user_id`, `card_id`→card_cache, `quantity`, `condition`, `printing`, `language`, `purchase_price`, `location_id`, `compartment_id`, `position`, `list_type` (`collection`/`trade`), `is_trade`, `game`, `added_at`; per-copy grading (`grader`, `grade`, `cert_number`) and per-copy value (`market_value`, `market_value_source`, `market_value_at`) |
 | `locations` | Physical containers: `user_id`, `name`, `type`, `sort_order`, `foil_sorting`, `rule_type`, `rule_config`, `game` |
 | `compartments` | Pages/rows within a location: `location_id`, `idx`, `label`, `capacity`, `rule_config` |
