@@ -40,6 +40,7 @@ export default function MultiSelectDropdown({ label, options, value, onChange, a
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', textAlign: 'left' }}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-label={label}
       >
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>
         <ChevronDown size={14} style={{ flexShrink: 0, marginLeft: '0.4rem' }} />
