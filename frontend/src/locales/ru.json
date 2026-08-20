@@ -1460,5 +1460,14 @@
   "wizard.nothingToMove": "Нет карт для перемещения.",
   "wizard.page": "Страница",
   "wizard.selectAll": "Выбрать все",
-  "wizard.slot": "Ячейка {slot}"
+  "wizard.slot": "Ячейка {slot}",
+  "loc.prev": "← Назад",
+  "loc.allowStacking": "Складывать дубликаты в один карман",
+  "loc.allowStackingHint": "Копии одной карты занимают один карман и показывают количество, поэтому на странице помещается больше разных карт.",
+  "loc.cardsStoredLabel": "Карт хранится",
+  "loc.slotsUsedLabel": "Занято мест",
+  "compartment.stackedHere": "{count} копий в этом кармане",
+  "settings.linkContainer": "Ссылки на контейнеры",
+  "settings.copied.container": "Публичная ссылка на контейнер скопирована в буфер обмена.",
+  "shared.errLoadContainer": "Не удалось загрузить общий контейнер."
 }

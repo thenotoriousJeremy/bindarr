@@ -1435,5 +1435,14 @@
   "wizard.nothingToMove": "No hay cartas que mover.",
   "wizard.page": "Página",
   "wizard.selectAll": "Seleccionar todo",
-  "wizard.slot": "Hueco {slot}"
+  "wizard.slot": "Hueco {slot}",
+  "loc.prev": "← Ant.",
+  "loc.allowStacking": "Apilar duplicados en un bolsillo",
+  "loc.allowStackingHint": "Las copias de la misma carta comparten un bolsillo y muestran un contador, así que la página cabe más cartas distintas.",
+  "loc.cardsStoredLabel": "Cartas guardadas",
+  "loc.slotsUsedLabel": "Espacios usados",
+  "compartment.stackedHere": "{count} copias apiladas en este bolsillo",
+  "settings.linkContainer": "Enlaces para compartir contenedores",
+  "settings.copied.container": "Enlace público del contenedor copiado al portapapeles.",
+  "shared.errLoadContainer": "No se pudo cargar el contenedor compartido."
 }

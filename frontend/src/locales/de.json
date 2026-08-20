@@ -1410,5 +1410,14 @@
   "wizard.nothingToMove": "Keine Karten zu bewegen.",
   "wizard.page": "Seite",
   "wizard.selectAll": "Alle auswählen",
-  "wizard.slot": "Platz {slot}"
+  "wizard.slot": "Platz {slot}",
+  "loc.prev": "← Zurück",
+  "loc.allowStacking": "Duplikate in einer Hülle stapeln",
+  "loc.allowStackingHint": "Mehrere Exemplare derselben Karte teilen eine Hülle und zeigen eine Anzahl, sodass eine Seite entsprechend mehr verschiedene Karten fasst.",
+  "loc.cardsStoredLabel": "Gespeicherte Karten",
+  "loc.slotsUsedLabel": "Belegte Plätze",
+  "compartment.stackedHere": "{count} Exemplare in dieser Hülle gestapelt",
+  "settings.linkContainer": "Freigabelinks für Container",
+  "settings.copied.container": "Öffentlicher Container-Link in die Zwischenablage kopiert.",
+  "shared.errLoadContainer": "Freigegebener Container konnte nicht geladen werden."
 }

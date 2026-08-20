@@ -1435,5 +1435,14 @@
   "wizard.nothingToMove": "Nessuna carta da spostare.",
   "wizard.page": "Pagina",
   "wizard.selectAll": "Seleziona tutto",
-  "wizard.slot": "Posto {slot}"
+  "wizard.slot": "Posto {slot}",
+  "loc.prev": "← Prec.",
+  "loc.allowStacking": "Impila i duplicati in una tasca",
+  "loc.allowStackingHint": "Le copie della stessa carta condividono una tasca e mostrano un contatore, così la pagina contiene più carte diverse.",
+  "loc.cardsStoredLabel": "Carte conservate",
+  "loc.slotsUsedLabel": "Spazi occupati",
+  "compartment.stackedHere": "{count} copie impilate in questa tasca",
+  "settings.linkContainer": "Link di condivisione contenitori",
+  "settings.copied.container": "Link pubblico del contenitore copiato negli appunti.",
+  "shared.errLoadContainer": "Impossibile caricare il contenitore condiviso."
 }

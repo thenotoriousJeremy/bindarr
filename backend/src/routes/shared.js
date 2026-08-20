@@ -1,8 +1,65 @@
 const express = require('express');
 const db = require('../db');
 const { resolveCardPrice, parseCardRow } = require('../utils/priceHelpers');
+const { compartmentLabel } = require('../utils/compartmentSort');
 
 const router = express.Router();
+
+// One container, laid out the way its owner sees it: its pages or rows, and the
+// slot each card sits in — so a shared binder reads as a binder and a shared box
+// as a box, instead of collapsing to a flat card list.
+//
+// Gated on share_locations, not just share_enabled: where a card is stored is
+// exactly what this exposes, and that is the setting the owner opts into.
+router.get('/:share_token/containers/:id', async (req, res) => {
+  const { share_token, id } = req.params;
+  try {
+    const owner = await db.get(`SELECT id, username, share_enabled, share_locations FROM users WHERE share_token = ?`, [share_token]);
+    if (!owner || owner.share_enabled === 0) {
+      return res.status(404).json({ error: 'This card collection is private or does not exist.' });
+    }
+    if (owner.share_locations !== 1) {
+      return res.status(404).json({ error: 'This collection does not share where its cards are stored.' });
+    }
+
+    const location = await db.get(
+      `SELECT id, name, type, sort_order, allow_stacking FROM locations WHERE id = ? AND user_id = ?`,
+      [id, owner.id]
+    );
+    if (!location) return res.status(404).json({ error: 'Container not found.' });
+
+    const compartments = await db.all(
+      `SELECT id, idx, label, capacity FROM compartments WHERE location_id = ? ORDER BY idx ASC`,
+      [location.id]
+    );
+
+    // Same public column set as the collection share above — no purchase price,
+    // no ROI — plus the placement columns the layout is drawn from.
+    const rows = await db.all(`
+      SELECT c.id AS entry_id, c.card_id, c.compartment_id, c.position, c.quantity, c.condition,
+             c.printing, c.language, c.favorite, c.is_trade, c.market_value,
+             cc.name, cc.printed_name, cc.supertype, cc.subtypes, cc.types, cc.rarity,
+             cc.set_id, cc.set_name, cc.number, cc.image_url, cc.game, cc.cmc, cc.color_identity,
+             cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition
+      FROM collection c
+      JOIN card_cache cc ON c.card_id = cc.id
+      WHERE c.location_id = ? AND c.user_id = ? AND c.list_type = 'collection'
+      ORDER BY c.position ASC, c.id ASC
+    `, [location.id, owner.id]);
+
+    const cards = rows.map(row => ({ ...parseCardRow(row), price_trend: resolveCardPrice(row) }));
+
+    res.json({
+      owner: owner.username,
+      location,
+      compartments: compartments.map(c => ({ ...c, display_label: compartmentLabel(c, location.type) })),
+      cards
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve shared container' });
+  }
+});
 
 // Retrieve a shared collection by share token
 router.get('/:share_token', async (req, res) => {

@@ -238,10 +238,26 @@ function compartmentLabel(comp, locationType) {
   return `${noun} ${comp.idx}`;
 }
 
+// Which copies share one slot in a container with allow_stacking on: the same
+// printing of the same card in the same language. Condition is deliberately not
+// part of it, matching the collection view's "stack duplicates", which only
+// splits by condition when the owner asks it to. The SQL and JS forms have to
+// agree — one counts occupancy, the other decides where a copy is filed — so
+// both default a legacy NULL the same way.
+const STACK_KEY_SQL = `card_id || '|' || COALESCE(printing, 'Normal') || '|' || COALESCE(language, 'English')`;
+function stackKey(row) {
+  const id = row.card_id !== undefined ? row.card_id : row.id;
+  return `${id}|${row.printing || 'Normal'}|${row.language || 'English'}`;
+}
+
 async function loadCompartments(database, locationId, userId) {
   const dbClient = database || db;
+  // The location's stacking flag rides along rather than being passed in by every
+  // caller: occupancy is the one thing all of them read off these rows, and it
+  // means a different thing on a stacking container (slots used, not cards held).
   const compartments = await dbClient.all(
-    `SELECT * FROM compartments WHERE location_id = ? ORDER BY idx ASC`,
+    `SELECT c.*, l.allow_stacking FROM compartments c JOIN locations l ON c.location_id = l.id
+     WHERE c.location_id = ? ORDER BY c.idx ASC`,
     [locationId]
   );
   if (compartments.length === 0) return [];
@@ -257,8 +273,10 @@ async function loadCompartments(database, locationId, userId) {
     filtersByCompartment.get(r.compartment_id).push(r.category);
   });
 
+  const stacking = compartments.some(c => c.allow_stacking);
   const countRows = await dbClient.all(
-    `SELECT compartment_id, SUM(quantity) as cnt FROM collection WHERE user_id = ? AND compartment_id IN (${placeholders}) GROUP BY compartment_id`,
+    `SELECT compartment_id, ${stacking ? `COUNT(DISTINCT ${STACK_KEY_SQL})` : 'SUM(quantity)'} as cnt
+     FROM collection WHERE user_id = ? AND compartment_id IN (${placeholders}) GROUP BY compartment_id`,
     [userId, ...ids]
   );
   const countByCompartment = new Map(countRows.map(r => [r.compartment_id, r.cnt]));
@@ -326,6 +344,30 @@ async function recommendSlot(database, location, cardMetadata, overrideCompartme
     cardsByCompId.get(c.compartment_id).push(c);
   });
 
+  // Stacking container: a duplicate rides in the pocket its twin already holds,
+  // so it claims no new slot and a full container still accepts it. Checked
+  // before the "everything is full" bail-out below for exactly that reason.
+  if (location.allow_stacking) {
+    const key = stackKey(cardMetadata);
+    const twin = allLocationCards.find(c =>
+      c.position > 0 && compartments.some(comp => comp.id === c.compartment_id) && stackKey(c) === key
+    );
+    if (twin) {
+      const twinComp = compartments.find(comp => comp.id === twin.compartment_id);
+      const seq = Math.max(1, Math.round(twin.position / 1000));
+      return {
+        location_id: location.id,
+        compartment_id: twin.compartment_id,
+        position: twin.position,
+        label: `${compartmentLabel(twinComp, location.type)}, Pos ${seq} (in ${location.name})`,
+        reason: `Stacked with the copy already in ${compartmentLabel(twinComp, location.type)}`,
+        // Batch callers tick a compartment's occupancy down per placement; a
+        // stacked copy takes no slot, so it must not count against capacity.
+        stacked: true
+      };
+    }
+  }
+
   const countOf = (c) => overrideCompartments
     ? (overrideCompartments.find(oc => oc.id === c.id)?.count || 0)
     : (c.count !== undefined ? c.count : (cardsByCompId.get(c.id) || []).reduce((sum, card) => sum + (card.quantity || 1), 0));
@@ -334,7 +376,7 @@ async function recommendSlot(database, location, cardMetadata, overrideCompartme
 
   if (allCompartmentsFull) {
     const otherLocations = await dbClient.all(
-      `SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, game, user_id FROM locations WHERE user_id = ? AND id != ? AND locked = 0 ORDER BY id ASC`,
+      `SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, game, allow_stacking, user_id FROM locations WHERE user_id = ? AND id != ? AND locked = 0 ORDER BY id ASC`,
       [location.user_id, location.id]
     );
     for (const otherLoc of otherLocations) {
@@ -649,5 +691,7 @@ module.exports = {
   loadSetsCache,
   getSortCategory,
   prepareCardMetadata,
-  safeJsonParse
+  safeJsonParse,
+  stackKey,
+  STACK_KEY_SQL
 };

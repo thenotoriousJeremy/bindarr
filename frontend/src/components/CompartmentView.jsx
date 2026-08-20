@@ -17,6 +17,27 @@ function pocketColumns(capacity) {
   return Math.max(1, Math.round(Math.sqrt(capacity || 1)));
 }
 
+// Collapse copies of the same card into one pocket, keyed the way the server
+// counts occupancy on a stacking container (card, printing and language; not
+// condition). The first copy holds the slot and the rest ride along in its
+// quantity, so the page lays out from stacks rather than from rows.
+function stackPocketCards(cards) {
+  const stacks = new Map();
+  for (const card of cards) {
+    const key = `${card.card_id}|${card.printing || 'Normal'}|${card.language || 'English'}`;
+    const held = stacks.get(key);
+    if (!held) {
+      stacks.set(key, { ...card, quantity: card.quantity || 1 });
+      continue;
+    }
+    held.quantity += card.quantity || 1;
+    // Whichever copy is actually filed decides where the stack sits; an unplaced
+    // one joining it must not drag the pocket back to "no position".
+    if (!(held.position > 0) && card.position > 0) held.position = card.position;
+  }
+  return Array.from(stacks.values());
+}
+
 // The label a card falls under for a given divider field.
 function categoryForField(card, field, setsList = []) {
   switch (field) {
@@ -257,6 +278,9 @@ export default function CompartmentView({
   compartment,
   cards = [],
   locationType,
+  // Container has allow_stacking: every copy of a card shares one pocket instead
+  // of taking one each. See stackPocketCards.
+  allowStacking = false,
   sortOrder = 'custom',
   setsList = [],
   highlightPositions = [], // Array of positions to highlight (1-indexed)
@@ -473,8 +497,9 @@ export default function CompartmentView({
 
   if (isBinder) {
     const cols = pocketColumns(compartment.capacity);
+    const pocketCards = allowStacking ? stackPocketCards(cards) : cards;
     let maxSlotFromCards = compartment.capacity || 1;
-    cards.forEach(c => {
+    pocketCards.forEach(c => {
       if (c && c.position > 0) {
         const s = Math.floor(c.position / 1000);
         if (s > maxSlotFromCards) maxSlotFromCards = s;
@@ -487,7 +512,7 @@ export default function CompartmentView({
     const pockets = new Array(slotCount).fill(null);
     const unplaced = [];
 
-    cards.forEach(c => {
+    pocketCards.forEach(c => {
       const slot = (c && c.position > 0) ? Math.floor(c.position / 1000) : null;
       if (slot && slot >= 1 && slot <= slotCount && !pockets[slot - 1]) {
         pockets[slot - 1] = c;
@@ -675,6 +700,11 @@ export default function CompartmentView({
                   <CardImage card={card} alt={displayName(card)} title={displayName(card)} loading="lazy" decoding="async" />
                   {getFoilOverlayClass(card.printing) && <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4px' }} />}
                   <PrintingBadge printing={card.printing} />
+                  {allowStacking && card.quantity > 1 && (
+                    <span title={t('compartment.stackedHere', { count: card.quantity })} style={{ position: 'absolute', bottom: '3px', left: '3px', zIndex: 24, fontSize: '0.6rem', fontWeight: 900, padding: '1px 4px', borderRadius: '4px', background: 'rgba(0,0,0,0.75)', border: '1px solid var(--border-glass-hover)', color: 'var(--text-strong)' }}>
+                      &times;{card.quantity}
+                    </span>
+                  )}
                   {(pullMode ? pulledSet.has(card.entry_id) : card.checked_out_qty > 0) && (
                     <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.62)', borderRadius: '4px', zIndex: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
                       <span style={{ fontSize: '0.5rem', fontWeight: 900, letterSpacing: '0.04em', color: 'var(--text-strong)', background: 'var(--accent-red)', padding: '2px 5px', borderRadius: '4px', transform: 'rotate(-8deg)', textTransform: 'uppercase' }}>

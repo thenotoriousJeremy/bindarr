@@ -6,7 +6,7 @@ import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } fro
 import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
 import CardInspectorModal from './CardInspectorModal';
 import { useMultiSelect } from '../utils/useMultiSelect';
-import { isBinderType as computeIsBinder } from '../utils/cardOptions';
+import { isBinderType as computeIsBinder, binderSpread } from '../utils/cardOptions';
 import { displayName } from '../utils/languages';
 import CompartmentView, { FocusedCardInfo } from './CompartmentView';
 import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
@@ -90,6 +90,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [nameDraft, setNameDraft] = useState('');
   const [capacityDraft, setCapacityDraft] = useState('');
   const [countDraft, setCountDraft] = useState('');
+  const [stackingDraft, setStackingDraft] = useState(false);
 
   const [inspectorCard, setInspectorCard] = useState(null);
 
@@ -920,6 +921,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       sort_order: newSort,
       rule_type: filterDraft.length > 0 ? 'compound' : 'any',
       rule_config: filterDraft.length > 0 ? JSON.stringify({ rules: filterDraft }) : null,
+      allow_stacking: stackingDraft,
     };
     const trimmedName = (nameDraft || '').trim();
     if (trimmedName && trimmedName !== selectedLoc.name) fields.name = trimmedName;
@@ -1077,8 +1079,32 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </label>
             </div>
 
+            {/* Binders only: a box row shows its cards in a coverflow, where a
+                shared slot has nothing to show — the pocket grid is what makes a
+                stack visible. */}
+            {isBinderType && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  id="allowStackingOpt"
+                  checked={stackingDraft}
+                  onChange={(e) => setStackingDraft(e.target.checked)}
+                  style={{ width: '16px', height: '16px', cursor: 'pointer', marginTop: '0.1rem', flexShrink: 0 }}
+                />
+                <label htmlFor="allowStackingOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--text-primary)', lineHeight: 1.35 }}>
+                  <strong>{t('loc.allowStacking')}</strong>
+                  <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+                    {t('loc.allowStackingHint')}
+                  </span>
+                </label>
+              </div>
+            )}
+
             <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.04))', borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.55rem', fontSize: '0.72rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ color: 'var(--text-muted)' }}>{t('loc.cardsCurrentlyStored')}</span>
+              {/* Label only — the count sits in the value beside it, so this is
+                  not loc.cardsCurrentlyStored, whose sentence carries a {count}
+                  this row has nowhere to put. */}
+              <span style={{ color: 'var(--text-muted)' }}>{t(selectedLoc.allow_stacking ? 'loc.slotsUsedLabel' : 'loc.cardsStoredLabel')}</span>
               <strong style={{ fontSize: '0.9rem', color: 'var(--text-strong)' }}>{selectedLoc.total_cards || 0} / {selectedLoc.total_capacity || 0}</strong>
             </div>
 
@@ -1222,6 +1248,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     setFilterDraft(fDraft);
 
                     setNameDraft(selectedLoc.name || '');
+                    setStackingDraft(!!selectedLoc.allow_stacking);
                     setCountDraft(String(compartments.length));
                     const caps = compartments.map(c => c.capacity);
                     const uniform = caps.length > 0 && caps.every(c => c === caps[0]);
@@ -1306,10 +1333,14 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   type="button"
                   className="btn btn-secondary"
                   disabled={activePageIndex <= 0}
-                  onClick={() => setActivePageIndex(prev => Math.max(0, isMobile ? prev - 1 : prev - 2))}
+                  onClick={() => setActivePageIndex(prev => {
+                    if (isMobile) return Math.max(0, prev - 1);
+                    const { spread } = binderSpread(prev);
+                    return spread <= 1 ? 0 : (spread - 1) * 2 - 1;
+                  })}
                   style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
                 >
-                  &larr; Prev
+                  {t('loc.prev')}
                 </button>
                 <select
                   className="select-control"
@@ -1333,9 +1364,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  disabled={isMobile ? activePageIndex >= compartments.length - 1 : Math.floor(activePageIndex / 2) * 2 + 2 >= compartments.length}
+                  disabled={isMobile
+                    ? activePageIndex >= compartments.length - 1
+                    : binderSpread(activePageIndex).spread * 2 + 1 >= compartments.length}
                   onClick={() => setActivePageIndex(prev => {
-                    const next = isMobile ? prev + 1 : prev + 2;
+                    // Next spread's left page — the opening spread has none, so
+                    // stepping off page 1 lands on page 2.
+                    const next = isMobile ? prev + 1 : binderSpread(prev).spread * 2 + 1;
                     return next < compartments.length ? next : prev;
                   })}
                   style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
@@ -1351,6 +1386,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 const pageProps = (c, i) => ({
                   compartment: c,
                   cards: cardsByCompartment.get(c.id) || [],
+                  allowStacking: !!selectedLoc.allow_stacking,
                   sortOrder: selectedLoc.sort_order,
                   setsList,
                   canRemove: i === compartments.length - 1 && compartments.length > 1 && (cardsByCompartment.get(c.id) || []).length === 0,
@@ -1404,23 +1440,22 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     </div>
                   );
                 } else {
-                  const spreadIdx = Math.floor(Math.min(activePageIndex, compartments.length - 1) / 2);
-                  const leftIdx = spreadIdx * 2;
-                  const rightIdx = leftIdx + 1;
-                  const left = compartments[leftIdx];
+                  const { leftIdx, rightIdx } = binderSpread(Math.min(activePageIndex, compartments.length - 1));
+                  const left = leftIdx >= 0 ? compartments[leftIdx] : null;
                   const right = compartments[rightIdx];
 
+                  // The missing half of an opening or closing spread still holds
+                  // its side of the binder, so the page that is there stays on
+                  // its own side of the spine instead of sliding across it.
                   binderPages = (
                     <div className="binder-page-container">
                       <div className="binder-page-left">
-                        <CompartmentView {...pageProps(left, leftIdx)} locationType={selectedLoc.type} />
+                        {left && <CompartmentView {...pageProps(left, leftIdx)} locationType={selectedLoc.type} />}
                       </div>
                       <div className="binder-spine" />
-                      {right && (
-                        <div className="binder-page-right">
-                          <CompartmentView {...pageProps(right, rightIdx)} locationType={selectedLoc.type} />
-                        </div>
-                      )}
+                      <div className="binder-page-right">
+                        {right && <CompartmentView {...pageProps(right, rightIdx)} locationType={selectedLoc.type} />}
+                      </div>
                     </div>
                   );
                 }

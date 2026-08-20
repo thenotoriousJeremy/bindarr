@@ -2,7 +2,7 @@
 // module so the split route files (collection, storage, importExport) never have
 // to import each other.
 const db = require('../db');
-const { recommendSlot, compartmentLabel, locationAcceptsCard } = require('./compartmentSort');
+const { recommendSlot, compartmentLabel, locationAcceptsCard, STACK_KEY_SQL } = require('./compartmentSort');
 
 // Default compartment plan by container type — used when a caller doesn't
 // specify one at creation time (see POST /locations).
@@ -74,12 +74,14 @@ async function resolveCompartmentAndPosition(arg1, locationId, cardId, userId) {
 
   if (compartmentId !== undefined && compartmentId !== null) {
     const compartment = await db.get(`
-      SELECT c.id, c.idx, c.label, c.capacity, l.id as loc_id, l.type as loc_type, l.name as loc_name FROM compartments c JOIN locations l ON c.location_id = l.id
+      SELECT c.id, c.idx, c.label, c.capacity, l.id as loc_id, l.type as loc_type, l.name as loc_name, l.allow_stacking
+      FROM compartments c JOIN locations l ON c.location_id = l.id
       WHERE c.id = ? AND l.user_id = ?
     `, [compartmentId, uId]);
     if (!compartment) return { compartment_id: null, position: position !== undefined ? position : 0 };
 
-    let countQuery = `SELECT COUNT(*) as cnt FROM collection WHERE compartment_id = ? AND user_id = ?`;
+    // On a stacking container the slot count is what fills up, not the card count.
+    let countQuery = `SELECT ${compartment.allow_stacking ? `COUNT(DISTINCT ${STACK_KEY_SQL})` : 'COUNT(*)'} as cnt FROM collection WHERE compartment_id = ? AND user_id = ?`;
     let countParams = [compartmentId, uId];
     if (excludeEntryId) {
       countQuery += ` AND id != ?`;
@@ -98,11 +100,14 @@ async function resolveCompartmentAndPosition(arg1, locationId, cardId, userId) {
     return { compartment_id: null, position: position !== undefined ? position : 0 };
   }
 
-  const location = await db.get(`SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, game, user_id FROM locations WHERE id = ? AND user_id = ?`, [locId, uId]);
+  const location = await db.get(`SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, game, allow_stacking, user_id FROM locations WHERE id = ? AND user_id = ?`, [locId, uId]);
   if (!location) return { compartment_id: null, position: 0 };
 
   let cardMetadata = await dbClient.get(`SELECT name, set_name, number, types, subtypes, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity, game, cmc, color_identity FROM card_cache WHERE id = ?`, [cId]);
   if (!cardMetadata) cardMetadata = { name: cId || '', types: [] };
+  // card_cache has no id column selected above, and a stacking container matches
+  // a copy against its twin by card id — so carry it on explicitly.
+  cardMetadata.card_id = cId;
   cardMetadata.printing = printing || 'Normal';
   cardMetadata.language = language || 'English';
   try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }

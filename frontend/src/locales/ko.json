@@ -1385,5 +1385,14 @@
   "wizard.nothingToMove": "옮길 카드가 없습니다.",
   "wizard.page": "페이지",
   "wizard.selectAll": "전체 선택",
-  "wizard.slot": "{slot}번 칸"
+  "wizard.slot": "{slot}번 칸",
+  "loc.prev": "← 이전",
+  "loc.allowStacking": "중복 카드를 한 포켓에 겹치기",
+  "loc.allowStackingHint": "같은 카드의 여러 장이 한 포켓을 공유하고 장수를 표시하므로, 한 페이지에 더 많은 다른 카드를 넣을 수 있습니다.",
+  "loc.cardsStoredLabel": "보관된 카드",
+  "loc.slotsUsedLabel": "사용된 슬롯",
+  "compartment.stackedHere": "이 포켓에 {count}장 겹쳐져 있습니다",
+  "settings.linkContainer": "보관함 공유 링크",
+  "settings.copied.container": "보관함 공개 링크를 클립보드에 복사했습니다.",
+  "shared.errLoadContainer": "공유된 보관함을 불러오지 못했습니다."
 }

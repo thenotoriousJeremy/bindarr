@@ -36,6 +36,15 @@ export const GRADES = [10, 9.5, 9, 8.5, 8, 7.5, 7, 6.5, 6, 5.5, 5, 4, 3, 2, 1];
 // UI spots that branch on it share one definition.
 export const isBinderType = (type) => type === 'Binder' || type === 'Toploader Binder';
 
+// Which two pages face each other on the desktop spread holding a given page.
+// A binder opens on page 1 alone against the inside cover, so pages pair up 2-3,
+// 4-5 and so on — and a binder with an even page count ends on a page sitting
+// alone on the left. leftIdx is -1 on the opening spread: nothing faces page 1.
+export function binderSpread(pageIndex) {
+  const spread = Math.floor((Math.max(0, pageIndex) + 1) / 2);
+  return { spread, leftIdx: spread * 2 - 1, rightIdx: spread * 2 };
+}
+
 // Container type labels are translated, but the type itself is the English string
 // stored in the database, so the two are paired here rather than in each screen
 // that renders one. The label is t(`container.type.${containerTypeKey(type)}`);

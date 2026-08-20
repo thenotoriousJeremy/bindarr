@@ -7,7 +7,8 @@ const {
   locationAcceptsCard,
   compartmentAcceptsCard,
   sortCards,
-  rebalanceCompartmentByScheme
+  rebalanceCompartmentByScheme,
+  STACK_KEY_SQL
 } = require('../utils/compartmentSort');
 const { defaultCompartmentPlan, normalizeRuleConfig } = require('../utils/collectionHelpers');
 
@@ -51,7 +52,13 @@ router.get('/locations', async (req, res) => {
       SELECT l.*,
              (SELECT COUNT(*) FROM compartments WHERE location_id = l.id) as compartment_count,
              (SELECT COALESCE(SUM(capacity), 0) FROM compartments WHERE location_id = l.id) as total_capacity,
-             (SELECT COALESCE(SUM(quantity), 0) FROM collection
+             -- Measured against total_capacity, which counts slots: on a stacking
+             -- container the duplicates sharing a pocket are one occupant, so
+             -- counting cards there would report a nine-pocket page as overfull.
+             (SELECT CASE WHEN l.allow_stacking
+                       THEN COUNT(DISTINCT ${STACK_KEY_SQL})
+                       ELSE COALESCE(SUM(quantity), 0) END
+                FROM collection
                 WHERE user_id = l.user_id
                   AND compartment_id IN (SELECT id FROM compartments WHERE location_id = l.id)) as total_cards
       FROM locations l
@@ -120,7 +127,7 @@ router.get('/locations/:id', async (req, res) => {
 
 router.put('/locations/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, type, sort_order, foil_sorting, rule_type, rule_config, game, locked } = req.body;
+  const { name, type, sort_order, foil_sorting, rule_type, rule_config, game, locked, allow_stacking } = req.body;
   if (rule_type !== undefined && !RULE_TYPES.includes(rule_type)) {
     return res.status(400).json({ error: 'Invalid rule_type' });
   }
@@ -167,9 +174,13 @@ router.put('/locations/:id', async (req, res) => {
         rule_type = COALESCE(?, rule_type),
         rule_config = COALESCE(?, rule_config),
         game = COALESCE(?, game),
-        locked = COALESCE(?, locked)
+        locked = COALESCE(?, locked),
+        allow_stacking = COALESCE(?, allow_stacking)
       WHERE id = ? AND user_id = ?
-    `, [name, type, sort_order, foil_sorting, rule_type, ruleConfigJson, game, locked === undefined ? null : (locked ? 1 : 0), id, req.user.id]);
+    `, [name, type, sort_order, foil_sorting, rule_type, ruleConfigJson, game,
+        locked === undefined ? null : (locked ? 1 : 0),
+        allow_stacking === undefined ? null : (allow_stacking ? 1 : 0),
+        id, req.user.id]);
 
     let evicted = 0;
     if (rule_type !== undefined || rule_config !== undefined || game !== undefined) {
@@ -464,12 +475,19 @@ router.post('/locations/:id/recommend-batch', async (req, res) => {
 
       recommendations.push({ entry, recommended });
 
-      workingCompartments = workingCompartments.map(c =>
-        c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
-      );
+      if (!recommended.stacked) {
+        workingCompartments = workingCompartments.map(c =>
+          c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
+        );
+      }
 
+      // card_id and position, not just the display fields: on a stacking
+      // container they are what lets the next copy in this same batch recognise
+      // its twin and land in the pocket this one just claimed.
       mockCards.push({
         entry_id: entry.entry_id,
+        card_id: entry.card_id,
+        position: recommended.position,
         compartment_id: recommended.compartment_id,
         image_url: entry.image_url,
         printing: entry.printing,
@@ -522,9 +540,11 @@ router.post('/locations/:id/apply-all', async (req, res) => {
         id, recommended.compartment_id, recommended.position, entryId, req.user.id
       ]);
 
-      workingCompartments = workingCompartments.map(c =>
-        c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
-      );
+      if (!recommended.stacked) {
+        workingCompartments = workingCompartments.map(c =>
+          c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
+        );
+      }
       filed++;
     }
 
@@ -570,7 +590,7 @@ router.post('/locations/:id/resort', async (req, res) => {
       ]);
       results.push({ entry, recommended });
 
-      if (finalLoc === Number(id)) {
+      if (finalLoc === Number(id) && !recommended.stacked) {
         workingCompartments = workingCompartments.map(c =>
           c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
         );

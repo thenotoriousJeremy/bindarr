@@ -15,6 +15,7 @@ const Settings = lazy(() => import('./components/Settings'));
 const AdminPanel = lazy(() => import('./components/AdminPanel'));
 const SetupWizard = lazy(() => import('./components/SetupWizard'));
 const SharedCollection = lazy(() => import('./components/SharedCollection'));
+const SharedContainer = lazy(() => import('./components/SharedContainer'));
 const DeckBuilder = lazy(() => import('./components/DeckBuilder'));
 const Notes = lazy(() => import('./components/Notes'));
 
@@ -127,6 +128,10 @@ function App() {
     const match = path.match(/^\/share\/([a-zA-Z0-9_-]+)$/);
     return match ? match[1] : null;
   });
+  const [sharedContainerId] = useState(() => {
+    const id = new URLSearchParams(window.location.search).get('container');
+    return /^\d+$/.test(id || '') ? id : null;
+  });
 
   const showToast = (message) => {
     setToast(message);
@@ -221,11 +226,14 @@ function App() {
     setStatsTrigger(prev => prev + 1);
   };
 
-  // Render shared collection view if URL matches /share/:token
+  // Render shared collection view if URL matches /share/:token. ?container=<id>
+  // narrows it to one binder or box, drawn as that container rather than a list.
   if (shareToken) {
     return (
       <Suspense fallback={<ChunkFallback />}>
-        <SharedCollection shareToken={shareToken} />
+        {sharedContainerId
+          ? <SharedContainer shareToken={shareToken} containerId={sharedContainerId} />
+          : <SharedCollection shareToken={shareToken} />}
       </Suspense>
     );
   }

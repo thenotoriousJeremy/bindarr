@@ -57,6 +57,7 @@ function Settings({ user, onUpdateUser, showToast }) {
   const [shareEnabled, setShareEnabled] = useState(user?.share_enabled === 1);
   const [shareLocations, setShareLocations] = useState(user?.share_locations === 1);
   const [shareLoading, setShareLoading] = useState(false);
+  const [containers, setContainers] = useState([]);
 
   const [tcgApiKey, setTcgApiKey] = useState(user?.tcg_api_key || '');
   const [psaToken, setPsaToken] = useState(user?.psa_api_token || '');
@@ -212,6 +213,16 @@ function Settings({ user, onUpdateUser, showToast }) {
     reader.readAsText(file);
     e.target.value = null;
   };
+
+  // Containers to offer share links for. Only fetched once both share toggles are
+  // on, because that is the only state the links work in.
+  useEffect(() => {
+    if (!shareEnabled || !shareLocations) { setContainers([]); return; }
+    fetch('/api/locations')
+      .then(res => (res.ok ? res.json() : []))
+      .then(list => setContainers(Array.isArray(list) ? list : []))
+      .catch(() => setContainers([]));
+  }, [shareEnabled, shareLocations]);
 
   useEffect(() => {
     if (user) {
@@ -433,10 +444,12 @@ function Settings({ user, onUpdateUser, showToast }) {
 
   const [copiedType, setCopiedType] = useState(''); // 'collection', 'trade', 'wishlist'
 
-  const copyToClipboard = (url, type) => {
+  // messageType is separate from type because the per-container rows key their
+  // "copied" tick by container id, while sharing one toast message.
+  const copyToClipboard = (url, type, messageType = type) => {
     navigator.clipboard.writeText(url).then(() => {
       setCopiedType(type);
-      showToast(t(`settings.copied.${type}`));
+      showToast(t(`settings.copied.${messageType}`));
       setTimeout(() => setCopiedType(''), 2000);
     }).catch(() => {
       showToast(t('settings.errCopy'));
@@ -594,6 +607,32 @@ function Settings({ user, onUpdateUser, showToast }) {
                   </span>
                 </label>
               </div>
+
+              {/* A container link opens that binder or box as itself — pockets
+                  and pages, or box rows — rather than as a flat card list, which
+                  is why it needs the locations toggle above to be on. */}
+              {shareLocations && containers.length > 0 && (
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label>{t('settings.linkContainer')}</label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                    {containers.map(loc => (
+                      <div key={loc.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {loc.name}
+                        </span>
+                        <button
+                          className="btn btn-secondary"
+                          onClick={() => copyToClipboard(`${origin}/share/${user?.share_token}?container=${loc.id}${themeQuery}`, `container-${loc.id}`, 'container')}
+                          style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap' }}
+                        >
+                          {copiedType === `container-${loc.id}` ? <Check size={14} style={{ color: 'var(--type-grass)' }} /> : <Clipboard size={14} />}
+                          <span>{t('settings.copy')}</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
                 <button

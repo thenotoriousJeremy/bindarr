@@ -1435,5 +1435,14 @@
   "wizard.nothingToMove": "Nenhuma carta para mover.",
   "wizard.page": "Página",
   "wizard.selectAll": "Selecionar tudo",
-  "wizard.slot": "Espaço {slot}"
+  "wizard.slot": "Espaço {slot}",
+  "loc.prev": "← Ant.",
+  "loc.allowStacking": "Empilhar duplicatas em um bolso",
+  "loc.allowStackingHint": "Cópias da mesma carta dividem um bolso e mostram a contagem, então a página cabe mais cartas diferentes.",
+  "loc.cardsStoredLabel": "Cartas guardadas",
+  "loc.slotsUsedLabel": "Espaços usados",
+  "compartment.stackedHere": "{count} cópias empilhadas neste bolso",
+  "settings.linkContainer": "Links de compartilhamento de contêiner",
+  "settings.copied.container": "Link público do contêiner copiado para a área de transferência.",
+  "shared.errLoadContainer": "Falha ao carregar o contêiner compartilhado."
 }

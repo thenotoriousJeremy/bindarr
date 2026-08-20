@@ -1385,5 +1385,14 @@
   "wizard.nothingToMove": "移動するカードはありません。",
   "wizard.page": "ページ",
   "wizard.selectAll": "すべて選択",
-  "wizard.slot": "スロット {slot}"
+  "wizard.slot": "スロット {slot}",
+  "loc.prev": "← 前へ",
+  "loc.allowStacking": "重複カードを1ポケットに重ねる",
+  "loc.allowStackingHint": "同じカードの複数枚が1つのポケットを共有し枚数を表示するため、1ページにより多くの異なるカードが入ります。",
+  "loc.cardsStoredLabel": "収納枚数",
+  "loc.slotsUsedLabel": "使用スロット",
+  "compartment.stackedHere": "このポケットに{count}枚重ねています",
+  "settings.linkContainer": "コンテナの共有リンク",
+  "settings.copied.container": "コンテナの公開リンクをクリップボードにコピーしました。",
+  "shared.errLoadContainer": "共有コンテナを読み込めませんでした。"
 }

@@ -715,6 +715,15 @@ async function initDb() {
     await run(`ALTER TABLE locations ADD COLUMN locked INTEGER NOT NULL DEFAULT 0`);
   }
 
+  // Stacking: on a container with this set, duplicate copies of a card share one
+  // slot instead of claiming one each, so a nine-pocket page holds nine distinct
+  // cards plus however many duplicates of them. Off by default — one card per
+  // slot is what a binder physically is unless the owner sleeves copies together.
+  const locationsStackCols = await all(`PRAGMA table_info(locations)`);
+  if (!locationsStackCols.some(c => c.name === 'allow_stacking')) {
+    await run(`ALTER TABLE locations ADD COLUMN allow_stacking INTEGER NOT NULL DEFAULT 0`);
+  }
+
   // --- PERFORMANCE INDEXES ---
   // `user_id` first, because it is the predicate on essentially every read in the
   // app — every collection query, every stats aggregate — and nothing indexed it.

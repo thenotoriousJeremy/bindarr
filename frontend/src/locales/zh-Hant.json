@@ -1385,5 +1385,14 @@
   "wizard.nothingToMove": "沒有需要移動的卡牌。",
   "wizard.page": "頁",
   "wizard.selectAll": "全選",
-  "wizard.slot": "第 {slot} 格"
+  "wizard.slot": "第 {slot} 格",
+  "loc.prev": "← 上一頁",
+  "loc.allowStacking": "將重複卡疊放在同一卡位",
+  "loc.allowStackingHint": "同一張卡的多份共用一個卡位並顯示數量，因此一頁可以放更多不同的卡。",
+  "loc.cardsStoredLabel": "已收納卡片",
+  "loc.slotsUsedLabel": "已用卡位",
+  "compartment.stackedHere": "此卡位疊放了 {count} 張",
+  "settings.linkContainer": "收納容器分享連結",
+  "settings.copied.container": "已將容器公開連結複製到剪貼板。",
+  "shared.errLoadContainer": "無法載入共享容器。"
 }

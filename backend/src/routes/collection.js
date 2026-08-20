@@ -13,7 +13,7 @@ const cardApi = require('../utils/cardApi');
 const { searchLimiter } = require('../middleware/auth');
 const { resolveCardPrice, parseCardRow, recordPrice } = require('../utils/priceHelpers');
 const { parseSetList } = require('../utils/setQuery');
-const { compartmentLabel, isBinderType, rebalanceCompartmentByScheme } = require('../utils/compartmentSort');
+const { compartmentLabel, isBinderType, rebalanceCompartmentByScheme, stackKey, STACK_KEY_SQL } = require('../utils/compartmentSort');
 const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, setStackQuantity } = require('../utils/collectionHelpers');
 const { validateDeckAddition } = require('../utils/deckRules');
 const { splitPrice } = require('../utils/splitPrice');
@@ -939,7 +939,7 @@ router.post('/collection/:id/place', async (req, res) => {
     if (!entry) return res.status(404).json({ error: 'Collection entry not found' });
 
     const comp = await db.get(`
-      SELECT c.id, c.capacity, l.id AS loc_id, l.type AS loc_type, l.sort_order
+      SELECT c.id, c.capacity, l.id AS loc_id, l.type AS loc_type, l.sort_order, l.allow_stacking
       FROM compartments c JOIN locations l ON c.location_id = l.id
       WHERE c.id = ? AND l.user_id = ?`, [compartment_id, req.user.id]);
     if (!comp) return res.status(400).json({ error: 'Invalid compartment' });
@@ -950,6 +950,15 @@ router.post('/collection/:id/place', async (req, res) => {
     if (swap_with) {
       const other = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [swap_with, req.user.id]);
       if (!other) return res.status(400).json({ error: 'Swap target not found' });
+      // Stacking container: dropping a copy onto its own twin joins that pocket
+      // rather than trading places with it — trading two identical cards is a
+      // no-op the user can see no result from.
+      if (comp.allow_stacking && stackKey(entry) === stackKey(other)) {
+        await db.run(`UPDATE collection SET compartment_id = ?, location_id = ?, position = ? WHERE id = ? AND user_id = ?`,
+          [other.compartment_id, other.location_id, other.position, id, req.user.id]);
+        const stackedPlacement = await describePlacement(db, id, req.user.id);
+        return res.json({ message: 'Card stacked', placement: stackedPlacement });
+      }
       await db.run(`UPDATE collection SET compartment_id = ?, location_id = ?, position = ? WHERE id = ? AND user_id = ?`,
         [other.compartment_id, other.location_id, other.position, id, req.user.id]);
       await db.run(`UPDATE collection SET compartment_id = ?, location_id = ?, position = ? WHERE id = ? AND user_id = ?`,
@@ -961,7 +970,10 @@ router.post('/collection/:id/place', async (req, res) => {
     if (!Number.isInteger(slot) || slot < 1) return res.status(400).json({ error: 'Invalid slot' });
 
     if (entry.compartment_id !== compartment_id) {
-      const cnt = await db.get(`SELECT COUNT(*) AS n FROM collection WHERE compartment_id = ? AND user_id = ?`, [compartment_id, req.user.id]);
+      // Slots used, not cards held, once copies are allowed to share a pocket.
+      const cnt = await db.get(
+        `SELECT ${comp.allow_stacking ? `COUNT(DISTINCT ${STACK_KEY_SQL})` : 'COUNT(*)'} AS n
+         FROM collection WHERE compartment_id = ? AND user_id = ?`, [compartment_id, req.user.id]);
       if (cnt.n >= comp.capacity) return res.status(400).json({ error: 'COMPARTMENT_FULL' });
     }
 

@@ -1435,5 +1435,14 @@
   "wizard.nothingToMove": "Aucune carte à déplacer.",
   "wizard.page": "Page",
   "wizard.selectAll": "Tout sélectionner",
-  "wizard.slot": "Emplacement {slot}"
+  "wizard.slot": "Emplacement {slot}",
+  "loc.prev": "← Préc.",
+  "loc.allowStacking": "Empiler les doublons dans une même pochette",
+  "loc.allowStackingHint": "Les exemplaires d’une même carte partagent une pochette et affichent un compteur, donc la page contient davantage de cartes différentes.",
+  "loc.cardsStoredLabel": "Cartes rangées",
+  "loc.slotsUsedLabel": "Emplacements utilisés",
+  "compartment.stackedHere": "{count} exemplaires empilés dans cette pochette",
+  "settings.linkContainer": "Liens de partage de conteneur",
+  "settings.copied.container": "Lien public du conteneur copié dans le presse-papiers.",
+  "shared.errLoadContainer": "Impossible de charger le conteneur partagé."
 }
