@@ -802,6 +802,7 @@ button, input, select, textarea {
 .collection-row-thumbnail,
 .binder-pocket img,
 .box-coverflow-card img {
+
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
