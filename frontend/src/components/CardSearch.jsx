@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, Plus, X, ShieldAlert, Check, MousePointerClick, Zap, Undo2, Maximize2 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { formatPrice } from '../utils/formatPrice';
+import { priceText } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import CardEntryFields from './CardEntryFields';
 import CardImageZoom from './CardImageZoom';
@@ -863,7 +863,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                   ) : null}
                   <div className="tcg-card-meta">
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>{card.set_name}</span>
-                    <span className="tcg-card-price">${formatPrice(card.price_trend)}</span>
+                    <span className="tcg-card-price">{priceText(card.price_trend, card.price_currency)}</span>
                   </div>
                 </div>
               </div>
@@ -944,7 +944,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
               </div>
               <div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('search.tcgMarketPrice', { printing })}</div>
-                <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>${formatPrice(resolveCardPrice(selectedCard, printing))}</div>
+                <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>{priceText(resolveCardPrice(selectedCard, printing), selectedCard.price_currency)}</div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{t('search.rarityLabel')} <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{selectedCard.rarity}</span></div>
               </div>
             </div>

@@ -86,6 +86,11 @@ const isForeignPokemon = (card) =>
 // marketplace and the wrong currency for exactly the cards it was written for.
 const SOURCE_NAMES = {
   tcgcsv: 'TCGplayer',
+  // TCGplayer sells Pokémon in English and Japanese only, so a German, French, Korean
+  // or Chinese card is priced off the English product for the same set and number.
+  // The qualifier travels with the name because it changes what the number means: it
+  // is the closest available quote, not this printing's.
+  'tcgcsv-en': 'TCGplayer (English printing)',
   scryfall: 'TCGplayer',
   pokemontcg: 'TCGplayer',
   tcgdex: 'Cardmarket',
@@ -96,11 +101,20 @@ export function priceSource(card) {
   // (テラスタルフェスex is one).
   if (!(Number(card?.price_trend) > 0)) return null;
   const currency = card.price_currency || 'USD';
-  const name = SOURCE_NAMES[card.price_source] || null;
+  // Scryfall quotes two marketplaces and the currency says which: `usd` is
+  // TCGplayer's number, `eur` is Cardmarket's. A non-English printing is usually the
+  // second one, so the table's default would name the wrong shop for exactly the
+  // cards this label is worth showing on.
+  const name = (card.price_source === 'scryfall' && currency === 'EUR')
+    ? 'Cardmarket'
+    : SOURCE_NAMES[card.price_source] || null;
   if (!name) return null;
   // USD is the app's own display currency, so naming it adds nothing for the
-  // overwhelming majority of rows. The label exists for the ones that are NOT USD.
-  if (currency === 'USD' && card.price_source !== 'tcgdex') return null;
+  // overwhelming majority of rows. The label exists for the ones that are NOT USD —
+  // and for a price that is a stand-in from another printing, where the currency is
+  // right but the card is not.
+  const proxy = card.price_source === 'tcgcsv-en';
+  if (currency === 'USD' && card.price_source !== 'tcgdex' && !proxy) return null;
   return { name, currency };
 }
 

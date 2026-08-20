@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { X, MapPin, Trash2, Star, Maximize2, ExternalLink, Search } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { translatedName, setCode, isEnglish } from '../utils/languages';
-import { formatPrice } from '../utils/formatPrice';
+import { formatPrice, priceText } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import { tcgplayerUrl, cardmarketUrl, searchUrl, priceSource, noLinkReason } from '../utils/marketplaceLinks';
 import CardImage from './CardImage';
@@ -513,7 +513,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 <div>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>{t('inspector.marketPrice')}</div>
                   <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--accent-yellow)', marginTop: '0.15rem' }}>
-                    ${formatPrice(displayPrice)}
+                    {priceText(displayPrice, card.price_currency)}
                   </div>
                   {/* Say where a non-English price came from and in what currency —
                       it is Cardmarket's EUR figure rendered with the app's $. */}
@@ -604,7 +604,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               )}
 
               {/* Price History Area Chart */}
-              <PriceHistoryChart cardId={card.card_id} height={100} defaultRange="30d" />
+              <PriceHistoryChart cardId={card.card_id} currency={card.price_currency} height={100} defaultRange="30d" />
 
               {/* Specifications Details Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem 1rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-glass)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem' }}>

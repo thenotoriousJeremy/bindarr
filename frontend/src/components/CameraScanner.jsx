@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Camera, RefreshCw, AlertTriangle, X, Zap, ZapOff, Settings, ScanLine, ListFilter } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
-import { formatPrice } from '../utils/formatPrice';
+import { priceText } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import { CONDITIONS, getPrintings } from '../utils/cardOptions';
 import CardEntryFields from './CardEntryFields';
@@ -2455,7 +2455,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                     <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)' }}>#{card.number}</div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{card.set_name}</div>
                     <LangFallbackNote card={card} />
-                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-yellow)', marginTop: '0.2rem' }}>${formatPrice(card.price_trend)}</div>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-yellow)', marginTop: '0.2rem' }}>{priceText(card.price_trend, card.price_currency)}</div>
                   </div>
                 </div>
               ))}
@@ -2543,7 +2543,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                   draggable={false}
                   style={{ width: '76px', height: '106px', objectFit: 'cover', borderRadius: '4px', border: selected ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)', boxShadow: selected ? '0 0 12px var(--accent-red-glow)' : '0 2px 6px rgba(0,0,0,0.3)', pointerEvents: 'none' }}
                 />
-                <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--accent-yellow)', textAlign: 'center' }}>${formatPrice(item.price_trend)}</div>
+                <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--accent-yellow)', textAlign: 'center' }}>{priceText(item.price_trend, item.price_currency)}</div>
                 {item.placementLabel && (
                   <div style={{ fontSize: '0.55rem', color: '#ffc107', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={item.placementLabel}>{item.placementLabel}</div>
                 )}
@@ -2600,7 +2600,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                   <div className="quick-add-preview-info">
                     <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>TCG Market ({printing})</div>
                     <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--accent-yellow)', margin: '0.1rem 0' }}>
-                      ${formatPrice(resolveCardPrice(selectedCard, printing))}
+                      {priceText(resolveCardPrice(selectedCard, printing), selectedCard.price_currency)}
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
                       Rarity: <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{selectedCard.rarity || 'Common'}</span>

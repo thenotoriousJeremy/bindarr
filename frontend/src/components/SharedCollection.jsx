@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend, BarChart, Bar, XAxis, YAxis } from 'recharts';
 import { Search, Trophy, Compass, Library, ShieldAlert, Sparkles, X, MapPin, SlidersHorizontal } from 'lucide-react';
 import Logo from './Logo';
-import { formatPrice } from '../utils/formatPrice';
+import { priceText } from '../utils/formatPrice';
 import { PRINTINGS } from '../utils/cardOptions';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { useBackGuard } from '../utils/useBackGuard';
@@ -305,7 +305,7 @@ function SharedCollection({ shareToken }) {
                   <div style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-strong)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{displayName(card)}</div>
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{card.set_name} • {card.rarity}</div>
                 </div>
-                <div style={{ fontWeight: 800, color: 'var(--accent-yellow)', fontSize: '0.9rem' }}>${formatPrice(card.price_trend)}</div>
+                <div style={{ fontWeight: 800, color: 'var(--accent-yellow)', fontSize: '0.9rem' }}>{priceText(card.price_trend, card.price_currency)}</div>
               </div>
             ))}
             {topValuable.length === 0 && <div className="chart-empty">{t('shared.noCards')}</div>}
@@ -421,7 +421,7 @@ function SharedCollection({ shareToken }) {
                   <div className="tcg-card-name">{displayName(card)}</div>
                   <div className="tcg-card-meta">
                     <span style={{ fontSize: '0.7rem' }}>{card.set_name} • #{card.number}</span>
-                    <span className="tcg-card-price">${formatPrice(card.price_trend)}</span>
+                    <span className="tcg-card-price">{priceText(card.price_trend, card.price_currency)}</span>
                   </div>
                   {shareLocations && card.location && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
@@ -460,7 +460,7 @@ function SharedCollection({ shareToken }) {
               <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1rem', display: 'flex', gap: '2rem' }}>
                 <div>
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{t('shared.estMarketPrice')}</div>
-                  <div style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>${formatPrice(activeCard.price_trend)}</div>
+                  <div style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>{priceText(activeCard.price_trend, activeCard.price_currency)}</div>
                 </div>
                 <div>
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{t('shared.quantity')}</div>

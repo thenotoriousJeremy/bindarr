@@ -119,6 +119,20 @@ const AFFILIATE_SEARCH =
     null,
     'a TCGplayer USD row needs no label — USD is the display currency'
   );
+  // A price borrowed from the English printing (TCGplayer has no German catalogue)
+  // must say so — the currency is right, the card is not.
+  assert.deepStrictEqual(
+    links.priceSource({ game: 'pokemon', language: 'German', price_trend: 4, price_source: 'tcgcsv-en', price_currency: 'USD' }),
+    { name: 'TCGplayer (English printing)', currency: 'USD' },
+    'a proxy price is labelled even though it is in the display currency'
+  );
+  // Scryfall quotes two marketplaces; EUR is Cardmarket's number, which is what a
+  // non-English Magic printing usually has instead of a TCGplayer one.
+  assert.deepStrictEqual(
+    links.priceSource({ game: 'mtg', language: 'Japanese', price_trend: 9, price_source: 'scryfall', price_currency: 'EUR' }),
+    { name: 'Cardmarket', currency: 'EUR' },
+    'a EUR Scryfall price is Cardmarket, not TCGplayer'
+  );
   // No price means no source. Labelling a $0.00 asserts a source that never answered.
   assert.strictEqual(
     links.priceSource({ game: 'pokemon', language: 'Japanese', price_trend: 0, price_source: 'tcgdex', price_currency: 'EUR' }),

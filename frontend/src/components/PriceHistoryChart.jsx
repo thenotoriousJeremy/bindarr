@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { formatPrice } from '../utils/formatPrice';
+import { priceText } from '../utils/formatPrice';
 import { useT } from '../utils/i18n';
 
 // Selectable chart windows. Default is 1 Year so price movement is visible; a
@@ -17,6 +17,9 @@ const RANGE_KEYS = ['30d', 'all'];
 // room and let the YAxis reserve enough width for "$1,234" style ticks.
 export default function PriceHistoryChart({
   cardId,
+  // The card's own currency. Stored prices are never converted, so the axis and the
+  // tooltip have to read in whatever marketplace quoted them (see utils/formatPrice).
+  currency,
   height = 150,
   defaultRange = '30d',
   titlePrefix,
@@ -94,7 +97,7 @@ export default function PriceHistoryChart({
         </span>
         {pctChange !== null && (
           <span style={{ fontSize: '0.7rem', fontWeight: 800, color: trendColor }}>
-            {up ? '▲' : '▼'} {up ? '+' : ''}${formatPrice(Math.abs(absChange))} ({up ? '+' : '−'}{Math.abs(pctChange).toFixed(1)}%)
+            {up ? '▲' : '▼'} {up ? '+' : ''}{priceText(Math.abs(absChange), currency)} ({up ? '+' : '−'}{Math.abs(pctChange).toFixed(1)}%)
           </span>
         )}
       </div>
@@ -165,12 +168,12 @@ export default function PriceHistoryChart({
                 stroke="var(--text-secondary)"
                 style={{ fontSize: '0.6rem' }}
                 width={48}
-                tickFormatter={(v) => `$${formatPrice(v)}`}
+                tickFormatter={(v) => priceText(v, currency)}
               />
               <Tooltip
                 contentStyle={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)', borderRadius: '8px', fontSize: '0.75rem' }}
                 labelStyle={{ color: 'var(--text-secondary)' }}
-                formatter={(val) => [`$${formatPrice(val)}`, t('priceHistory.market')]}
+                formatter={(val) => [priceText(val, currency), t('priceHistory.market')]}
                 labelFormatter={(label) => (label ? new Date(label).toLocaleDateString(locale) : '')}
               />
               <Area type="monotone" dataKey="price" stroke="var(--accent-yellow)" strokeWidth={1.75} fillOpacity={1} fill="url(#priceGlow)" />

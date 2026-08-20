@@ -33,7 +33,9 @@ const API_BASE_URL = 'https://tcgcsv.com';
 // TCGCSV rejects a request with no identifying User-Agent — a 401 with a note
 // asking you to say who you are. That is a reasonable ask of a free mirror, so the
 // header names the app and links the project rather than impersonating a browser.
-const USER_AGENT = 'Bindarr/1.6.1 (self-hosted TCG collection manager; https://github.com/thenotoriousJeremy/bindarr)';
+// Version read from package.json rather than typed here: the literal said 1.6.1
+// through two releases, which is exactly what a hardcoded version does.
+const USER_AGENT = `Bindarr/${require('../package.json').version} (self-hosted TCG collection manager; https://github.com/thenotoriousJeremy/bindarr)`;
 
 const client = axios.create({
   baseURL: API_BASE_URL,
@@ -306,6 +308,16 @@ async function priceSet({ set_id, set_name, language }, match) {
     [set_id, language]
   );
 
+  // Whose printing this price actually is. TCGplayer has two Pokémon catalogues,
+  // English (3) and Japanese (85), and nothing else — so a German, French, Korean or
+  // Chinese card is priced off the ENGLISH product for the same set and number
+  // (categoryFor sends it there). That is the closest real number available and much
+  // better than $0.00, but it is not the price of the card the user owns: a German
+  // printing usually trades below the English one, and a Korean one is often not
+  // listed at all. Recorded as its own source so the UI can say so instead of
+  // presenting a proxy as a quote for this printing.
+  const source = (language === 'English' || language === 'Japanese') ? 'tcgcsv' : 'tcgcsv-en';
+
   let priced = 0;
   for (const row of cached) {
     const product = byNumber.get(normNumber(row.number));
@@ -322,10 +334,10 @@ async function priceSet({ set_id, set_name, language }, match) {
     await db.run(
       `UPDATE card_cache
           SET price_trend = ?, price_normal = ?, price_holofoil = ?, price_reverse_holofoil = ?,
-              price_1st_edition = ?, tcgplayer_product_id = ?, price_source = 'tcgcsv', price_currency = 'USD'
+              price_1st_edition = ?, tcgplayer_product_id = ?, price_source = ?, price_currency = 'USD'
         WHERE id = ?`,
       [p.price_trend, p.price_normal, p.price_holofoil, p.price_reverse_holofoil,
-       p.price_1st_edition, product.productId, row.id]
+       p.price_1st_edition, product.productId, source, row.id]
     );
     await recordPrice(row.id, p.price_trend);
     priced++;

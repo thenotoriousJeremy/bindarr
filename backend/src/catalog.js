@@ -422,8 +422,18 @@ async function embedPhase(job) {
   // the whole app bandwidth to fix one pipeline.
   const embedUrl = (row) => row.image_url.replace(/\/low\.png$/, '/high.png');
 
+  // Scryfall's image CDN rejects a request with no User-Agent — 400, not 403, which
+  // reads like a bad URL. Version comes from package.json rather than a literal: the
+  // one in tcgcsvApi said 1.6.1 through two releases.
+  const HEADERS = {
+    'User-Agent': `Bindarr/${require('../package.json').version} (+https://github.com/thenotoriousJeremy/bindarr)`,
+    Accept: 'image/*',
+  };
   const fetchOne = async (row) => {
-    const res = await fetch(embedUrl(row), { signal: AbortSignal.timeout(30000) });
+    const res = await fetch(embedUrl(row), {
+      signal: AbortSignal.timeout(30000),
+      headers: HEADERS,
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return Buffer.from(await res.arrayBuffer());
   };

@@ -787,7 +787,9 @@ button, input, select, textarea {
 }
 
 .tcg-card-image {
-  display:block;
+  /* Inline images reserve descender space under the baseline, which showed up as a
+     gap between the artwork and the rarity-coloured border around it. */
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;

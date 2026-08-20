@@ -86,6 +86,38 @@ function normalizeChecks() {
   );
   assert.strictEqual(fallback.language, 'English', "the response's own lang wins");
   assert.strictEqual(fallback.printed_name, null, 'English printings have no printed name');
+
+  // Prices: USD is TCGplayer's number, EUR is Cardmarket's, and a non-English
+  // printing usually has only the second. Reading usd alone left whole languages at
+  // 0.00 — 241 of 1,205 Spanish rows priced, 53 of 194 Italian.
+  const priced = (prices) => scryfallApi.normalizeCard(
+    { id: 'u3', name: 'Lightning Bolt', lang: 'ja', set: 'msc', collector_number: '806', image_uris: { normal: 'i' }, prices },
+    'ja'
+  );
+
+  const eur = priced({ usd: null, usd_foil: null, eur: '4.50', eur_foil: '9.00' });
+  assert.strictEqual(eur.price_currency, 'EUR', 'a EUR-only printing is recorded as EUR');
+  assert.strictEqual(eur.price_normal, 4.5);
+  assert.strictEqual(eur.price_holofoil, 9);
+  assert.strictEqual(eur.price_trend, 4.5);
+
+  // USD wins when present, and the row must never mix the two: a USD normal price
+  // beside a EUR foil price is a pair of numbers that cannot be compared.
+  const both = priced({ usd: '3.00', usd_foil: null, eur: '4.50', eur_foil: '9.00' });
+  assert.strictEqual(both.price_currency, 'USD');
+  assert.strictEqual(both.price_normal, 3);
+  assert.strictEqual(both.price_holofoil, null, 'no EUR foil price on a USD row');
+
+  // A foil-only USD listing still counts as USD, EUR notwithstanding.
+  const foilOnly = priced({ usd: null, usd_foil: '7.00', eur: '4.50' });
+  assert.strictEqual(foilOnly.price_currency, 'USD');
+  assert.strictEqual(foilOnly.price_trend, 7, 'trend falls back to the foil price');
+
+  // Nothing anywhere: unpriced, and still labelled USD, which is what every
+  // consumer defaults to.
+  const none = priced({});
+  assert.strictEqual(none.price_currency, 'USD');
+  assert.strictEqual(none.price_trend, 0);
 }
 
 // --- 4. TCGdex ids round-trip ------------------------------------------------

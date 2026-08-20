@@ -203,9 +203,28 @@ function normalizeCard(raw, lang) {
   const imgSrc = raw.image_uris || face.image_uris || {};
   const typeLine = raw.type_line || face.type_line || '';
   const colors = raw.colors || face.colors || [];
+  // USD first, then EUR — and never a mix of the two in one row.
+  //
+  // Scryfall quotes `usd` from TCGplayer and `eur` from Cardmarket, and which one it
+  // has depends on where the printing is actually sold. TCGplayer lists English
+  // Magic almost completely (96,090 of 103,656 English rows here carry a usd price)
+  // and non-English barely at all, which is why reading usd alone left whole
+  // languages at $0.00: Spanish 241 of 1,205 priced, Italian 53 of 194, Simplified
+  // Chinese 11 of 61. Those are European and Asian printings sold on Cardmarket,
+  // where a eur price usually does exist.
+  //
+  // The currency is recorded per row (price_currency) rather than converted, because
+  // an exchange rate is a live number this app has no source for, and a stale
+  // hardcoded one silently misprices a collection. Falling back per row also keeps
+  // every column in a row in ONE currency — a normal price in USD next to a foil
+  // price in EUR would make the pair meaningless.
   const prices = raw.prices || {};
-  const usd = prices.usd != null ? parseFloat(prices.usd) : null;
-  const usdFoil = prices.usd_foil != null ? parseFloat(prices.usd_foil) : null;
+  const money = (v) => (v != null ? parseFloat(v) : null);
+  const eurOnly = money(prices.usd) == null && money(prices.usd_foil) == null
+    && (money(prices.eur) != null || money(prices.eur_foil) != null);
+  const currency = eurOnly ? 'EUR' : 'USD';
+  const usd = eurOnly ? money(prices.eur) : money(prices.usd);
+  const usdFoil = eurOnly ? money(prices.eur_foil) : money(prices.usd_foil);
   const cmc = raw.cmc != null ? parseFloat(raw.cmc) : null;
   const colorIdentity = raw.color_identity || face.color_identity || [];
 
@@ -254,9 +273,10 @@ function normalizeCard(raw, lang) {
     // Commander foils) carries no plain id, and etched is still the right product
     // to link at: it is the one TCGplayer actually sells for that printing.
     tcgplayer_product_id: raw.tcgplayer_id ?? raw.tcgplayer_etched_id ?? null,
-    // Scryfall's `prices.usd` is TCGplayer's number, quoted in USD.
+    // Scryfall's `prices.usd` is TCGplayer's number and `prices.eur` Cardmarket's,
+    // so the currency names the marketplace too (see the fallback above).
     price_source: 'scryfall',
-    price_currency: 'USD'
+    price_currency: currency
   };
 }
 
