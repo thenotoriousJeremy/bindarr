@@ -38,7 +38,7 @@ function SharedContainer({ shareToken, containerId }) {
       }
     };
     fetchContainer();
-  }, [shareToken, containerId]);
+  }, [shareToken, containerId, t]);
 
   const cardsByCompartment = useMemo(() => {
     const byComp = new Map();
