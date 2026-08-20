@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
-import { ChevronDown, Check } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
+import { useT } from '../utils/i18n';
 
 // A reusable checklist dropdown, standing in for a native <select> wherever
 // a filter should allow choosing several values at once instead of one.
 // `value` is always an array; an empty array means "no filter applied" (same
 // meaning as '' on the single-select version it replaces).
 export default function MultiSelectDropdown({ label, options, value, onChange, allLabel }) {
+  const { t } = useT();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -29,7 +31,7 @@ export default function MultiSelectDropdown({ label, options, value, onChange, a
     ? allLabel
     : value.length === 1
       ? (options.find(o => o.value === value[0])?.label ?? value[0])
-      : `${value.length} selected`;
+      : t('bulk.selected', { count: value.length });
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
@@ -48,12 +50,11 @@ export default function MultiSelectDropdown({ label, options, value, onChange, a
 
       {open && (
         <div
-          role="listbox"
           style={{
             position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 20,
             minWidth: '100%', maxHeight: '260px', overflowY: 'auto',
-            background: 'var(--bg-elevated, #1c1c1e)', border: '1px solid var(--border-glass)',
-            borderRadius: '8px', padding: '0.35rem', boxShadow: '0 8px 24px rgba(0,0,0,0.35)'
+            background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)',
+            borderRadius: 'var(--radius-sm)', padding: '0.35rem', boxShadow: 'var(--shadow-glow)'
           }}
         >
           {value.length > 0 && (
@@ -63,33 +64,25 @@ export default function MultiSelectDropdown({ label, options, value, onChange, a
               style={{ width: '100%', fontSize: '0.72rem', padding: '0.3rem', marginBottom: '0.3rem' }}
               onClick={() => onChange([])}
             >
-              Clear ({value.length})
+              {t('bulk.clear')}
             </button>
           )}
-          {options.map(opt => {
-            const checked = value.includes(opt.value);
-            return (
-              <label
-                key={opt.value}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.4rem', borderRadius: '5px', cursor: 'pointer', fontSize: '0.82rem' }}
-              >
-                <span style={{
-                  width: '16px', height: '16px', borderRadius: '4px', flexShrink: 0,
-                  border: '1px solid var(--border-glass)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: checked ? 'var(--accent-red)' : 'transparent'
-                }}>
-                  {checked && <Check size={12} color="white" />}
-                </span>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => toggle(opt.value)}
-                  style={{ display: 'none' }}
-                />
-                {opt.label}
-              </label>
-            );
-          })}
+          {/* Native checkboxes rather than a styled div: keyboard reachable and
+              announced without a roving-tabindex listbox of our own. */}
+          {options.map(opt => (
+            <label
+              key={opt.value}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.4rem', borderRadius: '5px', cursor: 'pointer', fontSize: '0.82rem' }}
+            >
+              <input
+                type="checkbox"
+                checked={value.includes(opt.value)}
+                onChange={() => toggle(opt.value)}
+                style={{ width: '14px', height: '14px', flexShrink: 0, cursor: 'pointer', accentColor: 'var(--accent-red)' }}
+              />
+              {opt.label}
+            </label>
+          ))}
         </div>
       )}
     </div>
