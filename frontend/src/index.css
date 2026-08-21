@@ -101,6 +101,177 @@
     radial-gradient(at 50% 50%, #ffffff 0px, var(--bg-primary) 100%);
 }
 
+/* Pokémon (Pokédex) — classic red handheld vibe with electric yellow and cyan sensor accents */
+:root[data-theme="pokemon"] {
+  --bg-primary: #12070a;
+  --bg-secondary: #1d0e14;
+  --bg-glass: rgba(29, 14, 20, 0.75);
+  --border-glass: rgba(239, 68, 68, 0.18);
+  --border-glass-hover: rgba(239, 68, 68, 0.4);
+
+  --text-primary: #fdf2f4;
+  --text-secondary: #c299a3;
+  --text-muted: #82606a;
+  --text-strong: #ffffff;
+  --text-on-accent: #ffffff;
+
+  --accent-red: #ef4444;
+  --accent-red-glow: rgba(239, 68, 68, 0.4);
+  --accent-blue: #38bdf8;
+  --accent-blue-glow: rgba(56, 189, 248, 0.4);
+  --accent-yellow: #facc15;
+  --accent-yellow-glow: rgba(250, 204, 21, 0.4);
+
+  --logo-cover: #ef4444;
+  --logo-spine: #b91c1c;
+  --logo-page-left: #fee2e2;
+  --logo-page-right: #ffffff;
+  --logo-ring-stroke: #18181b;
+  --logo-ring-inner: #38bdf8;
+
+  --surface-1: rgba(239, 68, 68, 0.04);
+  --surface-2: rgba(239, 68, 68, 0.08);
+  --surface-3: rgba(239, 68, 68, 0.14);
+  --input-bg: rgba(18, 7, 10, 0.65);
+  --input-bg-focus: rgba(29, 14, 20, 0.9);
+
+  --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+  --bg-gradient:
+    radial-gradient(at 0% 0%, rgba(239, 68, 68, 0.16) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(56, 189, 248, 0.12) 0px, transparent 50%),
+    radial-gradient(at 50% 50%, rgba(29, 14, 20, 0.95) 0px, var(--bg-primary) 100%);
+}
+
+:root[data-theme="pokemon"] .logo-icon svg,
+:root[data-theme="pokemon"] .logo-icon img {
+  filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.5));
+}
+
+:root[data-theme="pokemon"] .logo-text {
+  background: linear-gradient(135deg, #fee2e2 40%, #ef4444 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+:root[data-theme="pokemon"] .logo-text span {
+  color: #38bdf8;
+  -webkit-text-fill-color: #38bdf8;
+}
+
+/* Magic: The Gathering (MTG) — Planeswalker & Arcane Mana obsidian/slate with mythic gold & mana glows */
+:root[data-theme="mtg"] {
+  --bg-primary: #0e1017;
+  --bg-secondary: #161924;
+  --bg-glass: rgba(22, 25, 36, 0.75);
+  --border-glass: rgba(217, 119, 6, 0.2);
+  --border-glass-hover: rgba(245, 158, 11, 0.45);
+
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-strong: #fffbeb;
+  --text-on-accent: #ffffff;
+
+  --accent-red: #ea580c;
+  --accent-red-glow: rgba(234, 88, 12, 0.4);
+  --accent-blue: #0284c7;
+  --accent-blue-glow: rgba(2, 132, 199, 0.4);
+  --accent-yellow: #f59e0b;
+  --accent-yellow-glow: rgba(245, 158, 11, 0.4);
+
+  --logo-cover: #d97706;
+  --logo-spine: #92400e;
+  --logo-page-left: #fef3c7;
+  --logo-page-right: #ffffff;
+  --logo-ring-stroke: #18181b;
+  --logo-ring-inner: #f59e0b;
+
+  --surface-1: rgba(245, 158, 11, 0.04);
+  --surface-2: rgba(245, 158, 11, 0.08);
+  --surface-3: rgba(245, 158, 11, 0.14);
+  --input-bg: rgba(14, 16, 23, 0.65);
+  --input-bg-focus: rgba(22, 25, 36, 0.9);
+
+  --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+  --bg-gradient:
+    radial-gradient(at 0% 0%, rgba(147, 51, 234, 0.12) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(217, 119, 6, 0.14) 0px, transparent 50%),
+    radial-gradient(at 50% 50%, rgba(22, 25, 36, 0.95) 0px, var(--bg-primary) 100%);
+}
+
+:root[data-theme="mtg"] .logo-icon svg,
+:root[data-theme="mtg"] .logo-icon img {
+  filter: drop-shadow(0 0 10px rgba(245, 158, 11, 0.5));
+}
+
+:root[data-theme="mtg"] .logo-text {
+  background: linear-gradient(135deg, #fef3c7 40%, #f59e0b 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+:root[data-theme="mtg"] .logo-text span {
+  color: #f59e0b;
+  -webkit-text-fill-color: #f59e0b;
+}
+
+/* Disney Lorcana — Inkwell & Glimmer midnight royal indigo with glowing amber lore & amethyst ink */
+:root[data-theme="lorcana"] {
+  --bg-primary: #0a0918;
+  --bg-secondary: #14122e;
+  --bg-glass: rgba(20, 18, 46, 0.75);
+  --border-glass: rgba(168, 85, 247, 0.2);
+  --border-glass-hover: rgba(245, 158, 11, 0.45);
+
+  --text-primary: #f5f3ff;
+  --text-secondary: #c4b5fd;
+  --text-muted: #7c6f9f;
+  --text-strong: #faf5ff;
+  --text-on-accent: #ffffff;
+
+  --accent-red: #ec4899;
+  --accent-red-glow: rgba(236, 72, 153, 0.4);
+  --accent-blue: #06b6d4;
+  --accent-blue-glow: rgba(6, 182, 212, 0.4);
+  --accent-yellow: #fbbf24;
+  --accent-yellow-glow: rgba(251, 191, 36, 0.4);
+
+  --logo-cover: #7c3aed;
+  --logo-spine: #5b21b6;
+  --logo-page-left: #ede9fe;
+  --logo-page-right: #ffffff;
+  --logo-ring-stroke: #120f24;
+  --logo-ring-inner: #fbbf24;
+
+  --surface-1: rgba(168, 85, 247, 0.04);
+  --surface-2: rgba(168, 85, 247, 0.08);
+  --surface-3: rgba(168, 85, 247, 0.14);
+  --input-bg: rgba(10, 9, 24, 0.65);
+  --input-bg-focus: rgba(20, 18, 46, 0.9);
+
+  --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.55);
+  --bg-gradient:
+    radial-gradient(at 0% 0%, rgba(124, 58, 237, 0.16) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(245, 158, 11, 0.12) 0px, transparent 50%),
+    radial-gradient(at 50% 50%, rgba(20, 18, 46, 0.95) 0px, var(--bg-primary) 100%);
+}
+
+:root[data-theme="lorcana"] .logo-icon svg,
+:root[data-theme="lorcana"] .logo-icon img {
+  filter: drop-shadow(0 0 10px rgba(168, 85, 247, 0.5));
+}
+
+:root[data-theme="lorcana"] .logo-text {
+  background: linear-gradient(135deg, #ede9fe 40%, #a855f7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+:root[data-theme="lorcana"] .logo-text span {
+  color: #fbbf24;
+  -webkit-text-fill-color: #fbbf24;
+}
+
 /* LCARS (Star Trek) — palette + font reskin on the current layout. Amber text
    on black, colored accents, condensed uppercase headings, pill radii. */
 :root[data-theme="lcars"] {

@@ -6,7 +6,14 @@
 import { Capacitor } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
 
-const BG = { dark: '#0a0f1d', light: '#eef2f7', lcars: '#000000' };
+const BG = {
+  dark: '#0a0f1d',
+  light: '#eef2f7',
+  pokemon: '#12070a',
+  mtg: '#0e1017',
+  lorcana: '#0a0918',
+  lcars: '#000000',
+};
 
 function applyStatusBar() {
   const theme = document.documentElement.getAttribute('data-theme') || 'dark';

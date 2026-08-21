@@ -949,6 +949,9 @@ function Settings({ user, onUpdateUser, showToast }) {
             >
               <option value="dark">{t('theme.dark')}</option>
               <option value="light">{t('theme.light')}</option>
+              <option value="pokemon">{t('theme.pokemon')}</option>
+              <option value="mtg">{t('theme.mtg')}</option>
+              <option value="lorcana">{t('theme.lorcana')}</option>
               <option value="lcars">{t('theme.lcars')}</option>
             </select>
             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>
