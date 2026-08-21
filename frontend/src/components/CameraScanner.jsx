@@ -146,6 +146,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [detectQuad, setDetectQuad] = useState(null);
   const [showDetectOutline, setShowDetectOutline] = useState(() => localStorage.getItem('scan_outline') !== '0');
   const outlineCanvas = useRef(null);   // one canvas, reused every update
+  const orientedCanvas = useRef(null);  // reused for video orientation (zero allocation per frame)
+  const dewarpCanvas = useRef(null);    // reused for client dewarp
   const smoothed = useRef(null);        // eased corners, what actually gets drawn
   const lastRawQuad = useRef(null);     // previous RAW detection, for drift
   const steadyFrames = useRef(0);       // consecutive low-drift detections
@@ -711,6 +713,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
     // the picture; the outline is a readout of that same work, so drawing it while
     // nothing can fire would be paying ~1.5 inferences a second to animate a box.
     if (!cameraActive || !autoScan) { setDetectQuad(null); setAutoState(null); return; }
+    refreshAutoState();
     let stopped = false;
     let timer;
     const schedule = (ms) => { if (!stopped) timer = setTimeout(tick, ms); };
@@ -1005,7 +1008,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const getOrientedVideoCanvas = (video, maxW = 0) => {
     const videoWidth = video.videoWidth;
     const videoHeight = video.videoHeight;
-    const canvas = document.createElement('canvas');
+    const canvas = orientedCanvas.current || (orientedCanvas.current = document.createElement('canvas'));
 
     const videoRect = video.getBoundingClientRect();
     const streamRatio = videoWidth / videoHeight;
@@ -1108,7 +1111,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
       const dst = [{ x: 0, y: 0 }, { x: N, y: 0 }, { x: N, y: N }, { x: 0, y: N }];
       const rgba = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, h).data;
       const out = warpPerspective(rgba, w, h, getPerspectiveTransform(src, dst), EMBED_SIZE, EMBED_SIZE);
-      const c = document.createElement('canvas');
+      const c = dewarpCanvas.current || (dewarpCanvas.current = document.createElement('canvas'));
       c.width = EMBED_SIZE; c.height = EMBED_SIZE;
       c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(out), EMBED_SIZE, EMBED_SIZE), 0, 0);
       return c.toDataURL('image/jpeg', 0.9);

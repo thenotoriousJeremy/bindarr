@@ -17,32 +17,12 @@ import {
   rgbaToGray, gaussianBlur5, otsuThreshold, morphClose, dilate, canny,
   connectedRegions, arcLength, convexHull, approxPolyDP,
   isContourConvex, minAreaRect, getPerspectiveTransform, warpPerspective,
+  orderQuad,
 } from './imgproc.mjs';
 
 export function createDetector() {
   const CARD_ASPECT = 2.5 / 3.5;
   const WARP_W = 500, WARP_H = Math.round(500 / CARD_ASPECT); // rectified card size
-
-  // Order 4 quad points as [tl, tr, br, bl].
-  //
-  // The sum/diff trick is exact for an axis-aligned-ish quad but degenerates near
-  // 45°, where one point can win two slots and leave another unused — that feeds
-  // warpPerspective a collapsed quad and produces the badly sheared crops. So the
-  // result is checked for duplicates and falls back to ordering by angle around the
-  // centroid, which is rotation-proof.
-  function orderQuad(pts) {
-    const bySum = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y));
-    const byDiff = [...pts].sort((a, b) => (a.y - a.x) - (b.y - b.x));
-    const guess = [bySum[0], byDiff[0], bySum[3], byDiff[3]]; // tl, tr, br, bl
-    if (new Set(guess).size === 4) return guess;
-  
-    const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
-    const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
-    // Clockwise from the top-left-most quadrant so the order still reads tl,tr,br,bl.
-    const byAngle = [...pts].sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
-    const start = byAngle.reduce((bi, p, i) => (p.x + p.y < byAngle[bi].x + byAngle[bi].y ? i : bi), 0);
-    return [0, 1, 2, 3].map(i => byAngle[(start + i) % 4]);
-  }
   
   // Geometry of an ordered quad, or null if it is too small to judge. Used to throw
   // out candidates that are not plausibly a card seen at an angle.

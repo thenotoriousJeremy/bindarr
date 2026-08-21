@@ -38,6 +38,7 @@ function ensureWorker(onResult) {
   // a silent error would stop the detection loop dead, and the outline would
   // simply freeze with no way to tell that from "no card".
   worker.onerror = (e) => {
+    console.error('[cardDetector] Worker error event:', e);
     pending = false;
     onResult({ seq, detected: false, error: e?.message || 'detect worker failed' });
   };

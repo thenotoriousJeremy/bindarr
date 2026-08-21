@@ -28,27 +28,37 @@
 //   'onnxruntime-web/wasm'    the CPU backend alone, which is all this can reach.
 import * as ort from 'onnxruntime-web/wasm';
 import { sharpness } from './sharpness.js';
-import { orderQuad } from '../../../shared/imgproc.mjs';
+import { createDetector } from '../../../shared/cardDetectPure.mjs';
 
-// Served by the backend from data/models.
-//
-// THREADS. This graph parallelises almost linearly — measured on the same model
-// via onnxruntime-node: 30.6ms on one thread, 17.2ms on two, 10.6ms on four. One
-// thread was leaving that on the floor, and on a phone the difference is a 270ms
-// detection against roughly 110ms.
-//
-// Multi-threaded wasm needs SharedArrayBuffer, which needs the DOCUMENT to be
-// cross-origin isolated (COOP + COEP). The server sends those headers, but a
-// reverse proxy can strip them and the Capacitor WebView never had them, so this
-// is asked, never assumed: crossOriginIsolated is false there and the session
-// stays single-threaded rather than failing to construct. Cap at 4 — phones
-// report 8 cores of which half are little ones, and oversubscribing a 384x384
-// graph costs more in synchronisation than it buys.
+// Order 4 points into [TL, TR, BR, BL] in perimeter clockwise order.
+// Sorts by polar angle around the centroid so the resulting polygon is convex
+// and mathematically guaranteed to never cross itself (eliminates hourglass/bowtie).
+function orderQuad(pts) {
+  if (!pts || pts.length !== 4) return pts;
+  const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
+  const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+  const sorted = [...pts].sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+  let tlIdx = 0, minScore = Infinity;
+  for (let i = 0; i < 4; i++) {
+    const score = sorted[i].x + sorted[i].y;
+    if (score < minScore) { minScore = score; tlIdx = i; }
+  }
+  const pTL = sorted[tlIdx];
+  const pNext = sorted[(tlIdx + 1) % 4];
+  const pPrev = sorted[(tlIdx + 3) % 4];
+  if (pNext.x - pTL.x > pPrev.x - pTL.x || pPrev.y - pTL.y > pNext.y - pTL.y) {
+    return [sorted[tlIdx], sorted[(tlIdx + 1) % 4], sorted[(tlIdx + 2) % 4], sorted[(tlIdx + 3) % 4]];
+  } else {
+    return [sorted[tlIdx], sorted[(tlIdx + 3) % 4], sorted[(tlIdx + 2) % 4], sorted[(tlIdx + 1) % 4]];
+  }
+}
+
+// Served by the backend from data/models. Single-threaded: multi-threaded wasm
+// needs cross-origin isolation (COOP/COEP), which a self-hosted app behind an
+// arbitrary reverse proxy cannot count on, and one thread already makes the
+// cadence (~22ms with FastWeb-Single).
 ort.env.wasm.wasmPaths = '/ort/';
-const THREADS = self.crossOriginIsolated
-  ? Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1))
-  : 1;
-ort.env.wasm.numThreads = THREADS;
+ort.env.wasm.numThreads = 1;
 
 const CORN_SIZE = 384;
 const MEAN = [0.485, 0.456, 0.406];
@@ -83,21 +93,24 @@ let engine = 'cornelius';
 async function getSession() {
   if (!sessionPromise) {
     sessionPromise = (async () => {
+      console.log('[detectWorker] Fetching model /models/cornelius.onnx...');
       const res = await fetch('/models/cornelius.onnx');
-      // A SPA catch-all answers 200 with index.html; ORT would then fail deep
-      // inside a protobuf parse with a message that names nothing useful.
       const type = res.headers.get('content-type') || '';
       if (!res.ok || type.includes('text/html')) {
         throw new Error(`cornelius.onnx not served (${res.status} ${type || 'no type'})`);
       }
       const bytes = new Uint8Array(await res.arrayBuffer());
       const isFastWeb = bytes.length < 4000000;
-      engine = isFastWeb ? 'fastweb-wasm' : `cornelius-wasm x${THREADS}`;
-      return ort.InferenceSession.create(bytes, {
+      engine = isFastWeb ? 'fastweb-wasm' : 'cornelius-wasm';
+      console.log(`[detectWorker] Creating session (${engine}, ${bytes.length} bytes)...`);
+      const s = await ort.InferenceSession.create(bytes, {
         executionProviders: ['wasm'],
         graphOptimizationLevel: 'all',
       });
+      console.log('[detectWorker] Session created successfully!');
+      return s;
     })().catch((err) => {
+      console.error('[detectWorker] getSession error:', err);
       sessionPromise = null;      // allow a later retry
       throw err;
     });
@@ -105,9 +118,8 @@ async function getSession() {
   return sessionPromise;
 }
 
-async function getFallback() {
+function getFallback() {
   if (!fallback) {
-    const { createDetector } = await import('../../../shared/cardDetectPure.mjs');
     fallback = createDetector();
   }
   return fallback;
@@ -115,8 +127,8 @@ async function getFallback() {
 
 // The contour detector, in the shape this worker returns. `fill` stays the
 // quad's area fraction so the caller's gate means the same thing either way.
-async function detectWithFallback(rgba, w, h, seq, why) {
-  const det = await getFallback();
+function detectWithFallback(rgba, w, h, seq, why) {
+  const det = getFallback();
   const card = det.detectCard(rgba, w, h);
   if (!card) return { seq, detected: false, engine: 'contour', degraded: why };
   const quad = card.quad.map(p => ({ x: p.x / w, y: p.y / h }));
@@ -136,14 +148,20 @@ const PLANE = CORN_SIZE * CORN_SIZE;
 const tensorData = new Float32Array(3 * PLANE);   // reused every frame
 const invStd0 = 1 / (255 * STD[0]), invStd1 = 1 / (255 * STD[1]), invStd2 = 1 / (255 * STD[2]);
 const offset0 = -MEAN[0] / STD[0], offset1 = -MEAN[1] / STD[1], offset2 = -MEAN[2] / STD[2];
+const lut0 = new Float32Array(256), lut1 = new Float32Array(256), lut2 = new Float32Array(256);
+for (let v = 0; v < 256; v++) {
+  lut0[v] = v * invStd0 + offset0;
+  lut1[v] = v * invStd1 + offset1;
+  lut2[v] = v * invStd2 + offset2;
+}
 
 function toTensor(rgba, w, h) {
   if (w === CORN_SIZE && h === CORN_SIZE) {
     const p0 = 0, p1 = PLANE, p2 = 2 * PLANE;
     for (let i = 0, j = 0; i < PLANE; i++, j += 4) {
-      tensorData[p0 + i] = rgba[j] * invStd0 + offset0;
-      tensorData[p1 + i] = rgba[j + 1] * invStd1 + offset1;
-      tensorData[p2 + i] = rgba[j + 2] * invStd2 + offset2;
+      tensorData[p0 + i] = lut0[rgba[j]];
+      tensorData[p1 + i] = lut1[rgba[j + 1]];
+      tensorData[p2 + i] = lut2[rgba[j + 2]];
     }
     return new ort.Tensor('float32', tensorData, [1, 3, CORN_SIZE, CORN_SIZE]);
   }
@@ -182,7 +200,7 @@ self.onmessage = async (e) => {
       session = await getSession();
     } catch (loadErr) {
       // Degraded, but still answering. The caller can tell the difference.
-      const r = await detectWithFallback(rgba, w, h, seq, loadErr.message);
+      const r = detectWithFallback(rgba, w, h, seq, loadErr.message);
       self.postMessage({ ...r, buf: rgba.buffer }, [rgba.buffer]);
       return;
     }

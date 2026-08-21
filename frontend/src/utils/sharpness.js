@@ -14,14 +14,17 @@
 // a worker entry cannot export helpers to its host.
 export function sharpness(rgba, w, h) {
   let sum = 0, sumSq = 0, n = 0;
-  const luma = (p) => {
-    const i = p * 4;
-    return rgba[i] * 0.299 + rgba[i + 1] * 0.587 + rgba[i + 2] * 0.114;
-  };
+  const w4 = w * 4;
   for (let y = 3; y < h - 3; y += 3) {
+    const row = y * w4;
     for (let x = 3; x < w - 3; x += 3) {
-      const p = y * w + x;
-      const lap = 4 * luma(p) - luma(p - 1) - luma(p + 1) - luma(p - w) - luma(p + w);
+      const i = row + x * 4;
+      const c = (rgba[i] * 77 + rgba[i + 1] * 150 + rgba[i + 2] * 29) >> 8;
+      const l = (rgba[i - 4] * 77 + rgba[i - 3] * 150 + rgba[i - 2] * 29) >> 8;
+      const r = (rgba[i + 4] * 77 + rgba[i + 5] * 150 + rgba[i + 6] * 29) >> 8;
+      const u = (rgba[i - w4] * 77 + rgba[i - w4 + 1] * 150 + rgba[i - w4 + 2] * 29) >> 8;
+      const d = (rgba[i + w4] * 77 + rgba[i + w4 + 1] * 150 + rgba[i + w4 + 2] * 29) >> 8;
+      const lap = 4 * c - l - r - u - d;
       sum += lap; sumSq += lap * lap; n++;
     }
   }

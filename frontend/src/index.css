@@ -103,24 +103,26 @@
 
 /* Pokémon (Pokédex) — classic red handheld vibe with electric yellow and cyan sensor accents */
 :root[data-theme="pokemon"] {
-  --bg-primary: #12070a;
-  --bg-secondary: #1d0e14;
-  --bg-glass: rgba(29, 14, 20, 0.75);
-  --border-glass: rgba(239, 68, 68, 0.18);
-  --border-glass-hover: rgba(239, 68, 68, 0.4);
+  --font-main: 'Chakra Petch', 'Plus Jakarta Sans', system-ui, sans-serif;
+
+  --bg-primary: #0f070b;
+  --bg-secondary: #1a0c13;
+  --bg-glass: rgba(26, 12, 19, 0.82);
+  --border-glass: rgba(239, 68, 68, 0.28);
+  --border-glass-hover: #ef4444;
 
   --text-primary: #fdf2f4;
-  --text-secondary: #c299a3;
-  --text-muted: #82606a;
+  --text-secondary: #c99ea8;
+  --text-muted: #8a6570;
   --text-strong: #ffffff;
   --text-on-accent: #ffffff;
 
   --accent-red: #ef4444;
-  --accent-red-glow: rgba(239, 68, 68, 0.4);
+  --accent-red-glow: rgba(239, 68, 68, 0.5);
   --accent-blue: #38bdf8;
-  --accent-blue-glow: rgba(56, 189, 248, 0.4);
+  --accent-blue-glow: rgba(56, 189, 248, 0.5);
   --accent-yellow: #facc15;
-  --accent-yellow-glow: rgba(250, 204, 21, 0.4);
+  --accent-yellow-glow: rgba(250, 204, 21, 0.5);
 
   --logo-cover: #ef4444;
   --logo-spine: #b91c1c;
@@ -129,26 +131,33 @@
   --logo-ring-stroke: #18181b;
   --logo-ring-inner: #38bdf8;
 
-  --surface-1: rgba(239, 68, 68, 0.04);
-  --surface-2: rgba(239, 68, 68, 0.08);
-  --surface-3: rgba(239, 68, 68, 0.14);
-  --input-bg: rgba(18, 7, 10, 0.65);
-  --input-bg-focus: rgba(29, 14, 20, 0.9);
+  --surface-1: rgba(239, 68, 68, 0.05);
+  --surface-2: rgba(239, 68, 68, 0.09);
+  --surface-3: rgba(239, 68, 68, 0.15);
+  --input-bg: rgba(15, 7, 11, 0.75);
+  --input-bg-focus: rgba(26, 12, 19, 0.95);
 
-  --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+
+  --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.55);
   --bg-gradient:
-    radial-gradient(at 0% 0%, rgba(239, 68, 68, 0.16) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(56, 189, 248, 0.12) 0px, transparent 50%),
-    radial-gradient(at 50% 50%, rgba(29, 14, 20, 0.95) 0px, var(--bg-primary) 100%);
+    radial-gradient(circle at 10% 10%, rgba(239, 68, 68, 0.2) 0px, transparent 45%),
+    radial-gradient(circle at 90% 90%, rgba(56, 189, 248, 0.15) 0px, transparent 45%),
+    radial-gradient(circle at 50% 50%, rgba(26, 12, 19, 0.95) 0px, var(--bg-primary) 100%);
 }
 
 :root[data-theme="pokemon"] .logo-icon svg,
 :root[data-theme="pokemon"] .logo-icon img {
-  filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.5));
+  filter: drop-shadow(0 0 12px rgba(239, 68, 68, 0.6));
 }
 
 :root[data-theme="pokemon"] .logo-text {
-  background: linear-gradient(135deg, #fee2e2 40%, #ef4444 100%);
+  font-family: 'Righteous', 'Chakra Petch', cursive, sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: linear-gradient(135deg, #fee2e2 35%, #ef4444 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -156,28 +165,148 @@
 :root[data-theme="pokemon"] .logo-text span {
   color: #38bdf8;
   -webkit-text-fill-color: #38bdf8;
+  text-shadow: 0 0 10px rgba(56, 189, 248, 0.5);
 }
+
+:root[data-theme="pokemon"] h1,
+:root[data-theme="pokemon"] h2,
+:root[data-theme="pokemon"] h3,
+:root[data-theme="pokemon"] h4 {
+  font-family: 'Righteous', 'Chakra Petch', var(--font-main);
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 12px rgba(239, 68, 68, 0.35);
+}
+
+:root[data-theme="pokemon"] .chart-title::before {
+  background: linear-gradient(180deg, #ef4444 0%, #38bdf8 100%);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.4);
+}
+
+:root[data-theme="pokemon"] select,
+:root[data-theme="pokemon"] .select-control {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  font-family: var(--font-main);
+  font-weight: 600;
+  color: var(--text-primary);
+  background-color: var(--bg-secondary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%2338bdf8' d='M0 0l6 8 6-8z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2.2rem !important;
+  border: 1.5px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.15);
+  transition: all 0.2s ease;
+}
+
+:root[data-theme="pokemon"] select:focus,
+:root[data-theme="pokemon"] .select-control:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.45);
+  background-color: var(--bg-primary);
+}
+
+:root[data-theme="pokemon"] .input-control:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
+}
+
+:root[data-theme="pokemon"] select option,
+:root[data-theme="pokemon"] .select-control option {
+  background-color: #1a0c13;
+  color: #fdf2f4;
+  font-family: var(--font-main);
+  padding: 0.5rem;
+}
+
+:root[data-theme="pokemon"] .btn-primary {
+  background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.3);
+  font-family: 'Chakra Petch', sans-serif;
+  letter-spacing: 0.03em;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+:root[data-theme="pokemon"] .btn-primary:hover {
+  background: linear-gradient(135deg, #f87171 0%, #dc2626 100%);
+  box-shadow: 0 6px 22px rgba(239, 68, 68, 0.6), 0 0 12px rgba(250, 204, 21, 0.35);
+  border-color: #facc15;
+}
+
+:root[data-theme="pokemon"] .kebab-dropdown,
+:root[data-theme="pokemon"] .dropdown-menu {
+  background-color: #160a10;
+  border: 1.5px solid var(--accent-red);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.35);
+}
+
+:root[data-theme="pokemon"] .kebab-item,
+:root[data-theme="pokemon"] .dropdown-item {
+  font-family: var(--font-main);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+:root[data-theme="pokemon"] .kebab-item:hover,
+:root[data-theme="pokemon"] .dropdown-item:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ffffff;
+}
+
+:root[data-theme="pokemon"] .glass-panel,
+:root[data-theme="pokemon"] .metric-card {
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(239, 68, 68, 0.08);
+}
+
+:root[data-theme="pokemon"] .nav-tab.active,
+:root[data-theme="pokemon"] .sub-nav-tab.active {
+  background: linear-gradient(135deg, #1d0e14 0%, #2b121c 100%);
+  border-color: var(--accent-red);
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.35);
+  color: #ffffff;
+}
+
+:root[data-theme="pokemon"] .tcg-card:hover .tcg-card-inner {
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.6), 0 0 18px rgba(239, 68, 68, 0.45);
+  border-color: #ef4444;
+}
+
+:root[data-theme="pokemon"] .set-progress-bar-fill {
+  background: linear-gradient(90deg, #ef4444 0%, #facc15 100%);
+}
+
+:root[data-theme="pokemon"] ::-webkit-scrollbar-track { background: #0f070b; }
+:root[data-theme="pokemon"] ::-webkit-scrollbar-thumb { background: #b91c1c; border-color: #0f070b; }
+:root[data-theme="pokemon"] ::-webkit-scrollbar-thumb:hover { background: #ef4444; }
 
 /* Magic: The Gathering (MTG) — Planeswalker & Arcane Mana obsidian/slate with mythic gold & mana glows */
 :root[data-theme="mtg"] {
-  --bg-primary: #0e1017;
-  --bg-secondary: #161924;
-  --bg-glass: rgba(22, 25, 36, 0.75);
-  --border-glass: rgba(217, 119, 6, 0.2);
-  --border-glass-hover: rgba(245, 158, 11, 0.45);
+  --font-main: 'Crimson Pro', 'Outfit', Georgia, serif;
+
+  --bg-primary: #0a0b10;
+  --bg-secondary: #121520;
+  --bg-glass: rgba(18, 21, 32, 0.82);
+  --border-glass: rgba(217, 119, 6, 0.3);
+  --border-glass-hover: #f59e0b;
 
   --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  --text-strong: #fffbeb;
+  --text-secondary: #9cb0c9;
+  --text-muted: #627288;
+  --text-strong: #fef3c7;
   --text-on-accent: #ffffff;
 
   --accent-red: #ea580c;
-  --accent-red-glow: rgba(234, 88, 12, 0.4);
+  --accent-red-glow: rgba(234, 88, 12, 0.5);
   --accent-blue: #0284c7;
-  --accent-blue-glow: rgba(2, 132, 199, 0.4);
+  --accent-blue-glow: rgba(2, 132, 199, 0.5);
   --accent-yellow: #f59e0b;
-  --accent-yellow-glow: rgba(245, 158, 11, 0.4);
+  --accent-yellow-glow: rgba(245, 158, 11, 0.5);
 
   --logo-cover: #d97706;
   --logo-spine: #92400e;
@@ -186,26 +315,33 @@
   --logo-ring-stroke: #18181b;
   --logo-ring-inner: #f59e0b;
 
-  --surface-1: rgba(245, 158, 11, 0.04);
-  --surface-2: rgba(245, 158, 11, 0.08);
-  --surface-3: rgba(245, 158, 11, 0.14);
-  --input-bg: rgba(14, 16, 23, 0.65);
-  --input-bg-focus: rgba(22, 25, 36, 0.9);
+  --surface-1: rgba(245, 158, 11, 0.05);
+  --surface-2: rgba(245, 158, 11, 0.09);
+  --surface-3: rgba(245, 158, 11, 0.16);
+  --input-bg: rgba(10, 11, 16, 0.75);
+  --input-bg-focus: rgba(18, 21, 32, 0.95);
 
-  --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.6);
   --bg-gradient:
-    radial-gradient(at 0% 0%, rgba(147, 51, 234, 0.12) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(217, 119, 6, 0.14) 0px, transparent 50%),
-    radial-gradient(at 50% 50%, rgba(22, 25, 36, 0.95) 0px, var(--bg-primary) 100%);
+    radial-gradient(circle at 15% 15%, rgba(147, 51, 234, 0.15) 0px, transparent 50%),
+    radial-gradient(circle at 85% 85%, rgba(217, 119, 6, 0.18) 0px, transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(18, 21, 32, 0.95) 0px, var(--bg-primary) 100%);
 }
 
 :root[data-theme="mtg"] .logo-icon svg,
 :root[data-theme="mtg"] .logo-icon img {
-  filter: drop-shadow(0 0 10px rgba(245, 158, 11, 0.5));
+  filter: drop-shadow(0 0 12px rgba(245, 158, 11, 0.6));
 }
 
 :root[data-theme="mtg"] .logo-text {
-  background: linear-gradient(135deg, #fef3c7 40%, #f59e0b 100%);
+  font-family: 'Cinzel Decorative', 'Cinzel', serif;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: linear-gradient(135deg, #fef3c7 35%, #f59e0b 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -213,28 +349,154 @@
 :root[data-theme="mtg"] .logo-text span {
   color: #f59e0b;
   -webkit-text-fill-color: #f59e0b;
+  text-shadow: 0 0 12px rgba(245, 158, 11, 0.5);
 }
+
+:root[data-theme="mtg"] h1,
+:root[data-theme="mtg"] h2,
+:root[data-theme="mtg"] h3,
+:root[data-theme="mtg"] h4 {
+  font-family: 'Cinzel Decorative', 'Cinzel', serif;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #fef3c7;
+  text-shadow: 0 0 15px rgba(245, 158, 11, 0.4);
+}
+
+:root[data-theme="mtg"] .chart-title::before {
+  background: linear-gradient(180deg, #f59e0b 0%, #ea580c 100%);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
+}
+
+:root[data-theme="mtg"] select,
+:root[data-theme="mtg"] .select-control {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  font-family: var(--font-main);
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--text-primary);
+  background-color: var(--bg-secondary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23f59e0b' d='M0 0l6 8 6-8z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2.2rem !important;
+  border: 1.5px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 8px rgba(217, 119, 6, 0.15);
+  transition: all 0.2s ease;
+}
+
+:root[data-theme="mtg"] select:focus,
+:root[data-theme="mtg"] .select-control:focus {
+  border-color: #f59e0b;
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.45);
+  background-color: var(--bg-primary);
+}
+
+:root[data-theme="mtg"] .input-control:focus {
+  border-color: #f59e0b;
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+}
+
+:root[data-theme="mtg"] select option,
+:root[data-theme="mtg"] .select-control option {
+  background-color: #121520;
+  color: #fef3c7;
+  font-family: var(--font-main);
+  padding: 0.5rem;
+}
+
+:root[data-theme="mtg"] .btn-primary {
+  background: linear-gradient(135deg, #ea580c 0%, #d97706 50%, #b45309 100%);
+  border: 1px solid #f59e0b;
+  box-shadow: 0 4px 16px rgba(217, 119, 6, 0.4), inset 0 1px 1px rgba(254, 243, 199, 0.4);
+  font-family: 'Cinzel', serif;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #ffffff;
+}
+
+:root[data-theme="mtg"] .btn-primary:hover {
+  background: linear-gradient(135deg, #f97316 0%, #f59e0b 50%, #d97706 100%);
+  box-shadow: 0 6px 24px rgba(245, 158, 11, 0.6), 0 0 14px rgba(234, 88, 12, 0.4);
+  border-color: #fef3c7;
+}
+
+:root[data-theme="mtg"] .kebab-dropdown,
+:root[data-theme="mtg"] .dropdown-menu {
+  background-color: #121520;
+  border: 1.5px solid #d97706;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 18px rgba(217, 119, 6, 0.35);
+}
+
+:root[data-theme="mtg"] .kebab-item,
+:root[data-theme="mtg"] .dropdown-item {
+  font-family: var(--font-main);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+:root[data-theme="mtg"] .kebab-item:hover,
+:root[data-theme="mtg"] .dropdown-item:hover {
+  background: rgba(217, 119, 6, 0.2);
+  color: #fef3c7;
+}
+
+:root[data-theme="mtg"] .glass-panel,
+:root[data-theme="mtg"] .metric-card {
+  border: 1px solid rgba(217, 119, 6, 0.3);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(245, 158, 11, 0.1);
+  border-radius: var(--radius-md);
+}
+
+:root[data-theme="mtg"] .nav-tab.active,
+:root[data-theme="mtg"] .sub-nav-tab.active {
+  background: linear-gradient(135deg, #161926 0%, #231b2e 100%);
+  border-color: #f59e0b;
+  box-shadow: 0 0 14px rgba(245, 158, 11, 0.35);
+  color: #fef3c7;
+}
+
+:root[data-theme="mtg"] .tcg-card:hover .tcg-card-inner {
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.7), 0 0 20px rgba(245, 158, 11, 0.45);
+  border-color: #f59e0b;
+}
+
+:root[data-theme="mtg"] .set-progress-bar-fill {
+  background: linear-gradient(90deg, #ea580c 0%, #f59e0b 100%);
+}
+
+:root[data-theme="mtg"] ::-webkit-scrollbar-track { background: #0a0b10; }
+:root[data-theme="mtg"] ::-webkit-scrollbar-thumb { background: #92400e; border-color: #0a0b10; }
+:root[data-theme="mtg"] ::-webkit-scrollbar-thumb:hover { background: #f59e0b; }
 
 /* Disney Lorcana — Inkwell & Glimmer midnight royal indigo with glowing amber lore & amethyst ink */
 :root[data-theme="lorcana"] {
-  --bg-primary: #0a0918;
-  --bg-secondary: #14122e;
-  --bg-glass: rgba(20, 18, 46, 0.75);
-  --border-glass: rgba(168, 85, 247, 0.2);
-  --border-glass-hover: rgba(245, 158, 11, 0.45);
+  --font-main: 'Philosopher', 'Outfit', Georgia, serif;
+
+  --bg-primary: #070514;
+  --bg-secondary: #110d24;
+  --bg-glass: rgba(17, 13, 36, 0.82);
+  --border-glass: rgba(168, 85, 247, 0.28);
+  --border-glass-hover: #fbbf24;
 
   --text-primary: #f5f3ff;
   --text-secondary: #c4b5fd;
-  --text-muted: #7c6f9f;
+  --text-muted: #8574a7;
   --text-strong: #faf5ff;
   --text-on-accent: #ffffff;
 
   --accent-red: #ec4899;
-  --accent-red-glow: rgba(236, 72, 153, 0.4);
+  --accent-red-glow: rgba(236, 72, 153, 0.5);
   --accent-blue: #06b6d4;
-  --accent-blue-glow: rgba(6, 182, 212, 0.4);
+  --accent-blue-glow: rgba(6, 182, 212, 0.5);
   --accent-yellow: #fbbf24;
-  --accent-yellow-glow: rgba(251, 191, 36, 0.4);
+  --accent-yellow-glow: rgba(251, 191, 36, 0.5);
 
   --logo-cover: #7c3aed;
   --logo-spine: #5b21b6;
@@ -243,26 +505,32 @@
   --logo-ring-stroke: #120f24;
   --logo-ring-inner: #fbbf24;
 
-  --surface-1: rgba(168, 85, 247, 0.04);
-  --surface-2: rgba(168, 85, 247, 0.08);
-  --surface-3: rgba(168, 85, 247, 0.14);
-  --input-bg: rgba(10, 9, 24, 0.65);
-  --input-bg-focus: rgba(20, 18, 46, 0.9);
+  --surface-1: rgba(168, 85, 247, 0.05);
+  --surface-2: rgba(168, 85, 247, 0.09);
+  --surface-3: rgba(168, 85, 247, 0.16);
+  --input-bg: rgba(7, 5, 20, 0.75);
+  --input-bg-focus: rgba(17, 13, 36, 0.95);
 
-  --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.55);
+  --radius-sm: 10px;
+  --radius-md: 18px;
+  --radius-lg: 28px;
+
+  --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.6);
   --bg-gradient:
-    radial-gradient(at 0% 0%, rgba(124, 58, 237, 0.16) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(245, 158, 11, 0.12) 0px, transparent 50%),
-    radial-gradient(at 50% 50%, rgba(20, 18, 46, 0.95) 0px, var(--bg-primary) 100%);
+    radial-gradient(circle at 10% 10%, rgba(124, 58, 237, 0.22) 0px, transparent 50%),
+    radial-gradient(circle at 90% 90%, rgba(251, 191, 36, 0.16) 0px, transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(17, 13, 36, 0.95) 0px, var(--bg-primary) 100%);
 }
 
 :root[data-theme="lorcana"] .logo-icon svg,
 :root[data-theme="lorcana"] .logo-icon img {
-  filter: drop-shadow(0 0 10px rgba(168, 85, 247, 0.5));
+  filter: drop-shadow(0 0 12px rgba(168, 85, 247, 0.6));
 }
 
 :root[data-theme="lorcana"] .logo-text {
-  background: linear-gradient(135deg, #ede9fe 40%, #a855f7 100%);
+  font-family: 'Cinzel Decorative', 'Philosopher', serif;
+  letter-spacing: 0.03em;
+  background: linear-gradient(135deg, #ede9fe 35%, #a855f7 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -270,7 +538,131 @@
 :root[data-theme="lorcana"] .logo-text span {
   color: #fbbf24;
   -webkit-text-fill-color: #fbbf24;
+  text-shadow: 0 0 12px rgba(251, 191, 36, 0.5);
 }
+
+:root[data-theme="lorcana"] h1,
+:root[data-theme="lorcana"] h2,
+:root[data-theme="lorcana"] h3,
+:root[data-theme="lorcana"] h4 {
+  font-family: 'Philosopher', 'Cinzel Decorative', serif;
+  letter-spacing: 0.02em;
+  font-weight: 700;
+  color: #faf5ff;
+  text-shadow: 0 0 16px rgba(168, 85, 247, 0.5), 0 0 30px rgba(251, 191, 36, 0.25);
+}
+
+:root[data-theme="lorcana"] .chart-title::before {
+  background: linear-gradient(180deg, #fbbf24 0%, #7c3aed 100%);
+  box-shadow: 0 0 8px rgba(251, 191, 36, 0.4);
+}
+
+:root[data-theme="lorcana"] select,
+:root[data-theme="lorcana"] .select-control {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  font-family: var(--font-main);
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--text-primary);
+  background-color: var(--bg-secondary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23fbbf24' d='M0 0l6 8 6-8z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2.2rem !important;
+  border: 1.5px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0 8px rgba(168, 85, 247, 0.15);
+  transition: all 0.2s ease;
+}
+
+:root[data-theme="lorcana"] select:focus,
+:root[data-theme="lorcana"] .select-control:focus {
+  border-color: #fbbf24;
+  box-shadow: 0 0 14px rgba(251, 191, 36, 0.4), 0 0 8px rgba(168, 85, 247, 0.3);
+  background-color: var(--bg-primary);
+}
+
+:root[data-theme="lorcana"] .input-control:focus {
+  border-color: #a855f7;
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.4);
+}
+
+:root[data-theme="lorcana"] select option,
+:root[data-theme="lorcana"] .select-control option {
+  background-color: #110d24;
+  color: #faf5ff;
+  font-family: var(--font-main);
+  padding: 0.5rem;
+}
+
+:root[data-theme="lorcana"] .btn-primary {
+  background: linear-gradient(135deg, #7c3aed 0%, #9333ea 50%, #d97706 100%);
+  border: 1px solid rgba(251, 191, 36, 0.5);
+  box-shadow: 0 4px 18px rgba(124, 58, 237, 0.45), 0 0 12px rgba(251, 191, 36, 0.2);
+  font-family: 'Philosopher', 'Cinzel', serif;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+  border-radius: var(--radius-md);
+  color: #ffffff;
+}
+
+:root[data-theme="lorcana"] .btn-primary:hover {
+  background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 50%, #f59e0b 100%);
+  box-shadow: 0 6px 26px rgba(168, 85, 247, 0.6), 0 0 16px rgba(251, 191, 36, 0.4);
+  border-color: #fbbf24;
+}
+
+:root[data-theme="lorcana"] .kebab-dropdown,
+:root[data-theme="lorcana"] .dropdown-menu {
+  background-color: #110d24;
+  border: 1.5px solid #a855f7;
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 20px rgba(168, 85, 247, 0.35), 0 0 10px rgba(251, 191, 36, 0.2);
+}
+
+:root[data-theme="lorcana"] .kebab-item,
+:root[data-theme="lorcana"] .dropdown-item {
+  font-family: var(--font-main);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+:root[data-theme="lorcana"] .kebab-item:hover,
+:root[data-theme="lorcana"] .dropdown-item:hover {
+  background: rgba(168, 85, 247, 0.2);
+  color: #faf5ff;
+}
+
+:root[data-theme="lorcana"] .glass-panel,
+:root[data-theme="lorcana"] .metric-card {
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(251, 191, 36, 0.08);
+  border-radius: var(--radius-md);
+}
+
+:root[data-theme="lorcana"] .nav-tab.active,
+:root[data-theme="lorcana"] .sub-nav-tab.active {
+  background: linear-gradient(135deg, #1a1236 0%, #2d184d 100%);
+  border-color: #a855f7;
+  box-shadow: 0 0 16px rgba(168, 85, 247, 0.4), 0 0 8px rgba(251, 191, 36, 0.2);
+  color: #faf5ff;
+  border-radius: var(--radius-md);
+}
+
+:root[data-theme="lorcana"] .tcg-card:hover .tcg-card-inner {
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.7), 0 0 20px rgba(168, 85, 247, 0.5), 0 0 10px rgba(251, 191, 36, 0.3);
+  border-color: #fbbf24;
+}
+
+:root[data-theme="lorcana"] .set-progress-bar-fill {
+  background: linear-gradient(90deg, #7c3aed 0%, #fbbf24 100%);
+}
+
+:root[data-theme="lorcana"] ::-webkit-scrollbar-track { background: #070514; }
+:root[data-theme="lorcana"] ::-webkit-scrollbar-thumb { background: #5b21b6; border-color: #070514; }
+:root[data-theme="lorcana"] ::-webkit-scrollbar-thumb:hover { background: #a855f7; }
 
 /* LCARS (Star Trek) — palette + font reskin on the current layout. Amber text
    on black, colored accents, condensed uppercase headings, pill radii. */
