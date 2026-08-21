@@ -7,7 +7,7 @@ import { displayName } from '../utils/languages';
 import CheckoutWizardModal from './CheckoutWizardModal';
 import { useBackGuard } from '../utils/useBackGuard';
 import { buildDeckExport, parseDeckLine } from '../utils/deckText';
-import { defaultGame, gameOptions, showGamePicker } from '../utils/games';
+import { defaultGame, gameOptions, showGamePicker, isGameEnabled } from '../utils/games';
 import CardImage from './CardImage';
 import { useT } from '../utils/i18n';
 
