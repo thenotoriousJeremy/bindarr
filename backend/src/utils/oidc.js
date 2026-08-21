@@ -62,6 +62,27 @@ function resolveRedirectUri(req) {
   return 'http://localhost:3001/api/auth/oidc/callback';
 }
 
+function getTokenEndpointAuthMethod() {
+  const method = (
+    process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD || 'client_secret_basic'
+  ).trim();
+
+  const supported = [
+    'client_secret_basic',
+    'client_secret_post',
+    'none'
+  ];
+
+  if (!supported.includes(method)) {
+    throw new Error(
+      `Unsupported OIDC_TOKEN_ENDPOINT_AUTH_METHOD: ${method}. ` +
+      `Supported values: ${supported.join(', ')}`
+    );
+  }
+
+  return method;
+}
+
 /**
  * Fetch and cache OpenID Connect Discovery document (.well-known/openid-configuration).
  */
@@ -208,28 +229,48 @@ async function exchangeCode({ code, stateToken, req }) {
   const discovery = await getDiscovery();
   const clientId = getClientId();
   const clientSecret = getClientSecret();
+  const authMethod = getTokenEndpointAuthMethod();
   const redirectUri = stateData.ru || resolveRedirectUri(req);
+
+  if (!clientId) {
+    throw new Error('OIDC_CLIENT_ID is not configured');
+  }
+
+  if (
+    ['client_secret_basic', 'client_secret_post'].includes(authMethod) &&
+    !clientSecret
+  ) {
+    throw new Error(
+      `OIDC_CLIENT_SECRET is required when using ${authMethod}`
+    );
+  }
 
   const params = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
     redirect_uri: redirectUri,
-    client_id: clientId,
     code_verifier: stateData.cv
   });
-
-  if (clientSecret) {
-    params.set('client_secret', clientSecret);
-  }
 
   const headers = {
     'Content-Type': 'application/x-www-form-urlencoded',
     Accept: 'application/json'
   };
 
-  // Also include Authorization header if secret is present for providers requiring HTTP Basic auth
-  if (clientSecret) {
-    headers['Authorization'] = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
+  switch (authMethod) {
+    case 'client_secret_basic':
+      headers.Authorization =
+        `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
+      break;
+
+    case 'client_secret_post':
+      params.set('client_id', clientId);
+      params.set('client_secret', clientSecret);
+      break;
+
+    case 'none':
+      params.set('client_id', clientId);
+      break;
   }
 
   const tokenRes = await fetch(discovery.token_endpoint, {
@@ -315,6 +356,7 @@ module.exports = {
   isAutoProvisionEnabled,
   getDefaultRole,
   getUserClaimName,
+  getTokenEndpointAuthMethod,
   getDiscovery,
   generatePkce,
   createStateToken,
