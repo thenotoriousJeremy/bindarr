@@ -35,6 +35,14 @@ function testNumberMatching() {
   const numeric = numberClause('number', '25');
   assert.ok(numeric.clause.includes('CAST'), 'CAST still applies where it means something');
 
+  // Fractions (e.g. 5/64) and hash prefixes (#5) extract the clean collector number
+  const frac = numberClause('number', '5/64');
+  assert.ok(frac.clause.includes('CAST'), 'CAST applies for extracted numeric part of fraction');
+  assert.deepStrictEqual(frac.params, ['5/64', '5', '5']);
+
+  const hashNum = numberClause('number', '#5');
+  assert.deepStrictEqual(hashNum.params, ['#5', '5', '5']);
+
   // Column name is honoured, so the aliased collection query and the bare local
   // one cannot diverge.
   assert.ok(numberClause('cc.number', '7').clause.includes('cc.number'));
@@ -105,12 +113,28 @@ function testParamOrderMatchesClauseOrder() {
   assert.deepStrictEqual(params, ['mtg', 'English', '%Bolt%', '%Bolt%', '007', '7', '007', 5, 10]);
 }
 
+function testNormalizeSearchParams() {
+  const { normalizeSearchParams } = require('../src/routes/collection');
+  assert.deepStrictEqual(normalizeSearchParams({ name: 'Kangaskhan 5/64' }), { name: 'Kangaskhan', number: '5', set: '' });
+  assert.deepStrictEqual(normalizeSearchParams({ name: 'Kangaskhan', number: '5/64' }), { name: 'Kangaskhan', number: '5', set: '' });
+  assert.deepStrictEqual(normalizeSearchParams({ name: '5/64' }), { name: '', number: '5', set: '' });
+  assert.deepStrictEqual(normalizeSearchParams({ name: '#5' }), { name: '', number: '5', set: '' });
+  assert.deepStrictEqual(normalizeSearchParams({ name: 'Kangaskhan #5' }), { name: 'Kangaskhan', number: '5', set: '' });
+  assert.deepStrictEqual(normalizeSearchParams({ name: 'Kangaskhan 5' }), { name: 'Kangaskhan', number: '5', set: '' });
+  assert.deepStrictEqual(normalizeSearchParams({ name: 'Kangaskhan' }), { name: 'Kangaskhan', number: '', set: '' });
+  assert.deepStrictEqual(normalizeSearchParams({ q: 'Kangaskhan 5/64' }), { name: 'Kangaskhan', number: '5', set: '' });
+  assert.deepStrictEqual(normalizeSearchParams({ q: '5/64' }), { name: '', number: '5', set: '' });
+  assert.deepStrictEqual(normalizeSearchParams({ name: 'Charizard VMAX SV107/SV122' }), { name: 'Charizard VMAX', number: 'SV107', set: '' });
+  assert.deepStrictEqual(normalizeSearchParams({ set: 'base2', number: '5/64' }), { name: '', number: '5', set: 'base2' });
+}
+
 function main() {
   testNumberMatching();
   testNameMatching();
   testCollectionScopeIgnoresLanguage();
   testLocalCacheKeepsLanguage();
   testParamOrderMatchesClauseOrder();
+  testNormalizeSearchParams();
   console.log('cardsearchsql.test.js: all assertions passed');
 }
 

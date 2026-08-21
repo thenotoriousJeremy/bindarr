@@ -1,20 +1,51 @@
-// Two decimals, and '0.00' for anything that does not parse as a number — null,
-// undefined and '' all become NaN, which `|| 0` catches along with a genuine zero.
-// parseFloat rather than Number, deliberately: it keeps the leniency the callers
-// were written against, where a value like '12.50 USD' still reads as 12.50.
+export const CURRENCIES = [
+  { code: 'USD', symbol: '$', label: 'USD ($)' },
+  { code: 'EUR', symbol: '€', label: 'EUR (€)' },
+  { code: 'GBP', symbol: '£', label: 'GBP (£)' },
+  { code: 'CAD', symbol: 'C$', label: 'CAD (C$)' },
+  { code: 'AUD', symbol: 'A$', label: 'AUD (A$)' },
+  { code: 'JPY', symbol: '¥', label: 'JPY (¥)' },
+];
+
+export const DEFAULT_CURRENCY = 'USD';
+
+export const SYMBOLS = {
+  USD: '$',
+  EUR: '€',
+  GBP: '£',
+  CAD: 'C$',
+  AUD: 'A$',
+  JPY: '¥',
+};
+
+export const getCurrency = () => {
+  try {
+    const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('bindarr_currency') : null;
+    return (stored && SYMBOLS[stored]) ? stored : DEFAULT_CURRENCY;
+  } catch {
+    return DEFAULT_CURRENCY;
+  }
+};
+
+export const setCurrency = (code) => {
+  const next = SYMBOLS[code] ? code : DEFAULT_CURRENCY;
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('bindarr_currency', next);
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('bindarr_currency_change', { detail: next }));
+  }
+};
+
+export const currencySymbol = (currency) => {
+  const code = (currency && SYMBOLS[currency]) ? currency : getCurrency();
+  return SYMBOLS[code] || '$';
+};
+
+export const activeCurrencySymbol = () => SYMBOLS[getCurrency()] || '$';
+
 export const formatPrice = (p) => (parseFloat(p) || 0).toFixed(2);
 
-// Prices are stored in the currency the marketplace quoted (card_cache.price_currency)
-// and are NOT converted — an exchange rate is a live number this app has no source
-// for. So the symbol has to follow the row: a Japanese Magic card priced from
-// Cardmarket is €4.50, and printing it as $4.50 states a number the card was never
-// quoted at. Callers that hold a card row pass its price_currency; the ones showing
-// what the OWNER typed or paid (purchase_price, market_value) pass nothing and get
-// the app's default.
-const SYMBOLS = { USD: '$', EUR: '€', GBP: '£', JPY: '¥' };
-export const currencySymbol = (currency) => SYMBOLS[currency] || '$';
-
-// Symbol + amount, e.g. '$4.50' or '€4.50'. Use this anywhere a price is shown; a
-// literal '$' in the markup is how the symbol drifted from the number in the first
-// place.
-export const priceText = (p, currency) => `${currencySymbol(currency)}${formatPrice(p)}`;
+// Formats a price using the app's single active currency setting.
+// Enforces one uniform currency across the entire application.
+export const priceText = (p) => `${activeCurrencySymbol()}${formatPrice(p)}`;

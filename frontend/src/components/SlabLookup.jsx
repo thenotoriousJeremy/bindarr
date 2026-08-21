@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Award, Search, Plus } from 'lucide-react';
 import CardImage from './CardImage';
 import { useT } from '../utils/i18n';
-import { formatPrice } from '../utils/formatPrice';
+import { formatPrice, priceText } from '../utils/formatPrice';
 import { displayName } from '../utils/languages';
 
 // Add a graded slab by the cert number printed on its label.
@@ -184,7 +184,7 @@ export default function SlabLookup({ onAddSuccess, showToast }) {
                       so it is shown as context for identifying the printing, not as
                       what the slab is worth. */}
                   <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                    {t('slab.rawPrice', { price: formatPrice(card.price_trend) })}
+                    {t('slab.rawPrice', { price: priceText(card.price_trend) })}
                   </div>
                   <button
                     type="button"

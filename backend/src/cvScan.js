@@ -124,11 +124,15 @@ function builtLangs(game = 'mtg') {
 
 function loadModels() {
   if (!models) {
+    const cornPath = path.join(MODEL_DIR, 'cornelius.onnx');
+    const isFastWeb = fs.existsSync(cornPath) && fs.statSync(cornPath).size < 4000000;
     models = Promise.all([
-      ort.InferenceSession.create(path.join(MODEL_DIR, 'cornelius.onnx'), SESSION_OPTS),
+      ort.InferenceSession.create(cornPath, SESSION_OPTS),
       ort.InferenceSession.create(path.join(MODEL_DIR, 'milo.onnx'), SESSION_OPTS),
-    ]).then(([corn, milo]) => ({ corn, milo }))
-      .catch((err) => { models = null; throw err; });
+    ]).then(([corn, milo]) => {
+      corn.isFastWeb = isFastWeb;
+      return { corn, milo };
+    }).catch((err) => { models = null; throw err; });
   }
   return models;
 }
@@ -260,6 +264,26 @@ function perspectiveTransform(src, dst) {
   return A.map((row, r) => b[r] / row[r]);
 }
 
+function orderQuad(pts) {
+  if (!pts || pts.length !== 4) return pts;
+  const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
+  const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+  const sorted = [...pts].sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+  let tlIdx = 0, minScore = Infinity;
+  for (let i = 0; i < 4; i++) {
+    const score = sorted[i].x + sorted[i].y;
+    if (score < minScore) { minScore = score; tlIdx = i; }
+  }
+  const pTL = sorted[tlIdx];
+  const pNext = sorted[(tlIdx + 1) % 4];
+  const pPrev = sorted[(tlIdx + 3) % 4];
+  if (pNext.x - pTL.x > pPrev.x - pTL.x || pPrev.y - pTL.y > pNext.y - pTL.y) {
+    return [sorted[tlIdx], sorted[(tlIdx + 1) % 4], sorted[(tlIdx + 2) % 4], sorted[(tlIdx + 3) % 4]];
+  } else {
+    return [sorted[tlIdx], sorted[(tlIdx + 3) % 4], sorted[(tlIdx + 2) % 4], sorted[(tlIdx + 1) % 4]];
+  }
+}
+
 // Detect the card and return a dewarped EMBED_SIZE square of raw RGB.
 // An already-rectified crop from the browser. Resized rather than trusted to
 // be exact: JPEG round-trips and older clients can hand over something a few
@@ -291,14 +315,15 @@ async function detectAndDewarp(session, imageBuffer) {
     return { rgb: data, detected: false, sharpness };
   }
 
-  // The model card documents TL,TR,BR,BL. It emits BL,BR,TL,TR — verified over
-  // the eval sample (point 0 sits at y~0.98, point 2 at y~0.02). Following the
-  // documented order produces a sheared crop and scores 0%.
-  const src = [];
-  for (let k = 0; k < 4; k++) src.push({ x: corners[k * 2] * info.width, y: corners[k * 2 + 1] * info.height });
+  // Order points into [TL, TR, BR, BL] around centroid to guarantee non-crossing quad.
+  const pts = [];
+  for (let k = 0; k < 4; k++) {
+    pts.push({ x: corners[k * 2] * info.width, y: corners[k * 2 + 1] * info.height });
+  }
+  const src = orderQuad(pts);
   const dst = [
-    { x: 0, y: EMBED_SIZE - 1 }, { x: EMBED_SIZE - 1, y: EMBED_SIZE - 1 },
     { x: 0, y: 0 }, { x: EMBED_SIZE - 1, y: 0 },
+    { x: EMBED_SIZE - 1, y: EMBED_SIZE - 1 }, { x: 0, y: EMBED_SIZE - 1 },
   ];
   const M = perspectiveTransform(src, dst);
   if (!M) {
@@ -496,6 +521,95 @@ async function match(imageBuffer, game = 'mtg', topK = 8, opts = {}) {
   };
 }
 
+// Score a list of cards against an image embedding and sort them by visual similarity.
+async function scoreCards(imageBuffer, game = 'mtg', cards = [], opts = {}) {
+  if (!cards || cards.length <= 1 || !imageBuffer) return cards;
+  if (!isBuilt(game, opts.lang)) return cards;
+
+  try {
+    const cats = await loadAll(game, opts.lang);
+    if (!cats || !cats.length) return cards;
+
+    const det = opts.cropped
+      ? await useClientCrop(imageBuffer)
+      : await detectAndDewarp(cats[0].corn, imageBuffer);
+
+    const out = await cats[0].milo.run({ image: toTensor(det.rgb, EMBED_SIZE) });
+    const emb = out.embedding.data;
+
+    for (const c of cats) {
+      if (!c.idMap) {
+        const map = new Map();
+        for (let i = 0; i < c.n; i++) {
+          const raw = String(c.ids[i]).replace(/_back$/, '');
+          if (!map.has(raw)) map.set(raw, i);
+        }
+        c.idMap = map;
+      }
+    }
+
+    let prodMap = null;
+    if (game === 'pokemon') {
+      const db = require('./db');
+      const cardIds = cards.map(c => c.id).filter(Boolean);
+      if (cardIds.length) {
+        const placeholders = cardIds.map(() => '?').join(',');
+        const prodRows = await db.all(
+          `SELECT card_id, product_id FROM tcgplayer_product WHERE card_id IN (${placeholders})`,
+          cardIds
+        ).catch(() => []);
+        if (prodRows.length) {
+          prodMap = new Map(prodRows.map(r => [r.card_id, String(r.product_id)]));
+        }
+      }
+    }
+
+    for (const card of cards) {
+      let maxScore = null;
+      const possibleIds = [];
+      if (card.id) {
+        possibleIds.push(String(card.id));
+        possibleIds.push(String(card.id).replace(/^(mtg|pokemon)-/, ''));
+      }
+      if (card.scryfall_id) possibleIds.push(String(card.scryfall_id));
+      if (card.tcgplayer_id) possibleIds.push(String(card.tcgplayer_id));
+      if (card.tcgplayer_product_id) possibleIds.push(String(card.tcgplayer_product_id));
+      if (prodMap && prodMap.has(card.id)) possibleIds.push(prodMap.get(card.id));
+
+      for (const c of cats) {
+        for (const pid of possibleIds) {
+          const idx = c.idMap.get(pid);
+          if (idx !== undefined) {
+            const off = idx * c.dim;
+            let dot = 0;
+            for (let d = 0; d < c.dim; d++) {
+              dot += emb[d] * c.cat[off + d];
+            }
+            if (maxScore === null || dot > maxScore) {
+              maxScore = dot;
+            }
+          }
+        }
+      }
+
+      if (maxScore !== null) {
+        card.score = maxScore;
+        card.__match = { score: maxScore };
+      }
+    }
+
+    return [...cards].sort((a, b) => {
+      const aScore = a.score !== undefined && a.score !== null ? a.score : -Infinity;
+      const bScore = b.score !== undefined && b.score !== null ? b.score : -Infinity;
+      if (aScore !== bScore) return bScore - aScore;
+      return (b.image_url ? 1 : 0) - (a.image_url ? 1 : 0);
+    });
+  } catch (err) {
+    console.warn('cvScan.scoreCards failed:', err.message);
+    return cards;
+  }
+}
+
 // Evict a cached catalog so a freshly built one takes effect without a restart.
 // The models are untouched — only the embedding table changes on a rebuild.
 function reload(game, lang) {
@@ -506,4 +620,5 @@ function reload(game, lang) {
   delete catalogs[game];
 }
 
-module.exports = { match, load, loadAll, isBuilt, builtLangs, reload, STRONG_SIM, STRONG_MARGIN, GAP_FLOOR };
+module.exports = { match, load, loadAll, isBuilt, builtLangs, reload, scoreCards, STRONG_SIM, STRONG_MARGIN, GAP_FLOOR };
+

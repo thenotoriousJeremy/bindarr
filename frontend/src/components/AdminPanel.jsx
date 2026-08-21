@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Shield, UserPlus, Key, Trash2, ToggleLeft, ToggleRight, Search, Users, Globe, HardDriveDownload, Download } from 'lucide-react';
 import { useBackGuard } from '../utils/useBackGuard';
 import CatalogPanel from './CatalogPanel';
+import { currencySymbol } from '../utils/formatPrice';
 import { useT } from '../utils/i18n';
 
 const formatBytes = (n) => {
@@ -586,7 +587,7 @@ function AdminPanel({ showToast }) {
                       </td>
                       <td style={{ fontWeight: 600 }}>{t('admin.userCards', { count: user.total_cards })}</td>
                       <td style={{ fontWeight: 700, color: 'var(--accent-yellow)' }}>
-                        ${(user.total_value || 0).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {currencySymbol()}{(user.total_value || 0).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                       <td>
                         <div style={{ display: 'flex', gap: '0.35rem' }}>

@@ -399,7 +399,7 @@ async function searchCards({
 async function runSearch(meta, nameQuery = '', numberQuery = '', setQuery = '', scope = 'database', userId = null, lang = null, allPrints = false, page = 1, limit = 60) {
   const offset = (page - 1) * limit;
   const cleanName = (nameQuery || '').trim();
-  const cleanNumber = (numberQuery || '').trim();
+  const cleanNumber = (numberQuery || '').trim().replace(/^#/, '').split('/')[0].trim();
   // Set field may list several sets ("ltr, ltc") — match any of them. Scryfall
   // uses `(set:ltr or set:ltc)`; a single set stays the plain `set:ltr` form.
   const setList = parseSetList(setQuery);

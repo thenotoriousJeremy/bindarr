@@ -40,7 +40,7 @@ async function fetchOne({ name, repo, file, bytes }) {
   }
   const url = `${HF}/${repo}/resolve/main/${file}`;
   process.stdout.write(`  ${name}: downloading ${mb(bytes)} from ${repo}... `);
-  const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(600000) });
+  const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, redirect: 'follow', signal: AbortSignal.timeout(600000) });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length !== bytes) {

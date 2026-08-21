@@ -3,7 +3,7 @@ import { useDroppable, useDraggable } from '@dnd-kit/core';
 import { Lock, Edit3 } from 'lucide-react';
 import { getPrintingBadgeStyle, getPrintingBadgeLabel, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
-import { formatPrice } from '../utils/formatPrice';
+import { formatPrice, priceText } from '../utils/formatPrice';
 import { typeCategory } from '../utils/cardSort';
 import { isBinderType } from '../utils/cardOptions';
 import { displayName } from '../utils/languages';
@@ -263,10 +263,10 @@ export function FocusedCardInfo({ card, slotNumber, moveSelect = null }) {
             {card.quantity > 1 && <span style={{ ...infoChipStyle, color: 'var(--text-strong)' }}>x{card.quantity}</span>}
             {card.price_trend > 0 && (
               <span style={{ ...infoChipStyle, color: 'var(--accent-yellow)', marginLeft: 'auto' }}>
-                {t('compartment.value', { price: formatPrice(card.price_trend) })}
+                {t('compartment.value', { price: priceText(card.price_trend) })}
               </span>
             )}
-            {card.purchase_price > 0 && <span style={infoChipStyle}>{t('compartment.paid', { price: formatPrice(card.purchase_price) })}</span>}
+            {card.purchase_price > 0 && <span style={infoChipStyle}>{t('compartment.paid', { price: priceText(card.purchase_price) })}</span>}
           </div>
         )}
       </div>

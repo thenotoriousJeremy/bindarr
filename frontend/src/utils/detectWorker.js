@@ -28,6 +28,7 @@
 //   'onnxruntime-web/wasm'    the CPU backend alone, which is all this can reach.
 import * as ort from 'onnxruntime-web/wasm';
 import { sharpness } from './sharpness.js';
+import { orderQuad } from '../../../shared/imgproc.mjs';
 
 // Served by the backend from data/models.
 //
@@ -90,20 +91,8 @@ async function getSession() {
         throw new Error(`cornelius.onnx not served (${res.status} ${type || 'no type'})`);
       }
       const bytes = new Uint8Array(await res.arrayBuffer());
-      // wasm, NOT WebGPU, and the EP is named explicitly rather than left as a
-      // preference list — passing both lets ORT choose silently, which is how a
-      // 1075ms-per-frame outline went unattributed for so long.
-      //
-      // Measured on the same device, same model: 80ms per frame on wasm against
-// 1075ms on WebGPU. And 32ms single-threaded on a desktop CPU via
-      // onnxruntime-node, and 1075ms on WebGPU in the browser. MobileViT's
-      // attention blocks hit ops the WebGPU EP does not implement, and each one
-      // round-trips the tensor GPU->CPU->GPU. A 1M-parameter model is too small
-      // to win that back.
-      // Thread count in the name: a deployment whose proxy ate the isolation
-      // headers reads 'cornelius-wasm x1' and is three times slower for a reason
-      // no other readout would show.
-      engine = `cornelius-wasm x${THREADS}`;
+      const isFastWeb = bytes.length < 4000000;
+      engine = isFastWeb ? 'fastweb-wasm' : `cornelius-wasm x${THREADS}`;
       return ort.InferenceSession.create(bytes, {
         executionProviders: ['wasm'],
         graphOptimizationLevel: 'all',
@@ -141,15 +130,23 @@ async function detectWithFallback(rgba, w, h, seq, why) {
 // Square-resize into the model's input. `fit: fill` on the server, so squash
 // here too — letterboxing would move the corners the model predicts.
 //
-// Resize and normalise in ONE pass straight into the tensor. The obvious version
-// goes through a canvas (putImageData -> drawImage -> getImageData), which is
-// three full-frame copies plus an OffscreenCanvas allocation per frame; at 12
-// frames a second that allocation churn was most of the jitter between a 45ms
-// and a 199ms detection.
+// Resize and normalise straight into the tensor. When the caller passes a 384x384
+// canvas (scaled in GPU hardware), this is a direct 1:1 vectorised normalisation pass.
 const PLANE = CORN_SIZE * CORN_SIZE;
 const tensorData = new Float32Array(3 * PLANE);   // reused every frame
+const invStd0 = 1 / (255 * STD[0]), invStd1 = 1 / (255 * STD[1]), invStd2 = 1 / (255 * STD[2]);
+const offset0 = -MEAN[0] / STD[0], offset1 = -MEAN[1] / STD[1], offset2 = -MEAN[2] / STD[2];
 
 function toTensor(rgba, w, h) {
+  if (w === CORN_SIZE && h === CORN_SIZE) {
+    const p0 = 0, p1 = PLANE, p2 = 2 * PLANE;
+    for (let i = 0, j = 0; i < PLANE; i++, j += 4) {
+      tensorData[p0 + i] = rgba[j] * invStd0 + offset0;
+      tensorData[p1 + i] = rgba[j + 1] * invStd1 + offset1;
+      tensorData[p2 + i] = rgba[j + 2] * invStd2 + offset2;
+    }
+    return new ort.Tensor('float32', tensorData, [1, 3, CORN_SIZE, CORN_SIZE]);
+  }
   const xs = w / CORN_SIZE, ys = h / CORN_SIZE;
   for (let oy = 0; oy < CORN_SIZE; oy++) {
     const sy = (oy + 0.5) * ys - 0.5;
@@ -199,11 +196,11 @@ self.onmessage = async (e) => {
     const sharp = out.sharpness ? out.sharpness.data[0] : 1;
 
     if (sharp > SHARPNESS_GATE) {
-      // Cornelius emits BL, BR, TL, TR — NOT the TL,TR,BR,BL its model card
-      // documents. The overlay draws this as a polygon and the server warps from
-      // the same order, so getting it wrong is a visibly twisted box.
-      const order = [2, 3, 1, 0]; // -> TL, TR, BR, BL
-      const quad = order.map(i => ({ x: c[i * 2], y: c[i * 2 + 1] }));
+      // Order points topologically around the centroid so the quad is guaranteed
+      // to be in perimeter clockwise [TL, TR, BR, BL] order with no self-intersections (hourglasses).
+      const pts = [];
+      for (let i = 0; i < 4; i++) pts.push({ x: c[i * 2], y: c[i * 2 + 1] });
+      const quad = orderQuad(pts);
       result = {
         seq,
         detected: true,

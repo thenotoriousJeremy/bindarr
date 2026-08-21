@@ -101,12 +101,14 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   // list is per-language (the route reads it from TCGdex for those).
   useEffect(() => {
     let cancelled = false;
+    setKnownSets([]);
     fetch(`/api/sets?game=${game}&lang=${encodeURIComponent(searchLang)}`)
       .then(r => (r.ok ? r.json() : []))
       .then(rows => {
         if (cancelled) return;
         const seen = new Set();
         setKnownSets(rows
+          .filter(s => !s.game || s.game === game)
           .map(s => ({ code: String(s.id || '').replace(/^mtg-/, ''), name: s.name }))
           .filter(s => s.code && !seen.has(s.code) && seen.add(s.code))
           .reverse()); // newest first — that is what people are adding

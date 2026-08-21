@@ -278,8 +278,8 @@ async function runSearch(meta, nameQuery = '', numberQuery = '', setQuery = '', 
   }
 
   // Leading zeros are preserved here; utils/cardSearchSql matches the stripped
-  // form as well, so "004" and "4" find each other.
-  const cleanNumber = numberQuery ? numberQuery.trim() : '';
+  // form as well, so "004" and "4" find each other. Fractional totals (5/64) and hash prefixes are stripped.
+  const cleanNumber = numberQuery ? numberQuery.trim().replace(/^#/, '').split('/')[0].trim() : '';
   // Set field may list several sets ("ltr, ltc") — match any of them.
   const setList = parseSetList(setQuery);
 

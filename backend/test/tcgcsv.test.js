@@ -86,8 +86,28 @@ assert.strictEqual(match('base1', 'Base Set', 'English').confidence, 1,
 
 // An unknown set is null, not a guess. No match leaves the existing price alone;
 // a wrong match overwrites it.
-assert.strictEqual(match('basep', 'Wizards Black Star Promos', 'English'), null,
+assert.strictEqual(match('unknown_set_123', 'Some Random Unknown Set', 'English'), null,
   'an unmatched set must return null rather than a near-miss');
+
+// Aliases and '&' / 'and' matching when the proper English groups are present.
+const matchExtended = tcgcsv.buildGroupMatcher({
+  3: [
+    ...GROUPS_EN,
+    { groupId: 1418, name: 'WoTC Promo', abbreviation: 'PR', categoryId: 3 },
+    { groupId: 1430, name: 'Diamond and Pearl', abbreviation: 'DP', categoryId: 3 },
+    { groupId: 1400, name: 'Black and White', abbreviation: 'BLW', categoryId: 3 },
+    { groupId: 1863, name: 'SM Base Set', abbreviation: 'SM01', categoryId: 3 },
+  ],
+  85: GROUPS_JP,
+});
+assert.strictEqual(matchExtended('basep', 'Wizards Black Star Promos', 'English').group.groupId, 1418,
+  "'basep' / 'Wizards Black Star Promos' must match 'WoTC Promo'");
+assert.strictEqual(matchExtended('dp1', 'Diamond & Pearl', 'English').group.groupId, 1430,
+  "'dp1' / 'Diamond & Pearl' must match 'Diamond and Pearl' in English catalogue");
+assert.strictEqual(matchExtended('bw1', 'Black & White', 'English').group.groupId, 1400,
+  "'bw1' / 'Black & White' must match 'Black and White' in English catalogue");
+assert.strictEqual(matchExtended('sm1', 'Sun & Moon', 'English').group.groupId, 1863,
+  "'sm1' / 'Sun & Moon' must match 'SM Base Set' in English catalogue");
 
 // --- 3b. Set IDS collide across catalogues too ------------------------------
 // The suffix pass is scoped to the preferred catalogue, but the cross-catalogue

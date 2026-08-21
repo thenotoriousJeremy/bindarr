@@ -40,16 +40,22 @@ const { setSqlFilter } = require('./setQuery');
 function numberClause(column, number) {
   const exact = String(number || '').trim();
   if (!exact) return null;
-  const stripped = exact.replace(/^0+/, '');
+  const match = exact.match(/^#?([A-Z0-9★\-]+)(?:\s*\/\s*[A-Z0-9★\-]+)?$/i);
+  const clean = match ? match[1] : exact;
+  const stripped = clean.replace(/^0+/, '');
   const terms = [`${column} = ?`];
   const params = [exact];
-  if (stripped !== exact && stripped !== '') {
+  if (clean !== exact) {
+    terms.push(`${column} = ?`);
+    params.push(clean);
+  }
+  if (stripped !== clean && stripped !== '' && stripped !== exact) {
     terms.push(`${column} = ?`);
     params.push(stripped);
   }
-  if (/^\d+$/.test(exact)) {
+  if (/^\d+$/.test(clean) || /^\d+$/.test(exact)) {
     terms.push(`CAST(${column} AS INTEGER) = CAST(? AS INTEGER)`);
-    params.push(exact);
+    params.push(clean);
   }
   return { clause: `(${terms.join(' OR ')})`, params };
 }

@@ -189,6 +189,7 @@ app.use(cors({
 const bigJson = express.json({ limit: '15mb' });
 app.use('/api/import', bigJson);
 app.use('/api/scan-match', bigJson);
+app.use('/api/search', bigJson);
 app.use(express.json({ limit: '1mb' }));
 
 // Rebuild any catalog that has fallen behind, right after the weekly set refresh

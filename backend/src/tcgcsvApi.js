@@ -84,6 +84,23 @@ const stripGroupCode = (name) => String(name || '')
   .replace(/^[A-Za-z0-9]{1,6}\s*[-–—]\s*/, '');
 const groupTail = (name) => normName(stripGroupCode(name)).replace(/baseset$/, '');
 
+const normWithAnd = (s) => normName(String(s || '').replace(/&/g, ' and ').replace(/collection\s+(\d{4})/i, 'promos $1'));
+
+const SET_ALIASES = {
+  basep: ['wotcpromo'],
+  swshp: ['swshswordshieldpromocards', 'swsd'],
+  xyp: ['xypromos'],
+  bwp: ['blackandwhitepromos'],
+  dpp: ['diamondandpearlpromos'],
+  hgssp: ['hgsspromos'],
+  np: ['nintendopromos'],
+  smp: ['smpromos'],
+  sm1: ['smbaseset', 'sm01'],
+  ru1: ['rumble'],
+  ex1: ['exrubyandsapphire'],
+  ex3: ['exdragon'],
+};
+
 // Match a cached set to a TCGplayer group.
 //
 // Two passes, and the order is the whole safety argument:
@@ -106,17 +123,32 @@ function buildGroupMatcher(groupsByCategory) {
   const entries = [];
   for (const [categoryId, groups] of Object.entries(groupsByCategory)) {
     for (const g of groups) {
+      const gTail = groupTail(g.name);
       entries.push({
         categoryId: Number(categoryId),
         group: g,
-        keys: new Set([normId(g.abbreviation), normName(g.name), groupTail(g.name)].filter(Boolean)),
-        nameKey: normName(g.name),
+        keys: new Set([
+          normId(g.abbreviation),
+          normName(g.name),
+          normWithAnd(g.name),
+          normName(gTail),
+          normWithAnd(gTail),
+        ].filter(Boolean)),
+        nameKey: normWithAnd(g.name),
       });
     }
   }
   return function match(setId, setName, language) {
     const preferred = categoryFor(language);
-    const wanted = [normId(setId), normName(setName), groupTail(setName)].filter(Boolean);
+    const setNorm = normWithAnd(setName);
+    const setTail = normWithAnd(groupTail(setName));
+    const wanted = [
+      normId(setId),
+      normName(setName),
+      setNorm,
+      setTail,
+      ...(SET_ALIASES[normId(setId)] || []),
+    ].filter(Boolean);
 
     // 1. Exact, in the card's own catalogue.
     const sameCat = entries.find(e => e.categoryId === preferred && wanted.some(w => e.keys.has(w)));
@@ -129,9 +161,8 @@ function buildGroupMatcher(groupsByCategory) {
     //
     //    The length floor keeps a two-character name from matching half the
     //    catalogue; 151 is the shortest real set name and normalizes to 3.
-    const nameKey = normName(setName);
-    if (nameKey.length >= 3) {
-      const cand = entries.filter(e => e.categoryId === preferred && e.nameKey.endsWith(nameKey));
+    if (setNorm.length >= 3) {
+      const cand = entries.filter(e => e.categoryId === preferred && e.nameKey.endsWith(setNorm));
       if (cand.length === 1) return { ...cand[0], confidence: 0.8 };
     }
 

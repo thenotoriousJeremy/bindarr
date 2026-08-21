@@ -191,10 +191,12 @@ async function searchBriefs(lang, name, setList, page, limit) {
 }
 
 const numberMatches = (localId, wanted) => {
-  const a = String(localId ?? '');
-  const b = String(wanted ?? '');
-  if (!b) return true;
-  if (a === b || a.replace(/^0+/, '') === b.replace(/^0+/, '')) return true;
+  const a = String(localId ?? '').trim();
+  const bRaw = String(wanted ?? '').trim();
+  if (!bRaw) return true;
+  const match = bRaw.match(/^#?([A-Z0-9★\-]+)(?:\s*\/\s*[A-Z0-9★\-]+)?$/i);
+  const b = match ? match[1] : bRaw;
+  if (a === bRaw || a === b || a.replace(/^0+/, '') === b.replace(/^0+/, '')) return true;
   const na = parseInt(a, 10);
   const nb = parseInt(b, 10);
   return Number.isFinite(na) && Number.isFinite(nb) && na === nb;
@@ -217,7 +219,7 @@ async function runSearch(nameQuery = '', numberQuery = '', setQuery = '', scope 
   const langName = languages.toName(code);
   const offset = (page - 1) * limit;
   const name = (nameQuery || '').trim();
-  const number = (numberQuery || '').trim();
+  const number = (numberQuery || '').trim().replace(/^#/, '').split('/')[0].trim();
   const setList = parseSetList(setQuery);
 
   // 1. Collection-only search — never touches the network.

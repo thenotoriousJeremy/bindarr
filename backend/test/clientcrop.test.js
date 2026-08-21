@@ -37,10 +37,11 @@ async function corners(session, buf) {
   }
   const out = await session.run({ image: new ort.Tensor('float32', f, [1, 3, CORN, CORN]) });
   const c = out.corners.data;
+  const isCorn = c[1] > c[5];
+  const order = isCorn ? [2, 3, 1, 0] : [0, 2, 1, 3];
   return {
     sharpness: out.sharpness ? out.sharpness.data[0] : 1,
-    // detectWorker's reorder: cornelius emits BL,BR,TL,TR -> TL,TR,BR,BL
-    quad: [2, 3, 1, 0].map(i => ({ x: c[i * 2], y: c[i * 2 + 1] })),
+    quad: order.map(i => ({ x: c[i * 2], y: c[i * 2 + 1] })),
   };
 }
 

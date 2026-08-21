@@ -37,7 +37,7 @@ const HF = 'https://huggingface.co';
 // creation with a protobuf error that says nothing about the download, and a
 // truncated catalog loads as garbage that quietly scores every card wrong.
 const MODELS = [
-  { name: 'cornelius.onnx', repo: 'HanClinto/cornelius', file: 'model.onnx', bytes: 4407545 },
+  { name: 'cornelius.onnx', repo: 'HanClinto/ccgdetector-fastweb-single', file: 'fastweb-single-1.39.onnx', bytes: 3185226 },
   { name: 'milo.onnx', repo: 'HanClinto/milo', file: 'model.onnx', bytes: 5191100 },
 ];
 
@@ -53,15 +53,20 @@ const CATALOGS = [
 ];
 
 const LICENSE = {
-  spdx: 'AGPL-3.0',
-  urls: ['https://huggingface.co/HanClinto/cornelius', 'https://huggingface.co/HanClinto/milo'],
+  spdx: 'MIT / AGPL-3.0',
+  urls: ['https://huggingface.co/HanClinto/ccgdetector-fastweb-single', 'https://huggingface.co/HanClinto/milo'],
 };
 
 const assetPath = (a) => path.join(MODEL_DIR, a.name);
 // Present means present AND the right size. A half-written file from a killed
 // container reads as installed otherwise, and then fails at inference time.
+// Supports both new fastweb-single (3.19 MB) and previous cornelius (4.41 MB).
 const isPresent = (a) => {
-  try { return fs.statSync(assetPath(a)).size === a.bytes; } catch { return false; }
+  try {
+    const sz = fs.statSync(assetPath(a)).size;
+    if (a.name === 'cornelius.onnx') return sz === a.bytes || sz === 4407545;
+    return sz === a.bytes;
+  } catch { return false; }
 };
 
 // One download at a time, mirroring catalog.js: these are tens of megabytes from
@@ -91,6 +96,7 @@ async function fetchAsset(a, onProgress) {
   if (isPresent(a)) return 'present';
   fs.mkdirSync(MODEL_DIR, { recursive: true });
   const res = await fetch(`${HF}/${a.repo}/resolve/main/${a.file}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0' },
     redirect: 'follow', signal: AbortSignal.timeout(900000),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${a.name}`);
