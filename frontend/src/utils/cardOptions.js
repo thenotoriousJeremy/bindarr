@@ -9,15 +9,15 @@ export const PRINTINGS = ['Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition
 // picker and the backend can never drift out of sync.
 export const LANGUAGES = LANGUAGE_NAMES;
 
-// MTG cards are only Nonfoil or Foil, never the Pokémon finishes. The foil
-// price is stored under the 'Holofoil' value (scryfall usd_foil), so we keep
-// that stored value (also what the DB CHECK allows) and just relabel it "Foil".
-const MTG_PRINTINGS = [{ value: 'Normal', label: 'Nonfoil' }, { value: 'Holofoil', label: 'Foil' }];
+// MTG and Lorcana cards are Nonfoil or Foil, never the Pokémon finishes. The foil
+// price is stored under the 'Holofoil' value, so we keep that stored value and label it "Foil".
+const TWO_FINISH_PRINTINGS = [{ value: 'Normal', label: 'Nonfoil' }, { value: 'Holofoil', label: 'Foil' }];
 
 // Printing/finish {value,label} options for a card's game. Value stays within
 // the collection.printing CHECK constraint; only the label is game-specific.
 export function getPrintings(game) {
-  if (String(game).toLowerCase() === 'mtg') return MTG_PRINTINGS;
+  const g = String(game || '').toLowerCase();
+  if (g === 'mtg' || g === 'lorcana') return TWO_FINISH_PRINTINGS;
   return PRINTINGS.map(p => ({ value: p, label: p }));
 }
 

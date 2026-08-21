@@ -29,12 +29,25 @@
 import * as ort from 'onnxruntime-web/wasm';
 import { sharpness } from './sharpness.js';
 
-// Served by the backend from data/models. Single-threaded: multi-threaded wasm
-// needs cross-origin isolation (COOP/COEP), which a self-hosted app behind an
-// arbitrary reverse proxy cannot count on, and one thread already makes the
-// cadence.
+// Served by the backend from data/models.
+//
+// THREADS. This graph parallelises almost linearly — measured on the same model
+// via onnxruntime-node: 30.6ms on one thread, 17.2ms on two, 10.6ms on four. One
+// thread was leaving that on the floor, and on a phone the difference is a 270ms
+// detection against roughly 110ms.
+//
+// Multi-threaded wasm needs SharedArrayBuffer, which needs the DOCUMENT to be
+// cross-origin isolated (COOP + COEP). The server sends those headers, but a
+// reverse proxy can strip them and the Capacitor WebView never had them, so this
+// is asked, never assumed: crossOriginIsolated is false there and the session
+// stays single-threaded rather than failing to construct. Cap at 4 — phones
+// report 8 cores of which half are little ones, and oversubscribing a 384x384
+// graph costs more in synchronisation than it buys.
 ort.env.wasm.wasmPaths = '/ort/';
-ort.env.wasm.numThreads = 1;
+const THREADS = self.crossOriginIsolated
+  ? Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1))
+  : 1;
+ort.env.wasm.numThreads = THREADS;
 
 const CORN_SIZE = 384;
 const MEAN = [0.485, 0.456, 0.406];
@@ -87,7 +100,10 @@ async function getSession() {
       // attention blocks hit ops the WebGPU EP does not implement, and each one
       // round-trips the tensor GPU->CPU->GPU. A 1M-parameter model is too small
       // to win that back.
-      engine = 'cornelius-wasm';
+      // Thread count in the name: a deployment whose proxy ate the isolation
+      // headers reads 'cornelius-wasm x1' and is three times slower for a reason
+      // no other readout would show.
+      engine = `cornelius-wasm x${THREADS}`;
       return ort.InferenceSession.create(bytes, {
         executionProviders: ['wasm'],
         graphOptimizationLevel: 'all',

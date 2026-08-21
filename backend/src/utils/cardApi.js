@@ -23,15 +23,18 @@
 const scryfallApi = require('../scryfallApi');
 const tcgApi = require('../tcgApi');
 const tcgdexApi = require('../tcgdexApi');
+const lorcastApi = require('../lorcastApi');
 const languages = require('./languages');
 
 const isMtgId = (id) => String(id || '').startsWith('mtg-');
 const isTcgdexId = (id) => String(id || '').startsWith('tcgdex-');
+const isLorcanaId = (id) => String(id || '').startsWith('lorcana-');
 
-// The game an ID implies. `game` from the request wins when it says MTG, since a
-// caller that knows better should be believed; everything else is Pokémon.
+// The game an ID implies. `game` from the request wins when explicit; otherwise inferred from prefix.
 function gameOf(id, requestedGame) {
-  return (requestedGame === 'mtg' || isMtgId(id)) ? 'mtg' : 'pokemon';
+  if (requestedGame === 'mtg' || isMtgId(id)) return 'mtg';
+  if (requestedGame === 'lorcana' || isLorcanaId(id)) return 'lorcana';
+  return 'pokemon';
 }
 
 // Fill in a row that was cached from a partial source before it is relied on.
@@ -47,7 +50,9 @@ async function hydrate(id) {
 // Fetch a card from whichever provider minted its ID. Returns null when that
 // provider does not have it.
 async function getCardById(id, { game, tcgApiKey = '' } = {}) {
-  if (gameOf(id, game) === 'mtg') return await scryfallApi.getCardById(id);
+  const g = gameOf(id, game);
+  if (g === 'mtg') return await scryfallApi.getCardById(id);
+  if (g === 'lorcana') return await lorcastApi.getCardById(id);
   if (isTcgdexId(id)) return await tcgdexApi.getCardById(id);
   return await tcgApi.getCardById(id, tcgApiKey);
 }
@@ -78,4 +83,4 @@ async function printingInLanguage(card, language) {
   return await tcgdexApi.getPrintingInLang(card.id, language).catch(() => null);
 }
 
-module.exports = { isMtgId, isTcgdexId, gameOf, hydrate, getCardById, printingInLanguage };
+module.exports = { isMtgId, isTcgdexId, isLorcanaId, gameOf, hydrate, getCardById, printingInLanguage };

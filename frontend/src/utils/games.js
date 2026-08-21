@@ -9,6 +9,7 @@
 export const GAMES = [
   { value: 'pokemon', label: 'Pokémon', short: 'Pokémon' },
   { value: 'mtg', label: 'Magic: The Gathering', short: 'MTG' },
+  { value: 'lorcana', label: 'Disney Lorcana', short: 'Lorcana' },
 ];
 
 const KEY = 'hidden_games';

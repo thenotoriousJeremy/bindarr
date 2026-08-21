@@ -55,7 +55,7 @@ router.post('/', async (req, res) => {
   if (!name) {
     return res.status(400).json({ error: 'Deck name is required' });
   }
-  const deckGame = ['pokemon', 'mtg'].includes(game) ? game : 'pokemon';
+  const deckGame = ['pokemon', 'mtg', 'lorcana'].includes(game) ? game : 'pokemon';
   const targetSizeNum = parseInt(target_size, 10) || 60;
 
   try {

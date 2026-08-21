@@ -14,7 +14,10 @@
 // A search is still offered — see searchUrl — but as its own separately labelled
 // action, so the reader knows which one they are getting.
 function cardGame(card) {
-  return card?.game || (card?.supertype === 'MTG' ? 'mtg' : 'pokemon');
+  if (card?.game) return card.game;
+  if (card?.supertype === 'MTG' || String(card?.id).startsWith('mtg-')) return 'mtg';
+  if (card?.supertype === 'Lorcana' || String(card?.id).startsWith('lorcana-')) return 'lorcana';
+  return 'pokemon';
 }
 
 // Does this name stand a chance in an English-language marketplace search?
@@ -36,7 +39,7 @@ const isProductUrl = (url) => /%2Fproduct%2F|\/product\//.test(String(url || '')
 export function tcgplayerUrl(card) {
   // The id first. It exists only when the card is genuinely listed, and unlike a
   // stored URL it cannot quietly be a search. MTG gets it from Scryfall's
-  // `tcgplayer_id`; Pokémon from the TCGCSV catalogue mapping.
+  // `tcgplayer_id`; Pokémon from the TCGCSV catalogue mapping; Lorcana from Lorcast `tcgplayer_id`.
   if (card?.tcgplayer_product_id) {
     return `https://www.tcgplayer.com/product/${card.tcgplayer_product_id}`;
   }
@@ -68,7 +71,8 @@ export function cardmarketUrl(card) {
 // zero results every time, and an action that cannot work is worse than none.
 export function searchUrl(card) {
   if (!searchable(card)) return null;
-  const line = cardGame(card) === 'mtg' ? 'magic' : 'pokemon';
+  const g = cardGame(card);
+  const line = g === 'mtg' ? 'magic' : (g === 'lorcana' ? 'lorcana-tcg' : 'pokemon');
   // Name only. Appending set name + number narrowed a lot of searches to zero
   // hits — Scryfall's own links search the bare name for the same reason.
   return `https://www.tcgplayer.com/search/${line}/product?q=${encodeURIComponent(card.name)}`;
@@ -92,6 +96,7 @@ const SOURCE_NAMES = {
   // is the closest available quote, not this printing's.
   'tcgcsv-en': 'TCGplayer (English printing)',
   scryfall: 'TCGplayer',
+  lorcast: 'TCGplayer',
   pokemontcg: 'TCGplayer',
   tcgdex: 'Cardmarket',
 };

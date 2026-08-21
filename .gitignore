@@ -75,3 +75,6 @@ asckey.b64
 
 # CollectorVision models and onnxruntime-web wasm (fetched, not authored)
 frontend/public/ort/
+
+# Local wiki clone
+wiki/

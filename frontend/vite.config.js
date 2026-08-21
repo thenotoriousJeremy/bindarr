@@ -39,6 +39,14 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
+    // The same pair the backend sends in production. Without them the dev
+    // document is not cross-origin isolated, the detect worker falls back to one
+    // wasm thread, and detection is ~3x slower in dev than in a build — the kind
+    // of gap that gets chased as a bug in the wrong place.
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'credentialless',
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:3001',

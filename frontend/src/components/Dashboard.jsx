@@ -31,7 +31,13 @@ const TYPE_COLORS = {
   'Black': '#334155',
   'Red': '#ef4444',
   'Green': '#10b981',
-  'Land': '#d97706'
+  'Land': '#d97706',
+  'Amber': '#f59e0b',
+  'Amethyst': '#a855f7',
+  'Emerald': '#10b981',
+  'Ruby': '#ef4444',
+  'Sapphire': '#3b82f6',
+  'Steel': '#94a3b8'
 };
 
 function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEntryId, onUpdate, showToast }) {

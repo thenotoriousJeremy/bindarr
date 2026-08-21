@@ -1374,6 +1374,7 @@
   "deck.gamePokemonWithSystem": "Pokémon TCG",
   "deck.standard60": "60 Cards Standard",
   "deck.gameMtgWithSystem": "Magic (MTG)",
+  "deck.gameLorcanaWithSystem": "Disney Lorcana",
   "deck.descriptionOptional": "Description (Optional)",
   "deck.hideQuickImport": "Hide Quick Import Decklist",
   "deck.showQuickImport": "+ Quick Import Decklist (Optional)",

@@ -17,7 +17,7 @@ import { useT } from '../utils/i18n';
 // a side effect of building a scan index, so a set nobody indexed simply was not
 // in the database — which is why Pokemon sat at 35% of the real card pool while
 // looking, from the old panel, entirely built.
-const GAME_LABEL = { mtg: 'Magic: The Gathering', pokemon: 'Pokémon' };
+const GAME_LABEL = { mtg: 'Magic: The Gathering', pokemon: 'Pokémon', lorcana: 'Disney Lorcana' };
 const POLL_MS = 1000;
 
 // The house style, so this panel reads as part of Admin rather than its own app.

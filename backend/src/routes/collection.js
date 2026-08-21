@@ -3,6 +3,7 @@ const db = require('../db');
 const tcgApi = require('../tcgApi');
 const tcgdexApi = require('../tcgdexApi');
 const scryfallApi = require('../scryfallApi');
+const lorcastApi = require('../lorcastApi');
 const cvScan = require('../cvScan');
 const tcgplayerCatalog = require('../tcgplayerCatalog');
 const languages = require('../utils/languages');
@@ -37,8 +38,8 @@ async function attachOwnedQty(cards, userId) {
   for (const c of cards) c.owned_qty = owned.get(c.id) || 0;
 }
 
-// 1. Search cards (proxies to Pokémon TCG, Scryfall or TCGdex + database cache).
-// `game` and the PROVIDER route the request; all three return the same card shape.
+// 1. Search cards (proxies to Pokémon TCG, Scryfall, Lorcast or TCGdex + database cache).
+// `game` and the PROVIDER route the request; all return the same card shape.
 //
 // Language alone is not enough, and getting that wrong is not cosmetic. TCGdex can
 // serve English too, and when it is the selected provider the scan indexes are
@@ -71,7 +72,7 @@ router.get('/search', searchLimiter, async (req, res) => {
   try {
     // Every provider takes the same options object and ignores what does not
     // apply to it, so there is one call here rather than a branch per provider.
-    const api = game === 'mtg' ? scryfallApi : await pokemonApiFor(lang);
+    const api = game === 'mtg' ? scryfallApi : (game === 'lorcana' ? lorcastApi : await pokemonApiFor(lang));
     const { cards, total } = await api.searchCards({
       name, number, set, scope, userId: req.user.id, lang,
       apiKey: req.user.tcg_api_key, allPrints: prints === '1', page, limit,
@@ -120,7 +121,7 @@ router.get('/collection/cert/:certNumber', searchLimiter, async (req, res) => {
     // a 1986 Fleer basketball card would return nonsense candidates rather than an
     // honest empty list.
     const brand = `${cert.brand || ''} ${cert.category || ''}`.toUpperCase();
-    const game = /POKEMON/.test(brand) ? 'pokemon' : (/MAGIC|GATHERING/.test(brand) ? 'mtg' : null);
+    const game = /POKEMON/.test(brand) ? 'pokemon' : (/MAGIC|GATHERING/.test(brand) ? 'mtg' : (/LORCANA/.test(brand) ? 'lorcana' : null));
     let candidates = [];
     if (game) {
       const name = psaApi.searchableName(cert.subject);
@@ -129,7 +130,7 @@ router.get('/collection/cert/:certNumber', searchLimiter, async (req, res) => {
         // discriminator between printings of the same name, and the search treats
         // it as optional so a label without one still returns something.
         const number = cert.card_number || '';
-        const api = game === 'mtg' ? scryfallApi : await pokemonApiFor(null);
+        const api = game === 'mtg' ? scryfallApi : (game === 'lorcana' ? lorcastApi : await pokemonApiFor(null));
         ({ cards: candidates } = await api.searchCards({
           name, number, userId: req.user.id, apiKey: req.user.tcg_api_key,
           allPrints: true, limit: 24,
@@ -154,7 +155,7 @@ router.get('/collection/cert/:certNumber', searchLimiter, async (req, res) => {
 // match nothing. Read-only counts, no build controls.
 router.get('/scan-sets', async (req, res) => {
   const { game = 'pokemon', lang } = req.query;
-  if (game !== 'mtg' && game !== 'pokemon') return res.status(400).json({ error: 'Invalid game' });
+  if (game !== 'mtg' && game !== 'pokemon' && game !== 'lorcana') return res.status(400).json({ error: 'Invalid game' });
   try {
     // `builtLangs` rides along because the scanner's language picker has no other
     // way to know: it offered all eleven languages, and for ten of them a Pokémon
@@ -210,7 +211,7 @@ async function pokemonBySetNumber(langName, number, setId, tcgApiKey) {
 router.post('/scan-match', searchLimiter, async (req, res) => {
   try {
     const { game = 'pokemon', image, set = '', lang, cropped = false } = req.body || {};
-    if (game !== 'mtg' && game !== 'pokemon') return res.status(400).json({ error: 'Invalid game' });
+    if (game !== 'mtg' && game !== 'pokemon' && game !== 'lorcana') return res.status(400).json({ error: 'Invalid game' });
     if (!image || typeof image !== 'string') return res.status(400).json({ error: 'Missing image' });
     const base64 = image.includes(',') ? image.slice(image.indexOf(',') + 1) : image;
     const buf = Buffer.from(base64, 'base64');

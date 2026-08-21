@@ -410,6 +410,9 @@ async function initDb() {
   if (!appSettingsCols.some(c => c.name === 'tcgcsv_prices_swept_at')) {
     await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_prices_swept_at DATETIME`);
   }
+  if (!appSettingsCols.some(c => c.name === 'lorcana_prices_swept_at')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN lorcana_prices_swept_at DATETIME`);
+  }
 
   // VESTIGIAL. This gated non-admin members building an individual per-set ORB
   // index, and there are no per-set indexes any more — scanning is CollectorVision
