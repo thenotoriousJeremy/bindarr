@@ -3,7 +3,7 @@ import { useDroppable, useDraggable } from '@dnd-kit/core';
 import { Lock, Edit3 } from 'lucide-react';
 import { getPrintingBadgeStyle, getPrintingBadgeLabel, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
-import { formatPrice, priceText } from '../utils/formatPrice';
+import { priceText } from '../utils/formatPrice';
 import { typeCategory } from '../utils/cardSort';
 import { isBinderType } from '../utils/cardOptions';
 import { displayName } from '../utils/languages';

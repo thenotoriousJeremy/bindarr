@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Award, Search, Plus } from 'lucide-react';
 import CardImage from './CardImage';
 import { useT } from '../utils/i18n';
-import { formatPrice, priceText } from '../utils/formatPrice';
+import { priceText } from '../utils/formatPrice';
 import { displayName } from '../utils/languages';
 
 // Add a graded slab by the cert number printed on its label.

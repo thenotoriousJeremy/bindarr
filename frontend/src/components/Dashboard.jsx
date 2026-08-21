@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, AreaChart, Area } from 'recharts';
 import { TrendingUp, Coins, Library, Trophy, Plus, ArrowUpRight } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
-import { formatPrice, priceText, currencySymbol } from '../utils/formatPrice';
+import { priceText, currencySymbol } from '../utils/formatPrice';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { defaultGameFilter, gameOptions, showGamePicker, gameLabel } from '../utils/games';
 import { useT } from '../utils/i18n';
