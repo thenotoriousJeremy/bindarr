@@ -125,6 +125,13 @@ All optional.
 | `PUBLIC_BASE_URL` | — | External URL behind a proxy, e.g. `https://cards.example.com`. Used for share links and auto-allowed as a CORS origin, so proxied logins work with just this. Also editable in the Admin panel. |
 | `CORS_ORIGIN` | — | Extra allowed origins, comma-separated. Localhost and private-LAN origins are always allowed. |
 | `ALLOW_REGISTRATION` | unset | `true` allows self-registration. Unset means invite-only: admins create accounts. |
+| `OIDC_ENABLED` | `false` | Set to `true` to enable OpenID Connect / SSO login (Authelia, Authentik, Keycloak, etc.). |
+| `OIDC_ISSUER_URL` | — | Base URL of the OIDC provider (e.g. `https://auth.example.com`). |
+| `OIDC_CLIENT_ID` | — | OIDC OAuth2 client ID. |
+| `OIDC_CLIENT_SECRET` | — | OIDC OAuth2 client secret. |
+| `OIDC_PROVIDER_NAME` | `Single Sign-On` | Display name shown on the login button (e.g. `Authelia`, `Authentik`, `Keycloak`). |
+| `OIDC_USER_CLAIM` | `preferred_username` | Identity claim to map to the Bindarr username. |
+| `OIDC_AUTO_PROVISION` | `true` | Automatically create a Bindarr member account on first successful SSO login. |
 | `TRUST_PROXY` | — | Number of proxy hops (usually `1`) when a reverse proxy terminates TLS, so rate limiting sees the real client IP. |
 | `CV_MODEL_DIR` | `/app/database/models` in the image | Where the scan models and catalogs live. Must be on persistent storage, or an image update discards every catalog you built. |
 | `CV_SCAN_GAP` | `0.10` | How far a match must stand above its runner-ups before it counts as an answer rather than "this card is not in the catalog". Lower accepts more guesses. |

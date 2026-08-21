@@ -223,8 +223,10 @@ async function autoUpdateCatalogs() {
 }
 
 // Initialize Database on startup
+let dbReady = false;
 db.initDb()
   .then(async () => {
+    dbReady = true;
     console.log('Database tables verified/created successfully.');
 
     // Un-stack legacy multi-quantity entries so every copy is its own row (one
@@ -324,6 +326,9 @@ db.initDb()
 // Declared before the /api collection mount so nothing shadows it.
 app.get('/api/health', async (req, res) => {
   res.setHeader('X-App-Name', 'Bindarr');
+  if (!dbReady) {
+    return res.status(503).json({ status: 'db_initializing' });
+  }
   try {
     await db.get('SELECT 1');
     res.json({ status: 'ok' });

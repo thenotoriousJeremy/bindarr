@@ -135,6 +135,7 @@ async function initDb() {
       role TEXT CHECK(role IN ('admin', 'member')) NOT NULL DEFAULT 'member',
       share_token TEXT UNIQUE NOT NULL,
       share_enabled INTEGER DEFAULT 0,
+      oidc_sub TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -683,6 +684,13 @@ async function initDb() {
     await run(`ALTER TABLE users ADD COLUMN api_key TEXT`);
   }
   await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key) WHERE api_key IS NOT NULL`);
+
+  // OIDC / SSO unique identifier (subject claim `sub`). Links an external IdP
+  // user account to a Bindarr user row.
+  if (!usersCols.some(c => c.name === 'oidc_sub')) {
+    await run(`ALTER TABLE users ADD COLUMN oidc_sub TEXT`);
+  }
+  await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oidc_sub ON users(oidc_sub) WHERE oidc_sub IS NOT NULL`);
 
   const deckCardsCols = await all(`PRAGMA table_info(deck_cards)`);
   if (!deckCardsCols.some(c => c.name === 'checked_out')) {

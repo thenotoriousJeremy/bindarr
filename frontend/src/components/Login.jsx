@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { User, Lock, ArrowRight, Eye, EyeOff, Server } from 'lucide-react';
+import { User, Lock, ArrowRight, Eye, EyeOff, Server, Shield } from 'lucide-react';
 import { isNative, getServerUrl, setServerUrl } from '../apiBase';
 import { useT } from '../utils/i18n';
 import Logo from './Logo';
@@ -17,7 +17,18 @@ function Login({ onLoginSuccess }) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const oidcErr = params.get('oidc_error');
+      if (oidcErr) {
+        // Clean URL parameter without reloading
+        window.history.replaceState({}, document.title, window.location.pathname);
+        return oidcErr;
+      }
+    } catch { /* ignore */ }
+    return '';
+  });
   const [loading, setLoading] = useState(false);
   // Whether open self-registration is allowed (invite-only by default). Drives
   // whether the Sign Up option is shown at all.
@@ -25,6 +36,9 @@ function Login({ onLoginSuccess }) {
   // A server with no accounts at all: the form creates the owner account instead
   // of signing in, so nobody has to dig a generated password out of the logs.
   const [setupRequired, setSetupRequired] = useState(false);
+  // OIDC / SSO status
+  const [oidcEnabled, setOidcEnabled] = useState(false);
+  const [oidcProviderName, setOidcProviderName] = useState('Single Sign-On');
 
   useEffect(() => {
     if (isNative && !server) return; // wait until user sets their server URL
@@ -40,6 +54,8 @@ function Login({ onLoginSuccess }) {
           if (cancelled) return;
           setRegistrationEnabled(!!data.registrationEnabled);
           setSetupRequired(!!data.setupRequired);
+          setOidcEnabled(!!data.oidcEnabled);
+          if (data.oidcProviderName) setOidcProviderName(data.oidcProviderName);
           // The owner account's name is the server's to decide, not the
           // visitor's — see the bootstrap route. Shown read-only rather than
           // hidden, because it is the name they will log in with next time.
@@ -174,6 +190,44 @@ function Login({ onLoginSuccess }) {
             borderRadius: 'var(--radius-sm)'
           }}>
             {error}
+          </div>
+        )}
+
+        {oidcEnabled && !setupRequired && !isRegister && (
+          <div style={{ marginBottom: '1.25rem' }}>
+            <a
+              href={(isNative && server ? server.replace(/\/+$/, '') : '') + '/api/auth/oidc/login'}
+              className="btn"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.6rem',
+                padding: '0.75rem 1rem',
+                width: '100%',
+                boxSizing: 'border-box',
+                backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                color: 'var(--text-strong)',
+                fontSize: '0.95rem',
+                fontWeight: 600,
+                borderRadius: 'var(--radius-sm)',
+                textDecoration: 'none',
+                transition: 'all 0.2s ease',
+                cursor: 'pointer'
+              }}
+            >
+              <Shield size={18} style={{ color: 'var(--accent-red)' }} />
+              <span>{t('login.oidcLogin', { provider: oidcProviderName })}</span>
+            </a>
+
+            <div style={{ display: 'flex', alignItems: 'center', margin: '1.25rem 0 0.25rem 0', gap: '0.75rem' }}>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                {t('login.orDivider')}
+              </span>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
+            </div>
           </div>
         )}
 

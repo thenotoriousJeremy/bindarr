@@ -14,7 +14,7 @@ async function authenticateToken(req, res, next) {
 
   try {
     const columns = `u.username, u.role, u.share_token, u.share_enabled, u.share_locations,
-                     u.tcg_api_key, u.psa_api_token, u.graded_price_api_key, u.api_key`;
+                     u.tcg_api_key, u.psa_api_token, u.graded_price_api_key, u.api_key, u.oidc_sub`;
     let session = await db.get(`
       SELECT s.user_id, ${columns}
       FROM sessions s
@@ -51,6 +51,7 @@ async function authenticateToken(req, res, next) {
       psa_api_token: session.psa_api_token || '',
       graded_price_api_key: session.graded_price_api_key || '',
       api_key: session.api_key || '',
+      oidc_sub: session.oidc_sub || null,
       via_api_key: viaApiKey
     };
     next();

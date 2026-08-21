@@ -137,6 +137,39 @@ function App() {
     setToast(message);
   };
 
+  // Handle OIDC / SSO token in URL redirect
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const oidcToken = params.get('oidc_token') || params.get('token');
+      if (oidcToken && !token) {
+        // Clean URL parameters immediately
+        const newUrl = window.location.pathname + (window.location.hash || '');
+        window.history.replaceState({}, document.title, newUrl);
+
+        // Fetch user profile with the token to complete login
+        fetch('/api/auth/me', {
+          headers: { 'Authorization': `Bearer ${oidcToken}` }
+        })
+          .then(res => res.ok ? res.json() : Promise.reject(new Error('Failed to fetch profile')))
+          .then(data => {
+            if (data.user) {
+              setToken(oidcToken);
+              setUser(data.user);
+              localStorage.setItem('bindarr_token', oidcToken);
+              localStorage.setItem('bindarr_user', JSON.stringify(data.user));
+              showToast(t('toast.welcomeBack', { name: data.user.username }));
+              setActiveTab('dashboard');
+            }
+          })
+          .catch(err => {
+            console.error('OIDC token verification failed:', err);
+            showToast(t('login.errOidcFailed'));
+          });
+      }
+    } catch { /* ignore URL parse error */ }
+  }, [t, token]);
+
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => {
