@@ -28,24 +28,28 @@ const languages = require('./languages');
 
 const TCGDEX = 'tcgdex';
 const POKEMONTCG = 'pokemontcg';
+const POKEMONTCGAPI = 'pokemontcgapi';
 
 // The rule itself, pure and synchronous so it can be tested without a database.
 //
 // Language is a VETO, not the choice: pokemontcg.io genuinely has no non-English
-// cards, so anything but English must use TCGdex whatever the setting says. For
+// cards, so its non-English requests use TCGdex. For
 // English, the setting decides — and the setting is what built the indexes, the
 // caches and the set lists, so following it is what keeps them consistent.
 function decide(setting, lang) {
+  // Opt-in only. Other languages keep TCGdex because translating a Western
+  // card's name does not supply that language's physical printing or artwork.
+  if (setting === POKEMONTCGAPI && ['en', 'ja', 'zh-cn'].includes(languages.toCode(lang))) return POKEMONTCGAPI;
   if (!languages.isEnglish(lang)) return TCGDEX;
   return setting === TCGDEX ? TCGDEX : POKEMONTCG;
 }
 
-// The configured provider for English. Unreadable settings fall back to
+// The configured Pokémon provider. Unreadable settings fall back to
 // pokemontcg.io, which is the column default and the historical behaviour.
 async function configured() {
   try {
     const row = await db.get(`SELECT pokemon_provider FROM app_settings WHERE id = 1`);
-    return (row && row.pokemon_provider) === TCGDEX ? TCGDEX : POKEMONTCG;
+    return [TCGDEX, POKEMONTCGAPI].includes(row?.pokemon_provider) ? row.pokemon_provider : POKEMONTCG;
   } catch {
     return POKEMONTCG;
   }
@@ -81,4 +85,18 @@ function sunsetNotice(provider, now = Date.now()) {
     + ' it needs no key, and cards already cached keep working.';
 }
 
-module.exports = { decide, configured, providerFor, usesTcgdex, sunsetNotice, POKEMONTCG_SUNSET, TCGDEX, POKEMONTCG };
+// Resolve policy to a client here as well, so a third provider cannot silently
+// fall through an old two-way ternary at a search or set-sync call site.
+//
+// Every client returned here has searchCards, getCardById, fetchAndCacheSets,
+// updateCollectionPrices and listSets. pokemontcg.io's
+// listSets exists only to throw an explicit error, since that provider never had
+// a set listing in this shape and is being retired; callers that need one
+// (catalog.claimedFor, catalog.listLanguages) already route around it and catch.
+async function apiFor(lang) {
+  const provider = await providerFor(lang);
+  if (provider === POKEMONTCGAPI) return require('../pokemontcgapi');
+  return provider === TCGDEX ? require('../tcgdexApi') : require('../tcgApi');
+}
+
+module.exports = { decide, configured, providerFor, usesTcgdex, apiFor, sunsetNotice, POKEMONTCG_SUNSET, TCGDEX, POKEMONTCG, POKEMONTCGAPI };

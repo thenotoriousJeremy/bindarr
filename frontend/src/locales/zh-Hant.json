@@ -87,6 +87,7 @@
   "admin.phaseSets": "系列索引",
   "admin.phaseVerify": "正在驗證",
   "admin.pokemonProvider": "寶可夢卡牌資料來源",
+  "admin.pokemontcgapiHint": "需要在伺服器上設定 POKEMONTCGAPI_KEY。提供英語、日語和簡體中文系列；其他語言繼續使用 TCGdex。會消耗 API 額度。現有卡牌保留原來的資料提供者。",
   "admin.preflight": "檢查卡牌來源與編碼器（快速）",
   "admin.preflightFailed": "預檢失敗：{error}",
   "admin.preflightOk": "預檢通過——卡牌來源、圖片和編碼器皆可連線（共 {sets} 個系列）。",

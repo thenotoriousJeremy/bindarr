@@ -21,9 +21,7 @@ const lorcastApi = require('./lorcastApi');
 // once: the provider is a setting an admin can change while the server is up, and
 // the weekly refresh has to follow it without a restart.
 const pokemonSetSource = async () =>
-  (await require('./utils/pokemonProvider').usesTcgdex('English'))
-    ? require('./tcgdexApi')
-    : tcgApi;
+  require('./utils/pokemonProvider').apiFor('English');
 
 // Say the provider deprecation out loud at boot, to the installs it applies to.
 //
@@ -136,7 +134,7 @@ app.use(helmet({
       // break scanning the moment that flips.
       scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
       connectSrc: ["'self'"],
-      imgSrc: ["'self'", 'data:', 'blob:', 'https://images.pokemontcg.io', 'https://cards.scryfall.io', 'https://c1.scryfall.com', 'https://img.scryfall.com', 'https://assets.tcgdex.net', 'https://cards.lorcast.io'],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https://images.pokemontcg.io', 'https://cards.scryfall.io', 'https://c1.scryfall.com', 'https://img.scryfall.com', 'https://assets.tcgdex.net', 'https://cards.lorcast.io', 'https://media.rarebit.app'],
       // index.html loads Antonio, Outfit and Plus Jakarta Sans from Google Fonts,
       // which is two separate origins: the stylesheet comes from fonts.googleapis
       // .com and the .woff2 files it then references come from fonts.gstatic.com.
@@ -331,6 +329,7 @@ db.initDb()
       // sweep skips them and this is their only price refresh. No-op until the
       // user actually owns one.
       require('./tcgdexApi').updateCollectionPrices();
+      require('./pokemontcgapi').updateCollectionPrices();
       // TCGCSV runs LAST of the Pokémon sweeps on purpose. It writes the same
       // columns as the other two and is the better source — TCGplayer market
       // prices in USD, and 97% coverage against TCGdex's 8% — so it should have
@@ -347,6 +346,7 @@ db.initDb()
       scryfallApi.updateCollectionPrices();
       lorcastApi.updateCollectionPrices();
       require('./tcgdexApi').updateCollectionPrices();
+      require('./pokemontcgapi').updateCollectionPrices();
       require('./tcgcsvApi').updateCollectionPrices();
     }, 30000);
 

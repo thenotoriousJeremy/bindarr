@@ -53,7 +53,7 @@ async function attachOwnedQty(cards, userId) {
 // English follows whichever provider actually built the data being searched.
 // That rule lives in utils/pokemonProvider — this only maps its answer to a module.
 async function pokemonApiFor(lang) {
-  return (await pokemonProvider.usesTcgdex(lang)) ? tcgdexApi : tcgApi;
+  return pokemonProvider.apiFor(lang);
 }
 
 // Collector numbers as both providers can agree on. TCGdex zero-pads ('013')
@@ -153,6 +153,9 @@ router.all('/search', searchLimiter, async (req, res) => {
     }
     if (error.message === 'RATE_LIMIT_EXCEEDED') {
       return res.status(429).json({ error: 'Rate limit exceeded' });
+    }
+    if (['POKEMONTCGAPI_KEY_REQUIRED', 'POKEMONTCGAPI_KEY_INVALID'].includes(error.message)) {
+      return res.status(503).json({ error: 'The administrator needs to configure a valid POKEMONTCGAPI_KEY on the server.' });
     }
     if (error.message === 'UPSTREAM_UNAVAILABLE') {
       return res.status(503).json({ error: 'Card API is having trouble. Try again in a moment.' });

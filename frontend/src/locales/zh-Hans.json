@@ -87,6 +87,7 @@
   "admin.phaseSets": "系列索引",
   "admin.phaseVerify": "正在校验",
   "admin.pokemonProvider": "宝可梦卡牌数据源",
+  "admin.pokemontcgapiHint": "需要在服务器上设置 POKEMONTCGAPI_KEY。提供英语、日语和简体中文系列；其他语言继续使用 TCGdex。会消耗 API 额度。现有卡牌保留原来的数据提供商。",
   "admin.preflight": "检查卡牌来源与编码器（快速）",
   "admin.preflightFailed": "预检失败：{error}",
   "admin.preflightOk": "预检通过——卡牌来源、图片和编码器均可访问（共 {sets} 个系列）。",

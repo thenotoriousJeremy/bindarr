@@ -61,6 +61,7 @@ services:
     environment: {}
       # All optional — see the table below.
       # - POKEMON_TCG_API_KEY=       # only if you already have one; pokemontcg.io is deprecated (see below)
+      # - POKEMONTCGAPI_KEY=         # only for the optional pokemontcgapi.com provider (see below)
       # - PUBLIC_BASE_URL=
       # - DEFAULT_ADMIN_PASSWORD=
       # - TRUST_PROXY=1
@@ -122,6 +123,7 @@ All optional.
 | `DB_PATH` | `/app/database/bindarr.db` | SQLite file location. |
 | `DEFAULT_ADMIN_PASSWORD` | — | Create the `admin` account with this password at startup instead of letting the first browser visit create the owner account. Only applied while the `users` table is empty — changing it later does nothing to an existing account. |
 | `POKEMON_TCG_API_KEY` | — | **Only for installs still on the pokemontcg.io provider.** Raises its rate limit from 1,000 to 20,000 requests/day. pokemontcg.io is deprecated: [new registrations are closed](https://dev.pokemontcg.io/) and existing keys stop working on **1 March 2027**. New installs default to TCGdex, which needs no key — leave this unset. |
+| `POKEMONTCGAPI_KEY` | unset | Server-side key for the optional [pokemontcgapi.com provider](#pokemon-data-providers). Setting a key alone does not enable it. |
 | `PUBLIC_BASE_URL` | — | External URL behind a proxy, e.g. `https://cards.example.com`. Used for share links and auto-allowed as a CORS origin, so proxied logins work with just this. Also editable in the Admin panel. |
 | `CORS_ORIGIN` | — | Extra allowed origins, comma-separated. Localhost and private-LAN origins are always allowed. |
 | `ALLOW_REGISTRATION` | unset | `true` allows self-registration. Unset means invite-only: admins create accounts. |
@@ -159,6 +161,64 @@ The first visit in a browser asks you to create the owner account. The SQLite fi
 `Bindarr-Android.apk` is attached to each release (allow "install from unknown sources"). iOS goes out through TestFlight. Both talk to a Bindarr server, so install one of the above first and point the app at it.
 
 ---
+
+## Pokémon data providers
+
+Choose the Pokémon provider under **Admin → Instance Settings**. New installs
+still use TCGdex, and upgrades keep the provider already configured.
+
+| Provider | Printings served | Key |
+| --- | --- | --- |
+| TCGdex | All existing Pokémon language choices, subject to its catalogue coverage | None |
+| pokemontcg.io (deprecated) | English; other languages use TCGdex | Optional `POKEMON_TCG_API_KEY`. Registrations are closed and keys stop working on 1 March 2027; an install still on it gets a warning in the server log at every boot |
+| pokemontcgapi.com (optional) | English, Japanese and Simplified Chinese; other languages use TCGdex | Required `POKEMONTCGAPI_KEY` |
+
+To enable pokemontcgapi.com, set `POKEMONTCGAPI_KEY` in the **backend server's**
+environment and restart it, then select **pokemontcgapi.com** and save in the
+Admin panel. For Docker, add `POKEMONTCGAPI_KEY: ${POKEMONTCGAPI_KEY}` under the
+service's `environment` mapping. This key is separate from the pokemontcg.io key
+in personal Settings and is never returned to the browser. Setting the key alone leaves the
+provider disabled.
+
+The optional provider supports set browsing, name and collector-number searches,
+card lookup, artwork, and caching cards for local scan catalogs. Japanese and
+Simplified Chinese searches use their own physical release lines, not translated
+Western sets. The API can fall back to English names, and Chinese printed names
+are not currently supplied. Traditional Chinese and all other existing language
+choices continue through TCGdex.
+
+Prices prefer an ungraded Cardmarket quote in EUR, then TCGplayer in USD, for the
+printing's language. Printing-specific columns always use the same source and
+currency as the representative price. The inspector names the source; there is
+no currency conversion. Unavailable or plan-withheld prices remain absent,
+including the currently unpriced Simplified Chinese catalogue. TCGCSV continues
+to price existing providers' cards, but does not overwrite these quotes.
+
+Requests use up to 250 cards per page, cursor pagination, a persistent response
+cache and conditional ETag requests. Normalized cards also live in `card_cache`.
+
+The API meters credits, and prices are what cost them: a 250-card page is one
+credit without prices and about forty with them (measured 10 Sep 2026). So
+browsing and searching fetch names and artwork only, and a card is priced at the
+two moments the app shows a value: when it enters your collection (two credits for
+that card) and in the automatic refresh of owned or decked cards (batched, about
+one credit per six cards). That refresh only asks about cards whose stored price
+is older than three days, and it runs as often as **Admin → Instance Settings →
+Refresh prices** says: daily by default, down to every 30 days or never (see
+[How often prices refresh](#how-often-prices-refresh)). Search results therefore
+show no price until a card is added. A full catalogue build of a language costs roughly one credit per 250
+cards (Japanese, the largest release line, is under 100 credits), so check the
+account's quota before building a whole language. An outage serves matching
+cached cards or reports an error; it does not silently switch ID namespaces.
+
+Switching provider keeps existing collection entries and their IDs. Existing scan
+catalogs remain usable; rebuild the relevant language catalog to include the new
+provider's cards. This is an alternative an admin can select when another provider
+is unavailable, not automatic failover or a migration of existing cards.
+
+API contract and coverage: [documentation](https://pokemontcgapi.com/docs),
+[OpenAPI](https://pokemontcgapi.com/openapi.json),
+[regional coverage](https://pokemontcgapi.com/coverage).
 
 ## Card scanning
 
@@ -215,8 +275,9 @@ Which marketplace can price a printing depends on where it is sold, so the sourc
 | Card | Priced from |
 | --- | --- |
 | Magic, any language | Scryfall — TCGplayer's USD price, or Cardmarket's EUR one when TCGplayer has no listing (most non-English printings) |
-| Pokémon, English or Japanese | TCGplayer, via TCGCSV, in USD |
-| Pokémon, other languages | the **English** printing's TCGplayer price, labelled as such — TCGplayer runs no German, Korean or Chinese catalogue |
+| Pokémon via pokemontcgapi.com | Cardmarket EUR when available, otherwise TCGplayer USD, for the printing's language |
+| Pokémon via existing providers, English or Japanese | TCGplayer, via TCGCSV, in USD |
+| Pokémon via existing providers, other languages | the **English** printing's TCGplayer price, labelled as such — TCGplayer runs no German, Korean or Chinese catalogue |
 
 Prices are stored in the currency they were quoted in and never converted — an exchange rate is a live number Bindarr has no source for — so each card shows its own symbol (`$4.50`, `€4.50`) and the card inspector names the marketplace. Collection totals sum the currencies as-is; `currencies` in the API response says when a total is mixed.
 

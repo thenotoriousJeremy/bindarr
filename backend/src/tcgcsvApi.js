@@ -304,7 +304,9 @@ async function setsToPrice(scope = 'owned') {
      GROUP BY cc.set_id, cc.language
      ORDER BY n DESC
   `);
-  return rows.filter(r => r.set_id && !isPocketSet(r.set_id));
+  // These rows already have a source-aware EUR/USD price. TCGCSV must not
+  // replace it with a USD proxy or leave printing columns in mixed currencies.
+  return rows.filter(r => r.set_id && !r.set_id.startsWith('pokemontcgapi-') && !isPocketSet(r.set_id));
 }
 
 // Price one matched set: fetch its products and prices, join them to the cached
@@ -313,6 +315,7 @@ async function setsToPrice(scope = 'owned') {
 // Returns counts rather than throwing on a partial result — one set failing to
 // resolve must not abandon the other 200.
 async function priceSet({ set_id, set_name, language }, match) {
+  if (String(set_id).startsWith('pokemontcgapi-')) return { set_id, language, matched: false, priced: 0 };
   const hit = match(set_id, set_name, language);
   if (!hit) return { set_id, language, matched: false, priced: 0 };
 

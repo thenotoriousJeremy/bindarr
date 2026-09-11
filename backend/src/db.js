@@ -407,6 +407,14 @@ async function initDb() {
   if (!appSettingsCols.some(c => c.name === 'tcgdex_prices_swept_at')) {
     await run(`ALTER TABLE app_settings ADD COLUMN tcgdex_prices_swept_at DATETIME`);
   }
+  if (!appSettingsCols.some(c => c.name === 'pokemontcgapi_prices_swept_at')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN pokemontcgapi_prices_swept_at DATETIME`);
+  }
+  // Keep ETags and complete pages across restarts: card_cache alone cannot tell
+  // whether a set or a search result was fully paged. Credentials are never stored.
+  await run(`CREATE TABLE IF NOT EXISTS pokemontcgapi_cache (
+    request TEXT PRIMARY KEY, body TEXT NOT NULL, etag TEXT, fetched_at INTEGER NOT NULL
+  )`);
   // TCGCSV mirrors TCGplayer once a day, so its gate is the same 24h as the rest.
   if (!appSettingsCols.some(c => c.name === 'tcgcsv_prices_swept_at')) {
     await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_prices_swept_at DATETIME`);

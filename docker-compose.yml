@@ -17,6 +17,7 @@ services:
       # - HTTPS_PORT=3443               # Image default. Set to "" to serve plain HTTP only (no camera scanning off-localhost)
       # - SSL_CERT_PATH=                # Your own certificate, e.g. /app/database/certs/fullchain.pem. Omit for an auto-generated self-signed one
       # - SSL_KEY_PATH=                 # Its private key
+      # - POKEMONTCGAPI_KEY=            # Optional provider; also select it in Admin -> Instance Settings
       # - POKEMON_TCG_API_KEY=          # Only if you already hold one. Raises the rate limit for the deprecated pokemontcg.io provider (registrations closed; keys stop working 2027-03-01). TCGdex, the default, needs no key
       # - PUBLIC_BASE_URL=              # External URL behind a reverse proxy, e.g. https://cards.example.com. Used for share links AND auto-allowed as a CORS origin (so proxied logins work with just this set)
       # - DEFAULT_ADMIN_PASSWORD=       # Create the admin account with this password instead of creating the owner account on first visit

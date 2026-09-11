@@ -1,0 +1,138 @@
+{
+  "id": "bs-4",
+  "legacy_id": "base1-4",
+  "name": "Charizard",
+  "number": "4",
+  "number_sort": 4,
+  "supertype": "Pokémon",
+  "hp": 120,
+  "rarity": "Rare Holo",
+  "tcgplayer_id": 42382,
+  "cardmarket_id": 273699,
+  "index_eur": 561.84,
+  "last_price_at": "2026-08-26T19:03:20.955Z",
+  "row_version": 6,
+  "updated_at": "2026-08-26T17:47:39.900Z",
+  "set_code": "bs",
+  "set_name": "Base",
+  "set_total": 134,
+  "ptcgo_code": "BS",
+  "release_date": "1999-01-09",
+  "print_region": "WEST",
+  "series": "Base",
+  "artist_name": "Mitsuhiro Arita",
+  "artist_slug": "mitsuhiro-arita",
+  "prices": [
+    {
+      "source": "CARDMARKET",
+      "variant": "LOW",
+      "basis": "ASKING",
+      "amount": 599.9,
+      "currency": "EUR",
+      "locale": "en",
+      "condition": "NEAR_MINT",
+      "printing": null,
+      "grading": null,
+      "as_of": "2026-09-01",
+      "sample_n": null,
+      "provenance": "Cardmarket"
+    },
+    {
+      "source": "CARDTRADER",
+      "variant": "LOW",
+      "basis": "ASKING",
+      "amount": 1250.64,
+      "currency": "EUR",
+      "locale": "en",
+      "condition": "NEAR_MINT",
+      "printing": null,
+      "grading": null,
+      "as_of": "2026-09-01",
+      "sample_n": 4,
+      "provenance": "CardTrader"
+    },
+    {
+      "source": "TCGPLAYER",
+      "variant": "LOW",
+      "basis": "GUIDE",
+      "amount": 510,
+      "currency": "USD",
+      "locale": "en",
+      "condition": null,
+      "printing": "HOLOFOIL",
+      "grading": null,
+      "as_of": "2026-07-30",
+      "sample_n": null,
+      "provenance": "TCGplayer"
+    },
+    {
+      "source": "EBAY",
+      "variant": "MEDIAN_GRADED",
+      "basis": "ASKING",
+      "amount": 400,
+      "currency": "USD",
+      "locale": "en",
+      "condition": null,
+      "printing": null,
+      "grading": {
+        "company": "PSA",
+        "score": "1"
+      },
+      "as_of": "2026-08-26",
+      "sample_n": 7,
+      "provenance": "eBay"
+    },
+    {
+      "source": "PRICECHARTING",
+      "variant": "MEDIAN_GRADED",
+      "basis": "GUIDE",
+      "amount": 20061.4,
+      "currency": "USD",
+      "locale": "en",
+      "condition": null,
+      "printing": null,
+      "grading": {
+        "company": "PSA",
+        "score": "10"
+      },
+      "as_of": "2026-08-24",
+      "sample_n": null,
+      "provenance": "PriceCharting"
+    },
+    {
+      "source": "PTCG_INDEX",
+      "variant": "INDEX",
+      "basis": "DERIVED",
+      "amount": 556.23,
+      "currency": "EUR",
+      "locale": "en",
+      "condition": null,
+      "printing": null,
+      "grading": null,
+      "as_of": "2026-09-02",
+      "sample_n": 16,
+      "provenance": "pokemontcgapi composite index"
+    }
+  ],
+  "images": [
+    {
+      "face": "FRONT",
+      "size": "NORMAL",
+      "locale": null,
+      "url": "https://media.rarebit.app/cards/BASE/4-normal.webp",
+      "image_source": "rarebit-media",
+      "width": null,
+      "height": null
+    }
+  ],
+  "translations": [
+    {
+      "locale": "en",
+      "name": "Charizard"
+    },
+    {
+      "locale": "ja",
+      "name": "リザードン"
+    }
+  ]
+}

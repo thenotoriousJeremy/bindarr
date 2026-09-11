@@ -472,9 +472,10 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
               >
                 <option value="pokemontcg">{t('admin.providerPokemontcg')}</option>
                 <option value="tcgdex">{t('admin.providerTcgdex')}</option>
+                <option value="pokemontcgapi">pokemontcgapi.com</option>
               </select>
               <p style={{ margin: '0.4rem 0 0', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                {t('admin.pokemonProviderHint')}
+                {t(pokemonProvider === 'pokemontcgapi' ? 'admin.pokemontcgapiHint' : 'admin.pokemonProviderHint')}
               </p>
             </div>
             {/* How often prices are refreshed automatically.

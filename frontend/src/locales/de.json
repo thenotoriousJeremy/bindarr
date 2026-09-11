@@ -88,6 +88,7 @@
   "admin.phaseSets": "Set-Indizes",
   "admin.phaseVerify": "Wird geprüft",
   "admin.pokemonProvider": "Pokémon-Kartendaten",
+  "admin.pokemontcgapiHint": "Erfordert POKEMONTCGAPI_KEY auf dem Server. Liefert englische, japanische und vereinfachte chinesische Sets; andere Sprachen bleiben bei TCGdex. Verbraucht API-Credits. Bestehende Karten behalten ihren Anbieter.",
   "admin.preflight": "Kartenquelle und Encoder prüfen (schnell)",
   "admin.preflightFailed": "Vorabprüfung fehlgeschlagen: {error}",
   "admin.preflightOk": "Vorabprüfung erfolgreich — Kartenquelle, Bilder und Encoder sind erreichbar ({sets} Sets gefunden).",

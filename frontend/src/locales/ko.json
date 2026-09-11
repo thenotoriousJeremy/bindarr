@@ -87,6 +87,7 @@
   "admin.phaseSets": "세트 인덱스",
   "admin.phaseVerify": "확인 중",
   "admin.pokemonProvider": "Pokémon 카드 데이터",
+  "admin.pokemontcgapiHint": "서버에 POKEMONTCGAPI_KEY가 필요합니다. 영어, 일본어, 중국어 간체 세트를 제공하며 다른 언어는 TCGdex를 유지합니다. API 크레딧을 사용합니다. 기존 카드의 제공자는 유지됩니다.",
   "admin.preflight": "카드 소스와 인코더 확인 (빠름)",
   "admin.preflightFailed": "사전 점검 실패: {error}",
   "admin.preflightOk": "사전 점검 통과 — 카드 소스, 이미지, 인코더 모두 연결됩니다(세트 {sets}개 확인).",

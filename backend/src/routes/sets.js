@@ -6,6 +6,9 @@ const router = express.Router();
 router.get('/', async (req, res) => {
   try {
     const { game, lang } = req.query;
+    if (game === 'pokemon' && await require('../utils/pokemonProvider').providerFor(lang) === 'pokemontcgapi') {
+      return res.json(await require('../pokemontcgapi').listSets(lang));
+    }
     // Non-English Pokémon sets are a different list entirely — Japan gets sets the
     // West never sees — and they are not in the `sets` table, which is keyed by id
     // alone while the same id exists in several languages. Ask TCGdex instead.

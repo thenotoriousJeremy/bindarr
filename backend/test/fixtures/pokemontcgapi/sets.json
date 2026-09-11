@@ -1,0 +1,45 @@
+{
+  "data": [
+    {
+      "id": "m6",
+      "code": "m6",
+      "slug": "storm-emeralda",
+      "legacy_id": null,
+      "name": "Storm Emeralda",
+      "series": null,
+      "region": "JP",
+      "release_date": "2026-07-31",
+      "total": 116,
+      "printed_total": null,
+      "ptcgo_code": null,
+      "symbol_url": null,
+      "logo_url": "https://media.rarebit.app/sets/m6/logo-normal.webp",
+      "updated_at": "2026-08-26T17:47:39.900Z"
+    },
+    {
+      "id": "m5",
+      "code": "m5",
+      "slug": "abyss-eye",
+      "legacy_id": null,
+      "name": "Abyss Eye",
+      "series": null,
+      "region": "JP",
+      "release_date": "2026-05-22",
+      "total": 118,
+      "printed_total": null,
+      "ptcgo_code": null,
+      "symbol_url": null,
+      "logo_url": "https://media.rarebit.app/sets/M5/logo-normal.webp",
+      "updated_at": "2026-08-26T17:47:39.900Z"
+    }
+  ],
+  "meta": {
+    "limit": 2,
+    "count": 2,
+    "total_count": 379,
+    "has_more": true
+  },
+  "links": {
+    "next": "https://api.pokemontcgapi.com/v1/sets?limit=2&region=JP&cursor=eyJrIjpbIjIwMjYtMDUtMjJUMDA6MDA6MDAuMDAwWiJdLCJ..."
+  }
+}

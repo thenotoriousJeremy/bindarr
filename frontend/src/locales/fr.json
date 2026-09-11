@@ -89,6 +89,7 @@
   "admin.phaseSets": "Index des éditions",
   "admin.phaseVerify": "Vérification",
   "admin.pokemonProvider": "Données de cartes Pokémon",
+  "admin.pokemontcgapiHint": "Nécessite POKEMONTCGAPI_KEY sur le serveur. Fournit les extensions anglaises, japonaises et chinoises simplifiées ; les autres langues restent sur TCGdex. Consomme des crédits API. Les cartes existantes conservent leur fournisseur.",
   "admin.preflight": "Vérifier la source des cartes et l’encodeur (rapide)",
   "admin.preflightFailed": "Échec de la vérification préalable : {error}",
   "admin.preflightOk": "Vérification préalable réussie — la source des cartes, les images et l’encodeur sont accessibles ({sets} éditions trouvées).",

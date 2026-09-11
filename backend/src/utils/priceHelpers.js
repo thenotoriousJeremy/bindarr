@@ -119,6 +119,7 @@ const SWEEP_COLUMN = {
   mtg: 'mtg_prices_swept_at',
   pokemon: 'pokemon_prices_swept_at',
   tcgdex: 'tcgdex_prices_swept_at',
+  pokemontcgapi: 'pokemontcgapi_prices_swept_at',
   tcgcsv: 'tcgcsv_prices_swept_at',
   // Lorcana was the next one to go quiet exactly as the paragraph above
   // predicts. lorcastApi has asked for 'lorcana' since it was written and

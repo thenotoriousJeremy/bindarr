@@ -89,6 +89,7 @@
   "admin.phaseSets": "Índices de coleções",
   "admin.phaseVerify": "Verificando",
   "admin.pokemonProvider": "Dados de cartas Pokémon",
+  "admin.pokemontcgapiHint": "Requer POKEMONTCGAPI_KEY no servidor. Fornece coleções em inglês, japonês e chinês simplificado; os outros idiomas continuam no TCGdex. Consome créditos da API. As cartas existentes mantêm seu provedor.",
   "admin.preflight": "Verificar a fonte das cartas e o codificador (rápido)",
   "admin.preflightFailed": "A verificação prévia falhou: {error}",
   "admin.preflightOk": "Verificação prévia aprovada — fonte das cartas, imagens e codificador acessíveis ({sets} coleções encontradas).",

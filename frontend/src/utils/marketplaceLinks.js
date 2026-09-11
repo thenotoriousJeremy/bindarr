@@ -99,6 +99,8 @@ const SOURCE_NAMES = {
   lorcast: 'TCGplayer',
   pokemontcg: 'TCGplayer',
   tcgdex: 'Cardmarket',
+  'pokemontcgapi-cardmarket': 'Cardmarket (via pokemontcgapi.com)',
+  'pokemontcgapi-tcgplayer': 'TCGplayer (via pokemontcgapi.com)',
 };
 export function priceSource(card) {
   // No price means no source to name. Labelling a $0.00 "via Cardmarket" asserts a
@@ -119,7 +121,7 @@ export function priceSource(card) {
   // and for a price that is a stand-in from another printing, where the currency is
   // right but the card is not.
   const proxy = card.price_source === 'tcgcsv-en';
-  if (currency === 'USD' && card.price_source !== 'tcgdex' && !proxy) return null;
+  if (currency === 'USD' && card.price_source !== 'tcgdex' && !card.price_source?.startsWith('pokemontcgapi-') && !proxy) return null;
   return { name, currency };
 }
 

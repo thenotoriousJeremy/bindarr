@@ -89,6 +89,7 @@
   "admin.phaseSets": "Índices de sets",
   "admin.phaseVerify": "Verificando",
   "admin.pokemonProvider": "Datos de cartas de Pokémon",
+  "admin.pokemontcgapiHint": "Requiere POKEMONTCGAPI_KEY en el servidor. Proporciona sets en inglés, japonés y chino simplificado; los demás idiomas siguen con TCGdex. Consume créditos API. Las cartas existentes conservan su proveedor.",
   "admin.preflight": "Comprobar la fuente de cartas y el codificador (rápido)",
   "admin.preflightFailed": "La comprobación previa falló: {error}",
   "admin.preflightOk": "Comprobación previa correcta: la fuente de cartas, las imágenes y el codificador están accesibles ({sets} sets encontrados).",

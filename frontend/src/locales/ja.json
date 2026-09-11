@@ -87,6 +87,7 @@
   "admin.phaseSets": "セットインデックス",
   "admin.phaseVerify": "検証中",
   "admin.pokemonProvider": "Pokémon カードデータ",
+  "admin.pokemontcgapiHint": "サーバーに POKEMONTCGAPI_KEY が必要です。英語、日本語、簡体字中国語のセットを提供し、他の言語は TCGdex を使用します。APIクレジットを消費します。既存のカードのプロバイダーは変わりません。",
   "admin.preflight": "カードソースとエンコーダーを確認（高速）",
   "admin.preflightFailed": "事前チェックに失敗しました: {error}",
   "admin.preflightOk": "事前チェックに成功しました。カードソース、画像、エンコーダーすべてに接続できます（{sets}セットを検出）。",

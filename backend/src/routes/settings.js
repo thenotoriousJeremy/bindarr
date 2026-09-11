@@ -118,7 +118,10 @@ router.put('/', requireAdmin, async (req, res) => {
   } = req.body;
 
   if (pokemon_provider !== undefined) {
-    const want = pokemon_provider === 'tcgdex' ? 'tcgdex' : 'pokemontcg';
+    const want = ['tcgdex', 'pokemontcgapi'].includes(pokemon_provider) ? pokemon_provider : 'pokemontcg';
+    if (want === 'pokemontcgapi' && !require('../pokemontcgapi').hasKey()) {
+      return res.status(400).json({ error: 'Set POKEMONTCGAPI_KEY on the server before selecting this provider.' });
+    }
     const before = await db.get(`SELECT pokemon_provider FROM app_settings WHERE id = 1`);
     await db.run(`UPDATE app_settings SET pokemon_provider = ? WHERE id = 1`, [want]);
     // Switching provider re-numbers everything downstream of it, and leaving the
@@ -131,7 +134,7 @@ router.put('/', requireAdmin, async (req, res) => {
       console.log(`Pokémon provider changed to ${want} — re-syncing sets and the TCGplayer product map.`);
       (async () => {
         try {
-          const source = want === 'tcgdex' ? require('../tcgdexApi') : require('../tcgApi');
+          const source = await require('../utils/pokemonProvider').apiFor('en');
           await source.fetchAndCacheSets(true);
           await require('../utils/compartmentSort').loadSetsCache(db);
           require('../tcgplayerCatalog').start();

@@ -13,7 +13,7 @@ deck.
 - **Backend**: Node.js + Express, SQLite (single file), served together with the built frontend from one container.
 - **Frontend**: React + Vite SPA.
 - **Auth**: opaque session tokens in a server-side `sessions` table, sent as a `Bearer` header.
-- **Card data**: Pokémon TCG API / TCGdex (Pokémon), Scryfall (MTG), and Lorcast (Disney Lorcana), cached locally in `card_cache`.
+- **Card data**: Pokémon TCG API / TCGdex / optional pokemontcgapi.com (Pokémon), Scryfall (MTG), and Lorcast (Disney Lorcana), cached locally in `card_cache`.
 - **Image ID**: two small ONNX models — `cornelius` finds the card's corners, `milo` embeds the dewarped card as a 128-d unit vector — then a brute-force cosine sweep over a prebuilt catalog of every cached card's artwork. Corner detection also runs in the browser, so the outline on screen is the crop that gets matched.
 
 Stack: React + Vite + Recharts on the front, Express + `sqlite3` + Helmet +
@@ -42,7 +42,8 @@ backend/
     tcgApi.js              Pokémon TCG API client (search + fetch by id) -> card_cache shape
     scryfallApi.js         Scryfall (MTG) client -> same normalized card shape
     lorcastApi.js          Lorcast (Disney Lorcana) client -> same normalized card shape
-    tcgdexApi.js           TCGdex client: non-English Pokémon cards (the only source for them)
+    tcgdexApi.js           TCGdex client: multilingual Pokémon cards
+    pokemontcgapi.js        Optional Pokémon client: Western, Japanese and Simplified Chinese print lines
     tcgcsvApi.js           TCGCSV pricing + the tcgplayer_product id mapping
     psaApi.js              PSA cert lookup (what is in the slab), cached forever in psa_cert
     gradedPrices.js        Graded-price lookup (what the slab is worth) via PokemonPriceTracker
@@ -55,7 +56,7 @@ backend/
       priceHelpers.js      Price resolution across printings; vintage-set detection; UTC parsing
       authHelpers.js       Auth-related helpers
       npz.js               Minimal .npz reader, for the published (not locally built) catalogs
-      pokemonProvider.js   The single answer to "pokemontcg.io or TCGdex for this language"
+      pokemonProvider.js   The single Pokémon provider decision for this language
       languages.js         Language code/name resolution
     backup.js              DB backup helpers
   scripts/                 fetch-models.mjs, catalog builders, the scan-gate measurement harness
@@ -140,10 +141,72 @@ the rest of the app is game-agnostic. Every card carries a `game` field
 (`pokemon` | `mtg`) and a `language`. A user's Pokémon TCG API key (stored
 per-user) is passed through where available.
 
-`utils/pokemonProvider.js` owns the pokemontcg.io-vs-TCGdex decision. It is asked,
+`utils/pokemonProvider.js` owns the Pokémon provider decision. It is asked,
 never re-derived from the language: four call sites once derived it themselves and
 four of them disagreed, which is how 21,828 rows were cached with the wrong
 normalizer and ended up with no image and no collector number.
+
+#### Optional pokemontcgapi.com provider
+
+`pokemonProvider.apiFor(lang)` maps the central policy to its client. When the
+admin selects `pokemontcgapi`, `en`, `ja` and `zh-cn` use `pokemontcgapi.js`;
+other languages retain TCGdex. The existing default migration is untouched.
+The credential comes only from `POKEMONTCGAPI_KEY` on the server. Merely setting
+it does not enable the provider.
+
+Card and set IDs both use `pokemontcgapi-<canonical-id>`. Aliases are accepted
+upstream but normalized back to the canonical ID. `cardApi` dispatches stored IDs
+independently of today's setting. There is no guessed cross-provider or
+cross-language ID conversion: changing a name's locale does not identify the same
+physical printing in another release line.
+
+The API's card endpoint does not document a region filter. Searches filter
+`print_region` before applying Bindarr's page/limit window, following cursors even
+when a page has no matching region. Set lists use `region=WEST|JP|CN`, and set
+cards use the `/cards?set=...` shortcut. All list requests use `limit=250` and
+include images and translations but NOT prices: prices are what the API's
+credits pay for (a 250-card page measured 1 credit without them and 40 with
+them), so listing rows are cached unpriced (`price_trend` null, which
+`extractPrices` distinguishes from a genuine zero) and `cacheListedCards` copies
+any price already stored onto the incoming row so a listing never erases one.
+The price arrives at the two moments the app shows a value: `hydrateCard`, called
+by `cardApi.hydrate` when a card enters the collection, fetches that one card
+with prices (2 credits); and the automatic sweep prices owned/decked cards in
+batches, only those whose stored price has aged past three days, as often as
+`app_settings.price_refresh_days` allows (`shouldSweepPrices` is the single gate;
+the timer in server.js is unforced). `cacheListedCards` also puts a kept row's
+`last_updated` back, so a listing cannot make an old price look fresh to the sweep.
+User-entered names are quoted as literal query phrases; set IDs go through the
+separate `set` parameter.
+
+`pokemontcgapi_cache` stores complete response bodies, ETags and fetch times for
+up to 1,024 requests. A key digest scopes entries to the account's plan visibility;
+the key itself is never persisted. Responses are reused for 24 hours, then
+conditionally revalidated. In-flight identical requests coalesce, redirects are
+disabled, and only a same-origin, same-endpoint next cursor is accepted. A 429
+pauses further upstream calls for Retry-After (at least one minute), without
+sleeping in the request handler or automatically retrying a paid request.
+`card_cache` remains the normalized, durable store, written through
+`cacheNormalizedCards`. Cached cards can still answer when the API is unavailable.
+
+Price normalization chooses ungraded Cardmarket EUR, then TCGplayer USD, and
+keeps every printing/average column in that source and currency. It ignores slab
+quotes and known different locales; `index_eur` is a composite, so it is not
+presented as a Cardmarket price. Missing quotes stay absent. Source labels are
+`pokemontcgapi-cardmarket` and `pokemontcgapi-tcgplayer`. Its own sweep reads only
+stale owned/decked IDs in batches of 25, with a separate timestamp, and only while
+selected. The older pokemontcg.io and TCGCSV sweeps skip these IDs/sets.
+
+Set browsing, `cardSets` downloads and catalog coverage use the selected client.
+Existing cached cards and scan catalogs survive a switch; a rebuild includes the
+new provider's artwork. A complete catalog can consume many credits and is not
+started by selecting the provider.
+
+Offline contract and HTTP integration tests live in
+`backend/test/pokemontcgapi.test.js`, with documented fixtures under
+`backend/test/fixtures/pokemontcgapi/`. They cover ID routing, admin activation,
+search/add, regions, cursor/UI pagination, persisted ETag revalidation, price
+currencies, quota backoff and cache fallback. No live key is needed by the tests.
 
 #### Two names per card, and which is which
 
@@ -430,6 +493,7 @@ for cards not yet saved.
 | `deck_cards` | Deck contents: `deck_id`, `card_id`, `quantity` |
 | `price_history` | Per-card price points over time, powering trend charts |
 | `sets` | Set catalog (names/ordering) for dividers and set-scoped scan |
+| `pokemontcgapi_cache` | Bounded persistent response cache: `request` (credential digest + path/query), `body`, `etag`, `fetched_at`; no API keys |
 | `app_settings` | App-wide key/value settings (e.g. registration toggle) |
 
 **Entry identity**: a `collection.id` (`entry_id`) uniquely identifies one

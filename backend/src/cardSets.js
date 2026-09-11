@@ -210,6 +210,9 @@ async function listAllSets(game, lang) {
     return rows.map(r => r.ptcgo_code || r.id.replace(/^lorcana-/, ''));
   }
   if (game === 'pokemon') {
+    if (await pokemonProvider.providerFor(code) === pokemonProvider.POKEMONTCGAPI) {
+      return (await require('./pokemontcgapi').listSets(code)).filter(s => s.total > 0).map(s => s.id);
+    }
     const exclusions = await getScanExclusions();
     if (await pokemonProvider.usesTcgdex(code)) {
       const tcgdexApi = require('./tcgdexApi');
@@ -393,7 +396,13 @@ async function cacheSetCards(game, set, lang, { excludeChildCodes = [] } = {}) {
   // One decision, read once and reused by BOTH the fetch and the cache below.
   // They used to derive it separately and disagreed: the fetch asked the
   // provider, the cache asked the language.
-  const useTcgdex = game === 'pokemon' && await pokemonProvider.usesTcgdex(code);
+  const provider = game === 'pokemon' ? await pokemonProvider.providerFor(code) : null;
+  if (provider === pokemonProvider.POKEMONTCGAPI) {
+    const cards = await require('./pokemontcgapi').getCardsBySet(set, code);
+    if (!cards.length) throw absent(`no cards for set ${set}`);
+    return cards.map(c => ({ name: c.printed_name || c.name, set: c.set_id, number: c.number, img: c.image_url, raw: c }));
+  }
+  const useTcgdex = provider === pokemonProvider.TCGDEX;
   const cards = game === 'mtg'
     ? await fetchMtgSet(set, code, { excludeChildCodes })
     : (useTcgdex ? await fetchTcgdexSet(set, code) : await fetchPokemonSet(set));
