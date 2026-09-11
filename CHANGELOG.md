@@ -6,8 +6,22 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+## [1.8.5] - 2026-09-11
+
 ### Added
-- **Optional pokemontcgapi.com Pokémon provider.** Admins can select it after configuring `POKEMONTCGAPI_KEY` on the server. Adds English, Japanese and Simplified Chinese set/card browsing, search, artwork and scan-catalog caching, with Cardmarket EUR prices where available and TCGplayer USD fallback. Uses cursor pagination, persistent ETag caching and batched automatic refreshes for owned/decked cards, on the interval set under Admin → Instance Settings → Refresh prices and only for cards whose stored price has aged out. Listings are fetched without prices (one credit per 250-card page); a card is priced when it enters the collection and in that refresh, so search results show a price only for cards you own. Missing prices stay absent. Existing defaults, collection IDs and other providers' language support are preserved; TCGCSV does not overwrite the new provider's quotes.
+- **OIDC / SSO login.** Bindarr can sign users in through an external identity provider (Authelia, Authentik, Keycloak and other OIDC providers), linking an IdP identity to a Bindarr account by its `sub` claim. Both `client_secret_post` and `client_secret_basic` token-endpoint auth are selectable, so providers that accept only one of the two work without patching. Thanks [@JGHCode](https://github.com/JGHCode) ([#43](https://github.com/thenotoriousJeremy/bindarr/issues/43), [#45](https://github.com/thenotoriousJeremy/bindarr/pull/45), [#46](https://github.com/thenotoriousJeremy/bindarr/pull/46)).
+- **Optional pokemontcgapi.com Pokémon provider.** Admins can select it after configuring `POKEMONTCGAPI_KEY` on the server. Adds English, Japanese and Simplified Chinese set/card browsing, search, artwork and scan-catalog caching, with Cardmarket EUR prices where available and TCGplayer USD fallback. Uses cursor pagination, persistent ETag caching and batched automatic refreshes for owned/decked cards, on the interval set under Admin → Instance Settings → Refresh prices and only for cards whose stored price has aged out. Listings are fetched without prices (one credit per 250-card page); a card is priced when it enters the collection and in that refresh, so search results show a price only for cards you own. Missing prices stay absent. Existing defaults, collection IDs and other providers' language support are preserved; TCGCSV does not overwrite the new provider's quotes. Thanks [@Riccskywalker](https://github.com/Riccskywalker) ([#51](https://github.com/thenotoriousJeremy/bindarr/issues/51), [#52](https://github.com/thenotoriousJeremy/bindarr/pull/52)).
+- **Configurable automatic price-refresh interval.** Admin -> Instance Settings takes a refresh interval in whole days from 0 (off) to 30. Daily stays the default, which is what every install did before the setting existed; a longer interval matters for the metered pokemontcgapi.com provider, which charges credits per card refreshed ([#59](https://github.com/thenotoriousJeremy/bindarr/pull/59)).
+- **Startup warning for the pokemontcg.io sunset.** Installs still configured for pokemontcg.io get one boot-time notice naming the date, so the deprecation reaches admins who have not opened Settings in a while. The same notice is in the README, `.env.example` and the Admin provider hint ([#54](https://github.com/thenotoriousJeremy/bindarr/pull/54), [#57](https://github.com/thenotoriousJeremy/bindarr/pull/57)).
+
+### Fixed
+- **OIDC ID tokens are validated, not just decoded.** The callback now verifies the token's signature and claims before trusting its subject ([#56](https://github.com/thenotoriousJeremy/bindarr/pull/56)).
+- **OIDC no longer links an IdP identity to a local account by username.** Matching on a username alone let an identity provider claim an existing local account that happened to share a name; linking is opt-in and keyed on `sub` ([#55](https://github.com/thenotoriousJeremy/bindarr/pull/55)).
+- **Lorcana prices never refreshed automatically.** `lorcana` was missing from the sweep-bookkeeping map, so its freshness gate answered "not due" forever. The daily timer's `force` flag hid it, and that flag is gone now ([#59](https://github.com/thenotoriousJeremy/bindarr/pull/59)).
+
+### Performance
+- **The Pokémon price sweep only refreshes cards that are actually stale**, instead of re-pricing an entire collection on every run ([#58](https://github.com/thenotoriousJeremy/bindarr/pull/58)).
+- **Admin -> Catalogs stopped scanning `card_cache` once per set**, which made the page's cost grow with the number of sets ([#53](https://github.com/thenotoriousJeremy/bindarr/pull/53)).
 
 ## [1.8.4] - 2026-08-22
 
