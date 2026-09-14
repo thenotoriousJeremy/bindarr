@@ -978,6 +978,7 @@
   "scan.exactMatch": "Correspondance exacte identifiée !",
   "scan.expandSubsets": "Afficher les sous-ensembles",
   "scan.exposure": "Exposition",
+  "scan.zoom": "Zoom",
   "scan.fetchingCandidates": "Récupération des cartes candidates…",
   "scan.filterBySet": "Filtrer par extension",
   "scan.hashedCrop": "Recadrage haché",

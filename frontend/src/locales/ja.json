@@ -942,6 +942,7 @@
   "scan.exactMatch": "完全に一致するカードを識別しました！",
   "scan.expandSubsets": "サブセットを表示",
   "scan.exposure": "露出",
+  "scan.zoom": "ズーム",
   "scan.fetchingCandidates": "候補カードを取得中…",
   "scan.filterBySet": "セットで絞り込み",
   "scan.hashedCrop": "ハッシュ化した切り出し",

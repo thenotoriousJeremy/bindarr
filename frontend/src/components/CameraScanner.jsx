@@ -13,6 +13,7 @@ import { langName, langCode, getLanguagesForGame, isLanguageSupported } from '..
 import { requestDetect, stopDetect, smoothQuad, meanCornerDrift, DETECT_W } from '../utils/cardDetector';
 import { getPerspectiveTransform, warpPerspective } from '../../../shared/imgproc.mjs';
 import { shouldCapture, shouldRearm, autoStatusKey } from '../utils/autoCapture';
+import { zoomRange, initialZoom } from '../utils/cameraZoom';
 import { defaultGame, gameOptions, showGamePicker, isGameEnabled } from '../utils/games';
 import { isNative } from '../apiBase';
 import { useT } from '../utils/i18n';
@@ -219,6 +220,9 @@ function CameraScanner({ onAddSuccess, showToast }) {
   // exposureCompensation, else null (slider hidden). value = current setting.
   const [exposureCaps, setExposureCaps] = useState(null);
   const [exposure, setExposure] = useState(0);
+  // Camera zoom: same shape as exposure, from caps.zoom. Hidden when unsupported.
+  const [zoomCaps, setZoomCaps] = useState(null);
+  const [zoom, setZoom] = useState(1);
   // Which game is being fed in — the user's pick, not an inference. Persisted:
   // a scanning run is one game at a time, and re-picking it on every camera open
   // was friction for nothing. Falls back to the Settings default game if the
@@ -573,16 +577,26 @@ function CameraScanner({ onAddSuccess, showToast }) {
   // Detect manual-exposure support on the live track. Present on most Android
   // Chrome back cameras; absent on iOS Safari and many desktop webcams (slider
   // then stays hidden). Reads the current value so the slider starts in place.
+  // Zoom is detected the same way and restored from the last session: a phone
+  // mounted over the cards wants the same framing every time.
   useEffect(() => {
     const track = stream?.getVideoTracks?.()[0];
-    if (!track || typeof track.getCapabilities !== 'function') { setExposureCaps(null); return; }
-    const ec = track.getCapabilities().exposureCompensation;
+    if (!track || typeof track.getCapabilities !== 'function') { setExposureCaps(null); setZoomCaps(null); return; }
+    const caps = track.getCapabilities();
+    const ec = caps.exposureCompensation;
     if (ec && typeof ec.min === 'number' && typeof ec.max === 'number') {
       setExposureCaps({ min: ec.min, max: ec.max, step: ec.step || (ec.max - ec.min) / 100 || 0.1 });
       const cur = track.getSettings?.().exposureCompensation;
       setExposure(typeof cur === 'number' ? cur : 0);
     } else {
       setExposureCaps(null);
+    }
+    const range = zoomRange(caps.zoom);
+    setZoomCaps(range);
+    if (range) {
+      const { zoom: z, restore } = initialZoom(range, localStorage.getItem('scan_zoom'), track.getSettings?.().zoom);
+      setZoom(z);
+      if (restore) updateAdvancedConstraints(track, { zoom: z });
     }
   }, [stream]);
 
@@ -885,6 +899,15 @@ function CameraScanner({ onAddSuccess, showToast }) {
     if (track) updateAdvancedConstraints(track, { exposureMode: 'continuous', exposureCompensation: val });
   };
 
+  // Hardware zoom, not a CSS scale: the frames themselves are zoomed, so the
+  // guide-box crop maths stays correct and the crop gets more real pixels.
+  const changeZoom = (val) => {
+    setZoom(val);
+    localStorage.setItem('scan_zoom', String(val));
+    const track = stream?.getVideoTracks?.()[0];
+    if (track) updateAdvancedConstraints(track, { zoom: val });
+  };
+
   const startCamera = async () => {
     // Create/unlock the scan cue here: this call is inside a click handler, and a
     // context first created without a gesture starts suspended with no promise of
@@ -920,7 +943,10 @@ function CameraScanner({ onAddSuccess, showToast }) {
           // 91.0% at 420px, 90.0% at 800px. `ideal` rather than `min` so a camera
           // that cannot manage it degrades instead of failing getUserMedia.
           width: { ideal: 1920 },
-          height: { ideal: 1080 }
+          height: { ideal: 1080 },
+          // Chrome only reports caps.zoom (and honours zoom constraints) when the
+          // stream was requested with it. Browsers that don't know it ignore it.
+          zoom: true
         },
         audio: false
       };
@@ -1839,7 +1865,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
           </div>
 
           {/* Settings panel (toggled by the gear in the action row): set, auto-add,
-              scan detail, exposure, diagnostics. Card type and language are NOT
+              scan detail, zoom, exposure, diagnostics. Card type and language are NOT
               here — they are what the user picks before every run, so they live in
               the row above the camera. Kept off the camera view so it stays clean. */}
           {showScanSettings && (
@@ -2090,6 +2116,26 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 <span>{t('scan.detailSlow')}</span>
               </div>
             </div>
+
+            {/* Zoom: only rendered when the camera track supports it. Slider only,
+                no pinch — a pinch on the preview already resizes the guide box. */}
+            {zoomCaps && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                {/* No "×" readout: the unit is the camera's own. Phones report a
+                    ratio (1–8), desktop UVC webcams an arbitrary range (0–60). */}
+                <label htmlFor="scan-zoom" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t('scan.zoom')}</label>
+                <input
+                  id="scan-zoom"
+                  type="range"
+                  min={zoomCaps.min}
+                  max={zoomCaps.max}
+                  step={zoomCaps.step}
+                  value={zoom}
+                  onChange={(e) => changeZoom(parseFloat(e.target.value))}
+                  style={{ width: '100%', accentColor: 'var(--accent-red)' }}
+                />
+              </div>
+            )}
 
             {/* Manual exposure: only rendered when the camera track supports it
                 (Android Chrome back cams). Auto-exposure stays default until you

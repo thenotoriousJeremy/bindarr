@@ -996,6 +996,7 @@
   "scan.exactMatch": "Найдено точное совпадение!",
   "scan.expandSubsets": "Показать подвыпуски",
   "scan.exposure": "Экспозиция",
+  "scan.zoom": "Масштаб",
   "scan.fetchingCandidates": "Загрузка возможных карт…",
   "scan.filterBySet": "Фильтр по выпуску",
   "scan.hashedCrop": "Хэшированная обрезка",
