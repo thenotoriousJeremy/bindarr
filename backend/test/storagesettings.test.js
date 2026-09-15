@@ -128,6 +128,122 @@ async function main() {
   assert.deepStrictEqual(rows.map(r => r.name), ['Card A', 'Card B', 'Card C'], `name-asc order must be baked in, got ${rows.map(r => r.name)}`);
   assert.deepStrictEqual(rows.map(r => r.position), [1000, 2000, 3000], `positions must densify, got ${rows.map(r => r.position)}`);
   console.log('PASS: switching to Custom bakes the sorted order into dense positions');
+
+  // 4. Inserting a new compartment at a specific index should not just append to the end.
+  const binderLoc = await db.run(
+    `INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ['Insert Binder', 'Binder', 'custom', 'normals_first', 'any', userId]
+  );
+  const binderPage1 = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [binderLoc.lastID, 1, 9]);
+  const binderPage2 = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [binderLoc.lastID, 2, 9]);
+  const binderPage3 = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [binderLoc.lastID, 3, 9]);
+
+  const insertResp = await fetch(`${base}/api/locations/${binderLoc.lastID}/compartments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ before_id: binderPage2.lastID, capacity: 9 })
+  });
+  assert.strictEqual(insertResp.status, 201, 'POST /locations/:id/compartments with before_id must work');
+  const inserted = await insertResp.json();
+  const pageOrder = (await db.all(`SELECT id, idx FROM compartments WHERE location_id = ? ORDER BY idx`, [binderLoc.lastID])).map(c => c.id);
+  assert.deepStrictEqual(pageOrder, [binderPage1.lastID, inserted.id, binderPage2.lastID, binderPage3.lastID], `insert before id must produce order 1, new, 2, 3, got ${pageOrder}`);
+  assert.strictEqual(inserted.idx, 2, 'inserted page should take the target index');
+  console.log('PASS: inserting a new page before an existing one keeps the binder order stable');
+
+  // 5. Reordering and moving a page to another binder should update the owning location and index sequence.
+  const destBinder = await db.run(
+    `INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ['Destination Binder', 'Binder', 'custom', 'normals_first', 'any', userId]
+  );
+  const destPage1 = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [destBinder.lastID, 1, 9]);
+  const moveResp = await fetch(`${base}/api/compartments/${inserted.id}/reorder`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ location_id: destBinder.lastID, idx: 1 })
+  });
+  assert.strictEqual(moveResp.status, 200, 'PATCH /compartments/:id/reorder must move a page to another binder');
+  const moved = await db.get(`SELECT location_id, idx FROM compartments WHERE id = ?`, [inserted.id]);
+  assert.strictEqual(moved.location_id, destBinder.lastID, 'page must belong to the destination binder after move');
+  assert.strictEqual(moved.idx, 1, 'page must be inserted at the requested index');
+  const destOrder = (await db.all(`SELECT id, idx FROM compartments WHERE location_id = ? ORDER BY idx`, [destBinder.lastID])).map(c => c.id);
+  assert.deepStrictEqual(destOrder, [inserted.id, destPage1.lastID], `destination binders must reindex after a move, got ${destOrder}`);
+  console.log('PASS: moving a page to another binder preserves the binder order and reindexes both sides');
+
+  // 6. Moving a page to a binder that already contains the same idx value should
+  //    still succeed — the destination row must be reindexed before the move is
+  //    committed to avoid UNIQUE(location_id, idx) conflicts.
+  const sourceBinder = await db.run(
+    `INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ['Source Binder', 'Binder', 'custom', 'normals_first', 'any', userId]
+  );
+  const sourcePage1 = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [sourceBinder.lastID, 27, 9]);
+  const sourcePage2 = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [sourceBinder.lastID, 28, 9]);
+  const targetBinderSameIdx = await db.run(
+    `INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ['Target Binder Same Index', 'Binder', 'custom', 'normals_first', 'any', userId]
+  );
+  const targetPage1 = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [targetBinderSameIdx.lastID, 27, 9]);
+  const sameIndexResp = await fetch(`${base}/api/compartments/${sourcePage1.lastID}/reorder`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ location_id: targetBinderSameIdx.lastID, idx: 27 })
+  });
+  assert.strictEqual(sameIndexResp.status, 200, 'PATCH /compartments/:id/reorder must handle destination idx collisions without violating uniqueness');
+  const sameIndexMoved = await db.get(`SELECT location_id, idx FROM compartments WHERE id = ?`, [sourcePage1.lastID]);
+  assert.strictEqual(sameIndexMoved.location_id, targetBinderSameIdx.lastID, 'moved page must belong to the destination binder');
+  const targetPostMove = (await db.all(`SELECT id, idx FROM compartments WHERE location_id = ? ORDER BY idx`, [targetBinderSameIdx.lastID])).map(c => c.id);
+  assert.deepStrictEqual(targetPostMove, [targetPage1.lastID, sourcePage1.lastID], `same-index destination reorders must preserve insertion semantics, got ${targetPostMove}`);
+  console.log('PASS: moving a page onto a destination binder that already owns the same idx value still succeeds');
+
+  // 7. Moving a page to a binder with restrictive rules should fail if the cards
+  //    on that page would violate the target location's rules.
+  const rulesSourceBinder = await db.run(
+    `INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ['Rules Source', 'Binder', 'custom', 'normals_first', 'any', userId]
+  );
+  const rulesSourcePage = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [rulesSourceBinder.lastID, 1, 9]);
+  const rulesTargetBinder = await db.run(
+    `INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, rule_config, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ['Rules Target', 'Binder', 'custom', 'normals_first', 'compound', JSON.stringify([{ field: 'types', operator: 'equals', value: 'Water', action: 'include' }]), userId]
+  );
+  await db.run(`INSERT OR REPLACE INTO card_cache (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend, game)
+       VALUES (?, ?, 'Pokémon', '[]', ?, 'Common', 's1', 'Set One', '1', '', 1, 'pokemon')`,
+    ['rules-fire-card', 'Fire Card', JSON.stringify(['Fire'])]
+  );
+  await db.run(
+    `INSERT INTO collection (card_id, quantity, condition, printing, language, location_id, compartment_id, position, user_id)
+       VALUES (?, 1, 'Near Mint', 'Normal', 'English', ?, ?, ?, ?)`,
+    ['rules-fire-card', rulesSourceBinder.lastID, rulesSourcePage.lastID, 1000, userId]
+  );
+  const invalidMoveResp = await fetch(`${base}/api/compartments/${rulesSourcePage.lastID}/reorder`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ location_id: rulesTargetBinder.lastID, idx: 1 })
+  });
+  assert.strictEqual(invalidMoveResp.status, 400, 'PATCH /compartments/:id/reorder must reject a move when cards do not match target binder rules');
+  const invalidMoveBody = await invalidMoveResp.json();
+  assert.match(invalidMoveBody.error || '', /rule|match|cards/i, 'error should describe the rule mismatch');
+  const unchangedRulesPage = await db.get(`SELECT location_id FROM compartments WHERE id = ?`, [rulesSourcePage.lastID]);
+  assert.strictEqual(unchangedRulesPage.location_id, rulesSourceBinder.lastID, 'rejected move must leave the page in the source binder');
+  console.log('PASS: rejecting a page move when destination rules reject the cards on that page');
+
+  // 8. Reordering two pages inside the same binder should work via before/after.
+  const reorderBinder = await db.run(
+    `INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ['Reorder Binder', 'Binder', 'custom', 'normals_first', 'any', userId]
+  );
+  const reorderPage1 = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [reorderBinder.lastID, 1, 9]);
+  const reorderPage2 = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [reorderBinder.lastID, 2, 9]);
+  const reorderPage3 = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [reorderBinder.lastID, 3, 9]);
+  const reorderResp = await fetch(`${base}/api/compartments/${reorderPage3.lastID}/reorder`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ location_id: reorderBinder.lastID, before_id: reorderPage1.lastID })
+  });
+  assert.strictEqual(reorderResp.status, 200, 'PATCH /compartments/:id/reorder must reorder pages within the same binder');
+  const sameBinderOrder = (await db.all(`SELECT id, idx FROM compartments WHERE location_id = ? ORDER BY idx`, [reorderBinder.lastID])).map(c => c.id);
+  assert.deepStrictEqual(sameBinderOrder, [reorderPage3.lastID, reorderPage1.lastID, reorderPage2.lastID], `same-binder reorders must preserve order, got ${sameBinderOrder}`);
+  console.log('PASS: pages can be reordered within the same binder');
 }
 
 main()

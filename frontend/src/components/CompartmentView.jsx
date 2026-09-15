@@ -300,6 +300,13 @@ export default function CompartmentView({
   onRename = null,
   onSetCapacity = null,
   onRemove = null,
+  onInsertBefore = null,
+  onInsertAfter = null,
+  onReorderBefore = null,
+  onReorderAfter = null,
+  reorderTargets = [],
+  onMoveToLocation = null,
+  moveTargetLocations = [],
   onMoveCard = null,
   moveTargets = [],
   canRemove = false,
@@ -578,8 +585,58 @@ export default function CompartmentView({
               </span>
             )}
 
+            {onInsertBefore && onInsertAfter && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', marginLeft: 'auto' }}>
+                <button type="button" className="btn btn-secondary" onClick={onInsertBefore} title={t('loc.insertBeforePage')} style={{ fontSize: '0.55rem', padding: '0.15rem 0.35rem' }}>
+                  {t('loc.insertBeforePage')}
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={onInsertAfter} title={t('loc.insertAfterPage')} style={{ fontSize: '0.55rem', padding: '0.15rem 0.35rem' }}>
+                  {t('loc.insertAfterPage')}
+                </button>
+              </div>
+            )}
+
+            {onReorderBefore && onReorderAfter && reorderTargets.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                <select
+                  className="select-control"
+                  value=""
+                  onChange={(e) => {
+                    const targetId = Number(e.target.value);
+                    if (!targetId) return;
+                    onReorderBefore(targetId);
+                    e.target.value = '';
+                  }}
+                  title={t('loc.reorderBeforePage')}
+                  style={{ fontSize: '0.55rem', padding: '0.15rem 0.25rem', minWidth: '110px' }}
+                >
+                  <option value="">{t('loc.reorderBeforePage')}</option>
+                  {reorderTargets.map(page => (
+                    <option key={page.id} value={page.id}>{page.display_label || page.label || t('loc.pageName', { number: page.idx || 1 })}</option>
+                  ))}
+                </select>
+                <select
+                  className="select-control"
+                  value=""
+                  onChange={(e) => {
+                    const targetId = Number(e.target.value);
+                    if (!targetId) return;
+                    onReorderAfter(targetId);
+                    e.target.value = '';
+                  }}
+                  title={t('loc.reorderAfterPage')}
+                  style={{ fontSize: '0.55rem', padding: '0.15rem 0.25rem', minWidth: '110px' }}
+                >
+                  <option value="">{t('loc.reorderAfterPage')}</option>
+                  {reorderTargets.map(page => (
+                    <option key={page.id} value={page.id}>{page.display_label || page.label || t('loc.pageName', { number: page.idx || 1 })}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {onEditRules && (
-              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title={t('compartment.acceptsHintPage')} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem', marginLeft: 'auto', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: 'var(--text-strong)' } : {}) }}>
+              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title={t('compartment.acceptsHintPage')} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: 'var(--text-strong)' } : {}) }}>
                 {acceptsLabel}
               </button>
             )}
@@ -588,6 +645,26 @@ export default function CompartmentView({
               <button type="button" className="btn btn-secondary" onClick={onToggleLock} disabled={containerLocked} title={t(containerLocked ? 'compartment.lockContainer' : compartment.locked ? 'compartment.lockedHint' : 'compartment.lockHint')} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.55rem', padding: '0.15rem 0.4rem', opacity: containerLocked ? 0.5 : 1, ...((compartment.locked || containerLocked) ? { borderColor: 'var(--accent-yellow)', color: 'var(--accent-yellow)' } : {}) }}>
                 <Lock size={11} /> {t(compartment.locked ? 'compartment.locked' : 'compartment.lock')}
               </button>
+            )}
+
+            {onMoveToLocation && moveTargetLocations.length > 0 && (
+              <select
+                className="select-control"
+                value=""
+                onChange={(e) => {
+                  const targetId = Number(e.target.value);
+                  if (!targetId) return;
+                  onMoveToLocation(targetId);
+                  e.target.value = '';
+                }}
+                title={t('loc.movePageToBinder')}
+                style={{ fontSize: '0.55rem', padding: '0.15rem 0.25rem', minWidth: '112px' }}
+              >
+                <option value="">{t('loc.movePageToBinder')}</option>
+                {moveTargetLocations.map(loc => (
+                  <option key={loc.id} value={loc.id}>{loc.name}</option>
+                ))}
+              </select>
             )}
 
             {onSetCapacity && (
