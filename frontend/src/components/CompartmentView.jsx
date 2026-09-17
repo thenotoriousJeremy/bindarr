@@ -636,7 +636,7 @@ export default function CompartmentView({
             )}
 
             {onEditRules && (
-              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title={t('compartment.acceptsHintPage')} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: 'var(--text-strong)' } : {}) }}>
+              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title={t('compartment.acceptsHintPage')} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem', marginLeft: 'auto', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: 'var(--text-strong)' } : {}) }}>
                 {acceptsLabel}
               </button>
             )}

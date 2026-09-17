@@ -553,10 +553,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           if (created.idx) setActivePageIndex(created.idx - 1);
         }
       }
-      else {
-        const data = await res.json().catch(() => ({}));
-        showToast(data.error || t('loc.errAddCompartment'));
-      }
+      else showToast(t('loc.errAddCompartment'));
     } catch (err) { console.error(err); showToast(t('loc.errAddCompartmentGeneric')); }
   };
 
@@ -575,8 +572,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         showToast(t('loc.compartmentMoved'));
-        setActiveLocationId(targetLocationId);
-        await Promise.all([fetchLocations(), fetchCompartments(targetLocationId)]);
+        await Promise.all([fetchLocations(), fetchCompartments(activeLocationId)]);
       } else {
         const friendlyError = (data.error || '').toLowerCase().includes('do not match the destination binder rules')
           ? t('loc.moveRuleMismatch')

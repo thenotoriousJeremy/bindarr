@@ -389,6 +389,10 @@ router.patch('/compartments/:id/reorder', async (req, res) => {
         // destination binder already owns that idx value.
         const tempIdx = 2000000 + Number(id);
         await db.run(`UPDATE compartments SET location_id = ?, idx = ? WHERE id = ? AND location_id = ?`, [targetLocationId, tempIdx, id, current.location_id]);
+        // collection.location_id is denormalized off compartment_id, not derived
+        // from it — left stale, it still names the source binder, so deleting
+        // that binder later evicts cards that actually followed the page here.
+        await db.run(`UPDATE collection SET location_id = ? WHERE compartment_id = ? AND user_id = ?`, [targetLocationId, id, req.user.id]);
       }
       if (current.location_id === targetLocationId) {
         await renumberCompartmentOrder(current.location_id, targetOrder);

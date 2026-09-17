@@ -227,6 +227,43 @@ async function main() {
   assert.strictEqual(unchangedRulesPage.location_id, rulesSourceBinder.lastID, 'rejected move must leave the page in the source binder');
   console.log('PASS: rejecting a page move when destination rules reject the cards on that page');
 
+  // 7b. A moved page's cards must follow it: collection.location_id is
+  //     denormalized off compartment_id, and left stale it still names the
+  //     source binder, so deleting that binder later would evict cards that
+  //     actually live in the destination binder now.
+  const followSourceBinder = await db.run(
+    `INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ['Follow Source', 'Binder', 'custom', 'normals_first', 'any', userId]
+  );
+  const followSourcePage = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [followSourceBinder.lastID, 1, 9]);
+  const followDestBinder = await db.run(
+    `INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ['Follow Destination', 'Binder', 'custom', 'normals_first', 'any', userId]
+  );
+  await db.run(`INSERT OR REPLACE INTO card_cache (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend, game)
+       VALUES (?, ?, 'Pokémon', '[]', '[]', 'Common', 's1', 'Set One', '1', '', 1, 'pokemon')`,
+    ['follow-card', 'Follow Card']
+  );
+  const followEntry = await db.run(
+    `INSERT INTO collection (card_id, quantity, condition, printing, language, location_id, compartment_id, position, user_id)
+       VALUES (?, 1, 'Near Mint', 'Normal', 'English', ?, ?, ?, ?)`,
+    ['follow-card', followSourceBinder.lastID, followSourcePage.lastID, 1000, userId]
+  );
+  const followMoveResp = await fetch(`${base}/api/compartments/${followSourcePage.lastID}/reorder`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ location_id: followDestBinder.lastID, idx: 1 })
+  });
+  assert.strictEqual(followMoveResp.status, 200, 'moving the page to the destination binder must succeed');
+  const followedCard = await db.get(`SELECT location_id, compartment_id FROM collection WHERE id = ?`, [followEntry.lastID]);
+  assert.strictEqual(followedCard.location_id, followDestBinder.lastID, 'card location_id must be updated to the destination binder when its page moves');
+
+  await fetch(`${base}/api/locations/${followSourceBinder.lastID}`, { method: 'DELETE' });
+  const cardAfterSourceDelete = await db.get(`SELECT location_id, compartment_id FROM collection WHERE id = ?`, [followEntry.lastID]);
+  assert.strictEqual(cardAfterSourceDelete.location_id, followDestBinder.lastID, 'card must stay in the destination binder after the source binder is deleted');
+  assert.strictEqual(cardAfterSourceDelete.compartment_id, followSourcePage.lastID, 'card must stay on its page after the source binder is deleted');
+  console.log('PASS: cards on a moved page stay put after the source binder is deleted');
+
   // 8. Reordering two pages inside the same binder should work via before/after.
   const reorderBinder = await db.run(
     `INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
