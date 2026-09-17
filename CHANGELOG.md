@@ -6,6 +6,13 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+### Added
+- **Insert and reorder binder pages/box rows in place, and move a page to another binder.** A new page can be added before or after an existing one instead of always landing at the end, an existing page can be dragged into place before/after any other page in the same container, and a page can be moved to a different binder outright (the destination is checked against that binder's filing rules first, and the page's cards are rejected with a clear error if any don't fit rather than moving anyway).
+
+### Fixed
+- **Cards on a moved page could get orphaned if the original binder was later deleted.** Moving a page to another binder updated the page's own `location_id` but left the cards on it still pointing at the source binder; deleting that binder afterward evicted cards that had actually followed the page to its new home. Both are now kept in sync.
+- **Moving a page to another binder no longer jumps you to that binder.** The view now stays on the binder you were working in.
+
 ## [1.8.5] - 2026-09-11
 
 ### Added
