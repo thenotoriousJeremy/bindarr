@@ -559,7 +559,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   const handleMoveCompartmentToBinder = async (compartmentId, targetLocationId) => {
     if (!targetLocationId || targetLocationId === activeLocationId) return;
-    if (selectedLoc?.locked) {
+    const compartment = compartments.find(c => c.id === compartmentId);
+    if (selectedLoc?.locked || compartment?.locked) {
       showToast(t('loc.lockedMove'));
       return;
     }
@@ -586,7 +587,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   };
 
   const handleReorderCompartment = async (compartmentId, { before_id = null, after_id = null } = {}) => {
-    if (!selectedLoc || selectedLoc.locked) {
+    const compartment = compartments.find(c => c.id === compartmentId);
+    if (!selectedLoc || selectedLoc.locked || compartment?.locked) {
       showToast(t('loc.lockedMove'));
       return;
     }
@@ -1451,7 +1453,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   setsList,
                   canRemove: i === compartments.length - 1 && compartments.length > 1 && (cardsByCompartment.get(c.id) || []).length === 0,
                   moveTargets: compartments,
-                  moveTargetLocations: locations.filter(loc => loc.id !== selectedLoc.id && loc.type === 'Binder'),
+                  moveTargetLocations: locations.filter(loc => loc.id !== selectedLoc.id && loc.type === 'Binder' && !loc.locked),
                   reorderTargets: compartments.filter(page => page.id !== c.id),
                   onInsertBefore: () => handleAddCompartment({ before_id: c.id }),
                   onInsertAfter: () => handleAddCompartment({ after_id: c.id }),

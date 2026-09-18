@@ -587,10 +587,10 @@ export default function CompartmentView({
 
             {onInsertBefore && onInsertAfter && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', marginLeft: 'auto' }}>
-                <button type="button" className="btn btn-secondary" onClick={onInsertBefore} title={t('loc.insertBeforePage')} style={{ fontSize: '0.55rem', padding: '0.15rem 0.35rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={onInsertBefore} disabled={containerLocked || compartment.locked} title={t('loc.insertBeforePage')} style={{ fontSize: '0.55rem', padding: '0.15rem 0.35rem' }}>
                   {t('loc.insertBeforePage')}
                 </button>
-                <button type="button" className="btn btn-secondary" onClick={onInsertAfter} title={t('loc.insertAfterPage')} style={{ fontSize: '0.55rem', padding: '0.15rem 0.35rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={onInsertAfter} disabled={containerLocked || compartment.locked} title={t('loc.insertAfterPage')} style={{ fontSize: '0.55rem', padding: '0.15rem 0.35rem' }}>
                   {t('loc.insertAfterPage')}
                 </button>
               </div>
@@ -601,6 +601,7 @@ export default function CompartmentView({
                 <select
                   className="select-control"
                   value=""
+                  disabled={containerLocked || compartment.locked}
                   onChange={(e) => {
                     const targetId = Number(e.target.value);
                     if (!targetId) return;
@@ -618,6 +619,7 @@ export default function CompartmentView({
                 <select
                   className="select-control"
                   value=""
+                  disabled={containerLocked || compartment.locked}
                   onChange={(e) => {
                     const targetId = Number(e.target.value);
                     if (!targetId) return;
@@ -651,6 +653,7 @@ export default function CompartmentView({
               <select
                 className="select-control"
                 value=""
+                disabled={containerLocked || compartment.locked}
                 onChange={(e) => {
                   const targetId = Number(e.target.value);
                   if (!targetId) return;

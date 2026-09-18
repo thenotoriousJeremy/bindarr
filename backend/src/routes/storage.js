@@ -322,16 +322,22 @@ router.patch('/compartments/:id/reorder', async (req, res) => {
   const { location_id, idx, before_id, after_id } = req.body || {};
   try {
     const current = await db.get(`
-      SELECT cp.id, cp.location_id, cp.idx, cp.capacity, l.user_id, l.type, l.rule_type, l.rule_config, l.game, l.allow_stacking
+      SELECT cp.id, cp.location_id, cp.idx, cp.capacity, cp.locked AS compartment_locked, l.user_id, l.type, l.rule_type, l.rule_config, l.game, l.allow_stacking, l.locked AS container_locked
       FROM compartments cp
       JOIN locations l ON l.id = cp.location_id
       WHERE cp.id = ? AND l.user_id = ?
     `, [id, req.user.id]);
     if (!current) return res.status(404).json({ error: 'Compartment not found' });
+    if (current.compartment_locked || current.container_locked) {
+      return res.status(400).json({ error: 'This page is locked. Unlock it before moving or reordering.' });
+    }
 
     const targetLocationId = Number(location_id || current.location_id);
     const targetLocation = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [targetLocationId, req.user.id]);
     if (!targetLocation) return res.status(404).json({ error: 'Target location not found' });
+    if (targetLocation.locked) {
+      return res.status(400).json({ error: 'The destination binder is locked. Unlock it before moving a page there.' });
+    }
 
     if (current.location_id !== targetLocationId) {
       const cards = await db.all(`
