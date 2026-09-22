@@ -332,9 +332,9 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
     }
   };
 
-  // One card straight into the collection, no drawer. Stacked on purpose: one
-  // Enter press becomes exactly one row, so undo removes exactly what it added
-  // (an unstacked qty-3 add would leave two orphan copies behind).
+  // One card straight into the collection, no drawer. Unstacked, like every
+  // other add path, so a quantity of 5 becomes 5 individually placeable rows
+  // instead of one row stuck showing "x5"; undo removes every id it returns.
   const addCardNow = async (card) => {
     const response = await fetch('/api/collection', {
       method: 'POST',
@@ -347,8 +347,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         language,
         purchase_price: parseFloat(purchasePrice) || 0,
         game,
-        location_id: null,
-        stackable: true
+        location_id: null
       })
     });
     const data = await response.json().catch(() => ({}));
@@ -391,7 +390,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       }
 
       const result = await addCardNow(hit);
-      setRapidLog(prev => [{ entryId: result.id, card: hit, qty: parseInt(quantity, 10) || 1 }, ...prev].slice(0, 25));
+      const entryIds = result.ids && result.ids.length ? result.ids : [result.id];
+      setRapidLog(prev => [{ entryIds, card: hit, qty: parseInt(quantity, 10) || 1 }, ...prev].slice(0, 25));
       setRapidNumber('');
       // Keep the owned badge honest if the card is also on screen.
       setCards(prev => prev.map(c => (c.id === hit.id
@@ -410,9 +410,11 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
 
   const undoRapidAdd = async (entry) => {
     try {
-      const res = await fetch(`/api/collection/${entry.entryId}`, { method: 'DELETE' });
-      if (!res.ok) { showToast(t('search.errUndo')); return; }
-      setRapidLog(prev => prev.filter(e => e.entryId !== entry.entryId));
+      const results = await Promise.all(entry.entryIds.map(id =>
+        fetch(`/api/collection/${id}`, { method: 'DELETE' })
+      ));
+      if (results.some(res => !res.ok)) { showToast(t('search.errUndo')); return; }
+      setRapidLog(prev => prev.filter(e => e !== entry));
       setCards(prev => prev.map(c => (c.id === entry.card.id
         ? { ...c, owned_qty: Math.max(0, (c.owned_qty || 0) - entry.qty) }
         : c)));
@@ -690,6 +692,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
               className="input-control"
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleRapidAdd(); } }}
               title={t('search.copiesPerEnter')}
               style={{ width: '80px', fontSize: '0.75rem' }}
             />
@@ -702,7 +705,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                 {t('search.addedThisSession', { count: rapidLog.length })}
               </div>
               {rapidLog.map(entry => (
-                <div key={entry.entryId} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', background: 'rgba(255,255,255,0.02)', padding: '0.35rem 0.6rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                <div key={entry.entryIds[0]} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', background: 'rgba(255,255,255,0.02)', padding: '0.35rem 0.6rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
                   <CardImage card={entry.card} alt="" style={{ width: '28px', borderRadius: '3px' }} />
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-strong)', fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     #{entry.card.number} {displayName(entry.card)}{entry.qty > 1 ? ` ×${entry.qty}` : ''}
