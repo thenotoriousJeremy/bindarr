@@ -42,6 +42,48 @@ async function loadEntries(entryIds, userId) {
   return new Map(rows.map(r => [String(r.id), r]));
 }
 
+async function loadCompartmentOrder(locationId) {
+  return db.all(`SELECT * FROM compartments WHERE location_id = ? ORDER BY idx ASC`, [locationId]);
+}
+
+async function renumberCompartmentOrder(locationId, orderedIds) {
+  if (!orderedIds || orderedIds.length === 0) return;
+
+  const rows = await db.all(`SELECT id FROM compartments WHERE location_id = ? ORDER BY idx ASC, id ASC`, [locationId]);
+  const tempBase = 1000000;
+
+  // Existing data can already be stale or duplicated from prior failed moves.
+  // Move everything to a temporary unique range first so we never create a
+  // duplicate idx value while the final ordering is applied.
+  for (let i = 0; i < rows.length; i++) {
+    await db.run(`UPDATE compartments SET idx = ? WHERE id = ? AND location_id = ?`, [tempBase + i + 1, rows[i].id, locationId]);
+  }
+
+  for (let i = 0; i < orderedIds.length; i++) {
+    await db.run(`UPDATE compartments SET idx = ? WHERE id = ? AND location_id = ?`, [i + 1, orderedIds[i], locationId]);
+  }
+}
+
+async function resolveCompartmentInsertPosition(locationId, beforeId = null, afterId = null, idx = null) {
+  const ordered = await loadCompartmentOrder(locationId);
+  const asIds = ordered.map(c => c.id);
+  if (beforeId !== null && beforeId !== undefined) {
+    const pos = asIds.findIndex(id => Number(id) === Number(beforeId));
+    if (pos === -1) throw new Error('before_id not found in target binder');
+    return { ordered, insertAt: pos };
+  }
+  if (afterId !== null && afterId !== undefined) {
+    const pos = asIds.findIndex(id => Number(id) === Number(afterId));
+    if (pos === -1) throw new Error('after_id not found in target binder');
+    return { ordered, insertAt: pos + 1 };
+  }
+  if (idx !== null && idx !== undefined && !Number.isNaN(Number(idx))) {
+    const target = Math.max(0, Math.min(ordered.length, Number(idx) - 1));
+    return { ordered, insertAt: target };
+  }
+  return { ordered, insertAt: ordered.length };
+}
+
 // 1. Get Storage Locations with Compartment Summaries
 router.get('/locations', async (req, res) => {
   try {
@@ -244,20 +286,135 @@ router.get('/locations/:id/compartments', async (req, res) => {
 
 router.post('/locations/:id/compartments', async (req, res) => {
   const { id } = req.params;
+  const { before_id, after_id, idx, capacity } = req.body || {};
   try {
     const loc = await db.get(`SELECT id, type FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) return res.status(404).json({ error: 'Location not found' });
 
-    const last = await db.get(`SELECT MAX(idx) as maxIdx, capacity FROM compartments WHERE location_id = ? ORDER BY idx DESC LIMIT 1`, [id]);
-    const nextIdx = (last && last.maxIdx ? last.maxIdx : 0) + 1;
-    const capacity = (last && last.capacity) ? last.capacity : (loc.type === 'Binder' ? 9 : 400);
+    const existing = await loadCompartmentOrder(id);
+    const defaultCapacity = existing.length > 0 ? existing[existing.length - 1].capacity : (loc.type === 'Binder' ? 9 : 400);
+    const targetCapacity = Math.max(1, parseInt(capacity, 10) || defaultCapacity);
 
-    const result = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [id, nextIdx, capacity]);
-    const created = await db.get(`SELECT * FROM compartments WHERE id = ?`, [result.lastID]);
+    const insertPos = await resolveCompartmentInsertPosition(id, before_id, after_id, idx);
+    const insertAt = insertPos.insertAt;
+
+    let created = null;
+    await db.withTransaction(async () => {
+      const insertResult = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [id, 1000000, targetCapacity]);
+      const newOrder = existing.map(c => c.id);
+      newOrder.splice(insertAt, 0, insertResult.lastID);
+      await renumberCompartmentOrder(id, newOrder);
+      created = await db.get(`SELECT * FROM compartments WHERE id = ?`, [insertResult.lastID]);
+    });
+
     res.status(201).json({ ...created, display_label: compartmentLabel(created, loc.type) });
   } catch (error) {
     console.error(error);
+    if (error.message && /before_id|after_id/.test(error.message)) {
+      return res.status(400).json({ error: error.message });
+    }
     res.status(500).json({ error: 'Failed to add compartment' });
+  }
+});
+
+router.patch('/compartments/:id/reorder', async (req, res) => {
+  const { id } = req.params;
+  const { location_id, idx, before_id, after_id } = req.body || {};
+  try {
+    const current = await db.get(`
+      SELECT cp.id, cp.location_id, cp.idx, cp.capacity, cp.locked AS compartment_locked, l.user_id, l.type, l.rule_type, l.rule_config, l.game, l.allow_stacking, l.locked AS container_locked
+      FROM compartments cp
+      JOIN locations l ON l.id = cp.location_id
+      WHERE cp.id = ? AND l.user_id = ?
+    `, [id, req.user.id]);
+    if (!current) return res.status(404).json({ error: 'Compartment not found' });
+    if (current.compartment_locked || current.container_locked) {
+      return res.status(400).json({ error: 'This page is locked. Unlock it before moving or reordering.' });
+    }
+
+    const targetLocationId = Number(location_id || current.location_id);
+    const targetLocation = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [targetLocationId, req.user.id]);
+    if (!targetLocation) return res.status(404).json({ error: 'Target location not found' });
+    if (targetLocation.locked) {
+      return res.status(400).json({ error: 'The destination binder is locked. Unlock it before moving a page there.' });
+    }
+
+    if (current.location_id !== targetLocationId) {
+      const cards = await db.all(`
+        SELECT c.id as entry_id, c.card_id, c.location_id, c.compartment_id, c.position,
+               cc.name, cc.printed_name, cc.set_name, cc.number, cc.types, cc.subtypes,
+               cc.rarity, cc.supertype, cc.game, cc.color_identity, cc.cmc
+        FROM collection c
+        JOIN card_cache cc ON cc.id = c.card_id
+        WHERE c.user_id = ? AND c.compartment_id = ?
+      `, [req.user.id, id]);
+      const invalid = [];
+      for (const entry of cards) {
+        const cardMetadata = { ...entry, types: entry.types ? JSON.parse(entry.types || '[]') : [] };
+        if (!locationAcceptsCard(targetLocation, cardMetadata)) {
+          invalid.push(entry.name || entry.printed_name || `card ${entry.card_id}`);
+        }
+      }
+      if (invalid.length > 0) {
+        const preview = invalid.slice(0, 3).map(name => `"${name}"`).join(', ');
+        const suffix = invalid.length > 3 ? ', ...' : '';
+        return res.status(400).json({
+          error: `This page contains cards that do not match the destination binder rules: ${preview}${suffix}. Move those cards first or choose another binder.`
+        });
+      }
+    }
+
+    const sourceOrder = (await loadCompartmentOrder(current.location_id)).map(c => c.id).filter(compartmentId => compartmentId !== Number(id));
+    const destinationOrder = (await loadCompartmentOrder(targetLocationId)).map(c => c.id).filter(compartmentId => compartmentId !== Number(id));
+
+    let insertAt = destinationOrder.length;
+    if (before_id !== null && before_id !== undefined) {
+      const beforeId = Number(before_id);
+      if (beforeId === Number(id)) return res.json({ message: 'Compartment already in that position', moved: false });
+      const found = destinationOrder.findIndex(compartmentId => Number(compartmentId) === beforeId);
+      if (found === -1) return res.status(400).json({ error: 'before_id not found in target binder' });
+      insertAt = found;
+    } else if (after_id !== null && after_id !== undefined) {
+      const afterId = Number(after_id);
+      if (afterId === Number(id)) return res.json({ message: 'Compartment already in that position', moved: false });
+      const found = destinationOrder.findIndex(compartmentId => Number(compartmentId) === afterId);
+      if (found === -1) return res.status(400).json({ error: 'after_id not found in target binder' });
+      insertAt = found + 1;
+    } else if (idx !== null && idx !== undefined && !Number.isNaN(Number(idx))) {
+      const rawIdx = Number(idx);
+      insertAt = Math.max(0, Math.min(destinationOrder.length, rawIdx - 1));
+    }
+
+    const targetOrder = [...destinationOrder];
+    targetOrder.splice(insertAt, 0, Number(id));
+
+    await db.withTransaction(async () => {
+      if (current.location_id !== targetLocationId) {
+        // The moved row must not keep its old idx when it crosses into a new
+        // binder, otherwise SQLite can reject the location_id update because the
+        // destination binder already owns that idx value.
+        const tempIdx = 2000000 + Number(id);
+        await db.run(`UPDATE compartments SET location_id = ?, idx = ? WHERE id = ? AND location_id = ?`, [targetLocationId, tempIdx, id, current.location_id]);
+        // collection.location_id is denormalized off compartment_id, not derived
+        // from it — left stale, it still names the source binder, so deleting
+        // that binder later evicts cards that actually followed the page here.
+        await db.run(`UPDATE collection SET location_id = ? WHERE compartment_id = ? AND user_id = ?`, [targetLocationId, id, req.user.id]);
+      }
+      if (current.location_id === targetLocationId) {
+        await renumberCompartmentOrder(current.location_id, targetOrder);
+      } else {
+        await renumberCompartmentOrder(current.location_id, sourceOrder);
+        await renumberCompartmentOrder(targetLocationId, targetOrder);
+      }
+    });
+
+    res.json({ message: 'Compartment reordered successfully', moved: true, location_id: targetLocationId });
+  } catch (error) {
+    console.error(error);
+    if (error.message && /before_id|after_id/.test(error.message)) {
+      return res.status(400).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Failed to reorder compartment' });
   }
 });
 

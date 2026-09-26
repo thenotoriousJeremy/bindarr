@@ -531,14 +531,19 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     }
   };
 
-  const handleAddCompartment = async () => {
+  const handleAddCompartment = async ({ before_id = null, after_id = null, idx = null } = {}) => {
     if (!selectedLoc) return;
     if (selectedLoc.locked) {
       showToast(t('loc.lockedAdd'));
       return;
     }
     try {
-      const res = await fetch(`/api/locations/${selectedLoc.id}/compartments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const body = {};
+      if (before_id !== null && before_id !== undefined) body.before_id = before_id;
+      else if (after_id !== null && after_id !== undefined) body.after_id = after_id;
+      else if (idx !== null && idx !== undefined) body.idx = idx;
+
+      const res = await fetch(`/api/locations/${selectedLoc.id}/compartments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (res.ok) { 
         const created = await res.json();
         showToast(t(isBinderType ? 'loc.pageAdded' : 'loc.rowAdded')); 
@@ -550,6 +555,63 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       }
       else showToast(t('loc.errAddCompartment'));
     } catch (err) { console.error(err); showToast(t('loc.errAddCompartmentGeneric')); }
+  };
+
+  const handleMoveCompartmentToBinder = async (compartmentId, targetLocationId) => {
+    if (!targetLocationId || targetLocationId === activeLocationId) return;
+    const compartment = compartments.find(c => c.id === compartmentId);
+    if (selectedLoc?.locked || compartment?.locked) {
+      showToast(t('loc.lockedMove'));
+      return;
+    }
+    try {
+      const res = await fetch(`/api/compartments/${compartmentId}/reorder`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: targetLocationId, idx: 1 })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        showToast(t('loc.compartmentMoved'));
+        await Promise.all([fetchLocations(), fetchCompartments(activeLocationId)]);
+      } else {
+        const friendlyError = (data.error || '').toLowerCase().includes('do not match the destination binder rules')
+          ? t('loc.moveRuleMismatch')
+          : (data.error || t('loc.errMove'));
+        showToast(friendlyError);
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(t('loc.errMove'));
+    }
+  };
+
+  const handleReorderCompartment = async (compartmentId, { before_id = null, after_id = null } = {}) => {
+    const compartment = compartments.find(c => c.id === compartmentId);
+    if (!selectedLoc || selectedLoc.locked || compartment?.locked) {
+      showToast(t('loc.lockedMove'));
+      return;
+    }
+    try {
+      const body = { location_id: selectedLoc.id };
+      if (before_id !== null && before_id !== undefined) body.before_id = before_id;
+      else if (after_id !== null && after_id !== undefined) body.after_id = after_id;
+      const res = await fetch(`/api/compartments/${compartmentId}/reorder`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        showToast(t('loc.compartmentMoved'));
+        await Promise.all([fetchCompartments(selectedLoc.id), fetchLocations()]);
+      } else {
+        showToast(data.error || t('loc.errMove'));
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(t('loc.errMove'));
+    }
   };
 
   const handleRemoveCompartment = async (compartmentId) => {
@@ -1391,6 +1453,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   setsList,
                   canRemove: i === compartments.length - 1 && compartments.length > 1 && (cardsByCompartment.get(c.id) || []).length === 0,
                   moveTargets: compartments,
+                  moveTargetLocations: locations.filter(loc => loc.id !== selectedLoc.id && loc.type === 'Binder' && !loc.locked),
+                  reorderTargets: compartments.filter(page => page.id !== c.id),
+                  onInsertBefore: () => handleAddCompartment({ before_id: c.id }),
+                  onInsertAfter: () => handleAddCompartment({ after_id: c.id }),
+                  onReorderBefore: (targetId) => handleReorderCompartment(c.id, { before_id: targetId }),
+                  onReorderAfter: (targetId) => handleReorderCompartment(c.id, { after_id: targetId }),
+                  onMoveToLocation: (targetLocationId) => handleMoveCompartmentToBinder(c.id, targetLocationId),
                   onRename: (label) => handleRenameCompartment(c.id, label),
                   onSetCapacity: (cap) => handleSetCapacity(c.id, cap),
                   onRemove: () => handleRemoveCompartment(c.id),
