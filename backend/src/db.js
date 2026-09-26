@@ -116,6 +116,38 @@ function hashPassword(password) {
 }
 
 // Initialize tables
+// A copy is a row. A row with quantity > 1 came from an older Rapid Add or import
+// that stacked copies onto one row, and such a row cannot be filed into separate
+// slots or checked out one copy at a time (#64). Split every stacked row into
+// single-copy rows: every column except id is copied, and the extra copies sit
+// next to the original in its slot, the way POST /collection places them.
+//
+// A graded row is the exception: a cert number names one physical slab, so a
+// quantity above 1 there is a mistake rather than more slabs, and copying it would
+// trip the (grader, cert_number) unique index. It collapses to one copy instead.
+//
+// Runs on every startup. After the first run nothing matches, so it costs one
+// indexed SELECT.
+async function splitStackedRows() {
+  const stacked = await all(`SELECT * FROM collection WHERE quantity > 1`);
+  if (stacked.length === 0) return 0;
+  const cols = (await all(`PRAGMA table_info(collection)`)).map(c => c.name).filter(n => n !== 'id');
+  const placeholders = cols.map(() => '?').join(', ');
+  await withTransaction(async () => {
+    for (const row of stacked) {
+      if (!row.cert_number) {
+        for (let i = 1; i < row.quantity; i++) {
+          const copy = { ...row, quantity: 1, position: row.position == null ? null : row.position + i * 0.001 };
+          await run(`INSERT INTO collection (${cols.join(', ')}) VALUES (${placeholders})`, cols.map(c => copy[c]));
+        }
+      }
+      await run(`UPDATE collection SET quantity = 1 WHERE id = ?`, [row.id]);
+    }
+  });
+  console.log(`Split ${stacked.length} stacked collection row(s) into single copies.`);
+  return stacked.length;
+}
+
 async function initDb() {
   const existingCollectionCols = await all(`PRAGMA table_info(collection)`).catch(() => []);
   if (existingCollectionCols.some(c => c.name === 'sub_location_1')) {
@@ -751,6 +783,8 @@ async function initDb() {
     await run(`ALTER TABLE locations ADD COLUMN allow_stacking INTEGER NOT NULL DEFAULT 0`);
   }
 
+  await splitStackedRows();
+
   // --- PERFORMANCE INDEXES ---
   // `user_id` first, because it is the predicate on essentially every read in the
   // app — every collection query, every stats aggregate — and nothing indexed it.
@@ -849,6 +883,7 @@ module.exports = {
   all,
   withTransaction,
   initDb,
+  splitStackedRows,
   createCompartments,
   seedStarterLocations,
   adoptOrphanRows,

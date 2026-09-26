@@ -183,22 +183,28 @@ router.post('/import', async (req, res) => {
           );
         }
 
-        await db.run(
-          `INSERT INTO collection 
-           (card_id, user_id, quantity, condition, printing, language, purchase_price, game, added_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-          [
-            cardId,
-            req.user.id,
-            item.quantity || 1,
-            item.condition || 'Near Mint',
-            item.printing || 'Normal',
-            item.language || 'English',
-            item.purchase_price || 0,
-            item.game || 'pokemon'
-          ]
-        );
-        importedCount++;
+        // A copy is a row, never a quantity on one row: a stacked row cannot be
+        // filed into separate slots or lent to a deck one copy at a time (#64).
+        // Backups and third-party CSVs still carry a quantity column, so expand
+        // it here, the same way POST /collection does.
+        const copies = Math.max(1, parseInt(item.quantity, 10) || 1);
+        for (let i = 0; i < copies; i++) {
+          await db.run(
+            `INSERT INTO collection
+             (card_id, user_id, quantity, condition, printing, language, purchase_price, game, added_at)
+             VALUES (?, ?, 1, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+            [
+              cardId,
+              req.user.id,
+              item.condition || 'Near Mint',
+              item.printing || 'Normal',
+              item.language || 'English',
+              item.purchase_price || 0,
+              item.game || 'pokemon'
+            ]
+          );
+          importedCount++;
+        }
       }
     });
 
