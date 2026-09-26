@@ -942,6 +942,7 @@
   "scan.exactMatch": "정확히 일치하는 카드를 찾았습니다!",
   "scan.expandSubsets": "하위 세트 보기",
   "scan.exposure": "노출",
+  "scan.zoom": "줌",
   "scan.fetchingCandidates": "후보 카드를 가져오는 중…",
   "scan.filterBySet": "세트별 필터링",
   "scan.hashedCrop": "해시된 잘라내기",

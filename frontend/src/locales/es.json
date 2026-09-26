@@ -978,6 +978,7 @@
   "scan.exactMatch": "¡Coincidencia exacta identificada!",
   "scan.expandSubsets": "Mostrar subconjuntos",
   "scan.exposure": "Exposición",
+  "scan.zoom": "Zoom",
   "scan.fetchingCandidates": "Buscando cartas candidatas…",
   "scan.filterBySet": "Filtrar por colección",
   "scan.hashedCrop": "Recorte con hash",

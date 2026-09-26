@@ -942,6 +942,7 @@
   "scan.exactMatch": "已识别到完全匹配的卡牌！",
   "scan.expandSubsets": "展开子系列",
   "scan.exposure": "曝光",
+  "scan.zoom": "缩放",
   "scan.fetchingCandidates": "正在获取候选卡牌…",
   "scan.filterBySet": "按系列筛选",
   "scan.hashedCrop": "哈希裁剪",

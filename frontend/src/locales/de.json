@@ -960,6 +960,7 @@
   "scan.exactMatch": "Exakte Übereinstimmung erkannt!",
   "scan.expandSubsets": "Teilsets anzeigen",
   "scan.exposure": "Belichtung",
+  "scan.zoom": "Zoom",
   "scan.fetchingCandidates": "Kandidatenkarten werden geladen …",
   "scan.filterBySet": "Nach Set filtern",
   "scan.hashedCrop": "Gehashter Ausschnitt",

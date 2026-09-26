@@ -6,6 +6,9 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+### Added
+- **Camera zoom in the scanner.** Scan settings gain a zoom slider when the camera reports zoom support (`MediaStreamTrack.getCapabilities().zoom`, e.g. Android Chrome). It is hardware zoom, so the guide-box crop gets more real pixels, and the level is remembered for the next session, which suits a phone mounted over the cards ([#61](https://github.com/thenotoriousJeremy/bindarr/issues/61)).
+
 ## [1.8.5] - 2026-09-11
 
 ### Added
