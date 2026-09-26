@@ -752,6 +752,7 @@ async function addCardToCollection(user, body) {
     const targetLocationId = resolved.compartment_id ? (resolved.location_id ?? location_id) : null;
 
     let lastInsertedId = null;
+    const insertedIds = [];
     // A cert number names ONE physical slab, so a quantity above 1 is not a
     // request for more of them — it is a mistake that the per-user unique index on
     // (grader, cert_number) would reject on the second insert anyway, after the
@@ -776,6 +777,7 @@ async function addCardToCollection(user, body) {
         grader, gradeValue, certValue
       ]);
       lastInsertedId = result.lastID;
+      insertedIds.push(lastInsertedId);
     } else {
       for (let i = 0; i < count; i++) {
         const result = await db.run(`
@@ -790,6 +792,7 @@ async function addCardToCollection(user, body) {
           grader, gradeValue, certValue
         ]);
         lastInsertedId = result.lastID;
+        insertedIds.push(lastInsertedId);
       }
     }
 
@@ -805,6 +808,9 @@ async function addCardToCollection(user, body) {
     return {
       message: 'Card added to collection',
       id: lastInsertedId,
+      // All rows created by this request, so a caller that added N copies can
+      // undo/manage each one individually rather than only the last insert.
+      ids: insertedIds,
       placement: resolved.compartment_id
         ? await describePlacement(db, lastInsertedId, req.user.id)
         : null,
