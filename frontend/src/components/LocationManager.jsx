@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { DndContext, DragOverlay, MouseSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
-import { Plus, Trash2, X, MoreVertical, Settings, RefreshCw, Lock, LayoutGrid, List, MousePointerClick, ChevronDown, ChevronUp, Edit3 } from 'lucide-react';
+import { Plus, Minus, Trash2, X, MoreVertical, Settings, RefreshCw, Lock, LayoutGrid, List, MousePointerClick, ChevronDown, ChevronUp, Edit3 } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
@@ -115,6 +115,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [unsortedSearch, setUnsortedSearch] = useState('');
   const [unsortedSort, setUnsortedSort] = useState('scanned-desc');
   const [unsortedViewMode, setUnsortedViewMode] = useState('grid'); // 'grid' | 'detail'
+  const [containerViewMode, setContainerViewMode] = useState('layout'); // 'layout' | 'list'
+  const [containerCardScale, setContainerCardScale] = useState(1);
   const [unsortedBulkLocation, setUnsortedBulkLocation] = useState('');
 
   const {
@@ -812,6 +814,14 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     [allCards, activeLocationId]
   );
 
+  const containerListCards = useMemo(() => {
+    const compartmentIndex = new Map(compartments.map((compartment, index) => [compartment.id, index]));
+    return [...cardsInActiveLocation].sort((a, b) =>
+      (compartmentIndex.get(a.compartment_id) ?? Infinity) - (compartmentIndex.get(b.compartment_id) ?? Infinity)
+      || (a.position || 0) - (b.position || 0)
+    );
+  }, [cardsInActiveLocation, compartments]);
+
   const openCompartmentRules = (comp) => {
     let draft = [];
     const cfg = comp.rule_config;
@@ -1234,6 +1244,54 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           
           {selectedLoc && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            {!filingMode && !moveMode && (
+              <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                <button
+                  type="button"
+                  className={`btn btn-icon-only ${containerViewMode === 'layout' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setContainerViewMode('layout')}
+                  style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                  title={t('loc.gridView')}
+                >
+                  <LayoutGrid size={13} />
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-icon-only ${containerViewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setContainerViewMode('list')}
+                  style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                  title={t('loc.detailView')}
+                >
+                  <List size={13} />
+                </button>
+              </div>
+            )}
+            {containerViewMode === 'list' && !filingMode && !moveMode && (
+              <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                <button
+                  type="button"
+                  className="btn btn-icon-only btn-secondary"
+                  disabled={containerCardScale <= 0.6}
+                  onClick={() => setContainerCardScale(scale => Math.max(0.6, +(scale - 0.2).toFixed(1)))}
+                  aria-label={t('loc.decreaseCardScale')}
+                  title={t('loc.decreaseCardScale')}
+                  style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Minus size={13} />
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-icon-only btn-secondary"
+                  disabled={containerCardScale >= 2.5}
+                  onClick={() => setContainerCardScale(scale => Math.min(2.5, +(scale + 0.2).toFixed(1)))}
+                  aria-label={t('loc.increaseCardScale')}
+                  title={t('loc.increaseCardScale')}
+                  style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Plus size={13} />
+                </button>
+              </div>
+            )}
             {!filingMode && !moveMode && (selectedLoc.total_cards || 0) > 0 && (
               <button
                 type="button"
@@ -1389,7 +1447,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </div>
             )}
 
-            {isBinderType && compartments.length > 0 && (
+            {containerViewMode === 'layout' && isBinderType && compartments.length > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem', margin: '0.2rem 0', background: 'rgba(0,0,0,0.1)', padding: '0.4rem', borderRadius: 'var(--radius-sm)' }}>
                 <button
                   type="button"
@@ -1442,7 +1500,26 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </div>
             )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: isBinderType ? '1rem' : '0.6rem' }}>
+            {containerViewMode === 'list' && (
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${84 * containerCardScale}px, 1fr))`, gap: '0.45rem' }}>
+                {containerListCards.map(card => {
+                  const selected = storage.selectedIds.has(card.entry_id);
+                  return (
+                    <button
+                      key={card.entry_id}
+                      type="button"
+                      onClick={() => storage.selectMode ? storage.toggleSelect(card.entry_id) : setInspectorCard(card)}
+                      aria-label={displayName(card)}
+                      title={displayName(card)}
+                      style={{ display: 'flex', justifyContent: 'center', width: '100%', padding: '0.25rem', border: selected ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', background: selected ? 'rgba(255,71,71,0.12)' : 'rgba(255,255,255,0.03)', cursor: 'pointer' }}
+                    >
+                      <CardImage card={card} style={{ width: '100%', borderRadius: '3px' }} />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <div style={{ display: containerViewMode === 'layout' ? 'flex' : 'none', flexDirection: 'column', gap: isBinderType ? '1rem' : '0.6rem' }}>
               {isBinderType ? (() => {
                 if (compartments.length === 0) return null;
                 const pageProps = (c, i) => ({

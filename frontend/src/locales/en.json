@@ -401,6 +401,8 @@
   "loc.toggleMultiSelect": "Toggle multi-select",
   "loc.gridView": "Grid Gallery View",
   "loc.detailView": "Detail List View",
+  "loc.decreaseCardScale": "Decrease card size",
+  "loc.increaseCardScale": "Increase card size",
   "loc.selectAll": "Select All",
   "loc.fileSelectedTo": "File selected to...",
   "loc.searchPlaceholder": "Search...",
