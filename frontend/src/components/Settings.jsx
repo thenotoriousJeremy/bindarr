@@ -181,7 +181,7 @@ function Settings({ user, onUpdateUser, showToast }) {
 
     const reader = new FileReader();
     const isJson = file.name.endsWith('.json');
-    const format = isJson ? 'json' : 'csv';
+    const format = isJson ? 'json' : (file.name.endsWith('.txt') ? 'manabox' : 'csv');
 
     reader.onload = async (event) => {
       try {
@@ -876,7 +876,7 @@ function Settings({ user, onUpdateUser, showToast }) {
               <span>{t('settings.importBackup')}</span>
               <input
                 type="file"
-                accept=".json,.csv"
+                accept=".json,.csv,.txt"
                 onChange={handleImportFile}
                 style={{ display: 'none' }}
               />

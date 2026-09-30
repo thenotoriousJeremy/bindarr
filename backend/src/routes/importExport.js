@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { parseThirdPartyCSV } = require('../utils/csvMappers');
+const { parseThirdPartyCSV, parseManaboxText } = require('../utils/csvMappers');
+const scryfallApi = require('../scryfallApi');
 const { generateExportCSV } = require('../utils/csvExporters');
 const { resolveCardPrice } = require('../utils/priceHelpers');
 const { isBinderType } = require('../utils/compartmentSort');
@@ -95,9 +96,28 @@ router.post('/import', async (req, res) => {
 
   try {
     let rawItems = [];
-
-    if (format.toLowerCase() === 'json') {
+    let unmatchedCount = 0;
+    const formatKey = format.toLowerCase();
+    if (formatKey === 'json') {
       rawItems = typeof data === 'string' ? JSON.parse(data) : data;
+    } else if (formatKey === 'manabox') {
+      rawItems = parseManaboxText(data);
+      if (rawItems.length === 0) {
+        return res.status(400).json({ error: 'No ManaBox cards found' });
+      }
+
+      const { cards, pairs } = await scryfallApi.bulkFetchByIdentifier(rawItems.map(item => ({
+        ...item,
+        set_id: item.set_code,
+        number: item.collector_number
+      })));
+      await scryfallApi.cacheCards(cards);
+
+      unmatchedCount = rawItems.length - pairs.length;
+      rawItems = pairs.map(({ row, card }) => ({ ...row, card_id: card.id }));
+      if (rawItems.length === 0) {
+        return res.status(400).json({ error: 'No ManaBox cards matched Scryfall' });
+      }
     } else {
       let lines = [];
       if (typeof data === 'string') {
@@ -208,7 +228,8 @@ router.post('/import', async (req, res) => {
       }
     });
 
-    return res.json({ success: true, count: importedCount, message: `Successfully imported ${importedCount} items.` });
+    const unmatched = unmatchedCount ? ` ${unmatchedCount} unmatched ManaBox printings were skipped.` : '';
+    return res.json({ success: true, count: importedCount, message: `Successfully imported ${importedCount} items.${unmatched}` });
   } catch (error) {
     return res.status(500).json({ error: 'Import failed', message: error.message });
   }

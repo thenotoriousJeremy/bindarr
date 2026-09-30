@@ -1071,7 +1071,7 @@
   "settings.accessConfirmRevoke": "Revoke this API key? Anything using it stops working.",
   "settings.errAccessKey": "Could not update the API key.",
   "settings.backupTitle": "Collection Backup & Data",
-  "settings.backupHint": "Export your card collection as a CSV or JSON backup, or import a previously exported database. Importing will merge cards into your collection.",
+  "settings.backupHint": "Export your card collection as a CSV or JSON backup, or import a Bindarr backup or ManaBox text export. Imports merge cards into your existing collection.",
   "settings.exportCsv": "Export CSV",
   "settings.exportJson": "Export JSON",
   "settings.importBackup": "Import Backup",

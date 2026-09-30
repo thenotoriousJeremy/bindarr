@@ -55,8 +55,39 @@ function parseThirdPartyCSV(rows, formatType = 'tcgplayer') {
   return rows.map(strategy);
 }
 
+// ManaBox's plain-text export is a decklist: `2 Card Name (SET) 123`, with
+// `*F*`/star tags for foil copies. Group duplicate lines because an export may
+// list the same printing in multiple sections.
+function parseManaboxText(data) {
+  if (typeof data !== 'string') return [];
+  const items = new Map();
+
+  for (const line of data.split(/\r?\n/)) {
+    const match = line.match(/^\s*(\d+)\s+(.+?)\s+\(([A-Za-z0-9]+)\)\s+([A-Za-z0-9]+)(.*)$/);
+    if (!match) continue;
+
+    const [, quantity, name, set_code, collector_number, tags] = match;
+    const printing = /(?:\*F\*|★)/i.test(tags) ? 'Holofoil' : 'Normal';
+    const key = `${set_code.toLowerCase()}|${collector_number.toLowerCase()}|${printing}`;
+    const item = items.get(key) || {
+      name,
+      set_code,
+      collector_number,
+      quantity: 0,
+      condition: 'Near Mint',
+      printing,
+      game: 'mtg'
+    };
+    item.quantity += parseInt(quantity, 10);
+    items.set(key, item);
+  }
+
+  return [...items.values()];
+}
+
 module.exports = {
   CONDITION_MAP,
   STRATEGIES,
-  parseThirdPartyCSV
+  parseThirdPartyCSV,
+  parseManaboxText
 };
