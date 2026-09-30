@@ -303,6 +303,8 @@
   "deck.accentColor": "Vault Accent Color",
   "deck.notesPlaceholder": "Strategy notes, engine ideas, or format details...",
   "deck.createDeck": "Create Deck",
+  "deck.editProperties": "Edit Properties",
+  "deck.saveProperties": "Save Properties",
   "deck.handSimulator": "Opening Hand Simulator",
   "deck.noCardsDrawn": "No cards drawn yet.",
   "deck.exportTitle": "Export Decklist",
