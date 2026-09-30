@@ -235,8 +235,7 @@ router.post('/import', async (req, res) => {
   }
 });
 
-// Import a ManaBox export into a new physical box. Every copy gets its own
-// collection row so the container's slots and capacity stay physically accurate.
+// Build a physical box from matching, unfiled cards the user already owns.
 router.post('/import-container', async (req, res) => {
   const { data, name } = req.body;
   const containerName = String(name || '').trim();
@@ -250,17 +249,34 @@ router.post('/import-container', async (req, res) => {
     const duplicate = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [containerName, req.user.id]);
     if (duplicate) return res.status(400).json({ error: 'A location with this name already exists' });
 
-    const { cards, pairs } = await scryfallApi.bulkFetchByIdentifier(items.map(item => ({
+    const { pairs } = await scryfallApi.bulkFetchByIdentifier(items.map(item => ({
       ...item,
       set_id: item.set_code,
       number: item.collector_number
     })));
     if (pairs.length === 0) return res.status(400).json({ error: 'No ManaBox cards matched Scryfall' });
-    await scryfallApi.cacheCards(cards);
 
-    const count = pairs.reduce((total, { row }) => total + row.quantity, 0);
+    const requested = pairs.reduce((total, { row }) => total + row.quantity, 0);
     let locationId;
+    let count = 0;
     await db.withTransaction(async () => {
+      const entries = [];
+      for (const { row, card } of pairs) {
+        let remaining = row.quantity;
+        const owned = await db.all(`
+          SELECT id FROM collection
+          WHERE user_id = ? AND card_id = ? AND printing = ? AND list_type = 'collection'
+            AND location_id IS NULL AND quantity = 1
+          ORDER BY id
+          LIMIT ?
+        `, [req.user.id, card.id, row.printing || 'Normal', remaining]);
+        for (const entry of owned) {
+          entries.push(entry.id);
+          remaining--;
+        }
+      }
+
+      count = entries.length;
       const location = await db.run(`
         INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, game, user_id)
         VALUES (?, 'Box', 'custom', 'normals_first', 'any', 'mtg', ?)
@@ -268,27 +284,20 @@ router.post('/import-container', async (req, res) => {
       locationId = location.lastID;
       const compartment = await db.run(
         `INSERT INTO compartments (location_id, idx, capacity) VALUES (?, 1, ?)`,
-        [locationId, count]
+        [locationId, Math.max(1, count)]
       );
 
-      let position = 1000;
-      for (const { row, card } of pairs) {
-        for (let copy = 0; copy < row.quantity; copy++) {
-          await db.run(`
-            INSERT INTO collection (
-              card_id, user_id, quantity, condition, printing, language,
-              location_id, compartment_id, position, game
-            ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, 'mtg')
-          `, [
-            card.id, req.user.id, row.condition || 'Near Mint', row.printing || 'Normal',
-            row.language || 'English', locationId, compartment.lastID, position
-          ]);
-          position += 1000;
-        }
+      for (let index = 0; index < entries.length; index++) {
+        await db.run(
+          `UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`,
+          [locationId, compartment.lastID, (index + 1) * 1000, entries[index], req.user.id]
+        );
       }
     });
 
-    res.status(201).json({ id: locationId, count, message: `Created ${containerName} with ${count} cards.` });
+    const missing = requested - count;
+    const skipped = missing ? ` ${missing} card${missing === 1 ? '' : 's'} not found in Unsorted.` : '';
+    res.status(201).json({ id: locationId, count, missing, message: `Created ${containerName} with ${count} cards.${skipped}` });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to import container' });

@@ -18,17 +18,24 @@ const importContainer = importRouter.stack.find(layer => layer.route?.path === '
 
 async function testContainerImport() {
   const originalBulkFetch = scryfallApi.bulkFetchByIdentifier;
-  const originalCacheCards = scryfallApi.cacheCards;
 
   try {
     await db.initDb();
-    scryfallApi.bulkFetchByIdentifier = async rows => {
-      const cards = rows.map((row, index) => ({ id: `mtg-test-${index}`, name: row.name, game: 'mtg' }));
-      return { cards, pairs: rows.map((row, index) => ({ row, card: cards[index] })) };
-    };
-    scryfallApi.cacheCards = async cards => {
-      for (const card of cards) await db.run('INSERT INTO card_cache (id, name, game) VALUES (?, ?, ?)', [card.id, card.name, card.game]);
-    };
+    scryfallApi.bulkFetchByIdentifier = async rows => ({
+      pairs: rows.map((row, index) => ({ row, card: { id: `mtg-test-${index}` } }))
+    });
+    for (let index = 0; index < expected.length; index++) {
+      const item = expected[index];
+      const cardId = `mtg-test-${index}`;
+      await db.run('INSERT INTO card_cache (id, name, game) VALUES (?, ?, ?)', [cardId, item.name, 'mtg']);
+      for (let copy = 0; copy < item.quantity; copy++) {
+        await db.run(`
+          INSERT INTO collection (card_id, quantity, condition, printing, language, game, user_id)
+          VALUES (?, 1, ?, ?, ?, 'mtg', ?)
+        `, [cardId, item.condition, item.printing, item.language, 1]);
+      }
+    }
+    const collectionCount = (await db.get('SELECT COUNT(*) AS count FROM collection WHERE user_id = 1')).count;
 
     const res = {
       statusCode: 200,
@@ -39,6 +46,9 @@ async function testContainerImport() {
 
     assert.strictEqual(res.statusCode, 201);
     assert.strictEqual(res.body.count, expectedCopies);
+    assert.strictEqual(res.body.missing, 0);
+    assert.strictEqual((await db.get('SELECT COUNT(*) AS count FROM collection WHERE user_id = 1')).count, collectionCount,
+      'container import must move owned cards, not add new collection rows');
     const location = await db.get('SELECT name, type, game FROM locations WHERE id = ?', [res.body.id]);
     assert.deepStrictEqual(location, { name: 'Black Box', type: 'Box', game: 'mtg' });
     const compartment = await db.get('SELECT capacity FROM compartments WHERE location_id = ?', [res.body.id]);
@@ -49,7 +59,6 @@ async function testContainerImport() {
     assert.deepStrictEqual(cards.map(card => card.position), cards.map((_, index) => (index + 1) * 1000));
   } finally {
     scryfallApi.bulkFetchByIdentifier = originalBulkFetch;
-    scryfallApi.cacheCards = originalCacheCards;
     try { db.dbConnection.close(); } catch { /* already closed */ }
     for (const suffix of ['', '-wal', '-shm']) {
       try { fs.unlinkSync(tmpDb + suffix); } catch { /* not present */ }

@@ -1432,6 +1432,8 @@
   "deck.availabilityBreakdown": "Collection Availability Breakdown:",
   "deck.fullyOwnedSpecies": "{owned}/{total} species fully owned",
   "deck.reqQuantity": "Req: {count}",
+  "deck.unavailableCopies": "{count} unavailable",
+  "deck.unavailableCopiesInDecks": "{count} unavailable — {decks}",
   "loc.cardsCurrentlyStored": "There are {count} cards currently stored in this container.",
   "loc.reorganizeWarningTitle": "Reorganizing with items inside may disrupt their logical filing order:",
   "loc.ruleNoteResort": "Changing the filing rule will require refiling or resorting cards to match the new sort order.",

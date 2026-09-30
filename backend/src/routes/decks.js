@@ -138,13 +138,18 @@ router.get('/:id', async (req, res) => {
         cc.number,
         cc.image_url,
         cc.price_trend,
-        (SELECT COALESCE(SUM(quantity), 0) FROM collection WHERE card_id = cc.id AND user_id = ? AND list_type = 'collection') AS owned_qty
+        (SELECT COALESCE(SUM(quantity), 0) FROM collection WHERE card_id = cc.id AND user_id = ? AND list_type = 'collection') AS owned_qty,
+        (SELECT COALESCE(SUM(dc2.quantity), 0)
+         FROM deck_cards dc2 JOIN decks d2 ON dc2.deck_id = d2.id
+         WHERE d2.checked_out = 1 AND d2.user_id = ? AND d2.id != ? AND dc2.card_id = cc.id) AS locked_qty,
+        (SELECT GROUP_CONCAT(d2.name, ', ')
+         FROM deck_cards dc2 JOIN decks d2 ON dc2.deck_id = d2.id
+         WHERE d2.checked_out = 1 AND d2.user_id = ? AND d2.id != ? AND dc2.card_id = cc.id) AS locked_decks
       FROM deck_cards dc
       JOIN card_cache cc ON dc.card_id = cc.id
       WHERE dc.deck_id = ?
     `;
-    const cards = await db.all(cardsQuery, [req.user.id, id]);
-
+    const cards = await db.all(cardsQuery, [req.user.id, req.user.id, id, req.user.id, id, id]);
     const formatted = cards.map(parseCardRow);
 
     res.json({
