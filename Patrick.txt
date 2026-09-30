@@ -1,0 +1,782 @@
+2 Caldera Kavu (PLS) 58
+1 Blaze (POR) 118†
+2 Hulking Goblin (POR) 135
+1 Sacred Nectar (POR) 25
+3 Regal Unicorn (POR) 22
+1 Venerable Monk (POR) 35
+1 Spotted Griffin (POR) 28
+1 Plains (POR) 198
+1 Warrior's Charge (POR) 38
+2 Untamed Wilds (POR) 191
+2 Volcanic Hammer (POR) 154
+1 Raging Goblin (POR) 145
+1 Grizzly Bears (POR) 169
+1 Anaconda (POR) 158
+7 Forest (POR) 212
+1 Defiant Stand (POR) 12
+2 Armored Pegasus (POR) 6d
+2 Devoted Hero (POR) 13
+1 Hill Giant (POR) 133
+9 Plains (POR) 196
+2 Gorilla Warrior (POR) 168
+1 Cloak of Feathers (POR) 44
+9 Island (POR) 200
+2 Elite Cat Warrior (POR) 163
+2 Feral Shadow (POR) 93d
+1 Coral Eel (POR) 49
+1 Hand of Death (POR) 96
+1 Gravedigger (POR) 95
+1 Ingenious Thief (POR) 58
+1 Command of Unsummoning (POR) 48
+1 Craven Knight (POR) 85
+8 Swamp (POR) 204
+1 Mind Rot (POR) 101
+2 Vampiric Touch (POR) 115
+2 Monstrous Growth (POR) 173
+1 Time Ebb (POR) 75
+2 Panther Warriors (POR) 180
+1 Touch of Brilliance (POR) 76
+2 Muck Rats (POR) 102
+2 Rowan Treefolk (POR) 184
+2 Skeletal Crocodile (POR) 110
+1 Armored Pegasus (ATH) 2
+1 Angelic Blessing (POR) 2
+1 Goblin Bully (POR) 131
+1 Merfolk of the Pearl Trident (POR) 60
+1 Fleet-Footed Monk (POR) 15
+2 Cloud Pirates (POR) 46d
+1 Charging Rhino (POR) 161
+1 Ebon Dragon (POR) 91
+1 Giant Spider (POR) 167
+1 Assassin's Blade (POR) 80
+1 Howling Fury (POR) 97
+1 Keen-Eyed Archers (POR) 19
+1 Charging Paladin (POR) 11
+1 Elvish Ranger (POR) 165
+2 Forest (POR) 214
+1 Island (POR) 201
+1 Knight Errant (POR) 20
+1 Foot Soldiers (POR) 16
+1 Bog Wraith (POR) 83
+1 Dry Spell (POR) 90
+1 Bull Hippo (POR) 160d
+1 Giant Octopus (POR) 56
+1 Mind Knives (POR) 100
+1 Bog Raiders (POR) 82
+1 Scorching Spear (POR) 148
+1 Stern Marshal (POR) 32
+1 Storm Crow (POR) 69d
+1 Nature's Lore (POR) 178
+1 Omen (POR) 62
+1 Swamp (POR) 205
+1 Whiptail Wurm (POR) 192
+1 Virtue's Ruin (POR) 116
+1 Snapping Drake (POR) 67d
+2 Mountain (POR) 208
+1 Skeletal Snake (POR) 111
+1 Scorching Winds (POR) 149
+1 Minotaur Warrior (POR) 140
+1 Symbol of Unsummoning (POR) 70
+1 Owl Familiar (POR) 63
+1 Undying Beast (POR) 113
+1 Steadfastness (POR) 31
+1 Blood Pet (7ED) 121
+1 Familiar Ground (7ED) 243
+3 Eager Cadet (7ED) 14
+1 Breath of Life (7ED) 4
+1 Fog (7ED) 245
+1 Forest (7ED) 331
+3 Coral Merfolk (7ED) 66
+1 Dark Banishing (7ED) 127
+1 Flight (7ED) 75
+3 Disenchant (7ED) 13
+2 Forest (7ED) 330
+1 Hill Giant (7ED) 196
+2 Goblin Glider (7ED) 189
+4 Forest (7ED) 328
+3 Grizzly Bears (7ED) 251
+1 Fyndhorn Elder (7ED) 246
+2 Glacial Wall (7ED) 78
+2 Forest (7ED) 329
+4 Goblin Raider (7ED) 192
+3 Goblin Digging Team (7ED) 186
+1 Fugue (7ED) 137
+2 Giant Octopus (7ED) 77
+3 Goblin Gardener (7ED) 188
+1 Holy Strength (7ED) 20
+2 Lava Axe (7ED) 199
+1 Howl from Beyond (7ED) 142
+1 Monstrous Growth (7ED) 258
+4 Knight Errant (7ED) 24
+5 Island (7ED) 335
+6 Mountain (7ED) 339
+1 Intrepid Hero (7ED) 22
+6 Island (7ED) 334
+6 Mountain (7ED) 338
+8 Island (7ED) 332
+6 Island (7ED) 333
+2 Merfolk of the Pearl Trident (7ED) 90
+1 Llanowar Elves (7ED) 253
+6 Mountain (7ED) 340
+1 Honor Guard (7ED) 21
+1 Rod of Ruin (7ED) 314
+7 Plains (7ED) 341
+2 Patagia Golem (7ED) 310
+1 Reclaim (7ED) 263
+1 Rampant Growth (7ED) 262
+1 Orcish Oriflamme (7ED) 206
+4 Plains (7ED) 344
+8 Plains (7ED) 342
+7 Mountain (7ED) 337
+1 Ogre Taskmaster (7ED) 203
+1 Raise Dead (7ED) 157
+1 Reprisal (7ED) 33
+1 Shivan Dragon (7ED) 218
+1 Vigilant Drake (7ED) 109
+2 Vengeance (7ED) 54
+1 Sleight of Hand (7ED) 98
+3 Sacred Nectar (7ED) 37
+1 Telepathic Spies (7ED) 101
+1 Twiddle (7ED) 107
+3 Shock (7ED) 219
+3 Standing Troops (7ED) 48
+2 Spined Wurm (7ED) 270
+1 Tremor (7ED) 225
+1 Shield Wall (7ED) 44
+3 Trained Orgg (7ED) 224
+1 Shanodin Dryads (7ED) 269
+1 Wall of Spears (7ED) 323
+2 Vizzerdrix (7ED) 110
+3 Wind Drake (7ED) 114
+2 Volcanic Hammer (7ED) 226
+1 Wood Elves (7ED) 284
+1 Mountain (7ED) 339★ *F*
+1 Plains (7ED) 342★ *F*
+1 Plains (7ED) 344★ *F*
+1 Swamp (7ED) 347★ *F*
+1 Air Elemental (7ED) 58
+1 Ancestral Memories (7ED) 59
+1 Confiscate (7ED) 65
+2 Boomerang (7ED) 64
+1 Daring Apprentice (7ED) 68
+1 Force Spike (7ED) 76
+1 Prodigal Sorcerer (7ED) 94
+1 Horned Turtle (7ED) 80
+1 Inspiration (7ED) 81
+1 Merfolk Looter (7ED) 89
+2 Counterspell (7ED) 67
+1 Fighting Drake (7ED) 73
+1 Sage Owl (7ED) 96
+1 Unsummon (7ED) 108
+1 Wall of Air (7ED) 111
+1 Thieving Magpie (7ED) 104
+1 Battering Ram (5ED) 353
+1 Mountain (ODY) 345 *F*
+1 Daring Leap (PLS) 101
+1 Crosis's Catacombs (PLS) 136
+1 Lucky Offering (NEO) 27
+1 Heroic Defiance (PLS) 6
+1 Ghost Ship (DRK) 28
+1 Marsh Crocodile (PLS) 115
+1 Ertai's Trickery (PLS) 24
+1 Benevolent Unicorn (MIR) 4
+1 Mire Kavu (PLS) 67
+1 Cavern Harpy (PLS) 97
+1 Mountain (INV) 346 *F*
+1 Soul Net (5ED) 400
+1 Sleeping Potion (PLS) 34
+3 Quirion Explorer (PLS) 90
+1 Svyelunite Temple (FEM) 102
+1 Sinister Strength (PLS) 54
+1 Snap (ULG) 43
+2 Slingshot Goblin (PLS) 72
+1 Wall of Spears (4ED) 356
+1 Angelic Page (7ED) 1
+1 Crossbow Infantry (7ED) 12
+2 Pacifism (7ED) 29
+2 Healing Salve (7ED) 18
+4 Plains (7ED) 343
+1 Glorious Anthem (7ED) 17
+1 Master Healer (7ED) 27
+2 Longbow Archer (7ED) 26
+1 Heavy Ballista (7ED) 19
+2 Serra's Embrace (7ED) 43
+2 Samite Healer (7ED) 38
+1 Spirit Link (7ED) 47
+1 Serra Advocate (7ED) 41
+1 Razorfoot Griffin (7ED) 32
+1 Shivan Oasis (INV) 327
+1 Steel Leaf Paladin (PLS) 127
+2 Thunderscape Battlemage (PLS) 75
+1 Zap (INV) 180
+2 Thornscape Battlemage (PLS) 94
+1 Viashino Grappler (INV) 179
+1 Thornscape Apprentice (INV) 215
+3 Stone Kavu (PLS) 93
+2 Sunscape Battlemage (PLS) 16
+1 Singe (PLS) 71
+1 Armadillo Cloak (INV) 229
+1 Eladamri's Call (PLS) 106
+1 Amphibious Kavu (PLS) 78
+1 Ancient Kavu (INV) 136
+1 Elfhame Palace (INV) 322
+1 Aurora Griffin (PLS) 2
+3 Forest (INV) 348
+1 Magma Burst (PLS) 66
+3 Forest (INV) 349
+2 Forest (INV) 350
+3 Forest (INV) 347
+1 Fleetfoot Panther (PLS) 108
+1 Horned Kavu (PLS) 110
+1 Irrigation Ditch (INV) 324
+1 Geothermal Crevice (INV) 323
+2 Fertile Ground (INV) 188
+2 Gerrard's Command (PLS) 109
+1 Harrow (INV) 189
+1 Mirrorwood Treefolk (PLS) 83
+1 Plains (INV) 332
+1 Nomadic Elf (INV) 200
+1 Radiant Kavu (PLS) 120
+1 Quirion Elves (INV) 203
+1 Rampant Elephant (INV) 28
+1 Mountain (INV) 343
+1 Plains (INV) 331
+1 Rith's Charm (PLS) 122
+2 Rith's Grove (PLS) 141
+1 Pollen Remedy (PLS) 13
+1 Plains (INV) 333
+1 Mountain (INV) 344
+1 Blaze (7ED) 175
+1 Lightning Blast (7ED) 200
+1 Goblin King (7ED) 190
+1 Fire Elemental (7ED) 183
+1 Goblin Matron (7ED) 191
+2 Goblin Chariot (7ED) 185
+2 Spitting Earth (7ED) 220
+2 Raging Goblin (7ED) 211
+2 Pillage (7ED) 207
+2 Aven Windreader (ODY) 65
+1 Abandoned Outpost (ODY) 312
+1 Angelic Wall (ODY) 3
+2 Cephalid Looter (ODY) 72
+1 Beloved Chaplain (ODY) 11
+2 Blessed Orator (ODY) 12
+2 Island (ODY) 336
+2 Cephalid Scout (ODY) 74
+1 Embolden (ODY) 22
+1 Cephalid Retainer (ODY) 73
+3 Island (ODY) 335
+2 Hallowed Healer (ODY) 25
+2 Island (ODY) 337
+2 Island (ODY) 338
+2 Cephalid Broker (ODY) 71
+1 Puppeteer (ODY) 97
+1 Mystic Penitent (ODY) 34
+1 Seafloor Debris (ODY) 325
+2 Mystic Visionary (ODY) 35
+1 Skycloud Egg (ODY) 309
+2 Think Tank (ODY) 104
+2 Millikin (ODY) 302
+1 Pilgrim of Justice (ODY) 40
+2 Syncopate (ODY) 103
+1 Nomad Decoy (ODY) 37
+1 Shelter (ODY) 46
+1 Peek (ODY) 91
+3 Kirtar's Desire (ODY) 27
+2 Plains (ODY) 333
+2 Plains (ODY) 334
+3 Mystic Zealot (ODY) 36
+1 Second Thoughts (ODY) 45
+1 Mystic Crusader (ODY) 33
+3 Plains (ODY) 331
+3 Plains (ODY) 332
+3 Catalog (USG) 64
+1 Fog Bank (USG) 75
+1 Erase (ULG) 7
+5 Island (USG) 336
+6 Island (USG) 335
+4 Disenchant (USG) 12
+2 Miscalculation (ULG) 36
+3 Drifting Meadow (USG) 320
+5 Island (USG) 337
+5 Island (USG) 338
+2 Dragon Blood (USG) 293
+1 Mobile Fort (USG) 303
+1 Mother of Runes (ULG) 14
+1 Radiant's Dragoons (ULG) 21
+2 Plains (USG) 334
+1 Pacifism (USG) 27
+4 Plains (USG) 333
+4 Plains (USG) 332
+3 Power Sink (USG) 89
+4 Plains (USG) 331
+1 Raven Familiar (ULG) 39
+2 Opportunity (ULG) 37
+4 Remote Isle (USG) 324
+2 Opal Champion (ULG) 16
+2 Path of Peace (USG) 29
+3 Radiant's Judgment (ULG) 22
+2 Sustainer of the Realm (ULG) 23
+1 Thornwind Faeries (ULG) 44
+2 Vigilant Drake (ULG) 46
+1 Ring of Gix (ULG) 131
+1 Urza's Blueprints (ULG) 137
+2 Ticking Gnomes (ULG) 136
+2 Sanctum Custodian (USG) 42
+1 Avalanche Riders (ULG) 74
+5 Arc Lightning (USG) 174
+2 Bone Shredder (ULG) 49
+1 Headlong Rush (USG) 198
+3 Expunge (USG) 135
+2 Goblin Medics (ULG) 79
+2 Defender of Chaos (ULG) 75
+1 Ghitu Encampment (ULG) 141
+1 Molten Hydra (ULG) 85
+1 Giant Cockroach (ULG) 54
+2 Heat Ray (USG) 199
+1 Engineered Plague (ULG) 51
+1 Looming Shade (USG) 139
+1 Corrupt (USG) 124
+2 Ghitu Slinger (ULG) 77
+1 Fog of Gnats (ULG) 53
+5 Swamp (USG) 342
+5 Mountain (USG) 345
+3 Polluted Mire (USG) 323
+1 Spawning Pool (ULG) 142
+4 Mountain (USG) 346
+1 Phyrexian Denouncer (ULG) 61
+1 Phyrexian Broodlings (ULG) 58
+3 Smoldering Crater (USG) 328
+2 Phyrexian Debaser (ULG) 59
+1 Phyrexian Reclamation (ULG) 63
+6 Mountain (USG) 343
+1 Phyrexian Plaguelord (ULG) 62
+6 Mountain (USG) 344
+2 Phyrexian Defiler (ULG) 60
+5 Swamp (USG) 341
+1 Viashino Runner (USG) 224
+6 Swamp (USG) 339
+1 Treacherous Link (ULG) 71
+1 Viashino Cutthroat (ULG) 94
+5 Swamp (USG) 340
+1 Tethered Skirge (ULG) 70
+1 Viashino Heretic (ULG) 95
+3 Waterfront Bouncer (MMQ) 114
+4 Accumulated Knowledge (NEM) 26
+2 Rusting Golem (NEM) 138
+2 Island (MMQ) 337
+1 Vine Trellis (MMQ) 285
+2 Forest (MMQ) 350
+2 Ensnare (NEM) 32
+1 Parallax Inhibitor (NEM) 134
+3 Forest (MMQ) 347
+1 Puffer Extract (MMQ) 310
+2 Hickory Woodlot (MMQ) 319
+1 Seal of Removal (NEM) 42
+2 Forest (MMQ) 349
+1 Dehydration (MMQ) 73
+2 Blastoderm (NEM) 102
+2 Woodripper (NEM) 125
+4 Cloudskate (NEM) 29
+2 Stronghold Zeppelin (NEM) 47
+2 Island (MMQ) 338
+4 Skyshroud Ridgeback (NEM) 120
+3 Island (MMQ) 335
+1 False Demise (MMQ) 80
+1 Seal of Strength (NEM) 115
+1 War Tax (MMQ) 113
+3 Forest (MMQ) 348
+1 Skyshroud Behemoth (NEM) 116
+2 Revive (MMQ) 262
+2 Saprazzan Skerry (MMQ) 328
+3 Island (MMQ) 336
+1 Despondency (USG) 129
+3 Diabolic Servitude (USG) 130
+1 Confiscate (USG) 66
+1 Abyssal Horror (USG) 115
+1 Phyrexian Ghoul (USG) 148
+2 Humble (USG) 18
+3 Pendrell Drake (USG) 86
+1 Exhume (USG) 134
+1 Stern Proctor (USG) 99
+3 Sandbar Serpent (USG) 95
+1 Wizard Mentor (USG) 112
+1 Turnabout (USG) 105
+1 Rescind (USG) 92
+1 Sandbar Merfolk (USG) 94
+1 Sicken (USG) 156
+2 Victimize (USG) 166
+1 Somnophore (USG) 97
+2 Acridian (USG) 230
+1 Anaconda (USG) 232
+3 Forest (USG) 348
+2 Forest (USG) 350
+2 Goblin War Buggy (USG) 196
+2 Cradle Guard (USG) 245
+2 Forest (USG) 349
+1 Argothian Wurm (USG) 236
+2 Goblin Patrol (USG) 193
+1 Bull Hippo (USG) 239
+3 Forest (USG) 347
+1 Fiery Mantle (USG) 186
+1 Hidden Spider (USG) 264
+1 Hush (USG) 266
+1 Jagged Lightning (USG) 200
+1 Pouncing Jaguar (USG) 269
+1 Hidden Ancients (USG) 260
+1 Torch Song (USG) 222
+1 Thran Turbine (USG) 311
+1 Symbiosis (USG) 275
+1 Shiv's Embrace (USG) 216
+1 Shower of Sparks (USG) 217
+2 Shivan Raptor (USG) 215
+1 Scrap (USG) 213
+3 Wild Dogs (USG) 284
+2 Slippery Karst (USG) 327
+1 Wildfire (USG) 228
+2 Thundering Giant (USG) 221
+4 Blossoming Sands (TDM) 251
+1 Get Lost (LCI) 14
+8 Forest (ECL) 273
+4 Inspiring Overseer (FDN) 496
+4 Giada, Font of Hope (FDN) 141
+2 Lightstall Inquisitor (EOE) 24
+1 Chomping Changeling (ECL) 172
+3 Exemplar of Light (FDN) 11
+4 Secluded Courtyard (FDN) 267
+8 Plains (ECL) 269
+2 Personify (ECL) 28
+2 Lyra Dawnbringer (FDN) 707
+4 Starfield Shepherd (EOE) 37
+4 Youthful Valkyrie (FDN) 149
+4 Llanowar Elves (FDN) 227
+2 Ride's End (DFT) 25
+2 Split Up (DSK) 32
+1 Pawpatch Recruit (BLB) 187
+2 Haliya, Guided by Light (EOE) 19
+3 Foolish Fate (SOS) 83
+2 Fiendish Panda (FDN) 120
+3 Case of the Uneaten Feast (MKM) 10
+4 Hinterland Sanctifier (FDN) 730
+3 Amalia Benavides Aguirre (LCI) 221
+3 Essence Channeler (BLB) 12
+4 Deep-Cavern Bat (LCI) 102
+11 Plains (SOS) 272
+9 Plains (SOS) 273
+2 Silverquill Charm (SOS) 225
+2 Requiting Hex (ECL) 116
+3 Zoraline, Cosmos Caller (BLB) 242
+4 Swamp (SOS) 277
+2 Temple of Silence (FDN) 704
+2 Nowhere to Run (DSK) 111
+4 Scoured Barrens (TDM) 267
+3 Starscape Cleric (BLB) 116
+4 Swamp (SOS) 276
+1 Mudflat Village (BLB) 257
+3 Thornscape Familiar (PLS) 95
+1 Beast, Erudite Aerialist (MSH) 206
+1 Forest (MSH) 286
+1 Doc Ock's Henchmen (SPM) 30
+1 Arnim Zola, Bio-Fanatic (MSH) 86
+1 Gert and Old Lace, Runaways (MSC) 568
+1 A.I.M. Labs (MSH) 257
+1 Agent Maria Hill (MSH) 2
+6 Forest (MSH) 295
+1 Giant-Sized Flying Ant (MSH) 56
+2 Colossal Collision (MSC) 558
+1 Crimson Operative (MSH) 126 *F*
+1 Black Widow, Super Spy (MSH) 89
+1 Captain Mar-Vell, Space-Born (MSH) 12
+1 Happy Hogan, Dauntless Driver (MSC) 545
+1 Avengers Tower (MSH) 260
+1 Doom's Servo-Guards (MSC) 535
+1 Feral Ferocity (MSC) 560
+1 Cruel Alliance (MSH) 92
+1 Guy in the Chair (SPM) 102
+1 Crimson Operative (MSH) 126
+1 Forest (MSH) 285
+1 Gamma Grotesque (MSC) 562
+1 Arachne, Psionic Weaver (SPM) 2
+1 Armor Wars (MSH) 203
+1 HULK SMASH! (MSH) 135
+1 HYDRA Troopers (MSH) 101
+1 HYDRA Infiltration (MSH) 100
+1 Doom Blade (MSC) 576
+1 Grim Reaper, Lethal Legionnaire (MSH) 98
+1 Experimental Armor (MSC) 543
+1 Concentrated Fire (MSC) 847
+1 Furious Strength (MSC) 544
+1 Black Widow, Natasha Romanoff (MSC) 846
+1 Atlantis Attacks (MSH) 46
+1 Flora Colossus (MSC) 561
+6 Forest (MSH) 296
+1 Glamorous Grapplers (MSC) 536
+1 Agents of S.H.I.E.L.D. (MSH) 5
+1 Atlas, Sizable Stooge (MSC) 566
+2 Agents of HYDRA (MSH) 85
+1 Knight of Wundagore (MSH) 175
+1 Heroes' Hangout (SPM) 79
+7 Mountain (MSH) 293
+1 Thriving Bluff (MSC) 578
+1 Spider-Gwen, Free Spirit (SPM) 90
+1 Starling, Aerial Ally (SPM) 18
+1 Infernal Rebirth (MSC) 537
+1 Thing Swing (MSC) 564
+1 Marvelous Melee (MSC) 549
+1 Wonder Man, Hollywood Hero (MSH) 160
+1 Speed, Young Avenger (MSH) 152
+1 S.H.I.E.L.D. Helicarrier (MSH) 249
+1 Repulsor Rays (MSC) 854
+1 Ultimo, Civilization's End (MSC) 540
+1 Hellcat, Undying Vigilante (MSH) 170
+1 Serpent Specialist (MSH) 186
+1 Helicarrier Strike (MSH) 15 *F*
+1 Punishing Punch (MSH) 180
+1 Surveillance Room (MSH) 274
+1 Power Boost (MSC) 852
+1 Smashing Spree (MSC) 555
+3 Swamp (MSH) 291
+1 Lightning Strike (MSH) 142
+1 Spider-Man, Hometown Hero (MSC) 857
+2 Warriors of Wakanda (MSC) 565
+1 Mister Fantastic, Reed Richards (MSH) 66
+1 Iron Lad, Young Avenger (MSC) 569
+1 Wiccan, Young Avenger (MSC) 557
+1 Killmonger, Scourge of Wakanda (MSH) 218
+1 Plains (MSH) 288
+2 I Am Iron Man (MSH) 58
+1 Swamp (MSH) 281
+1 Savage Land Dinosaur (MSH) 185
+1 Undercover Skrull (MSH) 194
+1 Hour of Defeat (MSH) 99
+1 She-Hulk, Jennifer Walters (MSC) 554
+1 Mister Hyde, Monster Within (MSH) 176
+1 Iron Man, Tony Stark (MSC) 851
+1 Hot Dog Cart (SPM) 164
+2 K'un-Lun Warrior (MSH) 140
+1 Venom's Hunger (SPM) 73
+1 Madame Hydra, Reanimated (MSC) 538
+1 The Thing, Ben Grimm (MSH) 190
+1 Swamp (MSH) 282
+1 Hire a Crew (MSH) 134
+1 Scarlet Spider, Kaine (SPM) 143
+1 Robotics Mastery (SPM) 41
+1 Training Regimen (MSH) 192
+1 Zabu (TMSH) 16
+1 Kingpin's Enforcers (MSH) 102
+3 Swamp (MSH) 292
+1 Team Transmitter (MSC) 573
+1 Super Speed (MSH) 154
+7 Mountain (MSH) 294
+1 Spider-Woman, Secret Agent (MSH) 229
+1 Project Deathlok Soldier (MSH) 109
+1 Quicksilver, Pietro Maximoff (MSC) 551
+2 Thriving Grove (MSC) 579
+2 Take Up the Shield (MSH) 39
+1 Thriving Moor (MSC) 582
+2 Soldier (TMSH) 3
+1 Moon-Boy, Dino Rider (MSC) 563
+1 Human Citizen (TSPM) 4
+1 Vibranium Energy Daggers (MSH) 254
+1 Spider Manifestation (SPM) 148
+1 Scarlet Witch, Wanda Maximoff (MSC) 855
+1 Wall (TMSH) 1
+2 Wakandan Royal Guard (MSH) 195
+2 Pet Avengers (MSH) 178
+1 The Super Hero Civil War (MSH) 231
+1 The Immortal Weapons (MSC) 547
+1 Human Torch, Johnny Storm (MSH) 136
+2 Visions of Villainy (MSH) 120
+1 Panther Pounce (MSH) 29
+1 Villain (TMSH) 9
+1 Wiccan, Rising Magician (MSH) 83
+1 Klaw, Sonic Subjugator (MSH) 103 *F*
+1 News Helicopter (SPM) 169
+1 Stature, Young Avenger (MSC) 571
+1 Hulk, Bruce Banner (MSC) 850
+2 Robot Hero (TMSC) 32
+1 Patriot, Young Avenger (MSC) 570
+1 The Fabulous Frog-Man (MSC) 559
+1 Ominous Asylum (SPM) 181
+1 Mountain (MSH) 284
+1 Treasure (TMSH) 22
+1 Secret Identity (SPM) 43 *F*
+1 Teeming Dragonstorm (TDM) 293 *F*
+1 All-Out Assault (TDM) 352
+1 Abrade (TDC) 203
+1 Evolving Wilds (TDM) 255
+1 Ash Barrens (TDC) 339
+1 Vanquish the Horde (TDC) 91
+2 Mountain (TDM) 284
+1 Command Tower (TDC) 107
+1 Veyran, Voice of Duality (TDC) 310
+1 Elsha, Threefold Master (TDC) 2 *F*
+1 Reliquary Tower (TDC) 386
+1 Mana Geyser (TDC) 223
+1 Electrodominance (TDC) 212
+1 Arcane Signet (TDC) 105
+1 Curse of the Swine (TDC) 149
+1 Adaptive Training Post (TDC) 18
+1 Azorius Signet (TDC) 312
+1 Expressive Iteration (TDC) 288
+1 Young Pyromancer (TDC) 95
+3 Island (TDM) 279
+1 Shivan Reef (TDC) 393
+1 Ferrous Lake (TDC) 361
+1 Ponder (TDC) 159
+2 Island (TDM) 280
+1 Transforming Flourish (TDC) 39
+1 Big Score (TDC) 206
+1 Ancestral Vision (TDC) 144
+1 Monastery Mentor (TDC) 125
+3 Mountain (TDM) 283
+1 Deep Analysis (TDC) 150
+1 Goblin Electromancer (TDC) 99
+1 Archmage Emeritus (TDC) 145
+1 Mangara, the Diplomat (TDC) 124
+1 Path of Ancestry (TDC) 382
+1 Rugged Prairie (TDC) 389
+1 Whirlwind of Thought (TDC) 311
+1 Expansion // Explosion (TDC) 287
+1 Curse of Opulence (TDC) 209
+1 Mystic Monastery (TDM) 262
+1 Shiny Impetus (TDC) 231
+1 Storm-Kiln Artist (TDC) 235
+1 Temple of Enlightenment (TDC) 401
+1 Adarkar Wastes (TDC) 338
+1 Opt (TDC) 158
+1 Baral's Expertise (TDC) 146
+1 Shiko and Narset, Unified (TDC) 7 *F*
+1 Boros Signet (TDC) 314
+1 Skycloud Expanse (TDC) 394
+1 Aligned Heart (TDC) 12
+1 Compulsive Research (TDC) 147
+1 Velomachus Lorehold (TDC) 309
+1 Glacial Fortress (TDC) 367
+1 Will of the Jeskai (TDC) 40
+1 Faithless Looting (TDC) 213
+1 Prismari Command (TDC) 299
+1 Tempest Technique (TDC) 16
+1 Clifftop Retreat (TDC) 351
+1 Think Twice (TDC) 168
+1 Sol Ring (TDC) 106
+1 Pongify (TDC) 160
+1 Sublime Epiphany (TDC) 167
+1 Ghostly Prison (TDC) 116
+1 Manaform Hellkite (TDC) 224
+1 Izzet Signet (TDC) 320
+1 Battlefield Forge (TDC) 340
+1 Dismantling Wave (TDC) 112
+1 Talisman of Progress (TDC) 333
+1 Frantic Search (TDC) 153
+1 Magma Opus (TDC) 296
+1 Irrigated Farmland (TDC) 372
+1 Voracious Bibliophile (TDC) 23
+2 Plains (TDM) 278
+1 Guttersnipe (TDC) 217
+1 Exotic Orchard (TDC) 360
+2 Plains (TDM) 277
+1 Caldera Pyremaw (TDC) 33
+1 Rite of Replication (TDC) 165
+1 Temple of Triumph (TDC) 407
+1 Haughty Djinn (TDC) 154
+1 Third Path Iconoclast (TDC) 307
+1 Consider (TDC) 148
+1 Temple of Epiphany (TDC) 402
+1 Cascade Bluffs (TDC) 345
+1 Narset's Reversal (TDC) 92
+1 Lier, Disciple of the Drowned (TDC) 157
+1 Time Wipe (TDC) 308
+1 Preordain (TDC) 161
+1 Prairie Stream (TDC) 384
+1 Perilous Landscape (TDC) 383
+1 Baral and Kari Zev (TDC) 282
+1 Transcendent Dragon (TDC) 22
+1 Fellwar Stone (TDC) 318
+1 Sulfur Falls (TDC) 396
+1 Swords to Plowshares (TDC) 134
+1 Mind Stone (SOC) 352
+1 Arcane Signet (SOC) 127
+1 Sol Ring (SOC) 128
+1 Lotus Field (SOC) 385
+1 Glittering Massif (SOC) 376
+1 Command Tower (SOC) 129
+1 Secret Rendezvous (SOC) 166
+1 Fateful Tempest (SOC) 31
+1 Kami of Ancient Law (SOC) 150
+1 Archaeomancer's Map (SOC) 136
+1 Monologue Tax (SOC) 157
+1 Venerable Warsinger (SOC) 336
+1 Terramorphic Expanse (SOS) 265
+1 Augusta, Order Returned (SOC) 11
+1 Swords to Plowshares (SOC) 179
+1 Exotic Orchard (SOC) 369
+1 Quintorius, History Chaser (SOC) 7 *F*
+1 White Orchid Phantom (SOC) 184
+1 Bitterthorn, Nissa's Animus (SOC) 343
+1 Radiant Summit (SOC) 396
+1 Naktamun Lorespinner // Wheel of Fortune (SOC) 33
+1 Path to Exile (SOC) 159
+1 Quintorius, Field Historian (SOC) 326
+1 Fellwar Stone (SOC) 347
+1 Study Hall (SOC) 407
+1 Currency Converter (SOC) 345
+1 Sacred Peaks (SOC) 402
+1 Tragic Arrogance (SOC) 182
+1 Clifftop Retreat (SOC) 366
+1 Anger (SOC) 235
+1 Turbulent Steppe (SOC) 58
+1 Patchwork Banner (SOC) 353
+1 Hofri Ghostforge (SOC) 314
+1 Lorehold Campus (SOC) 384
+1 Moonshaker Cavalry (SOC) 110
+1 Lorehold Charm (SOS) 200
+1 Teshar, Ancestor's Apostle (SOC) 180
+1 Conspiracy Theorist (SOC) 240
+3 Mountain (SOS) 279
+1 Guardian of Faith (SOC) 148
+1 Karmic Guide (SOC) 151
+1 Staff of the Storyteller (SOC) 111
+1 Drumbellower (SOC) 143
+1 Millikin (SOC) 351
+1 Battlefield Forge (SOC) 362
+1 Vanguard of the Restless (SOC) 16
+1 Emeria, the Sky Ruin (SOC) 368
+1 Mistveil Plains (SOC) 386
+1 Selfless Spirit (SOC) 167
+1 Advanced Reconstruction (SOC) 30
+1 Perpetual Timepiece (SOC) 354
+1 Atsushi, the Blazing Sky (SOC) 236
+1 Lorehold Archivist // Restore Relic (SOC) 49
+1 Squee, Goblin Nabob (SOC) 254
+1 Furycalm Snarl (SOC) 375
+1 Containment Construct (SOC) 344
+1 Quintorius, Loremaster (SOC) 327
+1 Seize the Spoils (SOS) 129
+1 Wave of Reckoning (SOC) 112
+1 Claim Jumper (SOC) 140
+1 Fabled Passage (SOC) 130
+1 Balefire Liege (SOC) 295
+1 Excava, the Risen Past (SOC) 2 *F*
+1 Fields of Strife (SOS) 255
+1 Sevinne's Reclamation (SOC) 170
+1 Laelia, the Blade Reforged (SOC) 246
+1 Rip Apart (SOC) 328
+1 Relic Retriever (SOC) 35
+1 Angel of Indemnity (SOC) 133
+1 Tocasia's Welcome (SOC) 181
+1 Primary Research (SOS) 26
+1 Ceaseless Conflict (SOC) 12
+1 Spirit of Resilience (SOC) 37
+3 Mountain (SOS) 278
+1 Serra Paragon (SOC) 169
+1 Faithless Looting (SOC) 244
+1 Guardian Scalelord (SOC) 149
+1 Sun Titan (SOC) 178
+1 Kirol, History Buff // Pack a Punch (SOS) 198
+1 Temple of Triumph (SOC) 417
+1 Remorseful Cleric (SOC) 164
+1 Ao, the Dawn Sky (SOC) 135
+1 Rugged Prairie (SOC) 401
+1 Skyclave Apparition (SOC) 173
+1 Sunscorched Divide (SOC) 410

@@ -89,6 +89,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const [sortBy, setSortBy] = useState('added-newest');
   const [tradeOnly, setTradeOnly] = useState(false);
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [notCheckedOutOnly, setNotCheckedOutOnly] = useState(false);
 
   // Stacking state (default to stacked)
   const [stackCards, setStackCards] = useState(true);
@@ -235,7 +236,8 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     + (minPriceFilter !== '' ? 1 : 0)
     + (maxPriceFilter !== '' ? 1 : 0)
     + (tradeOnly ? 1 : 0)
-    + (favoriteOnly ? 1 : 0);
+    + (favoriteOnly ? 1 : 0)
+    + (notCheckedOutOnly ? 1 : 0);
 
   const clearAllFilters = () => {
     setSearchFilter('');
@@ -245,6 +247,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     setCmcFilter([]); setLanguageFilter([]);
     setMinPriceFilter(''); setMaxPriceFilter('');
     setTradeOnly(false); setFavoriteOnly(false);
+    setNotCheckedOutOnly(false);
   };
 
   // Filter + sort
@@ -283,10 +286,12 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       const price = item.price_trend || 0;
       const matchesMinPrice = minPriceFilter === '' ? true : price >= parseFloat(minPriceFilter);
       const matchesMaxPrice = maxPriceFilter === '' ? true : price <= parseFloat(maxPriceFilter);
+      const matchesNotCheckedOut = !notCheckedOutOnly || (item.checked_out_qty || 0) === 0;
 
       return matchesSearch && matchesGame && matchesLocation && matchesRarity && matchesCondition &&
              matchesPrinting && matchesSet && matchesType && matchesSupertype &&
-             matchesCmc && matchesLanguage && matchesFavorite && matchesGrader && matchesMinPrice && matchesMaxPrice;
+             matchesCmc && matchesLanguage && matchesFavorite && matchesGrader && matchesMinPrice && matchesMaxPrice &&
+             matchesNotCheckedOut;
     });
 
     if (sortBy === 'qty-desc') {
@@ -295,7 +300,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       sortCardsByOrder(result, SORT_CRITERIA[sortBy] || SORT_CRITERIA['added-newest'], undefined, setsList);
     }
     return result;
-  }, [collection, searchFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter, favoriteOnly, graderFilter, minPriceFilter, maxPriceFilter, sortBy, setsList]);
+  }, [collection, searchFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter, favoriteOnly, graderFilter, minPriceFilter, maxPriceFilter, notCheckedOutOnly, sortBy, setsList]);
 
   // Group duplicate cards if stack option is active
   const processedCollection = useMemo(() => {
@@ -594,6 +599,15 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                   {t('collection.favoritesOnly')}
                 </label>
               </div>
+
+              {subTab === 'collection' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <input type="checkbox" id="notCheckedOutOpt" checked={notCheckedOutOnly} onChange={(e) => setNotCheckedOutOnly(e.target.checked)} style={{ width: '14px', height: '14px', cursor: 'pointer' }} />
+                  <label htmlFor="notCheckedOutOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                    {t('collection.notInCheckedOutDeck')}
+                  </label>
+                </div>
+              )}
 
               {activeFilterCount > 0 && (
                 <button className="btn btn-secondary" onClick={clearAllFilters} style={{ marginLeft: 'auto', fontSize: '0.72rem', padding: '0.3rem 0.7rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>

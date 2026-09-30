@@ -29,8 +29,8 @@ Try it without installing anything at **[thenotoriousjeremy.github.io/bindarr](h
 ## Features
 
 - **Camera scanning** — photograph a card and the server identifies it from the image alone. Works for Magic, Pokémon, and Lorcana.
-- **Physical location tracking** — binders by page and slot (1–9), boxes by row and divider, with a page-flip binder view. Drag cards between pockets to arrange a binder, or file them by tapping on a phone.
-- **Deck checkout** — reserve a deck's cards and get a checklist of exactly which slot each one sits in, then the same list in reverse when you put them back.
+- **Physical location tracking** — binders by page and slot (1–9), boxes by row and divider, with layout and scalable image-list views. Drag cards between pockets to arrange a binder, or file them by tapping on a phone.
+- **Deck Builder & checkout** — build decks, edit their properties, import ManaBox decklists, reserve cards for play, and see exactly which checked-out deck makes a copy unavailable.
 - **Search and bulk add** — search or browse a whole set with multi-select; pin a set and add by collector number one keystroke at a time.
 - **Dashboard** — collection value, 7/30-day trends, rarity and type breakdowns, set completion.
 - **Graded slabs** — record grader, grade and cert number per copy (PSA cert lookup fills them in), and give a slab its own value instead of the raw card's price.
@@ -40,6 +40,37 @@ Try it without installing anything at **[thenotoriousjeremy.github.io/bindarr](h
 - **11 UI languages**, community-translated.
 
 Architecture, the scan pipeline, and the data model are in [PROJECT.md](PROJECT.md).
+
+## Collection and deck workflows
+
+### ManaBox imports
+
+**Decks:** Open **Deck Builder → Create Deck → + Quick Import Decklist**, choose
+**ManaBox text export**, then select the `.txt` export. Bindarr reads the
+filename as the deck name, uses MTG Commander defaults, and resolves each
+printing by its ManaBox set and collector number.
+
+**Storage containers:** In the Storage view, select the upload button beside
+**Create Container**, then choose a ManaBox `.txt` export. Bindarr creates a
+**Box** named from the file (`Black Box.txt` becomes `Black Box`) and files
+matching **Unsorted cards you already own** into its first row. It never adds
+new collection cards during a container import; cards absent from Unsorted are
+reported as not found.
+
+### Deck Builder
+
+Open a deck and select **Edit Properties** to change its name, description,
+format, category, accent color, and target size. A deck's game stays fixed:
+its cards are game-scoped.
+
+Deck cards that cannot currently be used have a red warning. The label shows
+the missing copy count and, when another checked-out deck holds the copy, that
+deck's name — for example, `1 unavailable — Goblin Stampede`.
+
+### Container views
+
+Containers support layout and image-list views. In image-list view, use the
+plus and minus controls to scale card images from 60% to 250%.
 
 ---
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, X, ChevronLeft, Play, BarChart2, Search, LogOut, PackageCheck, LayoutGrid, List, Download, Upload, Eye, Filter, CheckCircle, AlertTriangle, Layers, Zap, Swords, Gamepad2, SlidersHorizontal, ArrowRight, FolderPlus, FileText } from 'lucide-react';
+import { Plus, Trash2, X, ChevronLeft, Play, BarChart2, Search, LogOut, PackageCheck, LayoutGrid, List, Download, Upload, Eye, Filter, CheckCircle, AlertTriangle, Layers, Zap, Swords, Gamepad2, SlidersHorizontal, ArrowRight, FolderPlus, FileText, MapPin } from 'lucide-react';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { shuffleArray } from '../utils/shuffle';
 import { translateJapaneseName } from '../utils/langHelper';
@@ -35,6 +35,12 @@ const newDeckDefaults = (game) => {
   return { format: 'Standard', targetSize: 60 };
 };
 
+const formatCardLocations = (locations) => locations.map(({ take, location_name, compartment_display }) =>
+  `${take > 1 ? `×${take} ` : ''}${location_name}${compartment_display ? ` · ${compartment_display}` : ''}`
+).join(', ');
+
+const locationCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
 function DeckBuilder({ showToast }) {
   const { t } = useT();
   const [decks, setDecks] = useState([]);
@@ -44,6 +50,7 @@ function DeckBuilder({ showToast }) {
   
   // Deck View & Display Modes
   const [cardDisplayMode, setCardDisplayMode] = useState('list'); // 'list' | 'grid'
+  const [deckCardSortBy, setDeckCardSortBy] = useState('type');
   const [previewCard, setPreviewCard] = useState(null);
 
   // Deck Creation States & Constants
@@ -111,6 +118,7 @@ function DeckBuilder({ showToast }) {
   const [checkoutLocations, setCheckoutLocations] = useState([]);
   const [checkoutMode, setCheckoutMode] = useState('checkout'); // 'checkout' | 'checkin'
   const [checkoutDeckId, setCheckoutDeckId] = useState(null); // deck the open modal acts on
+  const [deckCardLocations, setDeckCardLocations] = useState({});
 
   // True while an add/qty write is in flight. Blocks overlapping clicks that
   // would otherwise each compute a new quantity from the same stale render and
@@ -224,9 +232,14 @@ function DeckBuilder({ showToast }) {
   const loadDeckDetails = async (deckId) => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/decks/${deckId}`);
+      const [response, locationsResponse] = await Promise.all([
+        fetch(`/api/decks/${deckId}`),
+        fetch(`/api/decks/${deckId}/locations`)
+      ]);
       if (response.ok) {
         const data = await response.json();
+        const locations = locationsResponse.ok ? await locationsResponse.json() : [];
+        setDeckCardLocations(Object.fromEntries(locations.map(({ card_id, locations: cardLocations }) => [card_id, cardLocations])));
         // Also get checkout status from deck list
         const deckMeta = decks.find(d => d.id === deckId);
         setActiveDeck({ ...data, checked_out: deckMeta?.checked_out || 0, checked_out_at: deckMeta?.checked_out_at || null });
@@ -727,6 +740,25 @@ function DeckBuilder({ showToast }) {
     : (deckGame === 'lorcana'
       ? ['Character', 'Action', 'Item', 'Location', 'Other']
       : ['Pokémon', 'Trainer', 'Energy', 'Other']);
+
+  const deckCardGroups = activeDeck && deckCardSortBy === 'location'
+    ? [{
+        name: t('collection.fLocation'),
+        cards: [...activeDeck.cards].sort((a, b) => {
+          const aLocation = deckCardLocations[a.id]?.[0];
+          const bLocation = deckCardLocations[b.id]?.[0];
+          if (!aLocation) return bLocation ? 1 : displayName(a).localeCompare(displayName(b));
+          if (!bLocation) return -1;
+          return locationCollator.compare(aLocation.location_name, bLocation.location_name)
+            || locationCollator.compare(aLocation.compartment_display || '', bLocation.compartment_display || '')
+            || (aLocation.position || 0) - (bLocation.position || 0)
+            || displayName(a).localeCompare(displayName(b));
+        })
+      }]
+    : GROUP_ORDER.map(name => ({
+        name,
+        cards: activeDeck?.cards.filter(card => cardGroup(card).toLowerCase() === name.toLowerCase()) || []
+      }));
 
   // --- CHART DATA GENERATION ---
   const getSupertypeChartData = () => {
@@ -1635,15 +1667,22 @@ function DeckBuilder({ showToast }) {
                         <LayoutGrid size={12} /> Grid
                       </button>
                     </div>
+                    <select
+                      className="select-control"
+                      value={deckCardSortBy}
+                      onChange={(e) => setDeckCardSortBy(e.target.value)}
+                      aria-label={t('collection.sortBy')}
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', height: 'auto' }}
+                    >
+                      <option value="type">{t('deck.sortByType')}</option>
+                      <option value="location">{t('collection.fLocation')}</option>
+                    </select>
                   </div>
                   
                   {activeDeck.cards.length === 0 ? (
                     <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem 0' }}>{t('deck.emptyDeck')}</p>
                   ) : (
-                    GROUP_ORDER.map(supertype => {
-                      const list = activeDeck.cards.filter(c => {
-                        return cardGroup(c).toLowerCase() === supertype.toLowerCase();
-                      });
+                    deckCardGroups.map(({ name: supertype, cards: list }) => {
                       if (list.length === 0) return null;
                       const sum = list.reduce((total, c) => total + c.quantity, 0);
 
@@ -1664,6 +1703,11 @@ function DeckBuilder({ showToast }) {
                                     <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
                                       <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(card)}</div>
                                       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.set_name} • #{card.number}</div>
+                                      {deckCardLocations[card.id]?.length > 0 && (
+                                        <div title={formatCardLocations(deckCardLocations[card.id])} style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '0.68rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                          <MapPin size={11} /> {formatCardLocations(deckCardLocations[card.id])}
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
 
@@ -1715,6 +1759,11 @@ function DeckBuilder({ showToast }) {
                                       </span>
                                     )}
                                   </div>
+                                  {deckCardLocations[card.id]?.length > 0 && (
+                                    <div title={formatCardLocations(deckCardLocations[card.id])} style={{ display: 'flex', alignItems: 'center', gap: '3px', padding: '4px 5px 0', fontSize: '0.65rem', color: 'var(--text-secondary)', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                                      <MapPin size={10} /> <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatCardLocations(deckCardLocations[card.id])}</span>
+                                    </div>
+                                  )}
                                   <div style={{ padding: '4px', display: 'flex', justifyContent: 'center', background: 'rgba(0,0,0,0.5)' }}>
                                     <div style={{ display: 'flex', gap: '2px' }}>
                                       <button className={`btn ${card.quantity === 1 ? 'btn-danger' : 'btn-secondary'} btn-icon-only`} style={{ width: '20px', height: '20px', fontSize: '0.7rem', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} disabled={savingCard} onClick={() => handleUpdateCardQty(card.id, card.quantity - 1)} title={t(card.quantity === 1 ? 'deck.removeFromDeck' : 'deck.decreaseQty')}>
