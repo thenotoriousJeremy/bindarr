@@ -4,7 +4,7 @@ const os = require('os');
 const path = require('path');
 const { parseManaboxText } = require('../src/utils/csvMappers');
 
-const decklist = fs.readFileSync(path.join(__dirname, '..', '..', 'Zoraline’s Last Light.txt'), 'utf8');
+const decklist = fs.readFileSync(path.join(__dirname, 'fixtures', 'manabox', 'Zoraline’s Last Light.txt'), 'utf8');
 const expected = parseManaboxText(decklist);
 const tmpDb = path.join(os.tmpdir(), `bindarr-manabox-deck-test-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;

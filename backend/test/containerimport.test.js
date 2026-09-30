@@ -4,7 +4,7 @@ const os = require('os');
 const path = require('path');
 const { parseManaboxText } = require('../src/utils/csvMappers');
 
-const data = fs.readFileSync(path.join(__dirname, '..', '..', 'Patrick.txt'), 'utf8');
+const data = fs.readFileSync(path.join(__dirname, 'fixtures', 'manabox', 'Patrick.txt'), 'utf8');
 const expected = parseManaboxText(data);
 const expectedCopies = expected.reduce((total, card) => total + card.quantity, 0);
 const tmpDb = path.join(os.tmpdir(), `bindarr-container-import-${process.pid}.db`);

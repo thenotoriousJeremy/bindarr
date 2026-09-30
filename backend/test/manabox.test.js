@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { parseManaboxText } = require('../src/utils/csvMappers');
 
-const cards = parseManaboxText(fs.readFileSync(path.join(__dirname, '..', '..', 'Patrick.txt'), 'utf8'));
+const cards = parseManaboxText(fs.readFileSync(path.join(__dirname, 'fixtures', 'manabox', 'Patrick.txt'), 'utf8'));
 const card = (set, number, printing = 'Normal') => cards.find(c =>
   c.set_code === set && c.collector_number === number && c.printing === printing
 );
@@ -60,11 +60,13 @@ async function testImportRoute() {
     }, res);
 
     assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(res.body.count, 2);
+    // One collection row per copy (#64), so `2 Caldera Kavu` lands as two rows.
+    assert.strictEqual(res.body.count, 3);
     assert.deepStrictEqual(await db.all(
       `SELECT card_id, quantity, printing, game FROM collection ORDER BY card_id`
     ), [
-      { card_id: 'mtg-caldera', quantity: 2, printing: 'Normal', game: 'mtg' },
+      { card_id: 'mtg-caldera', quantity: 1, printing: 'Normal', game: 'mtg' },
+      { card_id: 'mtg-caldera', quantity: 1, printing: 'Normal', game: 'mtg' },
       { card_id: 'mtg-mountain', quantity: 1, printing: 'Holofoil', game: 'mtg' }
     ]);
   } finally {

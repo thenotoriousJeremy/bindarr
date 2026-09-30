@@ -745,8 +745,8 @@ function DeckBuilder({ showToast }) {
     ? [{
         name: t('collection.fLocation'),
         cards: [...activeDeck.cards].sort((a, b) => {
-          const aLocation = deckCardLocations[a.id]?.[0];
-          const bLocation = deckCardLocations[b.id]?.[0];
+          const aLocation = deckCardLocations[a.id]?.find(location => location.location_id);
+          const bLocation = deckCardLocations[b.id]?.find(location => location.location_id);
           if (!aLocation) return bLocation ? 1 : displayName(a).localeCompare(displayName(b));
           if (!bLocation) return -1;
           return locationCollator.compare(aLocation.location_name, bLocation.location_name)

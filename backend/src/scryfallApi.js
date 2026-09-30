@@ -306,32 +306,37 @@ async function bulkFetchByIdentifier(rows) {
 
   for (let i = 0; i < rows.length; i += COLLECTION_BATCH) {
     const chunk = rows.slice(i, i + COLLECTION_BATCH);
+    // Several rows can name the same printing (a foil and a non-foil copy of one
+    // collector number), so a key holds every row that asked for it and is sent
+    // to Scryfall once; each returned card then pairs with all of them.
     const byKey = new Map();
-    const identifiers = chunk.map(row => {
-      const uuid = scryfallUuid(row.id || row.card_id);
-      if (uuid) {
-        byKey.set(`id:${uuid.toLowerCase()}`, row);
-        return { id: uuid };
+    const identifiers = [];
+    const want = (key, row, identifier) => {
+      if (!byKey.has(key)) {
+        byKey.set(key, []);
+        identifiers.push(identifier);
       }
+      byKey.get(key).push(row);
+    };
+    for (const row of chunk) {
+      const uuid = scryfallUuid(row.id || row.card_id);
       const setId = row.set_id != null ? String(row.set_id).toLowerCase() : '';
       const num = row.number != null ? String(row.number) : '';
-      if (setId && num) {
-        byKey.set(`sn:${setId}|${num.toLowerCase()}`, row);
-        return { set: setId, collector_number: num };
-      }
-      byKey.set(`n:${String(row.name || '').toLowerCase()}`, row);
-      return { name: row.name || '' };
-    });
+      if (uuid) want(`id:${uuid.toLowerCase()}`, row, { id: uuid });
+      else if (setId && num) want(`sn:${setId}|${num.toLowerCase()}`, row, { set: setId, collector_number: num });
+      else want(`n:${String(row.name || '').toLowerCase()}`, row, { name: row.name || '' });
+    }
 
     const resp = await scryPostRetried('/cards/collection', { identifiers });
     notFound += ((resp.data && resp.data.not_found) || []).length;
     for (const raw of (resp.data && resp.data.data) || []) {
       const norm = normalizeCard(raw);
       cards.push(norm);
-      const row = byKey.get(`id:${String(raw.id).toLowerCase()}`)
+      const matched = byKey.get(`id:${String(raw.id).toLowerCase()}`)
         || byKey.get(`sn:${String(norm.set_id).toLowerCase()}|${String(norm.number).toLowerCase()}`)
-        || byKey.get(`n:${String(norm.name).toLowerCase()}`);
-      if (row) pairs.push({ row, card: norm });
+        || byKey.get(`n:${String(norm.name).toLowerCase()}`)
+        || [];
+      for (const row of matched) pairs.push({ row, card: norm });
     }
   }
   return { cards, pairs, notFound };
