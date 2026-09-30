@@ -235,4 +235,64 @@ router.post('/import', async (req, res) => {
   }
 });
 
+// Import a ManaBox export into a new physical box. Every copy gets its own
+// collection row so the container's slots and capacity stay physically accurate.
+router.post('/import-container', async (req, res) => {
+  const { data, name } = req.body;
+  const containerName = String(name || '').trim();
+  if (!data || !containerName) {
+    return res.status(400).json({ error: 'Container name and ManaBox data are required' });
+  }
+
+  try {
+    const items = parseManaboxText(data);
+    if (items.length === 0) return res.status(400).json({ error: 'No ManaBox cards found' });
+    const duplicate = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [containerName, req.user.id]);
+    if (duplicate) return res.status(400).json({ error: 'A location with this name already exists' });
+
+    const { cards, pairs } = await scryfallApi.bulkFetchByIdentifier(items.map(item => ({
+      ...item,
+      set_id: item.set_code,
+      number: item.collector_number
+    })));
+    if (pairs.length === 0) return res.status(400).json({ error: 'No ManaBox cards matched Scryfall' });
+    await scryfallApi.cacheCards(cards);
+
+    const count = pairs.reduce((total, { row }) => total + row.quantity, 0);
+    let locationId;
+    await db.withTransaction(async () => {
+      const location = await db.run(`
+        INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, game, user_id)
+        VALUES (?, 'Box', 'custom', 'normals_first', 'any', 'mtg', ?)
+      `, [containerName, req.user.id]);
+      locationId = location.lastID;
+      const compartment = await db.run(
+        `INSERT INTO compartments (location_id, idx, capacity) VALUES (?, 1, ?)`,
+        [locationId, count]
+      );
+
+      let position = 1000;
+      for (const { row, card } of pairs) {
+        for (let copy = 0; copy < row.quantity; copy++) {
+          await db.run(`
+            INSERT INTO collection (
+              card_id, user_id, quantity, condition, printing, language,
+              location_id, compartment_id, position, game
+            ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, 'mtg')
+          `, [
+            card.id, req.user.id, row.condition || 'Near Mint', row.printing || 'Normal',
+            row.language || 'English', locationId, compartment.lastID, position
+          ]);
+          position += 1000;
+        }
+      }
+    });
+
+    res.status(201).json({ id: locationId, count, message: `Created ${containerName} with ${count} cards.` });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to import container' });
+  }
+});
+
 module.exports = router;

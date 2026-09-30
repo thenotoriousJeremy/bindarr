@@ -4,6 +4,8 @@ const cardApi = require('../utils/cardApi');
 const { parseCardRow, recordPrice } = require('../utils/priceHelpers');
 const { compartmentLabel } = require('../utils/compartmentSort');
 const { validateDeckAddition } = require('../utils/deckRules');
+const scryfallApi = require('../scryfallApi');
+const { parseManaboxText } = require('../utils/csvMappers');
 
 const router = express.Router();
 
@@ -49,7 +51,8 @@ router.post('/', async (req, res) => {
     category = 'Competitive',
     accent_color = '#eab308',
     target_size = 60,
-    decklist_text = ''
+    decklist_text = '',
+    decklist_format = 'plain'
   } = req.body;
   
   if (!name) {
@@ -65,22 +68,41 @@ router.post('/', async (req, res) => {
     );
     const newDeckId = result.lastID;
 
-    // Optional decklist import
+    // Optional decklist import. ManaBox identifies a printing by set and
+    // collector number, so resolve those identifiers in batches instead of
+    // guessing from a card name shared by many printings.
     if (decklist_text && typeof decklist_text === 'string') {
-      const lines = decklist_text.split('\n');
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        const match = trimmed.match(/^(\d+)x?\s+(.+)$/i);
-        if (match) {
-          const qty = parseInt(match[1], 10);
-          const cardName = match[2].trim();
-          const card = await db.get(`SELECT id FROM card_cache WHERE LOWER(name) = LOWER(?) AND game = ? LIMIT 1`, [cardName, deckGame]);
-          if (card) {
-            await db.run(
-              `INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, ?, ?) ON CONFLICT(deck_id, card_id) DO UPDATE SET quantity = quantity + EXCLUDED.quantity`,
-              [newDeckId, card.id, qty]
-            );
+      if (decklist_format === 'manabox' && deckGame === 'mtg') {
+        const items = parseManaboxText(decklist_text);
+        const { cards, pairs } = await scryfallApi.bulkFetchByIdentifier(items.map(item => ({
+          ...item,
+          set_id: item.set_code,
+          number: item.collector_number
+        })));
+        await scryfallApi.cacheCards(cards);
+        for (const { row, card } of pairs) {
+          await db.run(
+            `INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, ?, ?)
+             ON CONFLICT(deck_id, card_id) DO UPDATE SET quantity = quantity + EXCLUDED.quantity`,
+            [newDeckId, card.id, row.quantity]
+          );
+        }
+      } else {
+        const lines = decklist_text.split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          const match = trimmed.match(/^(\d+)x?\s+(.+)$/i);
+          if (match) {
+            const qty = parseInt(match[1], 10);
+            const cardName = match[2].trim();
+            const card = await db.get(`SELECT id FROM card_cache WHERE LOWER(name) = LOWER(?) AND game = ? LIMIT 1`, [cardName, deckGame]);
+            if (card) {
+              await db.run(
+                `INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, ?, ?) ON CONFLICT(deck_id, card_id) DO UPDATE SET quantity = quantity + EXCLUDED.quantity`,
+                [newDeckId, card.id, qty]
+              );
+            }
           }
         }
       }

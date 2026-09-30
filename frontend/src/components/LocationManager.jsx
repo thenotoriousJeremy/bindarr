@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { DndContext, DragOverlay, MouseSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
-import { Plus, Minus, Trash2, X, MoreVertical, Settings, RefreshCw, Lock, LayoutGrid, List, MousePointerClick, ChevronDown, ChevronUp, Edit3 } from 'lucide-react';
+import { Plus, Minus, Trash2, X, MoreVertical, Settings, RefreshCw, Lock, LayoutGrid, List, MousePointerClick, ChevronDown, ChevronUp, Edit3, Upload } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
@@ -81,6 +81,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
 
   const [showCreate, setShowCreate] = useState(false);
+  const containerImportInput = useRef(null);
 
   const [capacityUpdatePending, setCapacityUpdatePending] = useState(null);
   const [showKebabMenu, setShowKebabMenu] = useState(false);
@@ -482,6 +483,33 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       console.error(err);
       showToast(t('loc.errCreate'));
     }
+  };
+
+  const handleContainerImportFile = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const response = await fetch('/api/import-container', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: String(reader.result || ''), name: file.name.replace(/\.[^.]+$/, '') })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || t('loc.errCreate'));
+        showToast(data.message);
+        setActiveLocationId(data.id);
+        await refreshAll();
+        onUpdate();
+      } catch (error) {
+        console.error(error);
+        showToast(error.message);
+      }
+    };
+    reader.onerror = () => showToast(t('settings.errReadFile'));
+    reader.readAsText(file);
+    event.target.value = '';
   };
 
   const handleDeleteLocation = async (locId, name) => {
@@ -1235,6 +1263,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setShowCreate(s => !s)} style={{ width: '28px', height: '28px', padding: 0 }} title={t('loc.createContainer')}>
               <Plus size={14} />
             </button>
+            <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => containerImportInput.current?.click()} style={{ width: '28px', height: '28px', padding: 0 }} title={t('loc.importContainer')}>
+              <Upload size={14} />
+            </button>
+            <input ref={containerImportInput} type="file" accept=".txt,text/plain" onChange={handleContainerImportFile} style={{ display: 'none' }} />
             {selectedLoc && !!selectedLoc.locked && (
               <button type="button" onClick={handleToggleContainerLock} title={t('loc.lockedBadgeHint')} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.62rem', fontWeight: 800, padding: '0.15rem 0.45rem', borderRadius: '999px', cursor: 'pointer', background: 'rgba(255,193,7,0.15)', border: '1px solid var(--accent-yellow)', color: 'var(--accent-yellow)' }}>
                 <Lock size={11} /> Locked

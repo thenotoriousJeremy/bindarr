@@ -71,6 +71,7 @@ function DeckBuilder({ showToast }) {
   const [newDeckAccentColor, setNewDeckAccentColor] = useState('#eab308');
   const [newDeckTargetSize, setNewDeckTargetSize] = useState(() => newDeckDefaults(defaultGame()).targetSize);
   const [newDeckImportText, setNewDeckImportText] = useState('');
+  const [newDeckImportFormat, setNewDeckImportFormat] = useState('plain');
   const [showImportDecklistArea, setShowImportDecklistArea] = useState(false);
   
   // Card Search States inside editor
@@ -156,7 +157,8 @@ function DeckBuilder({ showToast }) {
           category: newDeckCategory,
           accent_color: newDeckAccentColor,
           target_size: newDeckTargetSize,
-          decklist_text: newDeckImportText
+          decklist_text: newDeckImportText,
+          decklist_format: newDeckImportFormat
         })
       });
 
@@ -170,6 +172,7 @@ function DeckBuilder({ showToast }) {
         setNewDeckAccentColor('#eab308');
         setNewDeckTargetSize(newDeckDefaults(defaultGame()).targetSize);
         setNewDeckImportText('');
+        setNewDeckImportFormat('plain');
         setShowImportDecklistArea(false);
         setShowCreateModal(false);
         fetchDecks();
@@ -180,6 +183,20 @@ function DeckBuilder({ showToast }) {
       console.error(err);
       showToast(t('deck.errCreateGeneric'));
     }
+  };
+
+  const handleManaBoxDeckFile = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setNewDeckImportText(String(reader.result || ''));
+      setNewDeckImportFormat('manabox');
+      if (!newDeckName.trim()) setNewDeckName(file.name.replace(/\.txt$/i, ''));
+    };
+    reader.onerror = () => showToast(t('settings.errReadFile'));
+    reader.readAsText(file);
+    event.target.value = '';
   };
 
   const loadDeckDetails = async (deckId) => {
@@ -1998,6 +2015,31 @@ function DeckBuilder({ showToast }) {
 
                 {showImportDecklistArea && (
                   <div style={{ marginTop: '0.5rem' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+                      <select
+                        className="select-control"
+                        value={newDeckImportFormat}
+                        onChange={(e) => {
+                          const format = e.target.value;
+                          setNewDeckImportFormat(format);
+                          if (format === 'manabox') {
+                            setNewDeckGame('mtg');
+                            setNewDeckFormat('Commander / EDH');
+                            setNewDeckTargetSize(100);
+                          }
+                        }}
+                        style={{ flex: 1, fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
+                      >
+                        <option value="plain">{t('deck.importFormatPlain')}</option>
+                        <option value="manabox">{t('deck.importFormatManaBox')}</option>
+                      </select>
+                      {newDeckImportFormat === 'manabox' && (
+                        <label className="btn btn-secondary" style={{ margin: 0, padding: '0.3rem 0.5rem', fontSize: '0.75rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                          <Upload size={13} /> {t('deck.chooseManaBoxFile')}
+                          <input type="file" accept=".txt,text/plain" onChange={handleManaBoxDeckFile} style={{ display: 'none' }} />
+                        </label>
+                      )}
+                    </div>
                     <textarea
                       className="input-control"
                       style={{ minHeight: '90px', fontFamily: 'monospace', fontSize: '0.8rem', whiteSpace: 'pre' }}
