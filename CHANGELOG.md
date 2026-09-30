@@ -6,9 +6,19 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+## [1.8.6] - 2026-09-30
+
 ### Added
+- **ManaBox imports.** Settings → Import Backup accepts a ManaBox `.txt` export, resolving each card by its set and collector number and keeping foil markers. Deck Builder can create a deck from a ManaBox decklist, and Storage can build a Box from one, filing matching cards you already own from Unsorted into it. Thanks [@batman-2099](https://github.com/batman-2099) ([#65](https://github.com/thenotoriousJeremy/bindarr/pull/65), [#66](https://github.com/thenotoriousJeremy/bindarr/pull/66)).
+- **Image-list view for storage containers**, with card images scalable from 60% to 250%. Thanks [@batman-2099](https://github.com/batman-2099) ([#67](https://github.com/thenotoriousJeremy/bindarr/pull/67)).
+- **Edit a deck's properties** (name, description, format, category, accent color, target size) after creating it. Thanks [@batman-2099](https://github.com/batman-2099) ([#68](https://github.com/thenotoriousJeremy/bindarr/pull/68)).
+- **Unavailable deck cards are flagged**, naming the checked-out deck that holds the missing copies. Thanks [@batman-2099](https://github.com/batman-2099) ([#69](https://github.com/thenotoriousJeremy/bindarr/pull/69)).
+- **Deck cards show where they are stored and can be sorted by location**, and the collection can be filtered to cards not in a checked-out deck. Thanks [@batman-2099](https://github.com/batman-2099) ([#70](https://github.com/thenotoriousJeremy/bindarr/pull/70)).
 - **Camera zoom in the scanner.** Scan settings gain a zoom slider when the camera reports zoom support (`MediaStreamTrack.getCapabilities().zoom`, e.g. Android Chrome). It is hardware zoom, so the guide-box crop gets more real pixels, and the level is remembered for the next session, which suits a phone mounted over the cards ([#61](https://github.com/thenotoriousJeremy/bindarr/issues/61)).
 - **Insert and reorder binder pages in place, and move a page to another binder.** A new page can be added before or after an existing one instead of always landing at the end, and an existing page can be moved to a different binder outright. The destination is checked against that binder's filing rules first, and the move is rejected with a clear error naming the cards that don't fit rather than moving anyway. Pages cannot be moved to or from a locked binder. Thanks [@shadow431](https://github.com/shadow431) ([#63](https://github.com/thenotoriousJeremy/bindarr/pull/63)).
+
+### Fixed
+- **One collection row per copy everywhere.** Rapid Add and imports (backups, CSVs, ManaBox) wrote a quantity onto a single row, so an "x5" row could be dropped into a four-slot box and could not be lent to a deck one copy at a time. They now add one row per copy, and startup splits any stacked row an earlier build left behind, keeping the copies in the original's slot. Thanks [@shadow431](https://github.com/shadow431) ([#64](https://github.com/thenotoriousJeremy/bindarr/issues/64), [#72](https://github.com/thenotoriousJeremy/bindarr/pull/72)).
 
 ## [1.8.5] - 2026-09-11
 
