@@ -73,6 +73,7 @@ function DeckBuilder({ showToast }) {
   const [newDeckImportText, setNewDeckImportText] = useState('');
   const [newDeckImportFormat, setNewDeckImportFormat] = useState('plain');
   const [showImportDecklistArea, setShowImportDecklistArea] = useState(false);
+  const [deckDraft, setDeckDraft] = useState(null);
   
   // Card Search States inside editor
   const [searchQuery, setSearchQuery] = useState('');
@@ -119,6 +120,7 @@ function DeckBuilder({ showToast }) {
   useBackGuard(showCreateModal, () => setShowCreateModal(false));
   useBackGuard(showSimulator, () => setShowSimulator(false));
   useBackGuard(!!activeDeck, () => setActiveDeck(null));
+  useBackGuard(!!deckDraft, () => setDeckDraft(null));
 
   useEffect(() => {
     fetchDecks();
@@ -197,6 +199,26 @@ function DeckBuilder({ showToast }) {
     reader.onerror = () => showToast(t('settings.errReadFile'));
     reader.readAsText(file);
     event.target.value = '';
+  };
+
+  const handleSaveDeckProperties = async () => {
+    if (!activeDeck || !deckDraft?.name.trim()) return;
+    try {
+      const response = await fetch(`/api/decks/${activeDeck.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...deckDraft, target_size: parseInt(deckDraft.target_size, 10) || 60 })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || t('deck.errCreateGeneric'));
+      setActiveDeck(deck => ({ ...deck, ...deckDraft, name: deckDraft.name.trim(), target_size: parseInt(deckDraft.target_size, 10) || 60 }));
+      setDeckDraft(null);
+      fetchDecks();
+      showToast(data.message);
+    } catch (error) {
+      console.error(error);
+      showToast(error.message);
+    }
   };
 
   const loadDeckDetails = async (deckId) => {
@@ -1330,6 +1352,53 @@ function DeckBuilder({ showToast }) {
       {viewMode === 'detail' && activeDeck && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           {/* Header */}
+          {deckDraft && (
+            <div className="modal-overlay" style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(0,0,0,0.7)' }} onClick={() => setDeckDraft(null)}>
+              <div className="glass-panel" style={{ width: '480px', maxWidth: '100%', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }} onClick={(event) => event.stopPropagation()}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h3 style={{ margin: 0 }}>{t('deck.editProperties')}</h3>
+                  <button className="btn btn-secondary btn-icon-only" onClick={() => setDeckDraft(null)}><X size={15} /></button>
+                </div>
+                <label className="form-group" style={{ margin: 0 }}>
+                  {t('deck.deckName')}
+                  <input className="input-control" value={deckDraft.name} onChange={(event) => setDeckDraft({ ...deckDraft, name: event.target.value })} />
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '0.75rem' }}>
+                  <label className="form-group" style={{ margin: 0 }}>
+                    {t('deck.format')}
+                    <select className="input-control" value={deckDraft.format} onChange={(event) => setDeckDraft({ ...deckDraft, format: event.target.value })}>
+                      {(activeDeck.game === 'mtg' ? MTG_FORMATS : activeDeck.game === 'lorcana' ? LORCANA_FORMATS : POKEMON_FORMATS).map(format => <option key={format} value={format}>{format}</option>)}
+                    </select>
+                  </label>
+                  <label className="form-group" style={{ margin: 0 }}>
+                    {t('deck.targetSize')}
+                    <input type="number" min="1" max="300" className="input-control" value={deckDraft.target_size} onChange={(event) => setDeckDraft({ ...deckDraft, target_size: event.target.value })} />
+                  </label>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '0.75rem', alignItems: 'end' }}>
+                  <label className="form-group" style={{ margin: 0 }}>
+                    {t('deck.category')}
+                    <select className="input-control" value={deckDraft.category} onChange={(event) => setDeckDraft({ ...deckDraft, category: event.target.value })}>
+                      {DECK_CATEGORIES.map(category => <option key={category} value={category}>{category}</option>)}
+                    </select>
+                  </label>
+                  <label className="form-group" style={{ margin: 0 }}>
+                    {t('deck.accentColor')}
+                    <input type="color" value={deckDraft.accent_color} onChange={(event) => setDeckDraft({ ...deckDraft, accent_color: event.target.value })} style={{ display: 'block', width: '42px', height: '38px', padding: 0, border: 0, background: 'none' }} />
+                  </label>
+                </div>
+                <label className="form-group" style={{ margin: 0 }}>
+                  {t('deck.descriptionOptional')}
+                  <textarea className="input-control" style={{ minHeight: '80px', resize: 'vertical' }} value={deckDraft.description} onChange={(event) => setDeckDraft({ ...deckDraft, description: event.target.value })} />
+                </label>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                  <button className="btn btn-secondary" onClick={() => setDeckDraft(null)}>{t('common.cancel')}</button>
+                  <button className="btn btn-primary" disabled={!deckDraft.name.trim()} onClick={handleSaveDeckProperties}>{t('deck.saveProperties')}</button>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', position: 'relative', overflow: 'hidden' }}>
             
             {/* Checked out banner */}
@@ -1383,6 +1452,20 @@ function DeckBuilder({ showToast }) {
             </div>
 
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => setDeckDraft({
+                  name: activeDeck.name,
+                  description: activeDeck.description || '',
+                  format: activeDeck.format || newDeckDefaults(activeDeck.game).format,
+                  category: activeDeck.category || 'Competitive',
+                  accent_color: activeDeck.accent_color || '#eab308',
+                  target_size: activeDeck.target_size || newDeckDefaults(activeDeck.game).targetSize
+                })}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+              >
+                <SlidersHorizontal size={14} /> {t('deck.editProperties')}
+              </button>
               <button
                 className="btn btn-secondary"
                 onClick={() => setShowExportModal(true)}
