@@ -29,6 +29,10 @@ const { recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/pri
 const { normId, normName, fold } = require('./utils/setCatalogueMatch');
 
 const API_BASE_URL = 'https://tcgcsv.com';
+const TCGCSV_403_COOLDOWN_HOURS = 24;
+const TCGCSV_MIN_REQUEST_INTERVAL_MS = 110;
+const TCGCSV_MAX_SYNC_REQUESTS = 10000;
+const SYNC_CATEGORIES = [1, 3, 71, 85];
 
 // TCGCSV rejects a request with no identifying User-Agent — a 401 with a note
 // asking you to say who you are. That is a reasonable ask of a free mirror, so the
@@ -43,6 +47,62 @@ const client = axios.create({
   headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
 });
 
+let loggedCooldownUntil;
+let lastRequestAt = 0;
+let requestQueue = Promise.resolve();
+let syncPromise = null;
+
+class TcgcsvCooldownError extends Error {
+  constructor(until) {
+    super(`TCGCSV HTTP 403 cooldown active until ${until}`);
+    this.name = 'TcgcsvCooldownError';
+    this.code = 'TCGCSV_403_COOLDOWN';
+  }
+}
+
+class TcgcsvCacheMissError extends Error {
+  constructor(path) {
+    super(`TCGCSV cache is missing ${path}`);
+    this.name = 'TcgcsvCacheMissError';
+    this.code = 'TCGCSV_CACHE_MISS';
+  }
+}
+
+function isCooldownError(error) {
+  return Boolean(error && error.code === 'TCGCSV_403_COOLDOWN');
+}
+
+function isCacheMissError(error) {
+  return Boolean(error && error.code === 'TCGCSV_CACHE_MISS');
+}
+
+async function check403Cooldown() {
+  const row = await db.get(`
+    SELECT tcgcsv_403_cooldown_until AS cooldownUntil
+      FROM app_settings
+     WHERE id = 1 AND tcgcsv_403_cooldown_until > CURRENT_TIMESTAMP
+  `);
+  if (!row) {
+    loggedCooldownUntil = null;
+    return;
+  }
+  if (loggedCooldownUntil !== row.cooldownUntil) {
+    console.warn(`TCGCSV requests paused after HTTP 403 until ${row.cooldownUntil}.`);
+    loggedCooldownUntil = row.cooldownUntil;
+  }
+  throw new TcgcsvCooldownError(row.cooldownUntil);
+}
+
+async function start403Cooldown() {
+  await db.run(`
+    UPDATE app_settings
+       SET tcgcsv_403_cooldown_until = datetime('now', '+${TCGCSV_403_COOLDOWN_HOURS} hours')
+     WHERE id = 1
+  `);
+  loggedCooldownUntil = null;
+  console.warn(`TCGCSV HTTP 403 received; suppressing further TCGCSV requests for ${TCGCSV_403_COOLDOWN_HOURS} hours.`);
+}
+
 // Verified against the live endpoint, not guessed.
 const CATEGORY = { english: 3, japanese: 85 };
 
@@ -51,9 +111,62 @@ const CATEGORY = { english: 3, japanese: 85 };
 // TCGdex carries (French, German, ...) is a Western release, so it belongs to 3.
 const categoryFor = (language) => (language === 'Japanese' ? CATEGORY.japanese : CATEGORY.english);
 
-// Every response is wrapped: { totalItems, success, errors, results }.
-async function fetchResults(path) {
-  const { data } = await client.get(path);
+function logRequestFailure(path, error) {
+  const response = error && error.response;
+  if (!response) return;
+
+  const config = error.config || {};
+  const url = `${config.baseURL || API_BASE_URL}${config.url || path}`;
+  const requestHeaders = config.headers || {};
+  const userAgent = requestHeaders.get
+    ? requestHeaders.get('User-Agent')
+    : requestHeaders['User-Agent'];
+  const headers = response.headers || {};
+  const headerDetails = ['content-type', 'server', 'via', 'retry-after', 'cf-ray', 'x-request-id']
+    .map(name => {
+      const value = headers.get ? headers.get(name) : headers[name];
+      return value ? `${name}=${value}` : null;
+    })
+    .filter(Boolean)
+    .join(', ');
+  const data = response.data;
+  const body = typeof data === 'string' ? data : data == null ? '' : JSON.stringify(data);
+  const bodyPreview = body
+    ? ` body=${body.replace(/\s+/g, ' ').slice(0, 1000)}${body.length > 1000 ? '...[truncated]' : ''}`
+    : '';
+
+  console.warn(
+    `TCGCSV HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''} ` +
+    `for ${url}${userAgent ? ` user-agent="${userAgent}"` : ''}` +
+    `${headerDetails ? ` (${headerDetails})` : ''}${bodyPreview}`
+  );
+}
+
+function pacedGet(path, config = {}) {
+  const request = requestQueue.then(async () => {
+    const delay = TCGCSV_MIN_REQUEST_INTERVAL_MS - (Date.now() - lastRequestAt);
+    if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+    await check403Cooldown();
+    lastRequestAt = Date.now();
+    try {
+      return await client.get(path, config);
+    } catch (error) {
+      logRequestFailure(path, error);
+      if (error && error.response && error.response.status === 403) {
+        try {
+          await start403Cooldown();
+        } catch (cooldownError) {
+          console.error('Could not save TCGCSV 403 cooldown:', cooldownError.message);
+        }
+      }
+      throw error;
+    }
+  });
+  requestQueue = request.then(() => undefined, () => undefined);
+  return request;
+}
+
+function parseResults(path, data) {
   if (!data || data.success === false) {
     const why = (data && data.errors && data.errors.join('; ')) || 'unknown error';
     throw new Error(`TCGCSV ${path} failed: ${why}`);
@@ -61,9 +174,125 @@ async function fetchResults(path) {
   return data.results || [];
 }
 
-const getGroups = (categoryId) => fetchResults(`/tcgplayer/${categoryId}/groups`);
-const getProducts = (categoryId, groupId) => fetchResults(`/tcgplayer/${categoryId}/${groupId}/products`);
-const getPrices = (categoryId, groupId) => fetchResults(`/tcgplayer/${categoryId}/${groupId}/prices`);
+async function cachedResults(path, dataVersion) {
+  const version = dataVersion || (await db.get(
+    `SELECT tcgcsv_data_version FROM app_settings WHERE id = 1`
+  ))?.tcgcsv_data_version;
+  if (!version) throw new TcgcsvCacheMissError(path);
+
+  const row = await db.get(
+    `SELECT results_json FROM tcgcsv_response_cache WHERE path = ? AND data_version = ?`,
+    [path, version]
+  );
+  if (!row) throw new TcgcsvCacheMissError(path);
+  return JSON.parse(row.results_json);
+}
+
+async function syncResults(path, dataVersion) {
+  const existing = await db.get(
+    `SELECT results_json FROM tcgcsv_response_cache WHERE path = ? AND data_version = ?`,
+    [path, dataVersion]
+  );
+  if (existing) return JSON.parse(existing.results_json);
+
+  const { data } = await pacedGet(path);
+  const results = parseResults(path, data);
+  await db.run(
+    `INSERT OR REPLACE INTO tcgcsv_response_cache (path, data_version, results_json)
+     VALUES (?, ?, ?)`,
+    [path, dataVersion, JSON.stringify(results)]
+  );
+  return results;
+}
+
+async function runSync() {
+  const state = await db.get(`
+    SELECT tcgcsv_data_version, tcgcsv_pending_version, tcgcsv_last_checked_at
+      FROM app_settings WHERE id = 1
+  `);
+  let dataVersion = state.tcgcsv_pending_version;
+
+  if (!dataVersion) {
+    const recentlyChecked = await db.get(`
+      SELECT tcgcsv_last_checked_at
+        FROM app_settings
+       WHERE id = 1 AND tcgcsv_last_checked_at >= datetime('now', '-24 hours')
+    `);
+    if (recentlyChecked) return { updated: false, checked: false };
+
+    const { data } = await pacedGet('/last-updated.txt', { responseType: 'text' });
+    dataVersion = String(data || '').trim();
+    if (!dataVersion || !Number.isFinite(Date.parse(dataVersion))) {
+      throw new Error(`Invalid TCGCSV last-updated.txt value: ${dataVersion || '(empty)'}`);
+    }
+
+    if (dataVersion === state.tcgcsv_data_version) {
+      await db.run(`UPDATE app_settings SET tcgcsv_last_checked_at = CURRENT_TIMESTAMP WHERE id = 1`);
+      console.log(`TCGCSV data is current at ${dataVersion}; skipping full sync.`);
+      return { updated: false, checked: true, dataVersion };
+    }
+
+    await db.run(
+      `UPDATE app_settings
+          SET tcgcsv_last_checked_at = CURRENT_TIMESTAMP, tcgcsv_pending_version = ?
+        WHERE id = 1`,
+      [dataVersion]
+    );
+  }
+
+  const groupsByCategory = {};
+  let groupCount = 0;
+  for (const categoryId of SYNC_CATEGORIES) {
+    const groups = await syncResults(`/tcgplayer/${categoryId}/groups`, dataVersion);
+    groupsByCategory[categoryId] = groups;
+    groupCount += groups.length;
+  }
+
+  const expectedRequests = 1 + SYNC_CATEGORIES.length + (groupCount * 2);
+  if (expectedRequests > TCGCSV_MAX_SYNC_REQUESTS) {
+    throw new Error(
+      `TCGCSV sync requires ${expectedRequests} requests, exceeding the ${TCGCSV_MAX_SYNC_REQUESTS} request budget`
+    );
+  }
+
+  for (const categoryId of SYNC_CATEGORIES) {
+    for (const group of groupsByCategory[categoryId]) {
+      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/products`, dataVersion);
+      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/prices`, dataVersion);
+    }
+  }
+
+  await db.run(
+    `UPDATE app_settings
+        SET tcgcsv_data_version = ?, tcgcsv_pending_version = NULL
+      WHERE id = 1`,
+    [dataVersion]
+  );
+  await db.run(`DELETE FROM tcgcsv_response_cache WHERE data_version != ?`, [dataVersion]);
+  console.log(
+    `TCGCSV sync complete for ${dataVersion}: ${groupCount} groups, ` +
+    `${expectedRequests} requests maximum.`
+  );
+  return { updated: true, dataVersion, groups: groupCount, expectedRequests };
+}
+
+async function syncIfUpdated() {
+  if (process.env.BINDARR_DISABLE_TCGCSV_SYNC === '1') {
+    return { updated: false, disabled: true };
+  }
+  if (syncPromise) return syncPromise;
+  const running = runSync();
+  syncPromise = running;
+  try {
+    return await running;
+  } finally {
+    if (syncPromise === running) syncPromise = null;
+  }
+}
+
+const getGroups = (categoryId) => cachedResults(`/tcgplayer/${categoryId}/groups`);
+const getProducts = (categoryId, groupId) => cachedResults(`/tcgplayer/${categoryId}/${groupId}/products`);
+const getPrices = (categoryId, groupId) => cachedResults(`/tcgplayer/${categoryId}/${groupId}/prices`);
 
 // Pokémon TCG Pocket sets (A1, A1a, A2b, B1, ...). Cards that exist only in the
 // phone game, so TCGplayer has never sold one and no amount of matching will find
@@ -314,28 +543,29 @@ async function setsToPrice(scope = 'owned') {
 //
 // Returns counts rather than throwing on a partial result — one set failing to
 // resolve must not abandon the other 200.
-async function priceSet({ set_id, set_name, language }, match) {
+async function priceSet({ set_id, set_name, language }, match, groupDataCache = new Map()) {
   if (String(set_id).startsWith('pokemontcgapi-')) return { set_id, language, matched: false, priced: 0 };
   const hit = match(set_id, set_name, language);
   if (!hit) return { set_id, language, matched: false, priced: 0 };
 
   const { categoryId, group, confidence } = hit;
-  const [products, prices] = await Promise.all([
-    getProducts(categoryId, group.groupId),
-    getPrices(categoryId, group.groupId),
-  ]);
-  const priceFor = pricesByProduct(prices);
-
-  // Number -> product. A number claimed by two products is dropped: TCGplayer
-  // lists sealed product and the occasional duplicate inside a group, and picking
-  // by insertion order would price a card off whichever came first in the JSON.
-  const byNumber = new Map();
-  for (const p of products) {
-    const key = normNumber(numberOf(p));
-    if (!key) continue;
-    if (byNumber.has(key)) byNumber.set(key, null);
-    else byNumber.set(key, p);
+  const groupKey = `${categoryId}:${group.groupId}`;
+  if (!groupDataCache.has(groupKey)) {
+    groupDataCache.set(groupKey, Promise.all([
+      getProducts(categoryId, group.groupId),
+      getPrices(categoryId, group.groupId),
+    ]).then(([products, prices]) => {
+      const byNumber = new Map();
+      for (const product of products) {
+        const key = normNumber(numberOf(product));
+        if (!key) continue;
+        if (byNumber.has(key)) byNumber.set(key, null);
+        else byNumber.set(key, product);
+      }
+      return { byNumber, priceFor: pricesByProduct(prices) };
+    }));
   }
+  const { byNumber, priceFor } = await groupDataCache.get(groupKey);
 
   const cached = await db.all(
     `SELECT id, number FROM card_cache WHERE game = 'pokemon' AND set_id = ? AND language = ?`,
@@ -384,6 +614,7 @@ async function priceSet({ set_id, set_name, language }, match) {
 // every restart, which under nodemon means every code edit.
 async function updateCollectionPrices(force = false, scope = 'owned') {
   try {
+    await syncIfUpdated();
     if (!force && !(await shouldSweepPrices('tcgcsv'))) {
       console.log('Skipping TCGCSV price update: already swept within the last 24h.');
       return;
@@ -399,14 +630,17 @@ async function updateCollectionPrices(force = false, scope = 'owned') {
 
     console.log(`Starting TCGCSV price update for ${sets.length} Pokémon sets (${scope})...`);
     let priced = 0, unmatched = [];
+    const groupDataCache = new Map();
     // Sequential: this is one request per set against somebody else's free mirror,
     // and the sweep has all day to finish.
     for (const s of sets) {
       try {
-        const r = await priceSet(s, match);
+        const r = await priceSet(s, match, groupDataCache);
         if (!r.matched) unmatched.push(`${s.set_id} (${s.language})`);
         priced += r.priced;
       } catch (e) {
+        if (e && e.response && e.response.status === 403) return;
+        if (isCooldownError(e)) return;
         console.warn(`TCGCSV: ${s.set_id} (${s.language}) failed: ${e.message}`);
       }
     }
@@ -418,6 +652,7 @@ async function updateCollectionPrices(force = false, scope = 'owned') {
       console.log(`TCGCSV: no TCGplayer group for ${unmatched.length} set(s): ${unmatched.slice(0, 20).join(', ')}${unmatched.length > 20 ? ', …' : ''}`);
     }
   } catch (err) {
+    if (isCooldownError(err)) return;
     console.error('Error during TCGCSV price update:', err.message);
   }
 }
@@ -426,9 +661,10 @@ module.exports = {
   CATEGORY,
   categoryFor,
   setsToPrice,
-  priceSet,
+  syncIfUpdated,
   updateCollectionPrices,
   client,
+  priceSet,
   getGroups,
   getProducts,
   getPrices,
@@ -439,6 +675,9 @@ module.exports = {
   normNumber,
   numberOf,
   pricesByProduct,
+  isCooldownError,
+  isCacheMissError,
+  TCGCSV_403_COOLDOWN_HOURS,
   SUBTYPE_TO_COLUMN,
   USER_AGENT,
 };

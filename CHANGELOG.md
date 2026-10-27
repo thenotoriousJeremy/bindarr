@@ -6,6 +6,9 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+### Changed
+- **TCGCSV data is synced into a persistent local cache.** Bindarr checks TCGCSV's `last-updated.txt` at most once every 24 hours and downloads a new dataset only when its timestamp advances. Cached group, product and price data is reused by the application; sync requests are serialized and spaced by at least 100 ms. A 403 response pauses further TCGCSV requests for 24 hours.
+
 ## [1.8.8] - 2026-10-26
 
 ### Added

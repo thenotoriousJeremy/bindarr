@@ -129,6 +129,7 @@ function start() {
   current = job;
   (async () => {
     try {
+      await tcgcsv.syncIfUpdated();
       const groupsByCategory = {};
       for (const categoryId of Object.values(tcgcsv.CATEGORY)) {
         groupsByCategory[categoryId] = await tcgcsv.getGroups(categoryId);
@@ -166,6 +167,7 @@ function start() {
             throw e;
           }
         } catch (e) {
+          if ((e && e.response && e.response.status === 403) || tcgcsv.isCooldownError(e)) throw e;
           // One unreachable group must not abandon the other 399.
           console.warn(`product map: ${g.name} failed (${e.message})`);
         }

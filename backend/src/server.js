@@ -276,6 +276,15 @@ db.initDb()
     const { loadSetsCache } = require('./utils/compartmentSort');
     await loadSetsCache(db);
 
+    if (process.env.BINDARR_DISABLE_TCGCSV_SYNC !== '1') {
+      const tcgcsvApi = require('./tcgcsvApi');
+      tcgcsvApi.syncIfUpdated().catch(err => {
+        if (!tcgcsvApi.isCooldownError(err)) {
+          console.error('TCGCSV startup sync failed:', err.message);
+        }
+      });
+    }
+
     // Warm the scan models and catalogs. Two ONNX sessions plus an embedding table
     // take ~400 ms to load; paying that on the first scan instead would make the
     // slowest scan of a session the one a user is most likely to judge. Not awaited

@@ -451,6 +451,26 @@ async function initDb() {
   if (!appSettingsCols.some(c => c.name === 'tcgcsv_prices_swept_at')) {
     await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_prices_swept_at DATETIME`);
   }
+  if (!appSettingsCols.some(c => c.name === 'tcgcsv_403_cooldown_until')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_403_cooldown_until DATETIME`);
+  }
+  if (!appSettingsCols.some(c => c.name === 'tcgcsv_data_version')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_data_version TEXT`);
+  }
+  if (!appSettingsCols.some(c => c.name === 'tcgcsv_pending_version')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_pending_version TEXT`);
+  }
+  if (!appSettingsCols.some(c => c.name === 'tcgcsv_last_checked_at')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_last_checked_at DATETIME`);
+  }
+  await run(`
+    CREATE TABLE IF NOT EXISTS tcgcsv_response_cache (
+      path TEXT NOT NULL,
+      data_version TEXT NOT NULL,
+      results_json TEXT NOT NULL,
+      PRIMARY KEY (path, data_version)
+    )
+  `);
   // How many days between automatic price refreshes; 0 switches them off.
   // Daily is what every install did before this column existed, so that is the
   // default and nothing changes for anyone who never touches it. It exists for

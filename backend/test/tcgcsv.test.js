@@ -243,10 +243,127 @@ const dbMod = require('../src/db');
 (async () => {
   await dbMod.initDb();
   const cols = (await dbMod.all(`PRAGMA table_info(app_settings)`)).map(c => c.name);
+  const originalAdapter = tcgcsv.client.defaults.adapter;
+  let remoteVersion = '2026-10-25T20:05:50+0000';
+  const remoteRequests = [];
+  tcgcsv.client.defaults.adapter = async config => {
+    remoteRequests.push({ path: config.url, startedAt: Date.now(), userAgent: config.headers.get('User-Agent') });
+    const groups = config.url.match(/^\/tcgplayer\/(\d+)\/groups$/);
+    const data = config.url === '/last-updated.txt'
+      ? remoteVersion
+      : { success: true, results: groups
+        ? [{ groupId: Number(groups[1]) * 10, name: 'Fixture Group', abbreviation: 'FG', categoryId: Number(groups[1]) }]
+        : [] };
+    return { data, status: 200, statusText: 'OK', headers: {}, config };
+  };
+  await tcgcsv.syncIfUpdated();
+  assert.strictEqual(remoteRequests.length, 13, 'the initial targeted sync should fetch the timestamp, groups, products, and prices');
+  assert.ok(remoteRequests.every(request => request.userAgent === tcgcsv.USER_AGENT),
+    'all TCGCSV requests must use the standard Bindarr User-Agent');
+  for (let i = 1; i < remoteRequests.length; i++) {
+    const gap = remoteRequests[i].startedAt - remoteRequests[i - 1].startedAt;
+    assert.ok(gap >= 100, `TCGCSV requests must be spaced by at least 100ms (observed ${gap}ms)`);
+  }
+  const fetchedRequestCount = remoteRequests.length;
+  assert.strictEqual((await tcgcsv.getGroups(3))[0].groupId, 30);
+  assert.deepStrictEqual(await tcgcsv.getProducts(3, 30), []);
+  assert.deepStrictEqual(await tcgcsv.getPrices(3, 30), []);
+  assert.strictEqual(remoteRequests.length, fetchedRequestCount,
+    'application reads must use the persistent response cache without network calls');
+  await tcgcsv.syncIfUpdated();
+  assert.strictEqual(remoteRequests.length, fetchedRequestCount,
+    'a second sync check within 24 hours must not contact TCGCSV');
+
+  await dbMod.run(`UPDATE app_settings SET tcgcsv_last_checked_at = datetime('now', '-25 hours') WHERE id = 1`);
+  await tcgcsv.syncIfUpdated();
+  assert.strictEqual(remoteRequests.length, fetchedRequestCount + 1,
+    'when last-updated.txt is unchanged, only its timestamp should be requested');
+
+  remoteVersion = '2026-10-26T20:05:50+0000';
+  await dbMod.run(`UPDATE app_settings SET tcgcsv_last_checked_at = datetime('now', '-25 hours') WHERE id = 1`);
+  await tcgcsv.syncIfUpdated();
+  assert.strictEqual(remoteRequests.length, fetchedRequestCount + 14,
+    'a newer timestamp should trigger a complete sync');
+  assert.strictEqual(
+    (await dbMod.get(`SELECT tcgcsv_data_version FROM app_settings WHERE id = 1`)).tcgcsv_data_version,
+    remoteVersion,
+    'the active cache version should advance only after the sync completes'
+  );
+
+  const originalDbGet = dbMod.get;
+  let responseCacheReads = 0;
+  dbMod.get = (query, params) => {
+    if (query.includes('FROM tcgcsv_response_cache')) responseCacheReads++;
+    return originalDbGet(query, params);
+  };
+  const groupDataCache = new Map();
+  const sameGroup = () => ({
+    categoryId: 3,
+    group: { groupId: 30, name: 'Fixture Group' },
+    confidence: 'exact',
+  });
+  try {
+    await tcgcsv.priceSet({ set_id: 'fixture-en', set_name: 'Fixture', language: 'English' }, sameGroup, groupDataCache);
+    await tcgcsv.priceSet({ set_id: 'fixture-fr', set_name: 'Fixture', language: 'French' }, sameGroup, groupDataCache);
+  } finally {
+    dbMod.get = originalDbGet;
+  }
+  assert.strictEqual(responseCacheReads, 2,
+    'sets mapping to the same group should read its cached products and prices only once');
+
+  const failureLogs = [];
+  const originalWarn = console.warn;
+  try {
+    tcgcsv.client.defaults.adapter = async config => {
+      const error = new Error('Request failed with status code 403');
+      error.config = config;
+      error.response = {
+        status: 403,
+        statusText: 'Forbidden',
+        headers: { 'content-type': 'text/html', 'cf-ray': 'fixture-ray' },
+        data: 'Request blocked',
+      };
+      throw error;
+    };
+    console.warn = message => { failureLogs.push(message); };
+    await dbMod.run(`UPDATE app_settings SET tcgcsv_last_checked_at = datetime('now', '-25 hours') WHERE id = 1`);
+    await assert.rejects(tcgcsv.syncIfUpdated(), /403/);
+  } finally {
+    tcgcsv.client.defaults.adapter = originalAdapter;
+    console.warn = originalWarn;
+  }
+  assert.ok(failureLogs.some(message => /HTTP 403 Forbidden.*https:\/\/tcgcsv\.com\/last-updated\.txt/.test(message)));
+  assert.ok(failureLogs.some(message => message.includes(`user-agent="${tcgcsv.USER_AGENT}"`)),
+    'TCGCSV failure diagnostics must include the standard User-Agent');
+  assert.ok(failureLogs.some(message => /cf-ray=fixture-ray.*Request blocked/.test(message)));
+
+  const { cooldown_active: cooldownActive } =
+    await dbMod.get(`SELECT tcgcsv_403_cooldown_until > CURRENT_TIMESTAMP AS cooldown_active FROM app_settings WHERE id = 1`);
+  assert.strictEqual(cooldownActive, 1, 'HTTP 403 must persist an active cooldown');
+  let blockedRequestCount = 0;
+  tcgcsv.client.defaults.adapter = async () => {
+    blockedRequestCount++;
+    throw new Error('request must not be sent during cooldown');
+  };
+  const cooldownWarn = console.warn;
+  console.warn = () => {};
+  try {
+    await assert.rejects(tcgcsv.syncIfUpdated(), tcgcsv.isCooldownError);
+  } finally {
+    tcgcsv.client.defaults.adapter = originalAdapter;
+    console.warn = cooldownWarn;
+  }
+  assert.strictEqual(blockedRequestCount, 0, 'the cooldown must suppress outgoing requests');
+
+  for (const column of ['tcgcsv_data_version', 'tcgcsv_pending_version', 'tcgcsv_last_checked_at']) {
+    assert.ok(cols.includes(column), `app_settings needs ${column}`);
+  }
   for (const provider of ['mtg', 'pokemon', 'tcgdex', 'tcgcsv']) {
     assert.ok(cols.includes(`${provider}_prices_swept_at`),
       `app_settings needs ${provider}_prices_swept_at`);
   }
+  assert.ok(cols.includes('tcgcsv_403_cooldown_until'),
+    'app_settings needs a persistent TCGCSV 403 cooldown');
 
   const { shouldSweepPrices, markPricesSwept } = require('../src/utils/priceHelpers');
   // A provider that has never swept must sweep.

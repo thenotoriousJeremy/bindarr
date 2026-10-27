@@ -2,6 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 
+process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
+
 const TEST_DIR = __dirname;
 const files = fs.readdirSync(TEST_DIR)
   .filter(f => f.endsWith('.test.js') && f !== 'run.js')
