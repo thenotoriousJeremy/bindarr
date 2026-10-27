@@ -104,8 +104,8 @@ COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 
-# Expose ports (HTTP + the TLS listener used for camera scanning)
-EXPOSE 3001 3443
+# Expose HTTP, TLS for camera scanning, and the optional Prometheus listener.
+EXPOSE 3001 3443 9100
 
 # Liveness/readiness probe. start-period covers startup (set sync + price job).
 # wget is installed above (slim has no wget by default).

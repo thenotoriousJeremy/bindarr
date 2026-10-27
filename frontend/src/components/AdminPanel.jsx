@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Shield, UserPlus, Key, Trash2, ToggleLeft, ToggleRight, Search, Users, Globe, HardDriveDownload, Download, Sparkles } from 'lucide-react';
 import { useBackGuard } from '../utils/useBackGuard';
+import AdminMetricsPanel from './AdminMetricsPanel';
 import CatalogPanel from './CatalogPanel';
 import SetupWizard from './SetupWizard';
 import { currencySymbol } from '../utils/formatPrice';
@@ -43,6 +44,9 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
   // Database backup states
   const [backups, setBackups] = useState([]);
   const [backupLoading, setBackupLoading] = useState(false);
+  const [metricsData, setMetricsData] = useState(null);
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  const [metricsError, setMetricsError] = useState('');
 
   // Scan catalog management (and its own polling) lives in CatalogPanel now.
   useEffect(() => {
@@ -50,6 +54,7 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
     fetchUsers();
     fetchSettings();
     fetchBackups();
+    fetchMetrics();
     return () => { mountedRef.current = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -79,12 +84,29 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
         const data = await res.json();
         showToast(data.message);
         fetchUsers(); // Refresh stats
+        fetchMetrics();
       } else {
         showToast(t('admin.errSeed'));
       }
     } catch (err) {
       console.error(err);
       showToast(t('admin.errSeedGeneric'));
+    }
+  };
+
+  const fetchMetrics = async () => {
+    setMetricsLoading(true);
+    setMetricsError('');
+    try {
+      const response = await fetch('/api/admin/metrics');
+      if (!response.ok) throw new Error(t('admin.metricsError'));
+      const data = await response.json();
+      if (mountedRef.current) setMetricsData(data);
+    } catch (err) {
+      console.error(err);
+      if (mountedRef.current) setMetricsError(t('admin.metricsError'));
+    } finally {
+      if (mountedRef.current) setMetricsLoading(false);
     }
   };
 
@@ -233,6 +255,7 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
         setNewPassword('');
         setNewRole('member');
         fetchUsers();
+        fetchMetrics();
       } else {
         const data = await response.json();
         showToast(data.error || t('admin.errCreateUser'));
@@ -326,6 +349,7 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
       if (response.ok) {
         showToast(t('admin.userDeleted', { name: user.username }));
         fetchUsers();
+        fetchMetrics();
       } else {
         const data = await response.json();
         showToast(data.error || t('admin.errDeleteUser'));
@@ -340,7 +364,6 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
     (u.username || '').toLowerCase().includes(filterText.toLowerCase()) ||
     (u.role || '').toLowerCase().includes(filterText.toLowerCase())
   );
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
       {showWizard && (
@@ -704,6 +727,13 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
           )}
         </div>
       </div>
+
+      <AdminMetricsPanel
+        metricsData={metricsData}
+        metricsError={metricsError}
+        metricsLoading={metricsLoading}
+        onRefresh={fetchMetrics}
+      />
 
       {/* Change Password Dialog Overlay */}
       {targetUser && (

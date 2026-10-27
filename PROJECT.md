@@ -131,7 +131,19 @@ collection/location/deck-adjacent route requires a valid session.
 | `/api/sets` | sets.js | Set catalog for dividers and scan scoping; non-English Pokémon set lists come from TCGdex, whose ids differ per language |
 | `/api/settings` | settings.js | App-wide settings (read any; write requires admin) |
 | `/api/shared` | shared.js | Public, read-only collection view by `share_token` (no auth) |
-| `/api/admin` | admin.js | User management, card cache seeding, `catalogs` (list / `build` / `stop` / `progress`), DB backups (admin) |
+| `/api/admin` | admin.js | User management, admin-only collection and runtime metrics, card cache seeding, `catalogs` (list / `build` / `stop` / `progress`), DB backups |
+
+`METRICS_ENABLED=true` enables the admin-only `/api/admin/metrics` panel and
+in-memory request/provider instrumentation. `PROMETHEUS_METRICS_ENABLED=true`
+enables an unauthenticated Prometheus-only listener at `/metrics`, on
+`PROMETHEUS_PORT` (default `9100`), and its instrumentation. The listener serves no
+other routes; protect its port with network rules. Both feature flags default to
+off. Prometheus exports the same collection totals and per-user card/type
+breakdowns as the admin panel, so its unauthenticated endpoint exposes usernames
+and individual collection values to clients that can reach the port. Runtime
+counters are held in memory and reset on server restart; collection metrics are
+queried from the database on each scrape. Provider calls are measured at the HTTP
+client boundary, so retries count as separate upstream attempts.
 
 ### Card data sources
 

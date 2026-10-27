@@ -10,10 +10,27 @@ const { parseCardRow } = require('../utils/priceHelpers');
 const languages = require('../utils/languages');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { BACKUP_DIR, listBackups, createBackup } = require('../backup');
+const metrics = require('../utils/metrics');
+const getCollectionMetrics = require('../utils/collectionMetrics');
 
 const router = express.Router();
 
 router.use(authenticateToken, requireAdmin);
+
+router.get('/metrics', async (req, res) => {
+  if (!metrics.adminEnabled) return res.json({ enabled: false });
+
+  try {
+    res.json({
+      enabled: true,
+      ...metrics.snapshot(),
+      collection: await getCollectionMetrics(db),
+    });
+  } catch (error) {
+    console.error('ADMIN METRICS ERROR:', error);
+    res.status(500).json({ error: 'Failed to load metrics' });
+  }
+});
 
 router.post('/seed-cards', async (req, res) => {
   try {

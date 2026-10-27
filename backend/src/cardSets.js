@@ -8,6 +8,7 @@
 // sharp, fs) and tuning constants went with it; nothing here reads pixels.
 const axios = require('axios');
 const languages = require('./utils/languages');
+const metrics = require('./utils/metrics');
 // The one place that decides pokemontcg.io vs TCGdex. Every branch below asks it
 // rather than re-deriving the answer from the language — see the note in that
 // module for what re-deriving it cost.
@@ -16,6 +17,7 @@ const pokemonProvider = require('./utils/pokemonProvider');
 // pull in the DB module, which verify-only worker threads must not load.
 
 const http = axios.create({ timeout: 30000, headers: { 'User-Agent': 'Bindarr/1.0', 'Accept': 'application/json' } });
+metrics.instrumentAxiosClient(http, 'set-discovery');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // "This set has no data in this language" — an expected gap, not a failure.
