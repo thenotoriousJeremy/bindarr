@@ -16,8 +16,11 @@ const pokemonProvider = require('./utils/pokemonProvider');
 // scryfallApi/tcgApi are lazy-required inside the build/preview paths only — they
 // pull in the DB module, which verify-only worker threads must not load.
 
-const http = axios.create({ timeout: 30000, headers: { 'User-Agent': 'Bindarr/1.0', 'Accept': 'application/json' } });
-metrics.instrumentAxiosClient(http, 'set-discovery');
+const httpOptions = { timeout: 30000, headers: { 'User-Agent': 'Bindarr/1.0', 'Accept': 'application/json' } };
+const tcgdexHttp = axios.create(httpOptions);
+metrics.instrumentAxiosClient(tcgdexHttp, 'tcgdex');
+const pokemonTcgHttp = axios.create(httpOptions);
+metrics.instrumentAxiosClient(pokemonTcgHttp, 'pokemontcg');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // "This set has no data in this language" — an expected gap, not a failure.
@@ -301,7 +304,7 @@ async function fetchTcgdexSet(set, lang) {
   const langName = languages.toName(code);
   let r;
   try {
-    r = await http.get(`https://api.tcgdex.net/v2/${code}/sets/${encodeURIComponent(set)}`);
+    r = await tcgdexHttp.get(`https://api.tcgdex.net/v2/${code}/sets/${encodeURIComponent(set)}`);
   } catch (e) {
     if (e.response && e.response.status === 404) {
       throw absent(`TCGdex has no ${langName} set "${set}". Set codes differ by language — pick from the ${langName} set list.`);
@@ -347,7 +350,7 @@ async function fetchPokemonSet(set) {
     let data = null, count = 0;
     for (let attempt = 0; attempt < 5 && data === null; attempt++) {
       try {
-        const r = await http.get('https://api.pokemontcg.io/v2/cards', {
+        const r = await pokemonTcgHttp.get('https://api.pokemontcg.io/v2/cards', {
           params: { q: `set.id:${set}`, page, pageSize: 250, select: 'id,name,number,set,images,rarity,supertype,subtypes,types,tcgplayer,cardmarket' },
           headers,
         });

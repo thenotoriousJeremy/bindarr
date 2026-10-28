@@ -17,6 +17,7 @@
 // every embedding whose image_url has not changed.
 const fs = require('fs');
 const path = require('path');
+const { performance } = require('perf_hooks');
 const sharp = require('sharp');
 const ort = require('onnxruntime-node');
 const db = require('./db');
@@ -24,6 +25,7 @@ const cardSets = require('./cardSets');
 const languages = require('./utils/languages');
 const cvScan = require('./cvScan');
 const pokemonProvider = require('./utils/pokemonProvider');
+const metrics = require('./utils/metrics');
 
 const MODEL_DIR = process.env.CV_MODEL_DIR || path.join(__dirname, '..', 'data', 'models');
 const SIZE = 448;
@@ -457,6 +459,21 @@ async function embedPhase(job) {
     return url;
   };
 
+  const imageProvider = (url) => {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host === 'tcgdex.net' || host.endsWith('.tcgdex.net')) return 'tcgdex';
+    if (host === 'pokemontcg.io' || host.endsWith('.pokemontcg.io')) return 'pokemontcg';
+    if (host === 'pokemontcgapi.com' || host.endsWith('.pokemontcgapi.com')) return 'pokemontcgapi';
+    if (host === 'scryfall.com' || host.endsWith('.scryfall.com')) return 'scryfall';
+    if (host === 'lorcast.io' || host.endsWith('.lorcast.io')) return 'lorcast';
+    if (host === 'rarebit.app' || host.endsWith('.rarebit.app')) return 'rarebit';
+    if (host === 'tcgcsv.com' || host.endsWith('.tcgcsv.com')) return 'tcgcsv';
+    if (host === 'tcgplayer.com' || host.endsWith('.tcgplayer.com')) return 'tcgplayer';
+    if (host === 'psacard.com' || host.endsWith('.psacard.com')) return 'psa';
+    if (host === 'pokemonpricetracker.com' || host.endsWith('.pokemonpricetracker.com')) return 'graded-prices';
+    return host;
+  };
+
   // Scryfall's image CDN rejects a request with no User-Agent — 400, not 403, which
   // reads like a bad URL. Version comes from package.json rather than a literal: the
   // one in tcgcsvApi said 1.6.1 through two releases.
@@ -465,12 +482,21 @@ async function embedPhase(job) {
     Accept: 'image/*',
   };
   const fetchOne = async (row) => {
-    const res = await fetch(embedUrl(row), {
-      signal: AbortSignal.timeout(30000),
-      headers: HEADERS,
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return Buffer.from(await res.arrayBuffer());
+    const url = embedUrl(row);
+    const provider = imageProvider(url);
+    const startedAt = performance.now();
+    let status = 500;
+    try {
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(30000),
+        headers: HEADERS,
+      });
+      status = res.status;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return Buffer.from(await res.arrayBuffer());
+    } finally {
+      metrics.recordProviderCall(provider, startedAt, status, 'card_image');
+    }
   };
   // Download ahead while the CPU embeds: the network is the slow half and the
   // model is single-threaded, so overlapping them is most of the wall clock.

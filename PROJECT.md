@@ -142,8 +142,10 @@ off. Prometheus exports the same collection totals and per-user card/type
 breakdowns as the admin panel, so its unauthenticated endpoint exposes usernames
 and individual collection values to clients that can reach the port. Runtime
 counters are held in memory and reset on server restart; collection metrics are
-queried from the database on each scrape. Provider calls are measured at the HTTP
-client boundary, so retries count as separate upstream attempts.
+queried from the database on each scrape. Provider totals include API calls and
+catalog card-image downloads; retries count as separate attempts. Prometheus also
+exports `bindarr_upstream_requests_by_operation_total` with `operation="api"` or
+`operation="card_image"` for the breakdown.
 
 ### Card data sources
 

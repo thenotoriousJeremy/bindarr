@@ -52,12 +52,28 @@ async function main() {
     response: { status: 503 },
   }));
 
+  const secondHandlers = { request: [], response: [] };
+  const secondClient = {
+    interceptors: {
+      request: { use: handler => secondHandlers.request.push(handler) },
+      response: { use: (onSuccess, onError) => secondHandlers.response.push({ onSuccess, onError }) },
+    },
+  };
+  metrics.instrumentAxiosClient(secondClient, 'tcgdex');
+  config = secondHandlers.request[0]({ method: 'get' });
+  secondHandlers.response[0].onSuccess({ config, status: 200 });
+  metrics.recordProviderCall('tcgdex', undefined, 200, 'card_image');
+
   const providerMetrics = metrics.snapshot().providers;
   assert.strictEqual(providerMetrics.length, 1);
   assert.strictEqual(providerMetrics[0].provider, 'tcgdex');
-  assert.strictEqual(providerMetrics[0].calls, 2);
+  assert.strictEqual(providerMetrics[0].calls, 4);
   assert.strictEqual(providerMetrics[0].errors, 1);
   assert.strictEqual(providerMetrics[0].serverErrors, 1);
+  assert.deepStrictEqual(providerMetrics[0].operations.map(item => [item.operation, item.calls]), [
+    ['api', 3],
+    ['card_image', 1],
+  ]);
 
   let collectionQuery = 0;
   const collection = await getCollectionMetrics({
@@ -92,6 +108,9 @@ async function main() {
   assert.match(exposition, /bindarr_http_request_average_duration_seconds/);
   assert.match(exposition, /bindarr_http_requests_total\{method="GET",route="\/api\/cards"\} 1/);
   assert.match(exposition, /bindarr_http_request_max_duration_seconds\{method="GET",route="\/api\/cards"\}/);
+  assert.match(exposition, /bindarr_upstream_requests_total\{provider="tcgdex"\} 4/);
+  assert.match(exposition, /bindarr_upstream_requests_by_operation_total\{provider="tcgdex",operation="api"\} 3/);
+  assert.match(exposition, /bindarr_upstream_requests_by_operation_total\{provider="tcgdex",operation="card_image"\} 1/);
   assert.match(exposition, /bindarr_upstream_request_errors_total\{provider="tcgdex"\} 1/);
   assert.match(exposition, /bindarr_upstream_request_max_duration_seconds\{provider="tcgdex"\}/);
 

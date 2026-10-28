@@ -46,12 +46,18 @@ function escapeLabel(value) {
 function createMetrics({ enabled = true } = {}) {
   const requestsByRoute = new Map();
   const providers = new Map();
+  const providerOperations = new Map();
   const instrumentedClients = new WeakSet();
 
-  function recordProviderCall(provider, startedAt, status) {
+  function recordProviderCall(provider, startedAt, status, operation = 'api') {
+    if (!enabled) return;
     if (!providers.has(provider)) providers.set(provider, createStats());
+    if (!providerOperations.has(provider)) providerOperations.set(provider, new Map());
+    const operations = providerOperations.get(provider);
+    if (!operations.has(operation)) operations.set(operation, createStats());
     const durationMs = startedAt === undefined ? 0 : Math.max(0, performance.now() - startedAt);
     updateStats(providers.get(provider), durationMs, status);
+    updateStats(operations.get(operation), durationMs, status);
   }
 
   function middleware(req, res, next) {
@@ -102,7 +108,13 @@ function createMetrics({ enabled = true } = {}) {
       .map(([route, stats]) => ({ route, ...presentStats(stats) }))
       .sort((a, b) => b.calls - a.calls);
     const providerMetrics = [...providers.entries()]
-      .map(([provider, stats]) => ({ provider, ...presentStats(stats) }))
+      .map(([provider, stats]) => ({
+        provider,
+        ...presentStats(stats),
+        operations: [...providerOperations.get(provider).entries()]
+          .map(([operation, operationStats]) => ({ operation, ...presentStats(operationStats) }))
+          .sort((a, b) => b.calls - a.calls),
+      }))
       .sort((a, b) => b.calls - a.calls);
     const totals = [...requestsByRoute.values()].reduce((total, stats) => {
       total.calls += stats.calls;
@@ -221,6 +233,8 @@ function createMetrics({ enabled = true } = {}) {
     lines.push(
       '# HELP bindarr_upstream_requests_total Upstream provider calls completed.',
       '# TYPE bindarr_upstream_requests_total counter',
+      '# HELP bindarr_upstream_requests_by_operation_total Upstream provider calls by operation.',
+      '# TYPE bindarr_upstream_requests_by_operation_total counter',
       '# HELP bindarr_upstream_request_errors_total Upstream provider calls that failed.',
       '# TYPE bindarr_upstream_request_errors_total counter',
       '# HELP bindarr_upstream_request_average_duration_seconds Average upstream provider call duration since process start.',
@@ -233,6 +247,9 @@ function createMetrics({ enabled = true } = {}) {
     for (const item of data.providers) {
       const label = `provider="${escapeLabel(item.provider)}"`;
       lines.push(`bindarr_upstream_requests_total{${label}} ${item.calls}`);
+      for (const operation of item.operations) {
+        lines.push(`bindarr_upstream_requests_by_operation_total{${label},operation="${escapeLabel(operation.operation)}"} ${operation.calls}`);
+      }
       if (item.errors) lines.push(`bindarr_upstream_request_errors_total{${label}} ${item.errors}`);
       lines.push(`bindarr_upstream_request_average_duration_seconds{${label}} ${item.averageDurationMs / 1000}`);
       lines.push(`bindarr_upstream_request_max_duration_seconds{${label}} ${item.maxDurationMs / 1000}`);
@@ -242,7 +259,7 @@ function createMetrics({ enabled = true } = {}) {
     return `${lines.join('\n')}\n`;
   }
 
-  return { middleware, instrumentAxiosClient, snapshot, toPrometheus };
+  return { middleware, instrumentAxiosClient, recordProviderCall, snapshot, toPrometheus };
 }
 
 const isEnabled = value => ['true', '1'].includes(String(value || '').toLowerCase());
