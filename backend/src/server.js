@@ -52,6 +52,7 @@ const decksRoutes = require('./routes/decks');
 const settingsRoutes = require('./routes/settings');
 const notesRoutes = require('./routes/notes');
 const cardArtRoutes = require('./routes/cardArt');
+const sealedRoutes = require('./routes/sealed');
 const { authenticateToken } = require('./middleware/auth');
 const { startHttps, selfSignedTls } = require('./utils/tls');
 
@@ -435,6 +436,7 @@ app.use('/api', storageRoutes);
 app.use('/api', statsRoutes);
 app.use('/api', importExportRoutes);
 app.use('/api', notesRoutes);
+app.use('/api', sealedRoutes);
 app.use('/api/sets', setsRoutes);
 app.use('/api/decks', decksRoutes);
 app.use('/api/settings', settingsRoutes);

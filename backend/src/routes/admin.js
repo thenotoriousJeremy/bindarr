@@ -346,21 +346,29 @@ router.post('/catalogs/build', (req, res) => {
 router.get('/models', async (req, res) => {
   // The product map ships with the ready-made Pokémon catalog's state because it is
   // that catalog's other half: product ids with nothing to look them up in name no
-  // cards at all.
+  // cards at all. Reported per game now that the map covers sealed product too.
+  const productMap = require('../tcgplayerCatalog');
+  const productMaps = {};
+  for (const game of Object.keys(productMap.SEALED_CATEGORIES)) {
+    productMaps[game] = await productMap.summary(game);
+  }
   res.json({
     ...require('../utils/modelAssets').status(),
-    productMap: await require('../tcgplayerCatalog').summary(),
+    productMap: productMaps.pokemon,
+    productMaps,
   });
 });
 
-// Build (or refresh) the TCGplayer product map. A download of the ready-made
-// Pokémon catalog starts this on its own — this is the button for refreshing it
-// after a set release, or recovering from a run that failed halfway.
+// Build (or refresh) the TCGplayer product map for one game. A download of the
+// ready-made Pokémon catalog starts this on its own — this is the button for
+// refreshing it after a set release, or recovering from a run that failed
+// halfway, or building it for a game that never had one.
 router.post('/models/product-map', (req, res) => {
   const productMap = require('../tcgplayerCatalog');
+  const game = (req.body && req.body.game) || 'pokemon';
   try {
     if (req.body && req.body.stop) return res.json({ stopped: productMap.stop() });
-    res.json({ progress: productMap.start() });
+    res.json({ progress: productMap.start(game) });
   } catch (e) {
     res.status(409).json({ error: e.message, progress: productMap.state() });
   }

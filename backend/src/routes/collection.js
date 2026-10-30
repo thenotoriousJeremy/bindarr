@@ -18,8 +18,22 @@ const { compartmentLabel, isBinderType, rebalanceCompartmentByScheme, stackKey, 
 const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, setStackQuantity } = require('../utils/collectionHelpers');
 const { validateDeckAddition } = require('../utils/deckRules');
 const { splitPrice } = require('../utils/splitPrice');
+const { allocateSealedUnitCost } = require('../utils/sealedCostAllocation');
 
 const router = express.Router();
+
+async function conflictingSealedLinks(ids, userId, unitId) {
+  if (!unitId) return [];
+  return db.all(
+    `SELECT DISTINCT p.product_name
+       FROM collection c
+       JOIN sealed_units u ON u.id = c.sealed_unit_id
+       JOIN sealed_purchases p ON p.id = u.purchase_id
+      WHERE c.id IN (${ids.map(() => '?').join(',')})
+        AND c.user_id = ? AND c.sealed_unit_id IS NOT NULL AND c.sealed_unit_id != ?`,
+    [...ids, userId, unitId]
+  );
+}
 
 // Stamp each result with how many copies the user already owns, so browsing a
 // set shows what is already in the binder instead of inviting duplicate adds.
@@ -571,6 +585,13 @@ router.get('/collection', async (req, res) => {
         c.market_value,
         c.market_value_source,
         c.market_value_at,
+        c.sealed_unit_id,
+        sp.id AS sealed_purchase_id,
+        sp.product_name AS sealed_product_name,
+        sp.store AS sealed_product_store,
+        sp.purchase_date AS sealed_product_date,
+        (SELECT COUNT(*) FROM sealed_units unit_order
+          WHERE unit_order.purchase_id = su.purchase_id AND unit_order.id <= su.id) AS sealed_unit_number,
         cc.name,
         -- The localized name for a non-English printing, so every view that
         -- renders a collection card can show it as the card actually reads.
@@ -606,6 +627,8 @@ router.get('/collection', async (req, res) => {
       JOIN card_cache cc ON c.card_id = cc.id
       LEFT JOIN locations l ON c.location_id = l.id
       LEFT JOIN compartments cp ON c.compartment_id = cp.id
+      LEFT JOIN sealed_units su ON su.id = c.sealed_unit_id
+      LEFT JOIN sealed_purchases sp ON sp.id = su.purchase_id
       ${filterSql}
       ORDER BY c.added_at DESC
     `;
@@ -659,7 +682,8 @@ async function addCardToCollection(user, body) {
     stackable = false,
     grader = 'Raw',
     grade = null,
-    cert_number = null
+    cert_number = null,
+    sealed_unit_id = null
   } = body;
   const req = { user, body };
 
@@ -769,12 +793,12 @@ async function addCardToCollection(user, body) {
         INSERT INTO collection (
           card_id, user_id, quantity, condition, printing, language, purchase_price,
           location_id, compartment_id, position, is_trade, list_type, game,
-          grader, grade, cert_number
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          grader, grade, cert_number, sealed_unit_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         cardId, req.user.id, count, condition, printing, language, purchase_price || 0,
         targetLocationId, resolved.compartment_id, resolved.position, is_trade ? 1 : 0, list_type, effectiveGame,
-        grader, gradeValue, certValue
+        grader, gradeValue, certValue, sealed_unit_id
       ]);
       lastInsertedId = result.lastID;
       insertedIds.push(lastInsertedId);
@@ -784,12 +808,12 @@ async function addCardToCollection(user, body) {
           INSERT INTO collection (
             card_id, user_id, quantity, condition, printing, language, purchase_price,
             location_id, compartment_id, position, is_trade, list_type, game,
-            grader, grade, cert_number
-          ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            grader, grade, cert_number, sealed_unit_id
+          ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
           cardId, req.user.id, condition, printing, language, purchase_price || 0,
           targetLocationId, resolved.compartment_id, resolved.position + (i * 0.001), is_trade ? 1 : 0, list_type, effectiveGame,
-          grader, gradeValue, certValue
+          grader, gradeValue, certValue, sealed_unit_id
         ]);
         lastInsertedId = result.lastID;
         insertedIds.push(lastInsertedId);
@@ -922,7 +946,7 @@ router.put('/collection/:id', async (req, res) => {
   const {
     quantity, condition, printing, language, purchase_price,
     location_id, compartment_id, list_type, is_trade, favorite, game, notes,
-    grader, grade, cert_number, market_value, card_id
+    grader, grade, cert_number, market_value, card_id, sealed_unit_id
   } = req.body;
 
   try {
@@ -1008,6 +1032,17 @@ router.put('/collection/:id', async (req, res) => {
       swappedCard = next;
     }
     if (purchase_price !== undefined) { updates.push('purchase_price = ?'); params.push(purchase_price); }
+    if (sealed_unit_id !== undefined) {
+      if (sealed_unit_id != null && Number(sealed_unit_id) !== Number(entry.sealed_unit_id)) {
+        const conflicts = await conflictingSealedLinks([id], req.user.id, Number(sealed_unit_id));
+        if (conflicts.length) {
+          const products = [...new Set(conflicts.map(row => row.product_name))].join(', ');
+          return res.status(409).json({ error: `This card is already linked to another sealed product${products ? ` (${products})` : ''}. Unlink it first before linking to this one.` });
+        }
+      }
+      updates.push('sealed_unit_id = ?');
+      params.push(sealed_unit_id);
+    }
     if (isMoving || compartment_id !== undefined) {
       updates.push('location_id = ?', 'compartment_id = ?', 'position = ?');
       params.push(finalLocationId, finalCompartmentId, finalPosition);
@@ -1230,7 +1265,7 @@ router.delete('/collection/:id', async (req, res) => {
 });
 
 // 5b. Bulk actions
-const BULK_ACTIONS = ['delete', 'move', 'trade', 'untrade', 'list_type', 'condition', 'printing', 'language', 'purchase_split', 'add_to_deck'];
+const BULK_ACTIONS = ['delete', 'move', 'trade', 'untrade', 'list_type', 'condition', 'printing', 'language', 'purchase_split', 'add_to_deck', 'set_sealed_unit', 'link_sealed_unit'];
 // Allowed field values mirror the collection table CHECK constraints in db.js.
 const BULK_CONDITIONS = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged'];
 const BULK_PRINTINGS = ['Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition', 'Promo'];
@@ -1346,6 +1381,108 @@ router.post('/collection/bulk', async (req, res) => {
       return res.json({ message: `Split $${total.toFixed(2)} across ${rows.length} card(s) (${weighted ? 'by value' : 'evenly'})`, affected: rows.length });
     }
 
+    // Link (or unlink, value null) the selected entries to the sealed unit they
+    // were pulled from — the "link cards" step of sealed product tracking.
+    if (action === 'set_sealed_unit') {
+      const unitId = value ? parseInt(value, 10) : null;
+      let unit = null;
+      if (unitId) {
+        unit = await db.get(
+          `SELECT u.id, p.unit_price, p.expected_cards FROM sealed_units u
+             JOIN sealed_purchases p ON p.id = u.purchase_id
+            WHERE u.id = ? AND p.user_id = ?`,
+          [unitId, req.user.id]
+        );
+        if (!unit) return res.status(400).json({ error: 'Invalid sealed unit' });
+        const conflicts = await conflictingSealedLinks(ids, req.user.id, unitId);
+        if (conflicts.length) {
+          const products = [...new Set(conflicts.map(row => row.product_name))].join(', ');
+          return res.status(409).json({ error: `Some selected cards are already linked to another sealed product${products ? ` (${products})` : ''}. Unlink them first before linking to this one.` });
+        }
+      }
+      const rows = unit ? await db.all(
+        `SELECT c.id, c.quantity, COALESCE(cc.price_trend, 0) AS price FROM collection c
+           LEFT JOIN card_cache cc ON cc.id = c.card_id
+          WHERE c.id IN (${placeholders}) AND c.user_id = ?`,
+        [...ids, req.user.id]
+      ) : [];
+      if (unit?.expected_cards != null) {
+        const alreadyLinked = await db.get(
+          `SELECT COALESCE(SUM(quantity), 0) AS count FROM collection
+            WHERE sealed_unit_id = ? AND user_id = ? AND id NOT IN (${placeholders})`,
+          [unitId, req.user.id, ...ids]
+        );
+        const requested = rows.reduce((sum, row) => sum + (Number(row.quantity) || 1), 0);
+        if ((alreadyLinked.count || 0) + requested > unit.expected_cards) {
+          return res.status(400).json({ error: `This pack allows ${unit.expected_cards} linked cards` });
+        }
+      }
+      for (let i = 0; i < rows.length; i++) {
+        await db.run(
+          `UPDATE collection SET sealed_unit_id = ? WHERE id = ? AND user_id = ?`,
+          [unitId, rows[i].id, req.user.id]
+        );
+      }
+      if (unit?.unit_price != null && rows.length) {
+        const allocation = await allocateSealedUnitCost(unitId, req.user.id, unit.unit_price);
+        if (allocation.componentCount === 0) return res.status(400).json({ error: 'No cards or recipe components are linked to this sealed unit' });
+      }
+      if (unit) {
+        const copyCount = rows.reduce((sum, row) => sum + (Number(row.quantity) || 1), 0);
+        return res.json({ message: `Linked ${copyCount} card copy/copies; allocated $${Number(unit.unit_price || 0).toFixed(2)} across the opened pack`, affected: rows.length });
+      }
+      const result = await db.run(
+        `UPDATE collection SET sealed_unit_id = ? WHERE id IN (${placeholders}) AND user_id = ?`,
+        [unitId, ...ids, req.user.id]
+      );
+      return res.json({ message: `Linked ${result.changes} card(s) to the sealed unit`, affected: result.changes });
+    }
+
+    if (action === 'link_sealed_unit') {
+      const unitId = parseInt(value && value.unit_id, 10);
+      const total = Number(value && value.total);
+      const method = value && value.method === 'equal' ? 'equal' : 'weighted';
+      if (!unitId || !(total >= 0)) return res.status(400).json({ error: 'Invalid sealed unit or total' });
+      const unit = await db.get(
+        `SELECT u.id, p.expected_cards FROM sealed_units u
+           JOIN sealed_purchases p ON p.id = u.purchase_id
+          WHERE u.id = ? AND p.user_id = ?`,
+        [unitId, req.user.id]
+      );
+      if (!unit) return res.status(400).json({ error: 'Invalid sealed unit' });
+      const conflicts = await conflictingSealedLinks(ids, req.user.id, unitId);
+      if (conflicts.length) {
+        const products = [...new Set(conflicts.map(row => row.product_name))].join(', ');
+        return res.status(409).json({ error: `Some selected cards are already linked to another sealed product${products ? ` (${products})` : ''}. Unlink them first before linking to this one.` });
+      }
+      const rows = await db.all(
+        `SELECT c.id, c.quantity, COALESCE(cc.price_trend, 0) AS price FROM collection c
+           LEFT JOIN card_cache cc ON cc.id = c.card_id
+          WHERE c.id IN (${placeholders}) AND c.user_id = ?`,
+        [...ids, req.user.id]
+      );
+      if (unit.expected_cards != null) {
+        const alreadyLinked = await db.get(
+          `SELECT COALESCE(SUM(quantity), 0) AS count FROM collection
+            WHERE sealed_unit_id = ? AND user_id = ? AND id NOT IN (${placeholders})`,
+          [unitId, req.user.id, ...ids]
+        );
+        const requested = rows.reduce((sum, row) => sum + (Number(row.quantity) || 1), 0);
+        if ((alreadyLinked.count || 0) + requested > unit.expected_cards) {
+          return res.status(400).json({ error: `This pack allows ${unit.expected_cards} linked cards` });
+        }
+      }
+      for (let i = 0; i < rows.length; i++) {
+        await db.run(
+          `UPDATE collection SET sealed_unit_id = ? WHERE id = ? AND user_id = ?`,
+          [unitId, rows[i].id, req.user.id]
+        );
+      }
+      const allocation = await allocateSealedUnitCost(unitId, req.user.id, total, method);
+      const copyCount = allocation.cardCount;
+      return res.json({ message: `Linked ${copyCount} card copy/copies; allocated $${total.toFixed(2)} across ${allocation.componentCount} cards and sealed components`, affected: rows.length });
+    }
+
     const locationId = value ? parseInt(value, 10) : null;
     if (locationId) {
       const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [locationId, req.user.id]);
@@ -1381,4 +1518,5 @@ router.post('/collection/bulk', async (req, res) => {
 });
 
 router.normalizeSearchParams = normalizeSearchParams;
+router.addCardToCollection = addCardToCollection;
 module.exports = router;

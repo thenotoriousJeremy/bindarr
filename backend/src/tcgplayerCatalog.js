@@ -20,12 +20,50 @@
 // deleted, so a rebuild after a new set release is additive.
 const db = require('./db');
 const tcgcsv = require('./tcgcsvApi');
+const setCatalogueMatch = require('./utils/setCatalogueMatch');
 
 // One build at a time, for the same reason catalog.js and modelAssets say so: this
 // is a few hundred requests against somebody else's free mirror.
 let current = null;
 const state = () => (current ? { ...current } : null);
 let last = null;
+
+// TCGplayer category ids to walk per game. Pokémon keeps its own two-category
+// split (English/Japanese); MTG and Lorcana are each one category. Confirmed
+// against the live TCGCSV catalogue, not guessed — Lorcana's id doubles as the
+// category already used for its TCGplayer product linkage in lorcastApi.js.
+const SEALED_CATEGORIES = {
+  pokemon: Object.values(tcgcsv.CATEGORY),
+  mtg: [1],
+  lorcana: [71],
+};
+
+// A rough shelf category for a sealed product, from its TCGplayer name. Order
+// matters: more specific phrases are checked before the generic ones they'd
+// otherwise be swallowed by ('Elite Trainer Box' before 'Box').
+const SEALED_TYPE_RULES = [
+  [/elite trainer box|\betb\b/i, 'Elite Trainer Box'],
+  [/booster box/i, 'Booster Box'],
+  [/booster pack|\bbooster\b/i, 'Booster Pack'],
+  [/bundle/i, 'Bundle'],
+  [/collector'?s?\s*box|collection box/i, 'Collection Box'],
+  [/commander deck/i, 'Commander Deck'],
+  [/starter deck/i, 'Starter Deck'],
+  [/theme deck/i, 'Theme Deck'],
+  [/precon(structed)?/i, 'Commander Deck'],
+  [/fat pack/i, 'Fat Pack'],
+  [/blister/i, 'Blister'],
+  [/\btin\b/i, 'Tin'],
+  [/\bcase\b/i, 'Case'],
+];
+
+function classifySealedType(name) {
+  const s = String(name || '');
+  for (const [re, label] of SEALED_TYPE_RULES) {
+    if (re.test(s)) return label;
+  }
+  return 'Other';
+}
 
 // The collector number as the card APIs write it.
 //
@@ -49,7 +87,25 @@ function displayNumber(raw) {
 // unmatched group degrades to a slightly looser lookup instead of no answer.
 const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-async function groupToSet(groupsByCategory) {
+// Non-Pokémon games: one TCGCSV category, no English/Japanese split, so none of
+// buildGroupMatcher's language-preferred-category logic applies (it is wired to
+// Pokémon's own two category ids). A plain id/name join is enough here, and
+// leaves a group unmatched rather than guessing when nothing lines up.
+async function groupToSetSimple(groupsByCategory, game) {
+  const sets = await db.all(`SELECT id, name FROM sets WHERE game = ?`, [game]).catch(() => []);
+  const match = setCatalogueMatch.matcher(sets);
+  const out = new Map();
+  for (const groups of Object.values(groupsByCategory)) {
+    for (const g of groups) {
+      const hit = match(g.abbreviation, g.name);
+      if (hit) out.set(g.groupId, hit.id);
+    }
+  }
+  return out;
+}
+
+async function groupToSet(groupsByCategory, game) {
+  if (game && game !== 'pokemon') return groupToSetSimple(groupsByCategory, game);
   const match = tcgcsv.buildGroupMatcher(groupsByCategory);
   const sets = await db.all(
     `SELECT id, name FROM sets WHERE game = 'pokemon' AND COALESCE(total, 0) > 0`
@@ -109,31 +165,37 @@ async function groupToSet(groupsByCategory) {
   return out;
 }
 
-// How many products are mapped, and whether a build is running or has just run.
-async function summary() {
+// How many products are mapped for a game, and whether a build is running or has
+// just run. `game` defaults to 'pokemon' for callers that predate multi-game
+// support; each game's rows are counted separately since one product_id space is
+// shared across all of them.
+async function summary(game = 'pokemon') {
   let rows = 0, groups = 0, at = null;
   try {
     const r = await db.get(
-      `SELECT COUNT(*) n, COUNT(DISTINCT group_id) g, MAX(built_at) at FROM tcgplayer_catalog`
+      `SELECT COUNT(*) n, COUNT(DISTINCT group_id) g, MAX(built_at) at FROM tcgplayer_catalog WHERE game = ?`,
+      [game]
     );
     rows = r?.n || 0;
     groups = r?.g || 0;
     at = r?.at || null;
   } catch { /* table not created yet — reports as empty, which it is */ }
-  return { rows, groups, builtAt: at, progress: state(), last };
+  return { game, rows, groups, builtAt: at, progress: state(), last };
 }
 
-function start() {
+function start(game = 'pokemon') {
   if (current) throw new Error('the product map is already building');
-  const job = { phase: 'groups', done: 0, total: 0, rows: 0, message: '', startedAt: Date.now() };
+  const categoryIds = SEALED_CATEGORIES[game];
+  if (!categoryIds) throw new Error(`no TCGplayer category known for game '${game}'`);
+  const job = { game, phase: 'groups', done: 0, total: 0, rows: 0, message: '', startedAt: Date.now() };
   current = job;
   (async () => {
     try {
       const groupsByCategory = {};
-      for (const categoryId of Object.values(tcgcsv.CATEGORY)) {
+      for (const categoryId of categoryIds) {
         groupsByCategory[categoryId] = await tcgcsv.getGroups(categoryId);
       }
-      const setOf = await groupToSet(groupsByCategory);
+      const setOf = await groupToSet(groupsByCategory, game);
       const work = Object.entries(groupsByCategory)
         .flatMap(([categoryId, groups]) => groups.map(g => ({ categoryId: Number(categoryId), g })));
       job.total = work.length;
@@ -150,13 +212,16 @@ function start() {
           try {
             for (const p of products) {
               const number = displayNumber(tcgcsv.numberOf(p));
-              if (!number) continue;   // sealed product, not a card
+              // A product with no collector number is sealed product (a box, pack,
+              // ETB, ...) rather than a card. Both get a row now: `number IS NULL`
+              // is how a reader tells the two apart.
+              const sealedType = number ? null : classifySealedType(p.name);
               await db.run(
                 `INSERT OR REPLACE INTO tcgplayer_catalog
-                   (product_id, category_id, group_id, group_name, set_id, name, number, built_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+                   (product_id, category_id, group_id, group_name, set_id, name, number, game, image_url, sealed_type, built_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
                 [p.productId, categoryId, g.groupId, g.name, setOf.get(g.groupId) || null,
-                  p.name || '', number]
+                  p.name || '', number || null, game, p.imageUrl || null, sealedType]
               );
               job.rows++;
             }
@@ -206,4 +271,4 @@ async function lookup(productId) {
   }
 }
 
-module.exports = { start, stop, state, summary, lookup, displayNumber };
+module.exports = { start, stop, state, summary, lookup, displayNumber, SEALED_CATEGORIES, classifySealedType };

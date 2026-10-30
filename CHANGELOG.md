@@ -6,6 +6,9 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+### Added
+- **Sealed product inventory and value tracking.** Record purchases from the TCGplayer catalog or by name, track individual units as sealed or opened, define reusable product contents, and create guaranteed cards or child products when a unit is opened. Link collection cards to the opened unit they came from, and track per-unit market value separately from purchase cost. Catalog-linked products can refresh value from TCGCSV; uncatalogued products can use a manually entered value. Search purchases and filter by game, product type, sealed/opened units, or expansions from the product and its contents. New recipes also attach matching existing purchases, and opening an older unit can recover its matching recipe.
+
 ## [1.8.8] - 2026-10-26
 
 ### Added
