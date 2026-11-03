@@ -713,6 +713,57 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specSupertype')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.supertype}</span></div>
               </div>
 
+              {activeCard.sealed_unit_id != null && activeCard.sealed_product_name && (
+                <div style={{ display: 'flex', gap: '0.75rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.75rem' }}>
+                  {activeCard.sealed_product_image_url && (
+                    <img
+                      src={activeCard.sealed_product_image_url}
+                      alt=""
+                      style={{ width: '64px', height: '64px', objectFit: 'contain', borderRadius: 'var(--radius-sm)', flexShrink: 0 }}
+                    />
+                  )}
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
+                      {t('inspector.sealedProduct')}
+                    </div>
+                    <div style={{ color: 'var(--text-strong)', fontWeight: 700, marginTop: '0.15rem' }}>
+                      {activeCard.sealed_product_name}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem 0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+                      {activeCard.sealed_product_type && <span>{activeCard.sealed_product_type}</span>}
+                      {activeCard.sealed_product_set_name && <span>{activeCard.sealed_product_set_name}</span>}
+                      {activeCard.sealed_product_game && <span>{activeCard.sealed_product_game}</span>}
+                      {activeCard.sealed_unit_number && <span>{t('inspector.sealedUnit', { n: activeCard.sealed_unit_number })}</span>}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem 0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                      {activeCard.sealed_product_store && <span>{activeCard.sealed_product_store}</span>}
+                      {activeCard.sealed_product_date && <span>{activeCard.sealed_product_date}</span>}
+                      {activeCard.sealed_product_unit_price != null && <span>{t('inspector.sealedUnitPrice', { price: priceText(activeCard.sealed_product_unit_price) })}</span>}
+                    </div>
+                    {activeCard.sealed_product_contents_note && (
+                      <div style={{ color: 'var(--text-secondary)', marginTop: '0.35rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {activeCard.sealed_product_contents_note}
+                      </div>
+                    )}
+                    {activeCard.sealed_product_notes && (
+                      <div style={{ color: 'var(--text-secondary)', marginTop: '0.35rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {activeCard.sealed_product_notes}
+                      </div>
+                    )}
+                    {activeCard.sealed_product_id != null && (
+                      <a
+                        href={`https://www.tcgplayer.com/product/${activeCard.sealed_product_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ display: 'inline-block', marginTop: '0.4rem', color: 'var(--accent-blue)', fontSize: '0.7rem' }}
+                      >
+                        {t('inspector.viewSealedProduct')}
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Right card, wrong set: re-file this copy under another printing. */}
               {printings ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
