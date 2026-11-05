@@ -19,6 +19,7 @@ const os = require('os');
 const path = require('path');
 
 process.env.DB_PATH = path.join(os.tmpdir(), `bindarr-tcgcsv-${process.pid}.db`);
+process.env.TCGCSV_BASE_URL = 'https://tcgcsv-cache.example.test/tcgcsv/';
 const tcgcsv = require('../src/tcgcsvApi');
 
 // Real groups, verbatim from /tcgplayer/3/groups and /tcgplayer/85/groups.
@@ -246,8 +247,14 @@ const dbMod = require('../src/db');
   const originalAdapter = tcgcsv.client.defaults.adapter;
   let remoteVersion = '2026-10-25T20:05:50+0000';
   const remoteRequests = [];
+  assert.strictEqual(tcgcsv.client.defaults.baseURL, 'https://tcgcsv-cache.example.test/tcgcsv');
   tcgcsv.client.defaults.adapter = async config => {
-    remoteRequests.push({ path: config.url, startedAt: Date.now(), userAgent: config.headers.get('User-Agent') });
+    remoteRequests.push({
+      baseURL: config.baseURL,
+      path: config.url,
+      startedAt: Date.now(),
+      userAgent: config.headers.get('User-Agent'),
+    });
     const groups = config.url.match(/^\/tcgplayer\/(\d+)\/groups$/);
     const data = config.url === '/last-updated.txt'
       ? remoteVersion
@@ -258,6 +265,8 @@ const dbMod = require('../src/db');
   };
   await tcgcsv.syncIfUpdated();
   assert.strictEqual(remoteRequests.length, 13, 'the initial targeted sync should fetch the timestamp, groups, products, and prices');
+  assert.ok(remoteRequests.every(request => request.baseURL === tcgcsv.client.defaults.baseURL),
+    'every TCGCSV request must use the configured base URL');
   assert.ok(remoteRequests.every(request => request.userAgent === tcgcsv.USER_AGENT),
     'all TCGCSV requests must use the standard Bindarr User-Agent');
   for (let i = 1; i < remoteRequests.length; i++) {
@@ -332,7 +341,7 @@ const dbMod = require('../src/db');
     tcgcsv.client.defaults.adapter = originalAdapter;
     console.warn = originalWarn;
   }
-  assert.ok(failureLogs.some(message => /HTTP 403 Forbidden.*https:\/\/tcgcsv\.com\/last-updated\.txt/.test(message)));
+  assert.ok(failureLogs.some(message => /HTTP 403 Forbidden.*https:\/\/tcgcsv-cache\.example\.test\/tcgcsv\/last-updated\.txt/.test(message)));
   assert.ok(failureLogs.some(message => message.includes(`user-agent="${tcgcsv.USER_AGENT}"`)),
     'TCGCSV failure diagnostics must include the standard User-Agent');
   assert.ok(failureLogs.some(message => /cf-ray=fixture-ray.*Request blocked/.test(message)));

@@ -28,7 +28,7 @@ const db = require('./db');
 const { recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
 const { normId, normName, fold } = require('./utils/setCatalogueMatch');
 
-const API_BASE_URL = 'https://tcgcsv.com';
+const API_BASE_URL = (process.env.TCGCSV_BASE_URL || 'https://tcgcsv.com').replace(/\/+$/, '');
 const TCGCSV_403_COOLDOWN_HOURS = 24;
 const TCGCSV_MIN_REQUEST_INTERVAL_MS = 110;
 const TCGCSV_MAX_SYNC_REQUESTS = 10000;
