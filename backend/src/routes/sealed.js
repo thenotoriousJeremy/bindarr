@@ -343,9 +343,9 @@ router.get('/sealed/purchases', async (req, res) => {
               COALESCE(recipe.expected_cards, p.expected_cards) AS expected_cards_per_unit,
               CASE WHEN p.user_id = ? THEN 1 ELSE 0 END AS is_owner,
               SUM(CASE WHEN u.claimed_by_user_id = ? THEN 1 ELSE 0 END) AS claimed_by_me,
-              source_purchase.product_name AS source_product_name,
-              (SELECT COUNT(*) FROM sealed_units earlier_unit
-                WHERE earlier_unit.purchase_id = source_purchase.id AND earlier_unit.id <= source_unit.id) AS source_unit_number,
+              COALESCE(p.source_product_name, source_purchase.product_name) AS source_product_name,
+              COALESCE(p.source_unit_number, (SELECT COUNT(*) FROM sealed_units earlier_unit
+                WHERE earlier_unit.purchase_id = source_purchase.id AND earlier_unit.id <= source_unit.id)) AS source_unit_number,
               COUNT(u.id) AS unit_count,
               COUNT(u.id) AS visible_unit_count,
               SUM(CASE WHEN u.id IS NOT NULL AND u.opened_at IS NULL THEN 1 ELSE 0 END) AS sealed_count,
@@ -986,7 +986,7 @@ router.get('/sealed/units', async (req, res) => {
   if (opened === '0') where.push(`u.opened_at IS NULL`);
   try {
     const units = await db.all(
-      `SELECT u.id, u.opened_at, u.created_at, u.claimed_by_user_id,
+      `SELECT u.id, u.opened_at, u.is_trade, u.created_at, u.claimed_by_user_id,
               claimant.username AS claimed_by_username,
               CASE WHEN u.claimed_by_user_id = ? THEN 1 ELSE 0 END AS claimed_by_me,
               p.user_id AS purchase_owner_id,
@@ -994,12 +994,18 @@ router.get('/sealed/units', async (req, res) => {
               (SELECT COUNT(*) FROM sealed_units earlier_unit
                 WHERE earlier_unit.purchase_id = p.id AND earlier_unit.id <= u.id) AS unit_number,
               p.id AS purchase_id, p.product_name, p.set_name, p.game, p.image_url,
+              COALESCE(p.source_product_name, source_purchase.product_name) AS source_product_name,
+              COALESCE(p.source_product_name, source_purchase.product_name) AS origin_product_name,
+              COALESCE(p.source_unit_number, (SELECT COUNT(*) FROM sealed_units earlier_source_unit
+                WHERE earlier_source_unit.purchase_id = source_purchase.id AND earlier_source_unit.id <= source_unit.id)) AS source_unit_number,
               p.store, p.purchase_date, p.unit_price, p.quantity, p.expected_cards,
               p.available_to_all
          FROM sealed_units u
          JOIN sealed_purchases p ON p.id = u.purchase_id
          JOIN users buyer ON buyer.id = p.user_id
          LEFT JOIN users claimant ON claimant.id = u.claimed_by_user_id
+         LEFT JOIN sealed_units source_unit ON source_unit.id = p.source_unit_id
+         LEFT JOIN sealed_purchases source_purchase ON source_purchase.id = source_unit.purchase_id
         WHERE ${where.join(' AND ')}
         ORDER BY u.opened_at DESC`,
       [req.user.id, ...params]

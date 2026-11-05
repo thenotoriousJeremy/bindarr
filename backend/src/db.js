@@ -850,6 +850,8 @@ async function initDb() {
       unit_price REAL,
       quantity INTEGER NOT NULL DEFAULT 1,
       notes TEXT,
+      source_product_name TEXT,
+      source_unit_number INTEGER,
       available_to_all INTEGER NOT NULL DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -864,12 +866,114 @@ async function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       purchase_id INTEGER NOT NULL,
       opened_at DATETIME,
+      is_trade INTEGER DEFAULT 0,
       claimed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(purchase_id) REFERENCES sealed_purchases(id) ON DELETE CASCADE
     )
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_sealed_units_purchase ON sealed_units(purchase_id)`);
+
+  // A transfer is a proposal between two users. Item rows snapshot the asset at
+  // proposal time and keep nullable source links so completed history survives
+  // when the original collection row or sealed unit is later removed.
+  await run(`
+    CREATE TABLE IF NOT EXISTS user_transfers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      proposer_id INTEGER NOT NULL,
+      recipient_id INTEGER NOT NULL,
+      transfer_type TEXT NOT NULL CHECK(transfer_type IN ('gift', 'trade')),
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'accepted', 'rejected', 'cancelled', 'countered')),
+      response_to_transfer_id INTEGER,
+      message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME,
+      CHECK(proposer_id != recipient_id),
+      FOREIGN KEY(proposer_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(recipient_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(response_to_transfer_id) REFERENCES user_transfers(id) ON DELETE SET NULL
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_user_transfers_proposer_status ON user_transfers(proposer_id, status, created_at)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_user_transfers_recipient_status ON user_transfers(recipient_id, status, created_at)`);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS user_transfer_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      transfer_id INTEGER NOT NULL,
+      from_user_id INTEGER NOT NULL,
+      to_user_id INTEGER NOT NULL,
+      item_type TEXT NOT NULL CHECK(item_type IN ('card', 'sealed')),
+      source_collection_id INTEGER,
+      source_sealed_unit_id INTEGER,
+      quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
+      purchase_cost REAL,
+      received_cost REAL,
+      item_snapshot TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(transfer_id) REFERENCES user_transfers(id) ON DELETE CASCADE,
+      FOREIGN KEY(from_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(to_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(source_collection_id) REFERENCES collection(id) ON DELETE SET NULL,
+      FOREIGN KEY(source_sealed_unit_id) REFERENCES sealed_units(id) ON DELETE SET NULL
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_user_transfer_items_transfer ON user_transfer_items(transfer_id)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_user_transfer_items_collection ON user_transfer_items(source_collection_id)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_user_transfer_items_sealed_unit ON user_transfer_items(source_sealed_unit_id)`);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS external_contacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 100),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_external_contacts_user_name
+    ON external_contacts(user_id, name COLLATE NOCASE)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_external_contacts_user ON external_contacts(user_id, name)`);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS external_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      contact_id INTEGER,
+      contact_name_snapshot TEXT NOT NULL,
+      transaction_type TEXT NOT NULL CHECK(transaction_type IN ('gift', 'trade')),
+      message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(contact_id) REFERENCES external_contacts(id) ON DELETE SET NULL
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_external_transactions_user_created
+    ON external_transactions(user_id, created_at DESC)`);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS external_transaction_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      transaction_id INTEGER NOT NULL,
+      direction TEXT NOT NULL CHECK(direction IN ('given', 'received')),
+      item_type TEXT NOT NULL CHECK(item_type IN ('card', 'sealed')),
+      source_collection_id INTEGER,
+      source_sealed_unit_id INTEGER,
+      quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
+      purchase_cost REAL,
+      received_cost REAL,
+      item_snapshot TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(transaction_id) REFERENCES external_transactions(id) ON DELETE CASCADE,
+      FOREIGN KEY(source_collection_id) REFERENCES collection(id) ON DELETE SET NULL,
+      FOREIGN KEY(source_sealed_unit_id) REFERENCES sealed_units(id) ON DELETE SET NULL
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_external_transaction_items_transaction
+    ON external_transaction_items(transaction_id)`);
 
   // A reusable "recipe" for what a product actually contains (TCGCSV publishes no
   // contents data, so this is typed in once by the user and matched to every
@@ -1481,6 +1585,12 @@ async function initDb() {
   if (!sealedPurchaseCols.some(c => c.name === 'source_unit_price_saved')) {
     await run(`ALTER TABLE sealed_purchases ADD COLUMN source_unit_price_saved INTEGER NOT NULL DEFAULT 0`);
   }
+  if (!sealedPurchaseCols.some(c => c.name === 'source_product_name')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN source_product_name TEXT`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'source_unit_number')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN source_unit_number INTEGER`);
+  }
   if (!sealedPurchaseCols.some(c => c.name === 'available_to_all')) {
     await run(`ALTER TABLE sealed_purchases ADD COLUMN available_to_all INTEGER NOT NULL DEFAULT 0`);
   }
@@ -1520,6 +1630,9 @@ async function initDb() {
   }
   if (!sealedUnitCols.some(c => c.name === 'components_applied_at')) {
     await run(`ALTER TABLE sealed_units ADD COLUMN components_applied_at DATETIME`);
+  }
+  if (!sealedUnitCols.some(c => c.name === 'is_trade')) {
+    await run(`ALTER TABLE sealed_units ADD COLUMN is_trade INTEGER DEFAULT 0`);
   }
   await run(`CREATE INDEX IF NOT EXISTS idx_sealed_units_claimed_by_user ON sealed_units(claimed_by_user_id)`);
 

@@ -609,6 +609,8 @@ function App() {
         return <Notes showToast={showToast} />;
       case 'sealed':
         return <SealedList showToast={showToast} />;
+      case 'transfers':
+        return <TransferManager user={user} showToast={showToast} />;
       case 'settings':
         return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} onLeaveDevice={handleLeaveDevice} />;
       case 'admin':
