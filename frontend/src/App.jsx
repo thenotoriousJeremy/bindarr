@@ -348,6 +348,28 @@ function App() {
     };
   }, [t, showToast]);
 
+  // Upgrade profiles cached before login responses included the user ID.
+  useEffect(() => {
+    if (!token || !user || user.id != null) return;
+    let active = true;
+    fetch('/api/auth/me')
+      .then(async response => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Failed to refresh user profile');
+        if (!data.user || data.user.id == null) throw new Error('Authenticated profile did not include a user ID');
+        return data.user;
+      })
+      .then(profile => {
+        if (!active) return;
+        setUser(profile);
+        localStorage.setItem('bindarr_user', JSON.stringify(profile));
+      })
+      .catch(error => {
+        if (active) console.error('Failed to refresh user profile:', error);
+      });
+    return () => { active = false; };
+  }, [token, user]);
+
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => {

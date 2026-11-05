@@ -276,6 +276,7 @@ router.post('/oidc/exchange', authLimiter, async (req, res) => {
 // the API key has its own on-demand read (GET /api-key).
 function sessionUser(user) {
   return {
+    id: user.id,
     username: user.username,
     role: user.role,
     share_token: user.share_token,
