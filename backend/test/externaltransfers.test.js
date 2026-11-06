@@ -30,6 +30,7 @@ function startApp(users) {
     next();
   });
   app.use('/api', require('../src/routes/externalTransfers'));
+  app.use('/api', require('../src/routes/collection'));
   return new Promise(resolve => {
     server = http.createServer(app).listen(0, '127.0.0.1', () =>
       resolve(`http://127.0.0.1:${server.address().port}`));
@@ -103,6 +104,16 @@ async function main() {
     assert.ok(received.every(row => row.location_id == null));
     assert.strictEqual(trade.transaction.items.filter(item => item.direction === 'given').length, 1);
     assert.strictEqual(trade.transaction.items.filter(item => item.direction === 'received').length, 2);
+    const collectionResponse = await request('/api/collection', ownerId);
+    assert.strictEqual(collectionResponse.status, 200);
+    const collection = await collectionResponse.json();
+    const receivedCards = collection.filter(row => row.card_id === `external-received-${process.pid}`);
+    assert.strictEqual(receivedCards.length, 2);
+    assert.ok(receivedCards.every(row =>
+      row.acquired_external_transaction_id === trade.transaction.id
+      && row.acquired_external_transaction_type === 'trade'
+      && row.acquired_external_contact === 'Local League Friend'
+    ));
     console.log('PASS: external trades update collection and allocate the outgoing cost to received copies');
 
     await db.run(

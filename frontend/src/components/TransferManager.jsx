@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowLeftRight, Check, Gift, RefreshCw, X } from 'lucide-react';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
@@ -8,7 +8,7 @@ import { GAMES } from '../utils/games';
 import { groupTransferHistory } from '../utils/transferHistory';
 import { counterSelections } from '../utils/transferSelection';
 import CardImage from './CardImage';
-import ExternalDealManager, { ExternalDealHistory } from './ExternalDealManager';
+import { ExternalDealHistory, ExternalReceivedItems } from './ExternalDealComponents';
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
@@ -122,42 +122,65 @@ function TransferItem({ item, currentUserId, t, location, showCost = true }) {
   );
 }
 
-export default function TransferManager({ user, showToast }) {
+export default function TransferManager({
+  user,
+  showToast,
+  initialOffer,
+  historyFocus,
+  onInitialOfferHandled,
+  onHistoryFocusHandled
+}) {
   const { t } = useT();
   const [activePage, setActivePage] = useState('new');
   const [users, setUsers] = useState([]);
+  const [contacts, setContacts] = useState([]);
   const [transfers, setTransfers] = useState([]);
   const [myCards, setMyCards] = useState([]);
   const [mySealed, setMySealed] = useState([]);
   const [setsList, setSetsList] = useState([]);
   const [markedItems, setMarkedItems] = useState({ cards: [], sealed: [] });
-  const [recipientId, setRecipientId] = useState('');
-  const [proposalTarget, setProposalTarget] = useState('bindarr');
+  const [recipientSelection, setRecipientSelection] = useState('');
   const [transferType, setTransferType] = useState('gift');
+  const [giftDirection, setGiftDirection] = useState('given');
   const [offered, setOffered] = useState({});
   const [requested, setRequested] = useState({});
+  const [receivedItems, setReceivedItems] = useState([]);
   const [countering, setCountering] = useState(null);
+  const [addingContact, setAddingContact] = useState(false);
+  const [newContactName, setNewContactName] = useState('');
   const [message, setMessage] = useState('');
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [offerFilters, setOfferFilters] = useState({ query: '', game: '', type: 'all', location: '', sort: 'name-asc' });
   const [requestFilters, setRequestFilters] = useState({ query: '', game: '', type: 'all', sort: 'name-asc' });
+  const [expandedHistoryGroupIds, setExpandedHistoryGroupIds] = useState(() => new Set());
+  const [historyScrollTargetId, setHistoryScrollTargetId] = useState(null);
+  const handledOfferRef = useRef(null);
+  const handledHistoryFocusRef = useRef(null);
+
+  const [recipientType, recipientValue] = recipientSelection.split(':');
+  const isExternalRecipient = recipientType === 'contact';
+  const recipientId = recipientType === 'user' ? recipientValue : '';
+  const externalContactId = isExternalRecipient ? recipientValue : '';
 
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [transferData, userData, collectionData, sealedData] = await Promise.all([
+      const [transferData, userData, collectionData, sealedData, contactData] = await Promise.all([
         requestJson('/api/transfers'),
         requestJson('/api/transfers/users'),
         requestJson('/api/collection?list_type=collection'),
-        requestJson('/api/sealed/units?opened=0')
+        requestJson('/api/sealed/units?opened=0'),
+        requestJson('/api/transfers/external/contacts')
       ]);
       setTransfers(transferData.transfers || []);
       setUsers(userData.users || []);
       setMyCards(Array.isArray(collectionData) ? collectionData : []);
       setMySealed(sealedData.units || []);
+      setContacts(contactData.contacts || []);
     } catch (err) {
       setError(err.message || t('transfer.errLoad'));
     } finally {
@@ -166,6 +189,27 @@ export default function TransferManager({ user, showToast }) {
   }, [t]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!initialOffer || loading || handledOfferRef.current === initialOffer.requestId) return;
+    handledOfferRef.current = initialOffer.requestId;
+    const card = myCards.find(item => String(item.entry_id) === String(initialOffer.entryId));
+    if (!card) {
+      showToast?.(t('transfer.cardUnavailable'));
+    } else {
+      setActivePage('new');
+      setRecipientSelection('');
+      setTransferType('trade');
+      setCountering(null);
+      setOffered({
+        [`card:${card.entry_id}`]: { type: 'card', id: card.entry_id, quantity: 1 }
+      });
+      setRequested({});
+      setReceivedItems([]);
+      setMessage('');
+    }
+    onInitialOfferHandled?.(initialOffer.requestId);
+  }, [initialOffer, loading, myCards, onInitialOfferHandled, showToast, t]);
 
   useEffect(() => {
     fetch('/api/sets')
@@ -249,6 +293,36 @@ export default function TransferManager({ user, showToast }) {
   const pendingOutgoing = transfers.filter(item => item.status === 'pending' && item.proposer_id === user.id);
   const historyGroups = useMemo(() => groupTransferHistory(transfers), [transfers]);
 
+  useEffect(() => {
+    if (historyFocus?.type !== 'internal' || loading) return;
+    const requestId = historyFocus.requestId ?? `internal:${historyFocus.id}`;
+    if (handledHistoryFocusRef.current === requestId) return;
+    handledHistoryFocusRef.current = requestId;
+    const group = historyGroups.find(item =>
+      item.transfers.some(transfer => String(transfer.id) === String(historyFocus.id))
+    );
+    if (group) {
+      const rootId = String(group.root.id);
+      setActivePage('history');
+      setExpandedHistoryGroupIds(current => new Set([...current, rootId]));
+      setHistoryScrollTargetId(rootId);
+    } else {
+      setError(t('transfer.historyUnavailable'));
+    }
+    onHistoryFocusHandled?.(requestId);
+  }, [historyFocus, historyGroups, loading, onHistoryFocusHandled, t]);
+
+  useEffect(() => {
+    if (activePage !== 'history' || !historyScrollTargetId) return;
+    document.getElementById(`transfer-history-${historyScrollTargetId}`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHistoryScrollTargetId(null);
+  }, [activePage, historyScrollTargetId]);
+
+  useEffect(() => {
+    if (historyFocus?.type === 'external') setActivePage('history');
+  }, [historyFocus]);
+
   const setSelection = (setter, selected, item, isSelected) => {
     const key = itemKey(item);
     setter(current => {
@@ -267,15 +341,74 @@ export default function TransferManager({ user, showToast }) {
   const resetComposer = () => {
     setOffered({});
     setRequested({});
+    setReceivedItems([]);
     setMessage('');
     setCountering(null);
-    setRecipientId('');
-    setProposalTarget('bindarr');
+    setRecipientSelection('');
     setTransferType('gift');
+    setGiftDirection('given');
+    setAddingContact(false);
+    setNewContactName('');
+    setNotice('');
+  };
+
+  const addExternalContact = async () => {
+    if (!newContactName.trim()) return;
+    setSaving(true);
+    setError('');
+    try {
+      const data = await requestJson('/api/transfers/external/contacts', {
+        method: 'POST',
+        body: JSON.stringify({ name: newContactName.trim() })
+      });
+      setContacts(current => [...current, data.contact].sort((a, b) => a.name.localeCompare(b.name)));
+      setRequested({});
+      setReceivedItems([]);
+      setRecipientSelection(`contact:${data.contact.id}`);
+      setNewContactName('');
+      setAddingContact(false);
+    } catch (err) {
+      setError(err.message || t('transfer.external.errContact'));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const submitProposal = async (event) => {
     event.preventDefault();
+    if (isExternalRecipient) {
+      const givenItems = transferType === 'trade' || giftDirection === 'given' ? selectedOfferItems : [];
+      const incomingItems = transferType === 'trade' || giftDirection === 'received' ? receivedItems : [];
+      if (!externalContactId
+        || (transferType === 'trade' && (!givenItems.length || !incomingItems.length))
+        || (transferType === 'gift' && (giftDirection === 'given' ? !givenItems.length : !incomingItems.length))) return;
+      setSaving(true);
+      setError('');
+      try {
+        const data = await requestJson('/api/transfers/external', {
+          method: 'POST',
+          body: JSON.stringify({
+            contact_id: Number(externalContactId),
+            transaction_type: transferType,
+            given_items: givenItems,
+            received_items: incomingItems,
+            message
+          })
+        });
+        const savedNotice = data.warnings?.length ? t('transfer.external.deckWarning') : '';
+        showToast?.(t('transfer.external.saved'));
+        resetComposer();
+        setNotice(savedNotice);
+        setActivePage('history');
+        await load();
+      } catch (err) {
+        setError(err.message || t('transfer.external.errSave'));
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     if (!recipientId || selectedOfferItems.length === 0) return;
     if (countering && selectedRequestItems.length === 0) return;
     setSaving(true);
@@ -322,8 +455,7 @@ export default function TransferManager({ user, showToast }) {
   const startCounter = (transfer) => {
     setCountering(transfer);
     setActivePage('new');
-    setProposalTarget('bindarr');
-    setRecipientId(String(transfer.proposer_id));
+    setRecipientSelection(`user:${transfer.proposer_id}`);
     setTransferType('trade');
     const selections = counterSelections(transfer, ownItemsByKey);
     setOffered(selections.offered);
@@ -682,36 +814,20 @@ export default function TransferManager({ user, showToast }) {
       </nav>
 
       <div id="transfer-panel-new" role="tabpanel" aria-labelledby="transfer-tab-new" tabIndex={0} hidden={activePage !== 'new'}>
-      {!countering && (
-        <TransferField id="transfer-proposal-target" label={t('transfer.createType')}>
-          <select
-            id="transfer-proposal-target"
-            className="select-control"
-            value={proposalTarget}
-            onChange={event => setProposalTarget(event.target.value)}
-          >
-            <option value="bindarr">{t('transfer.inAppProposal')}</option>
-            <option value="external">{t('transfer.external.title')}</option>
-          </select>
-        </TransferField>
-      )}
-      <ExternalDealManager
-        showToast={showToast}
-        onInventoryChange={load}
-        visible={!countering && proposalTarget === 'external'}
-      />
       <form
         className="glass-panel"
         onSubmit={submitProposal}
         style={{
           padding: '1rem',
-          display: countering || proposalTarget === 'bindarr' ? 'flex' : 'none',
+          display: 'flex',
           flexDirection: 'column',
           gap: '0.9rem'
         }}
       >
         <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>
-          {countering ? t('transfer.countering', { user: countering.proposer_username }) : t('transfer.newProposal')}
+          {countering
+            ? t('transfer.countering', { user: countering.proposer_username })
+            : isExternalRecipient ? t('transfer.external.title') : t('transfer.newProposal')}
         </h3>
         {countering && (
           <section className="glass-panel" aria-label={t('transfer.originalProposal')} style={{ padding: '0.75rem' }}>
@@ -748,11 +864,56 @@ export default function TransferManager({ user, showToast }) {
         )}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.65rem' }}>
           <TransferField id="transfer-recipient" label={t('transfer.recipient')}>
-            <select id="transfer-recipient" className="select-control" value={recipientId} disabled={Boolean(countering)} onChange={event => setRecipientId(event.target.value)} required>
+            <select
+              id="transfer-recipient"
+              className="select-control"
+              value={recipientSelection}
+              disabled={Boolean(countering)}
+              onChange={event => {
+                if (event.target.value === '__add_external_contact__') {
+                  setAddingContact(true);
+                  return;
+                }
+                if (event.target.value !== recipientSelection) {
+                  setRequested({});
+                  setReceivedItems([]);
+                }
+                setRecipientSelection(event.target.value);
+                setAddingContact(false);
+              }}
+              required
+            >
               <option value="">{t('transfer.chooseUser')}</option>
-              {users.map(other => <option key={other.id} value={other.id}>{other.username}</option>)}
+              <optgroup label={t('transfer.bindarrUsers')}>
+                {users.map(other => <option key={other.id} value={`user:${other.id}`}>{other.username}</option>)}
+              </optgroup>
+              <optgroup label={t('transfer.externalContacts')}>
+                {contacts.map(contact => <option key={contact.id} value={`contact:${contact.id}`}>{contact.name}</option>)}
+                <option value="__add_external_contact__">{t('transfer.addExternalContact')}</option>
+              </optgroup>
             </select>
           </TransferField>
+          {addingContact && (
+            <div style={{ display: 'flex', alignItems: 'end', gap: '0.4rem' }}>
+              <input
+                className="input-control"
+                value={newContactName}
+                maxLength={100}
+                placeholder={t('transfer.external.newContact')}
+                aria-label={t('transfer.external.newContact')}
+                onChange={event => setNewContactName(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    addExternalContact();
+                  }
+                }}
+              />
+              <button type="button" className="btn btn-secondary" disabled={saving || !newContactName.trim()} onClick={addExternalContact}>
+                {t('transfer.external.saveContact')}
+              </button>
+            </div>
+          )}
           {!countering && (
             <TransferField id="transfer-type" label={t('transfer.type')}>
               <select id="transfer-type" className="select-control" value={transferType} onChange={event => setTransferType(event.target.value)}>
@@ -761,15 +922,27 @@ export default function TransferManager({ user, showToast }) {
               </select>
             </TransferField>
           )}
+          {isExternalRecipient && !countering && transferType === 'gift' && (
+            <TransferField id="transfer-gift-direction" label={t('transfer.external.giftDirection')}>
+              <select id="transfer-gift-direction" className="select-control" value={giftDirection} onChange={event => setGiftDirection(event.target.value)}>
+                <option value="given">{t('transfer.external.giftGiven')}</option>
+                <option value="received">{t('transfer.external.giftReceived')}</option>
+              </select>
+            </TransferField>
+          )}
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
-          <section>
-            <h4 style={{ color: 'var(--text-strong)', margin: '0 0 0.25rem' }}>{t('transfer.offer')}</h4>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 0.5rem' }}>{t('transfer.offerHint')}</p>
-            {renderChoices(ownOfferItems, offered, setOffered, offerFilters, setOfferFilters)}
-          </section>
-          {(countering || transferType === 'trade') && (
+          {(!isExternalRecipient || transferType === 'trade' || giftDirection === 'given') && (
+            <section>
+              <h4 style={{ color: 'var(--text-strong)', margin: '0 0 0.25rem' }}>
+                {isExternalRecipient ? t('transfer.external.given') : t('transfer.offer')}
+              </h4>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 0.5rem' }}>{t('transfer.offerHint')}</p>
+              {renderChoices(ownOfferItems, offered, setOffered, offerFilters, setOfferFilters)}
+            </section>
+          )}
+          {!isExternalRecipient && (countering || transferType === 'trade') && (
             <section>
               <h4 style={{ color: 'var(--text-strong)', margin: '0 0 0.25rem' }}>{t('transfer.request')}</h4>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 0.5rem' }}>
@@ -778,15 +951,37 @@ export default function TransferManager({ user, showToast }) {
               {renderChoices(requestedOptions, requested, setRequested, requestFilters, setRequestFilters, true)}
             </section>
           )}
+          {isExternalRecipient && (transferType === 'trade' || giftDirection === 'received') && (
+            <section>
+              <h4 style={{ color: 'var(--text-strong)', margin: '0 0 0.25rem' }}>{t('transfer.external.received')}</h4>
+              <ExternalReceivedItems
+                items={receivedItems}
+                onItemsChange={setReceivedItems}
+                disabled={saving || loading}
+              />
+            </section>
+          )}
         </div>
 
         <TransferField id="transfer-message" label={t('transfer.message')}>
           <textarea id="transfer-message" className="input-control" value={message} maxLength={1000} rows={2} onChange={event => setMessage(event.target.value)} placeholder={t('transfer.messagePlaceholder')} />
         </TransferField>
+        {notice && <div role="status" style={{ color: 'var(--accent-yellow)' }}>{notice}</div>}
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button type="submit" className="btn btn-primary" disabled={saving || loading || !recipientId || !selectedOfferItems.length || (countering && !selectedRequestItems.length)}>
-            {countering ? <RefreshCw size={15} /> : transferType === 'gift' ? <Gift size={15} /> : <ArrowLeftRight size={15} />}
-            {countering ? t('transfer.sendCounter') : t('transfer.sendProposal')}
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={saving || loading || !recipientSelection || (isExternalRecipient
+              ? transferType === 'trade'
+                ? !selectedOfferItems.length || !receivedItems.length
+                : giftDirection === 'given' ? !selectedOfferItems.length : !receivedItems.length
+              : !selectedOfferItems.length || (countering && !selectedRequestItems.length))}
+          >
+            {saving && <RefreshCw size={15} className="spin" />}
+            {!saving && (countering ? <RefreshCw size={15} /> : transferType === 'gift' ? <Gift size={15} /> : <ArrowLeftRight size={15} />)}
+            {isExternalRecipient
+              ? saving ? t('transfer.external.saving') : t('transfer.external.save')
+              : countering ? t('transfer.sendCounter') : t('transfer.sendProposal')}
           </button>
           {countering && <button type="button" className="btn btn-secondary" onClick={resetComposer}>{t('common.cancel')}</button>}
         </div>
@@ -827,7 +1022,23 @@ export default function TransferManager({ user, showToast }) {
                 : t('transfer.theyOfferedItem', { item: name });
             });
             return (
-              <details key={group.root.id} className="glass-panel" style={{ padding: '0.75rem' }}>
+              <details
+                key={group.root.id}
+                id={`transfer-history-${group.root.id}`}
+                className="glass-panel"
+                open={expandedHistoryGroupIds.has(String(group.root.id))}
+                onToggle={event => {
+                  const rootId = String(group.root.id);
+                  const isOpen = event.currentTarget.open;
+                  setExpandedHistoryGroupIds(current => {
+                    const next = new Set(current);
+                    if (isOpen) next.add(rootId);
+                    else next.delete(rootId);
+                    return next;
+                  });
+                }}
+                style={{ padding: '0.75rem' }}
+              >
                 <summary style={{ cursor: 'pointer', color: 'var(--text-strong)' }}>
                   <strong>{t('transfer.negotiationWith', { user: otherUser })}</strong>
                   <span style={{ marginLeft: '0.5rem', color: 'var(--text-secondary)' }}>
@@ -846,7 +1057,11 @@ export default function TransferManager({ user, showToast }) {
             : <p style={{ color: 'var(--text-secondary)' }}>{t('transfer.noHistory')}</p>}
       </section>
 
-      <ExternalDealHistory />
+      <ExternalDealHistory
+        focus={historyFocus}
+        onFocusHandled={onHistoryFocusHandled}
+        onFocusMissing={() => setError(t('transfer.historyUnavailable'))}
+      />
       </>}
       </div>
     </div>

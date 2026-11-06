@@ -974,6 +974,8 @@ async function initDb() {
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_external_transaction_items_transaction
     ON external_transaction_items(transaction_id)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_external_transaction_items_collection
+    ON external_transaction_items(source_collection_id, direction)`);
 
   // A reusable "recipe" for what a product actually contains (TCGCSV publishes no
   // contents data, so this is typed in once by the user and matched to every
@@ -1662,6 +1664,10 @@ async function initDb() {
   // record must not delete cards the user still owns.
   if (!collectionCols.some(c => c.name === 'sealed_unit_id')) {
     await run(`ALTER TABLE collection ADD COLUMN sealed_unit_id INTEGER REFERENCES sealed_units(id) ON DELETE SET NULL`);
+  }
+  if (!collectionCols.some(c => c.name === 'acquired_via_transfer_item_id')) {
+    await run(`ALTER TABLE collection ADD COLUMN acquired_via_transfer_item_id INTEGER
+      REFERENCES user_transfer_items(id) ON DELETE SET NULL`);
   }
   if (!collectionCols.some(c => c.name === 'is_trade')) {
     await run(`ALTER TABLE collection ADD COLUMN is_trade INTEGER DEFAULT 0`);

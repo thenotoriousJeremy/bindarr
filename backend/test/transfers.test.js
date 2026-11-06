@@ -31,6 +31,7 @@ function startApp(users) {
   });
   app.use('/api', require('../src/routes/sealed'));
   app.use('/api', require('../src/routes/transfers'));
+  app.use('/api', require('../src/routes/collection'));
   return new Promise(resolve => {
     server = http.createServer(app).listen(0, '127.0.0.1', () =>
       resolve(`http://127.0.0.1:${server.address().port}`));
@@ -113,6 +114,13 @@ async function main() {
     assert.strictEqual(ownership.find(row => row.card_id === `transfer-b-${process.pid}`).purchase_price, 0.3);
     assert.ok(ownership.every(row => row.location_id == null), 'received cards must be unsorted');
     assert.ok(transfer.items.every(item => item.item_snapshot.name), 'accepted history keeps card snapshots');
+    const bobCollectionResponse = await request('/api/collection', bob);
+    assert.strictEqual(bobCollectionResponse.status, 200);
+    const bobCollection = await bobCollectionResponse.json();
+    const receivedCard = bobCollection.find(row => row.card_id === `transfer-a-${process.pid}`);
+    assert.strictEqual(receivedCard.acquired_transfer_id, transfer.id);
+    assert.strictEqual(receivedCard.acquired_transfer_type, 'trade');
+    assert.strictEqual(receivedCard.acquired_transfer_partner, 'transfer-api-alice');
     console.log('PASS: one-for-one trades exchange cost basis and move cards to unsorted collection');
 
     const aliceUnmarked = await addCard(alice, `counter-a-${process.pid}`, 'Counter Card A', 0.25);

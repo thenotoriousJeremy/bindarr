@@ -24,7 +24,7 @@ import BoxViewPanel from './storage/BoxViewPanel';
 import UnsortedQueue from './storage/UnsortedQueue';
 import { FilingGuidePanel, FilingBar } from './storage/FilingGuide';
 
-function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, focusEntryId }) {
+function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, focusEntryId, onProposeTrade, onViewTrade }) {
   const { t } = useT();
   const [locations, setLocations] = useState([]);
   const [activeLocationId, setActiveLocationId] = useState(null);
@@ -1537,6 +1537,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         onClose={() => setInspectorCard(null)}
         onUpdate={onUpdate}
         showToast={showToast}
+        onProposeTrade={onProposeTrade}
+        onViewTrade={onViewTrade}
       />
     </div>
     </DndContext>

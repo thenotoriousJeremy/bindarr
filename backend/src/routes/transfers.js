@@ -396,13 +396,13 @@ async function acceptTransfer(transferId, recipientId) {
              (card_id, user_id, quantity, condition, printing, language, purchase_price,
               location_id, compartment_id, position, favorite, is_trade, list_type, game,
               added_at, notes, grader, grade, cert_number, market_value,
-              market_value_source, market_value_at, sealed_unit_id)
+              market_value_source, market_value_at, sealed_unit_id, acquired_via_transfer_item_id)
            VALUES (?, ?, 1, ?, ?, ?, ?, NULL, NULL, 0, 0, 0, 'collection', ?,
-                   CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                   CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [source.card_id, item.to_user_id, source.condition, source.printing, source.language,
             item.received_cost, source.game, source.notes, source.grader, source.grade,
             source.cert_number, source.market_value, source.market_value_source,
-            source.market_value_at, source.sealed_unit_id]
+            source.market_value_at, source.sealed_unit_id, item.id]
         );
       } else {
         const source = asset.row;

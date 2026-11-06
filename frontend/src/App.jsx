@@ -171,6 +171,8 @@ function App() {
   const [selectedLocationId, setSelectedLocationId] = useState(null);
   const [focusEntryId, setFocusEntryId] = useState(null);
   const [selectedCardFilter, setSelectedCardFilter] = useState('');
+  const [transferLaunch, setTransferLaunch] = useState(null);
+  const [transferHistoryFocus, setTransferHistoryFocus] = useState(null);
   const [toast, setToast] = useState(null);
   const [statsTrigger, setStatsTrigger] = useState(0);
   // The set the Sets tab should open, from the dashboard's set-progress list. A
@@ -189,6 +191,7 @@ function App() {
   // the same commit that activates it.
   const [mountedTabs, setMountedTabs] = useState([activeTab]);
   if (!mountedTabs.includes(activeTab)) setMountedTabs([...mountedTabs, activeTab]);
+  const transferActionSequenceRef = useRef(0);
 
   // The page itself (window) is the scroller, shared by every tab, so each
   // tab's offset is read as you leave it (showTab, before the DOM changes — a
@@ -217,6 +220,8 @@ function App() {
     setMountedTabs(['dashboard']);
     setFocusSet(null);
     setLastCollectionView('collection');
+    setTransferLaunch(null);
+    setTransferHistoryFocus(null);
     wishlist.reset();
     scrollByTabRef.current = {};
   };
@@ -230,6 +235,31 @@ function App() {
     if (tab !== activeTab) goToTab(tab);
   });
   const openSet = useCallback((target) => { setFocusSet({ ...target }); goTab('sets'); }, [goTab]);
+  const openTradeComposer = useStableCallback(card => {
+    if (!card?.entry_id) return;
+    setTransferLaunch({
+      entryId: card.entry_id,
+      requestId: ++transferActionSequenceRef.current
+    });
+    goTab('add-cards');
+  });
+
+  const openTradeHistory = useStableCallback(focus => {
+    if (!focus?.type || focus.id == null) return;
+    setTransferHistoryFocus({
+      ...focus,
+      requestId: ++transferActionSequenceRef.current
+    });
+    goTab('add-cards');
+  });
+
+  const clearTransferLaunch = useStableCallback(requestId => {
+    setTransferLaunch(current => current?.requestId === requestId ? null : current);
+  });
+
+  const clearTradeHistoryFocus = useStableCallback(requestId => {
+    setTransferHistoryFocus(current => current?.requestId === requestId ? null : current);
+  });
 
   // Detect public share route on load
   const [shareToken] = useState(() => {
@@ -592,9 +622,11 @@ function App() {
   const renderTab = (tab) => {
     switch (tab === 'admin' && !showAdmin ? 'dashboard' : tab) {
       case 'dashboard':
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} onProposeTrade={openTradeComposer} onViewTrade={openTradeHistory} />;
       case 'add-cards':
-        return <AddCards active={activeTab === 'add-cards'} onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab} />;
+        return <AddCards active={activeTab === 'add-cards'} user={user} onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab}
+          transferLaunch={transferLaunch} transferHistoryFocus={transferHistoryFocus}
+          onInitialOfferHandled={clearTransferLaunch} onHistoryFocusHandled={clearTradeHistoryFocus} />;
       case 'collection':
         return (
           <CollectionList 
@@ -607,6 +639,8 @@ function App() {
             onNavigate={goTab}
             setSelectedLocationId={setSelectedLocationId}
             setFocusEntryId={setFocusEntryId}
+            onProposeTrade={openTradeComposer}
+            onViewTrade={openTradeHistory}
           />
         );
       case 'storage':
@@ -619,6 +653,8 @@ function App() {
             setSelectedLocationId={setSelectedLocationId}
             focusEntryId={focusEntryId}
             setFocusEntryId={setFocusEntryId}
+            onProposeTrade={openTradeComposer}
+            onViewTrade={openTradeHistory}
           />
         );
       case 'sets':
@@ -631,14 +667,12 @@ function App() {
         return <Notes showToast={showToast} />;
       case 'sealed':
         return <SealedList showToast={showToast} />;
-      case 'transfers':
-        return <TransferManager user={user} showToast={showToast} />;
       case 'settings':
         return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} onLeaveDevice={handleLeaveDevice} />;
       case 'admin':
         return <AdminPanel user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
       default:
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} onProposeTrade={openTradeComposer} onViewTrade={openTradeHistory} />;
     }
   };
 
