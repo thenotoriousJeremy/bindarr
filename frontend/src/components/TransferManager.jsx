@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ArrowLeftRight, Check, Gift, RefreshCw, X } from 'lucide-react';
 import { useT } from '../utils/i18n';
+import { GAMES } from '../utils/games';
 import ExternalDealManager from './ExternalDealManager';
 
 async function requestJson(url, options = {}) {
@@ -20,6 +21,36 @@ const itemKey = item => `${item.type}:${item.id}`;
 const itemLabel = item => item.type === 'card'
   ? item.name || item.printed_name || item.card_id
   : item.product_name;
+const transferPages = ['new', 'offers', 'history'];
+const locationFilterKey = item => item.location_id == null
+  ? 'unsorted'
+  : `${item.location_id}:${item.compartment_id ?? ''}`;
+
+function cardLocationLabel(item, t) {
+  if (item.location_id == null) return t('transfer.unsortedLocation');
+  return [
+    item.location_name,
+    item.compartment_display_label || item.sub_location
+  ].filter(Boolean).join(' · ') || t('transfer.unknownLocation');
+}
+
+function matchesItemFilters(item, filters) {
+  if (filters.type !== 'all' && item.type !== filters.type) return false;
+  if (filters.game && String(item.game || '').toLowerCase() !== filters.game) return false;
+  if (filters.location && (item.type !== 'card' || locationFilterKey(item) !== filters.location)) return false;
+  const query = filters.query.trim().toLowerCase();
+  if (!query) return true;
+  const haystack = [
+    item.name,
+    item.printed_name,
+    item.product_name,
+    item.set_name,
+    item.number,
+    item.sealed_type,
+    item.origin_product_name
+  ].filter(Boolean).join(' ').toLowerCase();
+  return haystack.includes(query);
+}
 
 function TransferItem({ item, currentUserId, t }) {
   const snapshot = item.item_snapshot || item;
@@ -45,6 +76,7 @@ function TransferItem({ item, currentUserId, t }) {
 
 export default function TransferManager({ user, showToast }) {
   const { t } = useT();
+  const [activePage, setActivePage] = useState('new');
   const [users, setUsers] = useState([]);
   const [transfers, setTransfers] = useState([]);
   const [myCards, setMyCards] = useState([]);
@@ -59,6 +91,8 @@ export default function TransferManager({ user, showToast }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [offerFilters, setOfferFilters] = useState({ query: '', game: '', type: 'all', location: '' });
+  const [requestFilters, setRequestFilters] = useState({ query: '', game: '', type: 'all' });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -104,8 +138,11 @@ export default function TransferManager({ user, showToast }) {
         id: item.item_type === 'card' ? item.source_collection_id : item.source_sealed_unit_id,
         quantity: 1,
         name: item.item_snapshot?.name || item.item_snapshot?.product_name,
+        printed_name: item.item_snapshot?.printed_name,
         set_name: item.item_snapshot?.set_name,
         number: item.item_snapshot?.number,
+        image_url: item.item_snapshot?.image_url,
+        game: item.item_snapshot?.game,
         sealed_type: item.item_snapshot?.sealed_type,
         origin_product_name: item.item_snapshot?.origin_product_name,
         explicit: true
@@ -172,6 +209,7 @@ export default function TransferManager({ user, showToast }) {
       });
       showToast?.(countering ? t('transfer.counterSent') : t('transfer.proposalSent'));
       resetComposer();
+      setActivePage('offers');
       await load();
     } catch (err) {
       setError(err.message || t('transfer.errSave'));
@@ -198,6 +236,7 @@ export default function TransferManager({ user, showToast }) {
 
   const startCounter = (transfer) => {
     setCountering(transfer);
+    setActivePage('new');
     setRecipientId(String(transfer.proposer_id));
     setTransferType('trade');
     setOffered({});
@@ -217,52 +256,146 @@ export default function TransferManager({ user, showToast }) {
     }
   };
 
-  const renderChoices = (items, selected, setter, isRequest = false) => (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: '18rem', overflowY: 'auto' }}>
-      {items.length === 0 ? (
-        <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', padding: '0.5rem 0' }}>
-          {isRequest ? t('transfer.noMarkedItems') : t('transfer.noInventory')}
+  const handleTabKeyDown = (event) => {
+    const currentIndex = transferPages.indexOf(activePage);
+    let nextIndex;
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % transferPages.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex + transferPages.length - 1) % transferPages.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = transferPages.length - 1;
+    else return;
+    event.preventDefault();
+    const nextPage = transferPages[nextIndex];
+    setActivePage(nextPage);
+    document.getElementById(`transfer-tab-${nextPage}`)?.focus();
+  };
+
+  const renderChoices = (items, selected, setter, filters, setFilters, isRequest = false) => {
+    const filteredItems = items.filter(item => matchesItemFilters(item, filters));
+    const updateFilter = (key, value) => setFilters(current => ({ ...current, [key]: value }));
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.45rem' }}>
+          <input
+            type="search"
+            value={filters.query}
+            aria-label={t('transfer.searchItems')}
+            placeholder={t('transfer.searchItems')}
+            onChange={event => updateFilter('query', event.target.value)}
+          />
+          <select
+            className="select-control"
+            value={filters.game}
+            aria-label={t('transfer.filterGame')}
+            onChange={event => updateFilter('game', event.target.value)}
+          >
+            <option value="">{t('transfer.allGames')}</option>
+            {GAMES.map(game => <option key={game.value} value={game.value}>{game.label}</option>)}
+          </select>
+          <select
+            className="select-control"
+            value={filters.type}
+            aria-label={t('transfer.filterType')}
+            onChange={event => updateFilter('type', event.target.value)}
+          >
+            <option value="all">{t('transfer.allItems')}</option>
+            <option value="card">{t('transfer.cardsOnly')}</option>
+            <option value="sealed">{t('transfer.sealedOnly')}</option>
+          </select>
+          {!isRequest && (
+            <select
+              className="select-control"
+              value={filters.location}
+              aria-label={t('transfer.filterLocation')}
+              onChange={event => updateFilter('location', event.target.value)}
+            >
+              <option value="">{t('transfer.anyLocation')}</option>
+              {locationOptions.map(location => (
+                <option key={location.key} value={location.key}>{location.label}</option>
+              ))}
+            </select>
+          )}
         </div>
-      ) : items.map(item => {
-        const key = itemKey(item);
-        const checked = Boolean(selected[key]);
-        const label = itemLabel(item);
-        return (
-          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', padding: '0.4rem 0.5rem', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)' }}>
-            <input
-              type="checkbox"
-              checked={checked}
-              aria-label={label}
-              onChange={event => setSelection(setter, selected, item, event.target.checked)}
-            />
-            <span style={{ flex: 1, minWidth: 0, color: 'var(--text-strong)', fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {label}
-              <span style={{ color: 'var(--text-secondary)', marginLeft: '0.35rem' }}>
-                {item.type === 'card' ? [item.set_name, item.number && `#${item.number}`].filter(Boolean).join(' · ') : item.origin_product_name ? t('transfer.fromProduct', { product: item.origin_product_name }) : item.sealed_type}
-              </span>
-            </span>
-            {item.type === 'card' && checked && (
-              <input
-                type="number"
-                min="1"
-                max={item.quantity || 1}
-                value={selected[key].quantity}
-                aria-label={t('transfer.quantity')}
-                onChange={event => updateQuantity(setter, selected, item, event.target.value)}
-                style={{ width: '4.3rem' }}
-              />
-            )}
-            {!isRequest && item.type === 'sealed' && (
-              <button type="button" className="btn btn-secondary" style={{ padding: '0.25rem 0.45rem', fontSize: '0.7rem' }}
-                onClick={() => toggleSealedTrade(item)}>
-                {item.is_trade ? t('transfer.unmarkTrade') : t('transfer.markTrade')}
-              </button>
-            )}
+        <div style={{ color: 'var(--text-secondary)', fontSize: '0.74rem' }}>
+          {t('transfer.selectedCount', { count: Object.keys(selected).length })}
+        </div>
+        {filteredItems.length === 0 ? (
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', padding: '0.5rem 0' }}>
+            {items.length === 0
+              ? (isRequest ? t('transfer.noMarkedItems') : t('transfer.noInventory'))
+              : t('transfer.noFilterResults')}
           </div>
-        );
-      })}
-    </div>
-  );
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '0.45rem', maxHeight: '24rem', overflowY: 'auto', padding: '0.1rem' }}>
+            {filteredItems.map(item => {
+              const key = itemKey(item);
+              const checked = Boolean(selected[key]);
+              const label = itemLabel(item);
+              return (
+              <article key={key} className="glass-panel" style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', padding: '0.45rem', minWidth: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  aria-label={label}
+                  onChange={event => setSelection(setter, selected, item, event.target.checked)}
+                />
+                {item.image_url ? (
+                  <img
+                    src={item.image_url}
+                    alt=""
+                    loading="lazy"
+                    onError={event => { event.currentTarget.style.visibility = 'hidden'; }}
+                    style={{ width: '3.2rem', height: '4.4rem', objectFit: 'contain', flex: '0 0 auto', borderRadius: 'var(--radius-sm)', background: 'var(--surface-2)' }}
+                  />
+                ) : (
+                  <div aria-hidden="true" style={{ width: '3.2rem', height: '4.4rem', flex: '0 0 auto', borderRadius: 'var(--radius-sm)', background: 'var(--surface-2)' }} />
+                )}
+                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                  <strong title={label} style={{ color: 'var(--text-strong)', fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</strong>
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {item.type === 'card'
+                      ? [item.set_name, item.number && `#${item.number}`, item.condition].filter(Boolean).join(' · ')
+                      : [item.sealed_type, item.origin_product_name && t('transfer.fromProduct', { product: item.origin_product_name })].filter(Boolean).join(' · ')}
+                  </span>
+                  {item.type === 'card' && !isRequest && (
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.68rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {t('transfer.location')}: {cardLocationLabel(item, t)}
+                    </span>
+                  )}
+                  {item.type === 'card' && (
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.68rem' }}>
+                      {t('transfer.availableQuantity', { count: item.quantity || 1 })}
+                    </span>
+                  )}
+                  {item.type === 'card' && checked && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', fontSize: '0.7rem' }}>
+                      {t('transfer.quantity')}
+                      <input
+                        type="number"
+                        min="1"
+                        max={item.quantity || 1}
+                        value={selected[key].quantity}
+                        aria-label={t('transfer.quantity')}
+                        onChange={event => updateQuantity(setter, selected, item, event.target.value)}
+                        style={{ width: '3.7rem' }}
+                      />
+                    </label>
+                  )}
+                  {!isRequest && item.type === 'sealed' && (
+                    <button type="button" className="btn btn-secondary" style={{ alignSelf: 'flex-start', padding: '0.2rem 0.4rem', fontSize: '0.68rem' }}
+                      onClick={() => toggleSealedTrade(item)}>
+                      {item.is_trade ? t('transfer.unmarkTrade') : t('transfer.markTrade')}
+                    </button>
+                  )}
+                </div>
+              </article>
+                );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const transferCard = (transfer, incoming) => (
     <article key={transfer.id} className="glass-panel" style={{ padding: '1rem' }}>
@@ -302,6 +435,14 @@ export default function TransferManager({ user, showToast }) {
     ...myCards.map(item => ({ ...item, type: 'card', id: item.entry_id })),
     ...mySealed.map(item => ({ ...item, type: 'sealed', id: item.id }))
   ];
+  const locationOptions = useMemo(() => {
+    const options = new Map();
+    for (const card of myCards) {
+      const key = locationFilterKey(card);
+      options.set(key, { key, label: cardLocationLabel(card, t) });
+    }
+    return [...options.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [myCards, t]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
@@ -312,7 +453,32 @@ export default function TransferManager({ user, showToast }) {
 
       {error && <div role="alert" className="glass-panel" style={{ padding: '0.75rem', color: 'var(--accent-red)' }}>{error}</div>}
 
-      <form className="glass-panel" onSubmit={submitProposal} style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+      <nav role="tablist" aria-label={t('transfer.title')} onKeyDown={handleTabKeyDown} style={{ display: 'flex', gap: '0.45rem', overflowX: 'auto', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.65rem' }}>
+        {[
+          { id: 'new', label: t('transfer.newProposal') },
+          { id: 'offers', label: t('transfer.offersTab'), count: pendingIncoming.length + pendingOutgoing.length },
+          { id: 'history', label: t('transfer.historyTab'), count: history.length }
+        ].map(page => (
+          <button
+            key={page.id}
+            type="button"
+            role="tab"
+            id={`transfer-tab-${page.id}`}
+            aria-selected={activePage === page.id}
+            aria-controls={`transfer-panel-${page.id}`}
+            tabIndex={activePage === page.id ? 0 : -1}
+            className={`btn ${activePage === page.id ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setActivePage(page.id)}
+            style={{ whiteSpace: 'nowrap' }}
+          >
+            {page.label}
+            {page.count > 0 && <span style={{ marginLeft: '0.4rem', opacity: 0.8 }}>{page.count}</span>}
+          </button>
+        ))}
+      </nav>
+
+      <div id="transfer-panel-new" role="tabpanel" aria-labelledby="transfer-tab-new" tabIndex={0} hidden={activePage !== 'new'}>
+      {activePage === 'new' && <form className="glass-panel" onSubmit={submitProposal} style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
         <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>
           {countering ? t('transfer.countering', { user: countering.proposer_username }) : t('transfer.newProposal')}
         </h3>
@@ -339,13 +505,13 @@ export default function TransferManager({ user, showToast }) {
           <section>
             <h4 style={{ color: 'var(--text-strong)', margin: '0 0 0.25rem' }}>{t('transfer.offer')}</h4>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', margin: '0 0 0.5rem' }}>{t('transfer.offerHint')}</p>
-            {renderChoices(ownOfferItems, offered, setOffered)}
+            {renderChoices(ownOfferItems, offered, setOffered, offerFilters, setOfferFilters)}
           </section>
           {(countering || transferType === 'trade') && (
             <section>
               <h4 style={{ color: 'var(--text-strong)', margin: '0 0 0.25rem' }}>{t('transfer.request')}</h4>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', margin: '0 0 0.5rem' }}>{t('transfer.requestHint')}</p>
-              {renderChoices(requestedOptions, requested, setRequested, true)}
+              {renderChoices(requestedOptions, requested, setRequested, requestFilters, setRequestFilters, true)}
             </section>
           )}
         </div>
@@ -361,8 +527,11 @@ export default function TransferManager({ user, showToast }) {
           </button>
           {countering && <button type="button" className="btn btn-secondary" onClick={resetComposer}>{t('common.cancel')}</button>}
         </div>
-      </form>
+      </form>}
+      </div>
 
+      <div id="transfer-panel-offers" role="tabpanel" aria-labelledby="transfer-tab-offers" tabIndex={0} hidden={activePage !== 'offers'} style={{ display: activePage === 'offers' ? 'flex' : 'none', flexDirection: 'column', gap: '1rem' }}>
+      {activePage === 'offers' && <>
       <section style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
         <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>{t('transfer.pendingIncoming')}</h3>
         {pendingIncoming.length ? pendingIncoming.map(item => transferCard(item, true)) : <p style={{ color: 'var(--text-secondary)' }}>{t('transfer.noneIncoming')}</p>}
@@ -372,7 +541,11 @@ export default function TransferManager({ user, showToast }) {
         <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>{t('transfer.pendingOutgoing')}</h3>
         {pendingOutgoing.length ? pendingOutgoing.map(item => transferCard(item, false)) : <p style={{ color: 'var(--text-secondary)' }}>{t('transfer.noneOutgoing')}</p>}
       </section>
+      </>}
+      </div>
 
+      <div id="transfer-panel-history" role="tabpanel" aria-labelledby="transfer-tab-history" tabIndex={0} hidden={activePage !== 'history'} style={{ display: activePage === 'history' ? 'flex' : 'none', flexDirection: 'column', gap: '1rem' }}>
+      {activePage === 'history' && <>
       <section style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
         <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>{t('transfer.history')}</h3>
         {loading ? <p style={{ color: 'var(--text-secondary)' }}>{t('common.loading')}</p>
@@ -381,6 +554,8 @@ export default function TransferManager({ user, showToast }) {
       </section>
 
       <ExternalDealManager showToast={showToast} onInventoryChange={load} />
+      </>}
+      </div>
     </div>
   );
 }
