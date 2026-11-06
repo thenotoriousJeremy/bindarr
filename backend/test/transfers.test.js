@@ -79,6 +79,7 @@ async function main() {
     const discoverJson = await discovery.json();
     assert.deepStrictEqual(discoverJson.cards.map(card => card.entry_id), [bobCard]);
     assert.ok(!('purchase_price' in discoverJson.cards[0]), 'discovery must not reveal private cost basis');
+    assert.ok(Object.hasOwn(discoverJson.cards[0], 'rarity'), 'discovery includes rarity for the trade card badge');
     console.log('PASS: trade discovery exposes marked cards only and omits private cost');
 
     let response = await request('/api/transfers', alice, 'POST', {
@@ -116,15 +117,18 @@ async function main() {
 
     const aliceUnmarked = await addCard(alice, `counter-a-${process.pid}`, 'Counter Card A', 0.25);
     const bobUnmarked = await addCard(bob, `counter-b-${process.pid}`, 'Counter Card B', 0.15);
-    const bobMarked = await addCard(bob, `counter-marked-${process.pid}`, 'Marked Request', 0.50, 1);
     response = await request('/api/transfers', alice, 'POST', {
       recipient_id: bob,
       transfer_type: 'trade',
       offered_items: [{ type: 'card', id: aliceUnmarked }],
-      requested_items: [{ type: 'card', id: bobMarked }]
+      requested_items: []
     });
     assert.strictEqual(response.status, 201);
     const original = (await response.json()).transfer;
+    assert.strictEqual(original.items.length, 1, 'offer-only trade proposals preserve the offered item');
+    response = await request(`/api/transfers/${original.id}/accept`, bob, 'PUT');
+    assert.strictEqual(response.status, 409, 'an offer-only trade must be countered before it can complete');
+    assert.strictEqual((await db.get(`SELECT user_id FROM collection WHERE id = ?`, [aliceUnmarked])).user_id, alice);
     response = await request(`/api/transfers/${original.id}/counter`, bob, 'POST', {
       offered_items: [{ type: 'card', id: bobUnmarked }],
       requested_items: [{ type: 'card', id: aliceUnmarked }]
@@ -137,7 +141,7 @@ async function main() {
     assert.strictEqual((await db.get(`SELECT status FROM user_transfers WHERE id = ?`, [original.id])).status, 'countered');
     assert.strictEqual((await db.get(`SELECT purchase_price FROM collection WHERE user_id = ? AND card_id = ?`, [alice, `counter-b-${process.pid}`])).purchase_price, 0.25);
     assert.strictEqual((await db.get(`SELECT purchase_price FROM collection WHERE user_id = ? AND card_id = ?`, [bob, `counter-a-${process.pid}`])).purchase_price, 0.15);
-    console.log('PASS: counteroffers can explicitly offer unmarked items and preserve negotiation history');
+    console.log('PASS: offer-only trades require a bilateral counterproposal and preserve negotiation history');
 
     const aliceKnown = await addCard(alice, `multi-a1-${process.pid}`, 'Multi Alice Known', 0.20);
     const aliceUnknown = await addCard(alice, `multi-a2-${process.pid}`, 'Multi Alice Unknown', null);

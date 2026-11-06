@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ArrowLeftRight, Check, Gift, RefreshCw, X } from 'lucide-react';
+import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
+import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { useT } from '../utils/i18n';
 import { GAMES } from '../utils/games';
+import CardImage from './CardImage';
 import ExternalDealManager from './ExternalDealManager';
 
 async function requestJson(url, options = {}) {
@@ -72,6 +75,15 @@ function sortItems(items, sort, t, setsList) {
   return sortCardsByOrder(normalized, criteria[sort] || criteria['name-asc'], undefined, setsList);
 }
 
+function TransferField({ id, label, children }) {
+  return (
+    <div className="form-group" style={{ marginBottom: 0 }}>
+      <label htmlFor={id}>{label}</label>
+      {children}
+    </div>
+  );
+}
+
 function TransferItem({ item, currentUserId, t }) {
   const snapshot = item.item_snapshot || item;
   const sentByYou = item.from_user_id === currentUserId;
@@ -81,7 +93,7 @@ function TransferItem({ item, currentUserId, t }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem', padding: '0.45rem 0', borderBottom: '1px solid var(--border-glass)' }}>
       <div style={{ minWidth: 0 }}>
         <strong style={{ color: 'var(--text-strong)' }}>{item.quantity > 1 ? `${item.quantity}× ` : ''}{name}</strong>
-        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
           {item.item_type === 'card'
             ? [
               snapshot.set_name,
@@ -93,7 +105,7 @@ function TransferItem({ item, currentUserId, t }) {
             : [snapshot.sealed_type, snapshot.origin_product_name && t('transfer.fromProduct', { product: snapshot.origin_product_name })].filter(Boolean).join(' · ')}
         </div>
       </div>
-      <span style={{ whiteSpace: 'nowrap', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+      <span style={{ whiteSpace: 'nowrap', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
         {cost == null ? t('transfer.unknownCost') : `$${Number(cost).toFixed(2)}`}
       </span>
     </div>
@@ -178,6 +190,7 @@ export default function TransferManager({ user, showToast }) {
         printed_name: item.item_snapshot?.printed_name,
         set_name: item.item_snapshot?.set_name,
         number: item.item_snapshot?.number,
+        rarity: item.item_snapshot?.rarity,
         image_url: item.item_snapshot?.image_url,
         game: item.item_snapshot?.game,
         sealed_type: item.item_snapshot?.sealed_type,
@@ -229,7 +242,7 @@ export default function TransferManager({ user, showToast }) {
   const submitProposal = async (event) => {
     event.preventDefault();
     if (!recipientId || selectedOfferItems.length === 0) return;
-    if (!countering && transferType === 'trade' && selectedRequestItems.length === 0) return;
+    if (countering && selectedRequestItems.length === 0) return;
     setSaving(true);
     setError('');
     try {
@@ -308,6 +321,7 @@ export default function TransferManager({ user, showToast }) {
   };
 
   const renderChoices = (items, selected, setter, filters, setFilters, isRequest = false) => {
+    const fieldPrefix = isRequest ? 'transfer-request' : 'transfer-offer';
     const filteredItems = sortItems(
       items.filter(item => matchesItemFilters(item, filters)),
       filters.sort,
@@ -317,49 +331,58 @@ export default function TransferManager({ user, showToast }) {
     const updateFilter = (key, value) => setFilters(current => ({ ...current, [key]: value }));
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.45rem' }}>
-          <input
-            type="search"
-            value={filters.query}
-            aria-label={t('transfer.searchItems')}
-            placeholder={t('transfer.searchItems')}
-            onChange={event => updateFilter('query', event.target.value)}
-          />
-          <select
-            className="select-control"
-            value={filters.game}
-            aria-label={t('transfer.filterGame')}
-            onChange={event => updateFilter('game', event.target.value)}
-          >
-            <option value="">{t('transfer.allGames')}</option>
-            {GAMES.map(game => <option key={game.value} value={game.value}>{game.label}</option>)}
-          </select>
-          <select
-            className="select-control"
-            value={filters.type}
-            aria-label={t('transfer.filterType')}
-            onChange={event => updateFilter('type', event.target.value)}
-          >
-            <option value="all">{t('transfer.allItems')}</option>
-            <option value="card">{t('transfer.cardsOnly')}</option>
-            <option value="sealed">{t('transfer.sealedOnly')}</option>
-          </select>
-          {!isRequest && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.65rem' }}>
+          <TransferField id={`${fieldPrefix}-search`} label={t('transfer.searchItems')}>
+            <input
+              id={`${fieldPrefix}-search`}
+              className="input-control"
+              type="search"
+              value={filters.query}
+              placeholder={t('transfer.searchItems')}
+              onChange={event => updateFilter('query', event.target.value)}
+            />
+          </TransferField>
+          <TransferField id={`${fieldPrefix}-game`} label={t('transfer.filterGame')}>
             <select
+              id={`${fieldPrefix}-game`}
               className="select-control"
-              value={filters.location}
-              aria-label={t('transfer.filterLocation')}
-              onChange={event => updateFilter('location', event.target.value)}
+              value={filters.game}
+              onChange={event => updateFilter('game', event.target.value)}
             >
-              <option value="">{t('transfer.anyLocation')}</option>
-              {locationOptions.map(location => (
-                <option key={location.key} value={location.key}>{location.label}</option>
-              ))}
+              <option value="">{t('transfer.allGames')}</option>
+              {GAMES.map(game => <option key={game.value} value={game.value}>{game.label}</option>)}
             </select>
-          )}
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', color: 'var(--text-secondary)', fontSize: '0.72rem', fontWeight: 700 }}>
-            {t('collection.sortBy')}
+          </TransferField>
+          <TransferField id={`${fieldPrefix}-type`} label={t('transfer.filterType')}>
             <select
+              id={`${fieldPrefix}-type`}
+              className="select-control"
+              value={filters.type}
+              onChange={event => updateFilter('type', event.target.value)}
+            >
+              <option value="all">{t('transfer.allItems')}</option>
+              <option value="card">{t('transfer.cardsOnly')}</option>
+              <option value="sealed">{t('transfer.sealedOnly')}</option>
+            </select>
+          </TransferField>
+          {!isRequest && (
+            <TransferField id={`${fieldPrefix}-location`} label={t('transfer.filterLocation')}>
+              <select
+                id={`${fieldPrefix}-location`}
+                className="select-control"
+                value={filters.location}
+                onChange={event => updateFilter('location', event.target.value)}
+              >
+                <option value="">{t('transfer.anyLocation')}</option>
+                {locationOptions.map(location => (
+                  <option key={location.key} value={location.key}>{location.label}</option>
+                ))}
+              </select>
+            </TransferField>
+          )}
+          <TransferField id={`${fieldPrefix}-sort`} label={t('collection.sortBy')}>
+            <select
+              id={`${fieldPrefix}-sort`}
               className="select-control"
               value={filters.sort}
               onChange={event => updateFilter('sort', event.target.value)}
@@ -371,51 +394,99 @@ export default function TransferManager({ user, showToast }) {
               <option value="number-asc">{t('collection.sort.number-asc')}</option>
               {!isRequest && <option value="location-asc">{t('transfer.sortLocation')}</option>}
             </select>
-          </label>
+          </TransferField>
         </div>
-        <div style={{ color: 'var(--text-secondary)', fontSize: '0.74rem' }}>
+        <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
           {t('transfer.selectedCount', { count: Object.keys(selected).length })}
         </div>
         {filteredItems.length === 0 ? (
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', padding: '0.5rem 0' }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', padding: '0.5rem 0' }}>
             {items.length === 0
               ? (isRequest ? t('transfer.noMarkedItems') : t('transfer.noInventory'))
               : t('transfer.noFilterResults')}
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '0.45rem', maxHeight: '24rem', overflowY: 'auto', padding: '0.1rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.65rem', maxHeight: '24rem', overflowY: 'auto', padding: '0.1rem' }}>
             {filteredItems.map(item => {
               const key = itemKey(item);
               const checked = Boolean(selected[key]);
               const label = itemLabel(item);
               return (
-              <article key={key} className="glass-panel" style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', padding: '0.45rem', minWidth: 0 }}>
+              <article key={key} className="glass-panel" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', padding: '0.6rem', minWidth: 0 }}>
                 <input
                   type="checkbox"
                   checked={checked}
                   aria-label={label}
                   onChange={event => setSelection(setter, selected, item, event.target.checked)}
                 />
-                {item.image_url ? (
-                  <img
-                    src={item.image_url}
-                    alt=""
-                    loading="lazy"
-                    onError={event => { event.currentTarget.style.visibility = 'hidden'; }}
-                    style={{ width: '3.2rem', height: '4.4rem', objectFit: 'contain', flex: '0 0 auto', borderRadius: 'var(--radius-sm)', background: 'var(--surface-2)' }}
-                  />
-                ) : (
-                  <div aria-hidden="true" style={{ width: '3.2rem', height: '4.4rem', flex: '0 0 auto', borderRadius: 'var(--radius-sm)', background: 'var(--surface-2)' }} />
-                )}
-                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                  <strong title={label} style={{ color: 'var(--text-strong)', fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</strong>
-                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div
+                  style={{
+                    position: 'relative',
+                    width: '3.75rem',
+                    height: '5.2rem',
+                    flex: '0 0 auto',
+                    overflow: 'hidden',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--surface-2)',
+                    ...(item.type === 'card' ? getCardRarityBorder(item.rarity) : {})
+                  }}
+                >
+                  {item.type === 'card' ? (
+                    <CardImage
+                      card={item}
+                      alt=""
+                      loading="lazy"
+                      draggable={false}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius-sm)' }}
+                    />
+                  ) : item.image_url ? (
+                    <img src={item.image_url} alt="" loading="lazy" onError={event => { event.currentTarget.style.visibility = 'hidden'; }} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                  ) : null}
+                  {item.type === 'card' && getFoilOverlayClass(item.printing) && (
+                    <div className={getFoilOverlayClass(item.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
+                  )}
+                  {item.type === 'card' && (
+                    <span style={{
+                      position: 'absolute',
+                      top: '3px',
+                      left: '3px',
+                      zIndex: 2,
+                      fontSize: '0.55rem',
+                      fontWeight: 900,
+                      padding: '2px 3px',
+                      borderRadius: '3px',
+                      textTransform: 'uppercase',
+                      ...getRarityBadgeStyle(item.rarity)
+                    }}>
+                      {getRarityBadgeLabel(item.rarity)}
+                    </span>
+                  )}
+                  {item.type === 'card' && item.printing !== 'Normal' && getPrintingBadgeLabel(item.printing) && (
+                    <span style={{
+                      position: 'absolute',
+                      right: '3px',
+                      bottom: '3px',
+                      zIndex: 2,
+                      fontSize: '0.55rem',
+                      fontWeight: 800,
+                      padding: '2px 3px',
+                      borderRadius: '3px',
+                      border: '1px solid rgba(255, 255, 255, 0.2)',
+                      ...getPrintingBadgeStyle(item.printing)
+                    }}>
+                      {getPrintingBadgeLabel(item.printing)}
+                    </span>
+                  )}
+                </div>
+                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                  <strong title={label} style={{ color: 'var(--text-strong)', fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</strong>
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {item.type === 'card'
                       ? [item.set_name, item.number && `#${item.number}`].filter(Boolean).join(' · ')
                       : [item.sealed_type, item.origin_product_name && t('transfer.fromProduct', { product: item.origin_product_name })].filter(Boolean).join(' · ')}
                   </span>
                   {item.type === 'card' && (
-                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.68rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {[
                         item.printing && `${t('transfer.printing')}: ${item.printing}`,
                         item.condition,
@@ -424,31 +495,32 @@ export default function TransferManager({ user, showToast }) {
                     </span>
                   )}
                   {item.type === 'card' && !isRequest && (
-                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.68rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {t('transfer.location')}: {cardLocationLabel(item, t)}
                     </span>
                   )}
                   {item.type === 'card' && (
-                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.68rem' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                       {t('transfer.availableQuantity', { count: item.quantity || 1 })}
                     </span>
                   )}
                   {item.type === 'card' && checked && (
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', fontSize: '0.7rem' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                       {t('transfer.quantity')}
                       <input
                         type="number"
+                        className="input-control"
                         min="1"
                         max={item.quantity || 1}
                         value={selected[key].quantity}
                         aria-label={t('transfer.quantity')}
                         onChange={event => updateQuantity(setter, selected, item, event.target.value)}
-                        style={{ width: '3.7rem' }}
+                        style={{ width: '4.5rem', padding: '0.45rem 0.55rem' }}
                       />
                     </label>
                   )}
                   {!isRequest && item.type === 'sealed' && (
-                    <button type="button" className="btn btn-secondary" style={{ alignSelf: 'flex-start', padding: '0.2rem 0.4rem', fontSize: '0.68rem' }}
+                    <button type="button" className="btn btn-secondary" style={{ alignSelf: 'flex-start', padding: '0.35rem 0.55rem', fontSize: '0.8rem' }}
                       onClick={() => toggleSealedTrade(item)}>
                       {item.is_trade ? t('transfer.unmarkTrade') : t('transfer.markTrade')}
                     </button>
@@ -463,8 +535,11 @@ export default function TransferManager({ user, showToast }) {
     );
   };
 
-  const transferCard = (transfer, incoming) => (
-    <article key={transfer.id} className="glass-panel" style={{ padding: '1rem' }}>
+  const transferCard = (transfer, incoming) => {
+    const oneSidedTrade = transfer.transfer_type === 'trade'
+      && !transfer.items.some(item => item.from_user_id === transfer.recipient_id);
+    return (
+      <article key={transfer.id} className="glass-panel" style={{ padding: '1rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           {transfer.transfer_type === 'gift' ? <Gift size={16} /> : <ArrowLeftRight size={16} />}
@@ -473,11 +548,11 @@ export default function TransferManager({ user, showToast }) {
               ? t('transfer.fromUser', { user: transfer.proposer_username })
               : t('transfer.toUser', { user: transfer.recipient_username })}
           </strong>
-          <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{t(`transfer.status.${transfer.status}`)}</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>{t(`transfer.status.${transfer.status}`)}</span>
         </div>
         {incoming && transfer.status === 'pending' ? (
           <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-            <button type="button" className="btn btn-primary" disabled={saving} onClick={() => actOnTransfer(transfer, 'accept')}><Check size={14} /> {t('transfer.accept')}</button>
+            {!oneSidedTrade && <button type="button" className="btn btn-primary" disabled={saving} onClick={() => actOnTransfer(transfer, 'accept')}><Check size={14} /> {t('transfer.accept')}</button>}
             <button type="button" className="btn btn-secondary" disabled={saving} onClick={() => startCounter(transfer)}><RefreshCw size={14} /> {t('transfer.counter')}</button>
             <button type="button" className="btn btn-secondary" disabled={saving} onClick={() => actOnTransfer(transfer, 'reject')}><X size={14} /> {t('transfer.reject')}</button>
           </div>
@@ -485,6 +560,11 @@ export default function TransferManager({ user, showToast }) {
           <button type="button" className="btn btn-secondary" disabled={saving} onClick={() => actOnTransfer(transfer, 'cancel')}>{t('transfer.cancel')}</button>
         ) : null}
       </div>
+      {incoming && transfer.status === 'pending' && oneSidedTrade && (
+        <p role="note" style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0.6rem 0 0' }}>
+          {t('transfer.counterRequired')}
+        </p>
+      )}
       {transfer.message && <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', margin: '0.5rem 0' }}>{transfer.message}</p>}
       <div style={{ marginTop: '0.5rem' }}>
         {transfer.items.map(item => <TransferItem key={item.id} item={item} currentUserId={user.id} t={t} />)}
@@ -494,8 +574,9 @@ export default function TransferManager({ user, showToast }) {
           <AlertTriangle size={14} /> {warning.message}
         </div>
       ))}
-    </article>
-  );
+      </article>
+    );
+  };
 
   const ownOfferItems = [
     ...myCards.map(item => ({ ...item, type: 'card', id: item.entry_id })),
@@ -549,45 +630,44 @@ export default function TransferManager({ user, showToast }) {
           {countering ? t('transfer.countering', { user: countering.proposer_username }) : t('transfer.newProposal')}
         </h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.65rem' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-            {t('transfer.recipient')}
-            <select className="select-control" value={recipientId} disabled={Boolean(countering)} onChange={event => setRecipientId(event.target.value)} required>
+          <TransferField id="transfer-recipient" label={t('transfer.recipient')}>
+            <select id="transfer-recipient" className="select-control" value={recipientId} disabled={Boolean(countering)} onChange={event => setRecipientId(event.target.value)} required>
               <option value="">{t('transfer.chooseUser')}</option>
               {users.map(other => <option key={other.id} value={other.id}>{other.username}</option>)}
             </select>
-          </label>
+          </TransferField>
           {!countering && (
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-              {t('transfer.type')}
-              <select className="select-control" value={transferType} onChange={event => setTransferType(event.target.value)}>
+            <TransferField id="transfer-type" label={t('transfer.type')}>
+              <select id="transfer-type" className="select-control" value={transferType} onChange={event => setTransferType(event.target.value)}>
                 <option value="gift">{t('transfer.gift')}</option>
                 <option value="trade">{t('transfer.trade')}</option>
               </select>
-            </label>
+            </TransferField>
           )}
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
           <section>
             <h4 style={{ color: 'var(--text-strong)', margin: '0 0 0.25rem' }}>{t('transfer.offer')}</h4>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', margin: '0 0 0.5rem' }}>{t('transfer.offerHint')}</p>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 0.5rem' }}>{t('transfer.offerHint')}</p>
             {renderChoices(ownOfferItems, offered, setOffered, offerFilters, setOfferFilters)}
           </section>
           {(countering || transferType === 'trade') && (
             <section>
               <h4 style={{ color: 'var(--text-strong)', margin: '0 0 0.25rem' }}>{t('transfer.request')}</h4>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', margin: '0 0 0.5rem' }}>{t('transfer.requestHint')}</p>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 0.5rem' }}>
+                {t(countering ? 'transfer.requestHint' : 'transfer.requestHintInitial')}
+              </p>
               {renderChoices(requestedOptions, requested, setRequested, requestFilters, setRequestFilters, true)}
             </section>
           )}
         </div>
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-          {t('transfer.message')}
-          <textarea value={message} maxLength={1000} rows={2} onChange={event => setMessage(event.target.value)} placeholder={t('transfer.messagePlaceholder')} />
-        </label>
+        <TransferField id="transfer-message" label={t('transfer.message')}>
+          <textarea id="transfer-message" className="input-control" value={message} maxLength={1000} rows={2} onChange={event => setMessage(event.target.value)} placeholder={t('transfer.messagePlaceholder')} />
+        </TransferField>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button type="submit" className="btn btn-primary" disabled={saving || loading || !recipientId || !selectedOfferItems.length || ((countering || transferType === 'trade') && !selectedRequestItems.length)}>
+          <button type="submit" className="btn btn-primary" disabled={saving || loading || !recipientId || !selectedOfferItems.length || (countering && !selectedRequestItems.length)}>
             {countering ? <RefreshCw size={15} /> : transferType === 'gift' ? <Gift size={15} /> : <ArrowLeftRight size={15} />}
             {countering ? t('transfer.sendCounter') : t('transfer.sendProposal')}
           </button>

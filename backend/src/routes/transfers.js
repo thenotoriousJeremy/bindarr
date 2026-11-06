@@ -52,7 +52,7 @@ function parseItems(value, label, { required = false } = {}) {
 async function loadAsset(ownerId, item, { requireTradeMarker = false } = {}) {
   if (item.type === 'card') {
     const row = await db.get(
-      `SELECT c.*, cc.name, cc.printed_name, cc.set_name, cc.number, cc.image_url, cc.game AS card_game
+      `SELECT c.*, cc.name, cc.printed_name, cc.set_name, cc.number, cc.rarity, cc.image_url, cc.game AS card_game
          FROM collection c
          JOIN card_cache cc ON cc.id = c.card_id
         WHERE c.id = ? AND c.user_id = ? AND c.list_type = 'collection'`,
@@ -76,6 +76,7 @@ async function loadAsset(ownerId, item, { requireTradeMarker = false } = {}) {
         name: row.printed_name || row.name,
         set_name: row.set_name,
         number: row.number,
+        rarity: row.rarity,
         image_url: row.image_url,
         game: row.game || row.card_game,
         condition: row.condition,
@@ -145,8 +146,8 @@ async function createTransferInTransaction({
   if (!recipient) throw new TransferError(404, 'Recipient not found');
   if (proposerId === recipientId) throw new TransferError(400, 'You cannot transfer items to yourself');
   if (!['gift', 'trade'].includes(transferType)) throw new TransferError(400, 'transfer_type must be gift or trade');
-  if (transferType === 'trade' && requestedItems.length === 0) {
-    throw new TransferError(400, 'A trade proposal must request at least one item');
+  if (transferType === 'trade' && requestedItems.length === 0 && responseToTransferId) {
+    throw new TransferError(400, 'A counterproposal must request at least one item');
   }
   if (transferType === 'gift' && requestedItems.length > 0) {
     throw new TransferError(400, 'A gift cannot request items in return');
@@ -285,6 +286,10 @@ async function acceptTransfer(transferId, recipientId) {
     if (transfer.recipient_id !== recipientId) throw new TransferError(403, 'Only the recipient can accept this transfer');
     const items = await currentTransferItems(transferId);
     if (items.length === 0) throw new TransferError(409, 'This transfer has no items');
+    if (transfer.transfer_type === 'trade'
+      && !items.some(item => item.from_user_id === transfer.recipient_id)) {
+      throw new TransferError(409, 'A one-sided trade proposal must be countered before it can be accepted');
+    }
 
     const loadedAssets = [];
     for (const item of items) {
@@ -444,7 +449,7 @@ router.get('/transfers/marked/:userId', async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
     const cards = await db.all(
       `SELECT c.id AS entry_id, c.card_id, c.quantity, c.condition, c.printing, c.language,
-              cc.name, cc.printed_name, cc.set_name, cc.number, cc.image_url, cc.game
+              cc.name, cc.printed_name, cc.set_name, cc.number, cc.rarity, cc.image_url, cc.game
          FROM collection c JOIN card_cache cc ON cc.id = c.card_id
         WHERE c.user_id = ? AND c.list_type = 'collection' AND c.is_trade = 1
         ORDER BY cc.name, cc.set_name, cc.number`,
