@@ -24,14 +24,12 @@ const itemLabel = item => item.type === 'card'
 const transferPages = ['new', 'offers', 'history'];
 const locationFilterKey = item => item.location_id == null
   ? 'unsorted'
-  : `${item.location_id}:${item.compartment_id ?? ''}`;
+  : String(item.location_id);
+const itemCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 function cardLocationLabel(item, t) {
   if (item.location_id == null) return t('transfer.unsortedLocation');
-  return [
-    item.location_name,
-    item.compartment_display_label || item.sub_location
-  ].filter(Boolean).join(' · ') || t('transfer.unknownLocation');
+  return item.location_name || t('transfer.unknownLocation');
 }
 
 function matchesItemFilters(item, filters) {
@@ -52,6 +50,27 @@ function matchesItemFilters(item, filters) {
   return haystack.includes(query);
 }
 
+function sortItems(items, sort, t) {
+  const compareByName = (a, b) => itemCollator.compare(itemLabel(a) || '', itemLabel(b) || '');
+  return [...items].sort((a, b) => {
+    let result = 0;
+    if (sort === 'set') {
+      result = itemCollator.compare(
+        [a.set_name, a.number].filter(Boolean).join(' '),
+        [b.set_name, b.number].filter(Boolean).join(' ')
+      );
+    } else if (sort === 'location') {
+      if (a.type !== b.type) return a.type === 'card' ? -1 : 1;
+      result = itemCollator.compare(cardLocationLabel(a, t), cardLocationLabel(b, t));
+    } else if (sort === 'quantity') {
+      result = (Number(b.quantity) || 1) - (Number(a.quantity) || 1);
+    } else {
+      result = compareByName(a, b);
+    }
+    return result || compareByName(a, b);
+  });
+}
+
 function TransferItem({ item, currentUserId, t }) {
   const snapshot = item.item_snapshot || item;
   const sentByYou = item.from_user_id === currentUserId;
@@ -63,7 +82,13 @@ function TransferItem({ item, currentUserId, t }) {
         <strong style={{ color: 'var(--text-strong)' }}>{item.quantity > 1 ? `${item.quantity}× ` : ''}{name}</strong>
         <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
           {item.item_type === 'card'
-            ? [snapshot.set_name, snapshot.number && `#${snapshot.number}`, snapshot.condition].filter(Boolean).join(' · ')
+            ? [
+              snapshot.set_name,
+              snapshot.number && `#${snapshot.number}`,
+              snapshot.printing && `${t('transfer.printing')}: ${snapshot.printing}`,
+              snapshot.condition,
+              snapshot.language
+            ].filter(Boolean).join(' · ')
             : [snapshot.sealed_type, snapshot.origin_product_name && t('transfer.fromProduct', { product: snapshot.origin_product_name })].filter(Boolean).join(' · ')}
         </div>
       </div>
@@ -91,8 +116,8 @@ export default function TransferManager({ user, showToast }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [offerFilters, setOfferFilters] = useState({ query: '', game: '', type: 'all', location: '' });
-  const [requestFilters, setRequestFilters] = useState({ query: '', game: '', type: 'all' });
+  const [offerFilters, setOfferFilters] = useState({ query: '', game: '', type: 'all', location: '', sort: 'name' });
+  const [requestFilters, setRequestFilters] = useState({ query: '', game: '', type: 'all', sort: 'name' });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -271,7 +296,11 @@ export default function TransferManager({ user, showToast }) {
   };
 
   const renderChoices = (items, selected, setter, filters, setFilters, isRequest = false) => {
-    const filteredItems = items.filter(item => matchesItemFilters(item, filters));
+    const filteredItems = sortItems(
+      items.filter(item => matchesItemFilters(item, filters)),
+      filters.sort,
+      t
+    );
     const updateFilter = (key, value) => setFilters(current => ({ ...current, [key]: value }));
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -315,6 +344,19 @@ export default function TransferManager({ user, showToast }) {
               ))}
             </select>
           )}
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+            {t('transfer.sortBy')}
+            <select
+              className="select-control"
+              value={filters.sort}
+              onChange={event => updateFilter('sort', event.target.value)}
+            >
+              <option value="name">{t('transfer.sortName')}</option>
+              <option value="set">{t('transfer.sortSet')}</option>
+              {!isRequest && <option value="location">{t('transfer.sortLocation')}</option>}
+              <option value="quantity">{t('transfer.sortQuantity')}</option>
+            </select>
+          </label>
         </div>
         <div style={{ color: 'var(--text-secondary)', fontSize: '0.74rem' }}>
           {t('transfer.selectedCount', { count: Object.keys(selected).length })}
@@ -354,9 +396,18 @@ export default function TransferManager({ user, showToast }) {
                   <strong title={label} style={{ color: 'var(--text-strong)', fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</strong>
                   <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {item.type === 'card'
-                      ? [item.set_name, item.number && `#${item.number}`, item.condition].filter(Boolean).join(' · ')
+                      ? [item.set_name, item.number && `#${item.number}`].filter(Boolean).join(' · ')
                       : [item.sealed_type, item.origin_product_name && t('transfer.fromProduct', { product: item.origin_product_name })].filter(Boolean).join(' · ')}
                   </span>
+                  {item.type === 'card' && (
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.68rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {[
+                        item.printing && `${t('transfer.printing')}: ${item.printing}`,
+                        item.condition,
+                        item.language
+                      ].filter(Boolean).join(' · ')}
+                    </span>
+                  )}
                   {item.type === 'card' && !isRequest && (
                     <span style={{ color: 'var(--text-secondary)', fontSize: '0.68rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {t('transfer.location')}: {cardLocationLabel(item, t)}
@@ -441,7 +492,7 @@ export default function TransferManager({ user, showToast }) {
       const key = locationFilterKey(card);
       options.set(key, { key, label: cardLocationLabel(card, t) });
     }
-    return [...options.values()].sort((a, b) => a.label.localeCompare(b.label));
+    return [...options.values()].sort((a, b) => itemCollator.compare(a.label, b.label));
   }, [myCards, t]);
 
   return (
