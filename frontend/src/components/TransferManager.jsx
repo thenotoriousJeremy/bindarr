@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ArrowLeftRight, Check, Gift, RefreshCw, X } from 'lucide-react';
+import { sortCardsByOrder } from '../utils/cardSort';
 import { useT } from '../utils/i18n';
 import { GAMES } from '../utils/games';
 import ExternalDealManager from './ExternalDealManager';
@@ -50,25 +51,25 @@ function matchesItemFilters(item, filters) {
   return haystack.includes(query);
 }
 
-function sortItems(items, sort, t) {
-  const compareByName = (a, b) => itemCollator.compare(itemLabel(a) || '', itemLabel(b) || '');
-  return [...items].sort((a, b) => {
-    let result = 0;
-    if (sort === 'set') {
-      result = itemCollator.compare(
-        [a.set_name, a.number].filter(Boolean).join(' '),
-        [b.set_name, b.number].filter(Boolean).join(' ')
-      );
-    } else if (sort === 'location') {
+function sortItems(items, sort, t, setsList) {
+  const normalized = items.map(item => ({ ...item, name: itemLabel(item) || '' }));
+  if (sort === 'location-asc') {
+    return normalized.sort((a, b) => {
       if (a.type !== b.type) return a.type === 'card' ? -1 : 1;
-      result = itemCollator.compare(cardLocationLabel(a, t), cardLocationLabel(b, t));
-    } else if (sort === 'quantity') {
-      result = (Number(b.quantity) || 1) - (Number(a.quantity) || 1);
-    } else {
-      result = compareByName(a, b);
-    }
-    return result || compareByName(a, b);
-  });
+      const byLocation = itemCollator.compare(cardLocationLabel(a, t), cardLocationLabel(b, t));
+      return byLocation || itemCollator.compare(a.name, b.name);
+    });
+  }
+  if (sort === 'qty-desc') {
+    return normalized.sort((a, b) => (Number(b.quantity) || 1) - (Number(a.quantity) || 1));
+  }
+  const criteria = {
+    'name-asc': [{ by: 'name', dir: 'asc' }],
+    'name-desc': [{ by: 'name', dir: 'desc' }],
+    'set-asc': [{ by: 'set', dir: 'asc' }, { by: 'number', dir: 'asc' }],
+    'number-asc': [{ by: 'number', dir: 'asc' }, { by: 'name', dir: 'asc' }]
+  };
+  return sortCardsByOrder(normalized, criteria[sort] || criteria['name-asc'], undefined, setsList);
 }
 
 function TransferItem({ item, currentUserId, t }) {
@@ -106,6 +107,7 @@ export default function TransferManager({ user, showToast }) {
   const [transfers, setTransfers] = useState([]);
   const [myCards, setMyCards] = useState([]);
   const [mySealed, setMySealed] = useState([]);
+  const [setsList, setSetsList] = useState([]);
   const [markedItems, setMarkedItems] = useState({ cards: [], sealed: [] });
   const [recipientId, setRecipientId] = useState('');
   const [transferType, setTransferType] = useState('gift');
@@ -116,8 +118,8 @@ export default function TransferManager({ user, showToast }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [offerFilters, setOfferFilters] = useState({ query: '', game: '', type: 'all', location: '', sort: 'name' });
-  const [requestFilters, setRequestFilters] = useState({ query: '', game: '', type: 'all', sort: 'name' });
+  const [offerFilters, setOfferFilters] = useState({ query: '', game: '', type: 'all', location: '', sort: 'name-asc' });
+  const [requestFilters, setRequestFilters] = useState({ query: '', game: '', type: 'all', sort: 'name-asc' });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -141,6 +143,16 @@ export default function TransferManager({ user, showToast }) {
   }, [t]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    fetch('/api/sets')
+      .then(response => {
+        if (!response.ok) throw new Error(`Request failed (${response.status})`);
+        return response.json();
+      })
+      .then(setSetsList)
+      .catch(err => console.error('Error fetching sets for transfer sorting:', err));
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -299,7 +311,8 @@ export default function TransferManager({ user, showToast }) {
     const filteredItems = sortItems(
       items.filter(item => matchesItemFilters(item, filters)),
       filters.sort,
-      t
+      t,
+      setsList
     );
     const updateFilter = (key, value) => setFilters(current => ({ ...current, [key]: value }));
     return (
@@ -344,17 +357,19 @@ export default function TransferManager({ user, showToast }) {
               ))}
             </select>
           )}
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-            {t('transfer.sortBy')}
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', color: 'var(--text-secondary)', fontSize: '0.72rem', fontWeight: 700 }}>
+            {t('collection.sortBy')}
             <select
               className="select-control"
               value={filters.sort}
               onChange={event => updateFilter('sort', event.target.value)}
             >
-              <option value="name">{t('transfer.sortName')}</option>
-              <option value="set">{t('transfer.sortSet')}</option>
-              {!isRequest && <option value="location">{t('transfer.sortLocation')}</option>}
-              <option value="quantity">{t('transfer.sortQuantity')}</option>
+              <option value="name-asc">{t('collection.sort.name-asc')}</option>
+              <option value="name-desc">{t('collection.sort.name-desc')}</option>
+              <option value="qty-desc">{t('collection.sort.qty-desc')}</option>
+              <option value="set-asc">{t('collection.sort.set-asc')}</option>
+              <option value="number-asc">{t('collection.sort.number-asc')}</option>
+              {!isRequest && <option value="location-asc">{t('transfer.sortLocation')}</option>}
             </select>
           </label>
         </div>
