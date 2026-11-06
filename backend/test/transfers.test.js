@@ -52,7 +52,7 @@ async function main() {
   const headers = userId => ({ 'Content-Type': 'application/json', 'x-user-id': String(userId) });
   const addCard = async (ownerId, id, name, price, isTrade = 0) => {
     await db.run(
-      `INSERT INTO card_cache (id, name, printed_name, set_name, number, image_url, game)
+      `INSERT OR IGNORE INTO card_cache (id, name, printed_name, set_name, number, image_url, game)
        VALUES (?, ?, ?, 'Transfer Test Set', '1', 'test.png', 'pokemon')`,
       [id, name, name]
     );
@@ -122,6 +122,69 @@ async function main() {
     assert.strictEqual(receivedCard.acquired_transfer_type, 'trade');
     assert.strictEqual(receivedCard.acquired_transfer_partner, 'transfer-api-alice');
     console.log('PASS: one-for-one trades exchange cost basis and move cards to unsorted collection');
+
+    const alicePastGiven = `past-a-given-${process.pid}`;
+    const alicePastReceived = `past-a-received-${process.pid}`;
+    const alicePastGivenEntry = await addCard(alice, alicePastGiven, 'Past Alice Given', 0.25);
+    const alicePastReceivedEntry = await addCard(alice, alicePastReceived, 'Past Alice Received', 0.35);
+    const bobPastGivenEntry = await addCard(bob, alicePastReceived, 'Past Alice Received', 0.30);
+    const bobPastReceivedEntry = await addCard(bob, alicePastGiven, 'Past Alice Given', 0.20);
+    response = await request('/api/transfers/history', alice, 'POST', {
+      recipient_id: bob,
+      completed_at: '2024-02-10',
+      message: 'First recorded trade',
+      items: [
+        { direction: 'given', card_id: alicePastGiven, quantity: 1, collection_entry_id: alicePastGivenEntry },
+        { direction: 'received', card_id: alicePastReceived, quantity: 1, collection_entry_id: alicePastReceivedEntry }
+      ]
+    });
+    await assertStatus(response, 201, 'recording past trade should succeed');
+    let pastTrade = (await response.json()).trade;
+    assert.strictEqual(pastTrade.status, 'pending_confirmation');
+    assert.strictEqual((await db.get(`SELECT COUNT(*) AS count FROM collection WHERE id IN (?, ?)`, [alicePastGivenEntry, alicePastReceivedEntry])).count, 2,
+      'creating a pending record must not change the creator inventory');
+    response = await request(`/api/transfers/history/${pastTrade.id}/confirm`, bob, 'PUT', {
+      items: [
+        { id: pastTrade.items[0].id, collection_entry_id: bobPastReceivedEntry },
+        { id: pastTrade.items[1].id, collection_entry_id: bobPastGivenEntry }
+      ]
+    });
+    await assertStatus(response, 200, 'recipient confirmation should succeed');
+    pastTrade = (await response.json()).trade;
+    assert.strictEqual(pastTrade.status, 'confirmed');
+    assert.strictEqual(await db.get(`SELECT id FROM collection WHERE id = ?`, [alicePastGivenEntry]), undefined);
+    assert.strictEqual(await db.get(`SELECT id FROM collection WHERE id = ?`, [bobPastGivenEntry]), undefined);
+    assert.strictEqual(
+      (await db.get(`SELECT acquired_via_historical_trade_item_id FROM collection WHERE id = ?`, [alicePastReceivedEntry])).acquired_via_historical_trade_item_id,
+      pastTrade.items[1].id
+    );
+    assert.strictEqual(
+      (await db.get(`SELECT acquired_via_historical_trade_item_id FROM collection WHERE id = ?`, [bobPastReceivedEntry])).acquired_via_historical_trade_item_id,
+      pastTrade.items[0].id
+    );
+    const pastCollection = await (await request('/api/collection', bob)).json();
+    const linkedPastCopy = pastCollection.find(card => card.entry_id === bobPastReceivedEntry);
+    assert.strictEqual(linkedPastCopy.acquired_historical_trade_id, pastTrade.id);
+    assert.strictEqual(linkedPastCopy.acquired_historical_trade_partner, 'transfer-api-alice');
+    console.log('PASS: past trades wait for the other user and reconcile each participant’s selected copies on confirmation');
+
+    response = await request('/api/transfers/history', alice, 'POST', {
+      recipient_id: bob,
+      completed_at: '2024-02-11',
+      items: [
+        { direction: 'given', card_id: alicePastGiven, quantity: 1 },
+        { direction: 'received', card_id: alicePastReceived, quantity: 1 }
+      ]
+    });
+    await assertStatus(response, 201, 'history-only record should be created');
+    const declinedPastTrade = (await response.json()).trade;
+    response = await request(`/api/transfers/history/${declinedPastTrade.id}/reject`, bob, 'PUT');
+    await assertStatus(response, 200, 'the recipient should be able to decline a history-only record');
+    assert.strictEqual((await db.get(`SELECT status FROM historical_trades WHERE id = ?`, [declinedPastTrade.id])).status, 'rejected');
+    assert.strictEqual((await request('/api/transfers/history', bob)).status, 200);
+    const bobPastHistory = await (await request('/api/transfers/history', bob)).json();
+    assert.ok(!bobPastHistory.trades.some(item => item.id === declinedPastTrade.id), 'the recipient should not keep seeing a declined record');
+    console.log('PASS: history-only entries can be declined without inventory changes');
 
     const aliceUnmarked = await addCard(alice, `counter-a-${process.pid}`, 'Counter Card A', 0.25);
     const bobUnmarked = await addCard(bob, `counter-b-${process.pid}`, 'Counter Card B', 0.15);

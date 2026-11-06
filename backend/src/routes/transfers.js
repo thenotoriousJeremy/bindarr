@@ -232,6 +232,128 @@ async function getDeckWarnings(items) {
   return warnings;
 }
 
+async function historicalTradeResponse(trade, viewerId) {
+  const [creator, recipient, rows] = await Promise.all([
+    db.get(`SELECT username FROM users WHERE id = ?`, [trade.creator_id]),
+    db.get(`SELECT username FROM users WHERE id = ?`, [trade.recipient_id]),
+    db.all(
+      `SELECT id, from_user_id, to_user_id, card_id, quantity, item_snapshot,
+              creator_collection_id, recipient_collection_id
+         FROM historical_trade_items WHERE trade_id = ? ORDER BY id`,
+      [trade.id]
+    )
+  ]);
+  return {
+    ...trade,
+    creator_username: creator?.username,
+    recipient_username: recipient?.username,
+    items: rows.map(item => ({
+      id: item.id,
+      from_user_id: item.from_user_id,
+      to_user_id: item.to_user_id,
+      card_id: item.card_id,
+      quantity: item.quantity,
+      item_snapshot: JSON.parse(item.item_snapshot),
+      my_collection_id: viewerId === trade.creator_id
+        ? item.creator_collection_id
+        : item.recipient_collection_id
+    }))
+  };
+}
+
+function validateHistoricalItems(value) {
+  if (!Array.isArray(value) || value.length < 2 || value.length > 100) {
+    throw new TransferError(400, 'A historical trade must contain 2 to 100 card entries');
+  }
+  const result = value.map(item => {
+    if (!item || !['given', 'received'].includes(item.direction)) {
+      throw new TransferError(400, 'Each historical card must be marked given or received');
+    }
+    return {
+      direction: item.direction,
+      cardId: String(item.card_id || '').trim(),
+      quantity: positiveInt(item.quantity ?? 1, 'quantity'),
+      collectionId: item.collection_entry_id == null || item.collection_entry_id === ''
+        ? null
+        : positiveInt(item.collection_entry_id, 'collection_entry_id')
+    };
+  });
+  if (!result.some(item => item.direction === 'given') || !result.some(item => item.direction === 'received')) {
+    throw new TransferError(400, 'A historical trade needs cards on both sides');
+  }
+  if (result.reduce((sum, item) => sum + item.quantity, 0) > 100) {
+    throw new TransferError(400, 'A historical trade cannot contain more than 100 copies');
+  }
+  return result;
+}
+
+async function validateHistoricalMapping(userId, items, collectionIdField) {
+  const sourceQuantities = new Map();
+  const destinationIds = new Set();
+  const rows = new Map();
+  for (const item of items) {
+    const collectionId = item[collectionIdField];
+    if (collectionId == null) continue;
+    const row = await db.get(
+      `SELECT id, card_id, quantity, acquired_via_historical_trade_item_id FROM collection
+        WHERE id = ? AND user_id = ? AND list_type = 'collection'`,
+      [collectionId, userId]
+    );
+    if (!row || row.card_id !== item.card_id) {
+      throw new TransferError(409, 'A linked collection card is no longer available');
+    }
+    rows.set(row.id, row);
+    if (item.from_user_id === userId) {
+      if (destinationIds.has(row.id)) {
+        throw new TransferError(409, 'A collection entry cannot represent both sides of one historical trade');
+      }
+      sourceQuantities.set(row.id, (sourceQuantities.get(row.id) || 0) + item.quantity);
+    } else {
+      if (item.quantity !== row.quantity || destinationIds.has(row.id)
+        || sourceQuantities.has(row.id) || row.acquired_via_historical_trade_item_id != null) {
+        throw new TransferError(409, 'A received card must link to one complete collection entry');
+      }
+      destinationIds.add(row.id);
+    }
+  }
+  for (const [id, quantity] of sourceQuantities) {
+    if (quantity > rows.get(id).quantity) {
+      throw new TransferError(409, 'A linked collection card no longer has enough copies');
+    }
+  }
+}
+
+async function applyHistoricalMapping(userId, items, collectionIdField) {
+  const sourceQuantities = new Map();
+  const destinations = [];
+  for (const item of items) {
+    const collectionId = item[collectionIdField];
+    if (collectionId == null) continue;
+    if (item.from_user_id === userId) {
+      sourceQuantities.set(collectionId, (sourceQuantities.get(collectionId) || 0) + item.quantity);
+    } else {
+      destinations.push(item);
+    }
+  }
+  for (const [collectionId, quantity] of sourceQuantities) {
+    const row = await db.get(`SELECT quantity FROM collection WHERE id = ? AND user_id = ?`, [collectionId, userId]);
+    if (quantity === row.quantity) {
+      await db.run(`DELETE FROM collection WHERE id = ? AND user_id = ?`, [collectionId, userId]);
+    } else {
+      await db.run(
+        `UPDATE collection SET quantity = quantity - ? WHERE id = ? AND user_id = ?`,
+        [quantity, collectionId, userId]
+      );
+    }
+  }
+  for (const item of destinations) {
+    await db.run(
+      `UPDATE collection SET acquired_via_historical_trade_item_id = ? WHERE id = ? AND user_id = ?`,
+      [item.id, item[collectionIdField], userId]
+    );
+  }
+}
+
 async function transferResponse(transfer, viewerId) {
   const items = await db.all(
     `SELECT i.*, sender.username AS from_username, recipient.username AS to_username
@@ -503,6 +625,206 @@ router.put('/transfers/sealed/:unitId/trade', async (req, res) => {
     res.json({ id: unitId, is_trade: req.body.is_trade });
   } catch (error) {
     respondError(res, error, 'Failed to update sealed trade status');
+  }
+});
+
+router.get('/transfers/history', async (req, res) => {
+  try {
+    const trades = await db.all(
+      `SELECT * FROM historical_trades
+        WHERE (creator_id = ? OR recipient_id = ?)
+          AND (status != 'rejected' OR creator_id = ?)
+        ORDER BY completed_at DESC, id DESC`,
+      [req.user.id, req.user.id, req.user.id]
+    );
+    const results = [];
+    for (const trade of trades) results.push(await historicalTradeResponse(trade, req.user.id));
+    res.json({ trades: results });
+  } catch (error) {
+    respondError(res, error, 'Failed to retrieve historical trades');
+  }
+});
+
+router.post('/transfers/history', async (req, res) => {
+  try {
+    const recipientId = positiveInt(req.body?.recipient_id, 'recipient_id');
+    if (recipientId === req.user.id) throw new TransferError(400, 'You cannot record a trade with yourself');
+    const completedAt = String(req.body?.completed_at || '');
+    const parsedDate = new Date(`${completedAt}T00:00:00.000Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(completedAt)
+      || Number.isNaN(parsedDate.getTime())
+      || parsedDate.toISOString().slice(0, 10) !== completedAt) {
+      throw new TransferError(400, 'completed_at must be a valid date');
+    }
+    if (completedAt > new Date().toISOString().slice(0, 10)) {
+      throw new TransferError(400, 'completed_at cannot be in the future');
+    }
+    const recipient = await db.get(`SELECT id FROM users WHERE id = ?`, [recipientId]);
+    if (!recipient) throw new TransferError(404, 'Recipient not found');
+    const requestItems = validateHistoricalItems(req.body?.items);
+    const message = req.body?.message == null ? null : String(req.body.message).trim().slice(0, 1000);
+    const tradeId = await withTransaction(async () => {
+      const trade = await db.run(
+        `INSERT INTO historical_trades (creator_id, recipient_id, completed_at, message)
+         VALUES (?, ?, ?, ?)`,
+        [req.user.id, recipientId, completedAt, message]
+      );
+      const items = [];
+      for (const item of requestItems) {
+        const card = await db.get(
+          `SELECT id, name, printed_name, set_name, number, rarity, image_url, game
+             FROM card_cache WHERE id = ?`,
+          [item.cardId]
+        );
+        if (!card) throw new TransferError(404, 'A selected card was not found');
+        let copy = null;
+        if (item.collectionId != null) {
+          copy = await db.get(
+            `SELECT id, user_id, card_id, condition, printing, language
+               FROM collection WHERE id = ? AND user_id = ? AND list_type = 'collection'`,
+            [item.collectionId, req.user.id]
+          );
+          if (!copy || copy.card_id !== item.cardId) {
+            throw new TransferError(409, 'A linked collection card is no longer available');
+          }
+        }
+        const fromUserId = item.direction === 'given' ? req.user.id : recipientId;
+        const toUserId = item.direction === 'given' ? recipientId : req.user.id;
+        const snapshot = {
+          card_id: card.id,
+          name: card.printed_name || card.name,
+          set_name: card.set_name,
+          number: card.number,
+          rarity: card.rarity,
+          image_url: card.image_url,
+          game: card.game,
+          condition: copy?.condition || null,
+          printing: copy?.printing || null,
+          language: copy?.language || null
+        };
+        const inserted = await db.run(
+          `INSERT INTO historical_trade_items
+             (trade_id, from_user_id, to_user_id, card_id, quantity, item_snapshot, creator_collection_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [trade.lastID, fromUserId, toUserId, card.id, item.quantity, JSON.stringify(snapshot), item.collectionId]
+        );
+        items.push({
+          id: inserted.lastID,
+          from_user_id: fromUserId,
+          to_user_id: toUserId,
+          card_id: card.id,
+          quantity: item.quantity,
+          creator_collection_id: item.collectionId
+        });
+      }
+      await validateHistoricalMapping(req.user.id, items, 'creator_collection_id');
+      return trade.lastID;
+    });
+    const trade = await db.get(`SELECT * FROM historical_trades WHERE id = ?`, [tradeId]);
+    res.status(201).json({ trade: await historicalTradeResponse(trade, req.user.id) });
+  } catch (error) {
+    respondError(res, error, 'Failed to record historical trade');
+  }
+});
+
+router.put('/transfers/history/:id/confirm', async (req, res) => {
+  try {
+    const id = positiveInt(req.params.id, 'historical trade id');
+    const tradeId = await withTransaction(async () => {
+      const trade = await db.get(`SELECT * FROM historical_trades WHERE id = ?`, [id]);
+      if (!trade) throw new TransferError(404, 'Historical trade not found');
+      if (trade.recipient_id !== req.user.id) {
+        throw new TransferError(403, 'Only the other participant can confirm this trade');
+      }
+      if (trade.status !== 'pending_confirmation') {
+        throw new TransferError(409, 'This historical trade is no longer awaiting confirmation');
+      }
+      const items = await db.all(
+        `SELECT id, from_user_id, to_user_id, card_id, quantity, creator_collection_id
+           FROM historical_trade_items WHERE trade_id = ? ORDER BY id`,
+        [id]
+      );
+      const mappings = req.body?.items;
+      if (!Array.isArray(mappings) || mappings.length !== items.length) {
+        throw new TransferError(400, 'Choose how to reconcile every historical card');
+      }
+      const mappingById = new Map();
+      for (const mapping of mappings) {
+        const itemId = positiveInt(mapping?.id, 'item id');
+        if (mappingById.has(itemId)) throw new TransferError(400, 'Each historical card can only be mapped once');
+        mappingById.set(itemId, mapping.collection_entry_id == null || mapping.collection_entry_id === ''
+          ? null
+          : positiveInt(mapping.collection_entry_id, 'collection_entry_id'));
+      }
+      for (const item of items) {
+        if (!mappingById.has(item.id)) throw new TransferError(400, 'Choose how to reconcile every historical card');
+        item.recipient_collection_id = mappingById.get(item.id);
+      }
+      await validateHistoricalMapping(trade.creator_id, items, 'creator_collection_id');
+      await validateHistoricalMapping(trade.recipient_id, items, 'recipient_collection_id');
+      for (const item of items) {
+        await db.run(
+          `UPDATE historical_trade_items SET recipient_collection_id = ? WHERE id = ?`,
+          [item.recipient_collection_id, item.id]
+        );
+      }
+      await applyHistoricalMapping(trade.creator_id, items, 'creator_collection_id');
+      await applyHistoricalMapping(trade.recipient_id, items, 'recipient_collection_id');
+      const updated = await db.run(
+        `UPDATE historical_trades SET status = 'confirmed', confirmed_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND status = 'pending_confirmation'`,
+        [id]
+      );
+      if (updated.changes === 0) throw new TransferError(409, 'This historical trade is no longer awaiting confirmation');
+      return id;
+    });
+    const trade = await db.get(`SELECT * FROM historical_trades WHERE id = ?`, [tradeId]);
+    res.json({ trade: await historicalTradeResponse(trade, req.user.id) });
+  } catch (error) {
+    respondError(res, error, 'Failed to confirm historical trade');
+  }
+});
+
+router.put('/transfers/history/:id/reject', async (req, res) => {
+  try {
+    const id = positiveInt(req.params.id, 'historical trade id');
+    const updated = await withTransaction(async () => {
+      const trade = await db.get(`SELECT * FROM historical_trades WHERE id = ?`, [id]);
+      if (!trade) throw new TransferError(404, 'Historical trade not found');
+      if (trade.recipient_id !== req.user.id) {
+        throw new TransferError(403, 'Only the other participant can reject this trade');
+      }
+      return db.run(
+        `UPDATE historical_trades SET status = 'rejected'
+          WHERE id = ? AND status = 'pending_confirmation'`,
+        [id]
+      );
+    });
+    if (updated.changes === 0) throw new TransferError(409, 'This historical trade is no longer awaiting confirmation');
+    res.json({ message: 'Historical trade rejected' });
+  } catch (error) {
+    respondError(res, error, 'Failed to reject historical trade');
+  }
+});
+
+router.delete('/transfers/history/:id', async (req, res) => {
+  try {
+    const id = positiveInt(req.params.id, 'historical trade id');
+    const deleted = await withTransaction(async () => {
+      const trade = await db.get(`SELECT * FROM historical_trades WHERE id = ?`, [id]);
+      if (!trade) throw new TransferError(404, 'Historical trade not found');
+      if (trade.creator_id !== req.user.id) {
+        throw new TransferError(403, 'Only the creator can cancel this record');
+      }
+      return db.run(
+        `DELETE FROM historical_trades WHERE id = ? AND status = 'pending_confirmation'`,
+        [id]
+      );
+    });
+    if (deleted.changes === 0) throw new TransferError(409, 'This historical trade can no longer be cancelled');
+    res.json({ message: 'Historical trade cancelled' });
+  } catch (error) {
+    respondError(res, error, 'Failed to cancel historical trade');
   }
 });
 

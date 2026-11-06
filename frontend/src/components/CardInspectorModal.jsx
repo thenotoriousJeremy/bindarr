@@ -854,7 +854,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               )}
 
               <UsedInDecks cardId={activeCard.card_id || activeCard.id} />
-              {(activeCard.acquired_transfer_id != null || activeCard.acquired_external_transaction_id != null) && (
+              {(activeCard.acquired_transfer_id != null || activeCard.acquired_external_transaction_id != null || activeCard.acquired_historical_trade_id != null) && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.75rem' }}>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
                     {t('inspector.tradeProvenance')}
@@ -884,6 +884,20 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                       </span>
                       {onViewTrade && (
                         <button type="button" className="btn btn-secondary btn-sm" onClick={() => onViewTrade({ type: 'external', id: activeCard.acquired_external_transaction_id })}>
+                          {t('inspector.viewTradeHistory')}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {activeCard.acquired_historical_trade_id != null && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                        {t('inspector.historicalTrade', {
+                          user: activeCard.acquired_historical_trade_partner || t('transfer.unknownUser')
+                        })}
+                      </span>
+                      {onViewTrade && (
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onViewTrade({ type: 'historical', id: activeCard.acquired_historical_trade_id })}>
                           {t('inspector.viewTradeHistory')}
                         </button>
                       )}

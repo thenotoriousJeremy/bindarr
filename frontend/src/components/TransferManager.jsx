@@ -9,6 +9,7 @@ import { groupTransferHistory } from '../utils/transferHistory';
 import { counterSelections } from '../utils/transferSelection';
 import CardImage from './CardImage';
 import { ExternalDealHistory, ExternalReceivedItems } from './ExternalDealComponents';
+import HistoricalTradeModal from './HistoricalTradeModal';
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
@@ -135,6 +136,8 @@ export default function TransferManager({
   const [users, setUsers] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [transfers, setTransfers] = useState([]);
+  const [historicalTrades, setHistoricalTrades] = useState([]);
+  const [historicalModal, setHistoricalModal] = useState(null);
   const [myCards, setMyCards] = useState([]);
   const [mySealed, setMySealed] = useState([]);
   const [setsList, setSetsList] = useState([]);
@@ -157,6 +160,7 @@ export default function TransferManager({
   const [requestFilters, setRequestFilters] = useState({ query: '', game: '', type: 'all', sort: 'name-asc' });
   const [expandedHistoryGroupIds, setExpandedHistoryGroupIds] = useState(() => new Set());
   const [historyScrollTargetId, setHistoryScrollTargetId] = useState(null);
+  const [historicalScrollTargetId, setHistoricalScrollTargetId] = useState(null);
   const handledOfferRef = useRef(null);
   const handledHistoryFocusRef = useRef(null);
 
@@ -169,14 +173,16 @@ export default function TransferManager({
     setLoading(true);
     setError('');
     try {
-      const [transferData, userData, collectionData, sealedData, contactData] = await Promise.all([
+      const [transferData, historyData, userData, collectionData, sealedData, contactData] = await Promise.all([
         requestJson('/api/transfers'),
+        requestJson('/api/transfers/history'),
         requestJson('/api/transfers/users'),
         requestJson('/api/collection?list_type=collection'),
         requestJson('/api/sealed/units?opened=0'),
         requestJson('/api/transfers/external/contacts')
       ]);
       setTransfers(transferData.transfers || []);
+      setHistoricalTrades(historyData.trades || []);
       setUsers(userData.users || []);
       setMyCards(Array.isArray(collectionData) ? collectionData : []);
       setMySealed(sealedData.units || []);
@@ -313,11 +319,33 @@ export default function TransferManager({
   }, [historyFocus, historyGroups, loading, onHistoryFocusHandled, t]);
 
   useEffect(() => {
+    if (historyFocus?.type !== 'historical' || loading) return;
+    const requestId = historyFocus.requestId ?? `historical:${historyFocus.id}`;
+    if (handledHistoryFocusRef.current === requestId) return;
+    handledHistoryFocusRef.current = requestId;
+    const trade = historicalTrades.find(item => String(item.id) === String(historyFocus.id));
+    if (trade) {
+      setActivePage('history');
+      setHistoricalScrollTargetId(String(trade.id));
+    } else {
+      setError(t('transfer.historyUnavailable'));
+    }
+    onHistoryFocusHandled?.(requestId);
+  }, [historyFocus, historicalTrades, loading, onHistoryFocusHandled, t]);
+
+  useEffect(() => {
     if (activePage !== 'history' || !historyScrollTargetId) return;
     document.getElementById(`transfer-history-${historyScrollTargetId}`)
       ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setHistoryScrollTargetId(null);
   }, [activePage, historyScrollTargetId]);
+
+  useEffect(() => {
+    if (activePage !== 'history' || !historicalScrollTargetId) return;
+    document.getElementById(`historical-trade-${historicalScrollTargetId}`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHistoricalScrollTargetId(null);
+  }, [activePage, historicalScrollTargetId]);
 
   useEffect(() => {
     if (historyFocus?.type === 'external') setActivePage('history');
@@ -336,6 +364,16 @@ export default function TransferManager({
   const updateQuantity = (setter, selected, item, quantity) => {
     const value = Math.max(1, Math.min(Number(item.quantity) || 1, Number(quantity) || 1));
     setter(current => ({ ...current, [itemKey(item)]: { ...current[itemKey(item)], quantity: value } }));
+  };
+
+  const saveHistoricalAction = async (url, method, body, successMessage) => {
+    const result = await requestJson(url, {
+      method,
+      ...(body ? { body: JSON.stringify(body) } : {})
+    });
+    await load();
+    showToast?.(t(successMessage));
+    return result;
   };
 
   const resetComposer = () => {
@@ -845,7 +883,7 @@ export default function TransferManager({
         {[
           { id: 'new', label: t('transfer.newTab') },
           { id: 'offers', label: t('transfer.offersTab'), count: pendingIncoming.length + pendingOutgoing.length },
-          { id: 'history', label: t('transfer.historyTab'), count: historyGroups.length }
+          { id: 'history', label: t('transfer.historyTab'), count: historyGroups.length + historicalTrades.length }
         ].map(page => (
           <button
             key={page.id}
@@ -866,6 +904,15 @@ export default function TransferManager({
       </nav>
 
       <div id="transfer-panel-new" role="tabpanel" aria-labelledby="transfer-tab-new" tabIndex={0} hidden={activePage !== 'new'}>
+      {!countering && (
+        <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', padding: '0.85rem 1rem' }}>
+          <div>
+            <strong style={{ color: 'var(--text-strong)' }}>{t('historical.shortcutTitle')}</strong>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.84rem' }}>{t('historical.shortcutHint')}</div>
+          </div>
+          <button type="button" className="btn btn-secondary" onClick={() => setHistoricalModal({ mode: 'create' })}>{t('historical.openForm')}</button>
+        </div>
+      )}
       <form
         className="glass-panel"
         onSubmit={submitProposal}
@@ -1057,7 +1104,10 @@ export default function TransferManager({
       <div id="transfer-panel-history" role="tabpanel" aria-labelledby="transfer-tab-history" tabIndex={0} hidden={activePage !== 'history'} style={{ display: activePage === 'history' ? 'flex' : 'none', flexDirection: 'column', gap: '1rem' }}>
       {activePage === 'history' && <>
       <section style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
-        <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>{t('transfer.history')}</h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+          <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>{t('transfer.history')}</h3>
+          <button type="button" className="btn btn-primary" onClick={() => setHistoricalModal({ mode: 'create' })}>{t('historical.openForm')}</button>
+        </div>
         {loading ? <p style={{ color: 'var(--text-secondary)' }}>{t('common.loading')}</p>
           : historyGroups.length ? historyGroups.map(group => {
             const otherUser = group.root.proposer_id === user.id
@@ -1106,7 +1156,60 @@ export default function TransferManager({
               </details>
             );
           })
-            : <p style={{ color: 'var(--text-secondary)' }}>{t('transfer.noHistory')}</p>}
+            : null}
+        {!loading && historicalTrades.map(trade => {
+          const isCreator = String(trade.creator_id) === String(user.id);
+          const partner = isCreator ? trade.recipient_username : trade.creator_username;
+          return (
+            <article key={`past-${trade.id}`} id={`historical-trade-${trade.id}`} className="glass-panel" style={{ padding: '0.85rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                <div>
+                  <strong style={{ color: 'var(--text-strong)' }}>{t('historical.tradeWith', { user: partner })}</strong>
+                  <span style={{ marginLeft: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.84rem' }}>
+                    {t(`historical.status.${trade.status}`)} · {new Date(`${trade.completed_at}T00:00:00`).toLocaleDateString()}
+                  </span>
+                </div>
+                {trade.status === 'pending_confirmation' && !isCreator && (
+                  <button type="button" className="btn btn-primary" onClick={() => setHistoricalModal({ mode: 'review', trade })}>{t('historical.review')}</button>
+                )}
+                {trade.status === 'pending_confirmation' && isCreator && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={saving}
+                    onClick={async () => {
+                      try {
+                        await saveHistoricalAction(`/api/transfers/history/${trade.id}`, 'DELETE', null, 'historical.cancelled');
+                      } catch (err) {
+                        setError(err.message || t('historical.errCancel'));
+                      }
+                    }}
+                  >
+                    {t('transfer.cancel')}
+                  </button>
+                )}
+              </div>
+              {trade.message && <p style={{ color: 'var(--text-secondary)', margin: '0.45rem 0' }}>{trade.message}</p>}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.35rem 1rem', marginTop: '0.45rem' }}>
+                {trade.items.map(item => {
+                  const wasGivenByYou = String(item.from_user_id) === String(user.id);
+                  return (
+                    <div key={item.id} style={{ color: 'var(--text-secondary)', fontSize: '0.84rem' }}>
+                      {item.quantity > 1 ? `${item.quantity}× ` : ''}{item.item_snapshot.name}
+                      <span style={{ marginLeft: '0.35rem', color: 'var(--text-muted)' }}>
+                        {t(wasGivenByYou ? 'historical.youGave' : 'historical.theyGave')}
+                      </span>
+                      <div style={{ fontSize: '0.78rem' }}>{[item.item_snapshot.set_name, item.item_snapshot.number && `#${item.item_snapshot.number}`].filter(Boolean).join(' · ')}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </article>
+          );
+        })}
+        {!loading && !historyGroups.length && !historicalTrades.length && (
+          <p style={{ color: 'var(--text-secondary)' }}>{t('transfer.noHistory')}</p>
+        )}
       </section>
 
       <ExternalDealHistory
@@ -1116,6 +1219,29 @@ export default function TransferManager({
       />
       </>}
       </div>
+      {historicalModal && (
+        <HistoricalTradeModal
+          mode={historicalModal.mode}
+          trade={historicalModal.trade}
+          user={user}
+          users={users}
+          cards={myCards}
+          onClose={() => setHistoricalModal(null)}
+          onCreate={payload => saveHistoricalAction('/api/transfers/history', 'POST', payload, 'historical.submitted')}
+          onConfirm={(tradeId, items) => saveHistoricalAction(
+            `/api/transfers/history/${tradeId}/confirm`,
+            'PUT',
+            { items },
+            'historical.confirmed'
+          )}
+          onReject={tradeId => saveHistoricalAction(
+            `/api/transfers/history/${tradeId}/reject`,
+            'PUT',
+            {},
+            'historical.rejected'
+          )}
+        />
+      )}
     </div>
   );
 }

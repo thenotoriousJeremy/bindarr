@@ -925,6 +925,51 @@ async function initDb() {
   await run(`CREATE INDEX IF NOT EXISTS idx_user_transfer_items_sealed_unit ON user_transfer_items(source_sealed_unit_id)`);
 
   await run(`
+    CREATE TABLE IF NOT EXISTS historical_trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      creator_id INTEGER NOT NULL,
+      recipient_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending_confirmation'
+        CHECK(status IN ('pending_confirmation', 'confirmed', 'rejected')),
+      completed_at TEXT NOT NULL,
+      message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      confirmed_at DATETIME,
+      CHECK(creator_id != recipient_id),
+      FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(recipient_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_historical_trades_creator
+    ON historical_trades(creator_id, status, completed_at DESC)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_historical_trades_recipient
+    ON historical_trades(recipient_id, status, completed_at DESC)`);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS historical_trade_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trade_id INTEGER NOT NULL,
+      from_user_id INTEGER NOT NULL,
+      to_user_id INTEGER NOT NULL,
+      card_id TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
+      item_snapshot TEXT NOT NULL,
+      creator_collection_id INTEGER,
+      recipient_collection_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(trade_id) REFERENCES historical_trades(id) ON DELETE CASCADE,
+      FOREIGN KEY(from_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(to_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(creator_collection_id) REFERENCES collection(id) ON DELETE SET NULL,
+      FOREIGN KEY(recipient_collection_id) REFERENCES collection(id) ON DELETE SET NULL
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_historical_trade_items_trade
+    ON historical_trade_items(trade_id, id)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_historical_trade_items_collection
+    ON historical_trade_items(creator_collection_id, recipient_collection_id)`);
+
+  await run(`
     CREATE TABLE IF NOT EXISTS external_contacts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
@@ -1668,6 +1713,10 @@ async function initDb() {
   if (!collectionCols.some(c => c.name === 'acquired_via_transfer_item_id')) {
     await run(`ALTER TABLE collection ADD COLUMN acquired_via_transfer_item_id INTEGER
       REFERENCES user_transfer_items(id) ON DELETE SET NULL`);
+  }
+  if (!collectionCols.some(c => c.name === 'acquired_via_historical_trade_item_id')) {
+    await run(`ALTER TABLE collection ADD COLUMN acquired_via_historical_trade_item_id INTEGER
+      REFERENCES historical_trade_items(id) ON DELETE SET NULL`);
   }
   if (!collectionCols.some(c => c.name === 'is_trade')) {
     await run(`ALTER TABLE collection ADD COLUMN is_trade INTEGER DEFAULT 0`);
