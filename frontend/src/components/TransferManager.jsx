@@ -497,9 +497,61 @@ export default function TransferManager({
       t,
       setsList
     );
+    const selectedItems = items.filter(item => selected[itemKey(item)]);
     const updateFilter = (key, value) => setFilters(current => ({ ...current, [key]: value }));
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        {selectedItems.length > 0 && (
+          <div className="glass-panel" style={{ padding: '0.65rem' }}>
+            <div style={{ color: 'var(--text-strong)', fontSize: '0.82rem', fontWeight: 700, marginBottom: '0.45rem' }}>
+              {t('transfer.selectedItems')}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.4rem', maxHeight: '10rem', overflowY: 'auto' }}>
+              {selectedItems.map(item => {
+                const key = itemKey(item);
+                const label = itemLabel(item) || t('transfer.unknownItem');
+                const selection = selected[key];
+                const details = item.type === 'card'
+                  ? [
+                    item.set_name,
+                    item.number && `#${item.number}`,
+                    item.printing && item.printing !== 'Normal' && item.printing,
+                    !isRequest && cardLocationLabel(item, t)
+                  ].filter(Boolean).join(' · ')
+                  : [item.sealed_type, item.origin_product_name].filter(Boolean).join(' · ');
+                return (
+                  <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', minWidth: 0, padding: '0.35rem', borderRadius: 'var(--radius-sm)', background: 'var(--surface-2)' }}>
+                    <div style={{ width: '2.5rem', height: '3.5rem', flex: '0 0 auto', overflow: 'hidden', borderRadius: 'var(--radius-sm)', background: 'var(--bg-secondary)' }}>
+                      {item.type === 'card'
+                        ? <CardImage card={item} alt="" loading="lazy" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : item.image_url
+                          ? <img src={item.image_url} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                          : null}
+                    </div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <strong title={label} style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-strong)', fontSize: '0.78rem' }}>
+                        {selection.quantity || 1}× {label}
+                      </strong>
+                      <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: '0.7rem' }}>
+                        {details || t('transfer.allItems')}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-icon-only"
+                      aria-label={t('transfer.removeSelected', { item: label })}
+                      title={t('transfer.removeSelected', { item: label })}
+                      onClick={() => setSelection(setter, selected, item, false)}
+                      style={{ width: '1.8rem', height: '1.8rem', padding: 0, flex: '0 0 auto' }}
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.65rem' }}>
           <TransferField id={`${fieldPrefix}-search`} label={t('transfer.searchItems')}>
             <input

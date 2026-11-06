@@ -148,18 +148,22 @@ export function ExternalReceivedItems({ items, onItemsChange, disabled = false }
       {items.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
           {items.map((item, index) => (
-            <div key={`${item.type}:${item.card_id || item.product_name}:${index}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', padding: '0.3rem 0' }}>
-              <span style={{ flex: 1, color: 'var(--text-strong)', fontSize: '0.82rem' }}>{item.name || item.product_name}</span>
-              <input
-                type="number"
-                min="1"
-                max="100"
-                value={item.quantity}
-                aria-label={t('transfer.quantity')}
-                disabled={disabled}
-                onChange={event => updateReceivedQuantity(item, event.target.value)}
-                style={{ width: '4rem' }}
-              />
+            <div key={`${item.type}:${item.card_id || item.product_name}:${index}`} className="glass-panel" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', padding: '0.5rem' }}>
+              <span style={{ flex: 1, minWidth: 0, color: 'var(--text-strong)', fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name || item.product_name}</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                {t('transfer.quantity')}
+                <input
+                  type="number"
+                  className="input-control"
+                  min="1"
+                  max="100"
+                  value={item.quantity}
+                  aria-label={t('transfer.quantity')}
+                  disabled={disabled}
+                  onChange={event => updateReceivedQuantity(item, event.target.value)}
+                  style={{ width: '4.5rem', padding: '0.45rem 0.55rem' }}
+                />
+              </label>
               <button
                 type="button"
                 className="btn btn-secondary"

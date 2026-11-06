@@ -1408,6 +1408,8 @@
   "transfer.quantity": "Quantity",
   "transfer.availableQuantity": "{count} available",
   "transfer.selectedCount": "{count} selected",
+  "transfer.selectedItems": "Selected items",
+  "transfer.removeSelected": "Remove {item} from selection",
   "transfer.searchItems": "Search name, set, or number",
   "transfer.filterGame": "Game",
   "transfer.allGames": "All games",
