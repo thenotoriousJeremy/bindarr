@@ -5,6 +5,8 @@ import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '.
 import { sortCardsByOrder } from '../utils/cardSort';
 import { useT } from '../utils/i18n';
 import { GAMES } from '../utils/games';
+import { groupTransferHistory } from '../utils/transferHistory';
+import { counterSelections } from '../utils/transferSelection';
 import CardImage from './CardImage';
 import ExternalDealManager from './ExternalDealManager';
 
@@ -25,6 +27,7 @@ const itemKey = item => `${item.type}:${item.id}`;
 const itemLabel = item => item.type === 'card'
   ? item.name || item.printed_name || item.card_id
   : item.product_name;
+
 const transferPages = ['new', 'offers', 'history'];
 const locationFilterKey = item => item.location_id == null
   ? 'unsorted'
@@ -84,7 +87,7 @@ function TransferField({ id, label, children }) {
   );
 }
 
-function TransferItem({ item, currentUserId, t }) {
+function TransferItem({ item, currentUserId, t, location, showCost = true }) {
   const snapshot = item.item_snapshot || item;
   const sentByYou = item.from_user_id === currentUserId;
   const cost = sentByYou ? item.purchase_cost : item.received_cost;
@@ -104,10 +107,17 @@ function TransferItem({ item, currentUserId, t }) {
             ].filter(Boolean).join(' · ')
             : [snapshot.sealed_type, snapshot.origin_product_name && t('transfer.fromProduct', { product: snapshot.origin_product_name })].filter(Boolean).join(' · ')}
         </div>
+        {location && item.item_type === 'card' && (
+          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            {t('transfer.location')}: {cardLocationLabel(location, t)}
+          </div>
+        )}
       </div>
-      <span style={{ whiteSpace: 'nowrap', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-        {cost == null ? t('transfer.unknownCost') : `$${Number(cost).toFixed(2)}`}
-      </span>
+      {showCost && (
+        <span style={{ whiteSpace: 'nowrap', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+          {cost == null ? t('transfer.unknownCost') : `$${Number(cost).toFixed(2)}`}
+        </span>
+      )}
     </div>
   );
 }
@@ -178,14 +188,33 @@ export default function TransferManager({ user, showToast }) {
     return () => { active = false; };
   }, [recipientId, t]);
 
+  const myCardsById = useMemo(
+    () => new Map(myCards.map(card => [card.entry_id, card])),
+    [myCards]
+  );
+  const ownItemsByKey = useMemo(() => new Map([
+    ...myCards.map(card => [`card:${card.entry_id}`, card]),
+    ...mySealed.map(unit => [`sealed:${unit.id}`, unit])
+  ]), [myCards, mySealed]);
+
   const explicitItemsFromCounter = useMemo(() => {
     if (!countering) return [];
-    return countering.items
-      .filter(item => item.from_user_id === countering.proposer_id)
-      .map(item => ({
-        type: item.item_type,
-        id: item.item_type === 'card' ? item.source_collection_id : item.source_sealed_unit_id,
-        quantity: 1,
+    const itemsByKey = new Map();
+    for (const item of countering.items) {
+      if (item.from_user_id !== countering.proposer_id) continue;
+      const type = item.item_type;
+      const id = type === 'card' ? item.source_collection_id : item.source_sealed_unit_id;
+      if (!id) continue;
+      const key = itemKey({ type, id });
+      const existing = itemsByKey.get(key);
+      if (existing) {
+        existing.quantity += type === 'card' ? Number(item.quantity) || 1 : 1;
+        continue;
+      }
+      itemsByKey.set(key, {
+        type,
+        id,
+        quantity: type === 'card' ? Number(item.quantity) || 1 : 1,
         name: item.item_snapshot?.name || item.item_snapshot?.product_name,
         printed_name: item.item_snapshot?.printed_name,
         set_name: item.item_snapshot?.set_name,
@@ -193,11 +222,15 @@ export default function TransferManager({ user, showToast }) {
         rarity: item.item_snapshot?.rarity,
         image_url: item.item_snapshot?.image_url,
         game: item.item_snapshot?.game,
+        printing: item.item_snapshot?.printing,
+        condition: item.item_snapshot?.condition,
+        language: item.item_snapshot?.language,
         sealed_type: item.item_snapshot?.sealed_type,
         origin_product_name: item.item_snapshot?.origin_product_name,
         explicit: true
-      }))
-      .filter(item => item.id);
+      });
+    }
+    return [...itemsByKey.values()];
   }, [countering]);
 
   const requestedOptions = useMemo(() => {
@@ -214,6 +247,7 @@ export default function TransferManager({ user, showToast }) {
   const pendingIncoming = transfers.filter(item => item.status === 'pending' && item.recipient_id === user.id);
   const pendingOutgoing = transfers.filter(item => item.status === 'pending' && item.proposer_id === user.id);
   const history = transfers.filter(item => item.status !== 'pending');
+  const historyGroups = useMemo(() => groupTransferHistory(transfers), [transfers]);
 
   const setSelection = (setter, selected, item, isSelected) => {
     const key = itemKey(item);
@@ -289,8 +323,9 @@ export default function TransferManager({ user, showToast }) {
     setActivePage('new');
     setRecipientId(String(transfer.proposer_id));
     setTransferType('trade');
-    setOffered({});
-    setRequested({});
+    const selections = counterSelections(transfer, ownItemsByKey);
+    setOffered(selections.offered);
+    setRequested(selections.requested);
     setMessage('');
   };
 
@@ -535,7 +570,7 @@ export default function TransferManager({ user, showToast }) {
     );
   };
 
-  const transferCard = (transfer, incoming) => {
+  const transferCard = (transfer, incoming, readOnly = false) => {
     const oneSidedTrade = transfer.transfer_type === 'trade'
       && !transfer.items.some(item => item.from_user_id === transfer.recipient_id);
     return (
@@ -550,24 +585,37 @@ export default function TransferManager({ user, showToast }) {
           </strong>
           <span style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>{t(`transfer.status.${transfer.status}`)}</span>
         </div>
-        {incoming && transfer.status === 'pending' ? (
+        {incoming && transfer.status === 'pending' && !readOnly ? (
           <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
             {!oneSidedTrade && <button type="button" className="btn btn-primary" disabled={saving} onClick={() => actOnTransfer(transfer, 'accept')}><Check size={14} /> {t('transfer.accept')}</button>}
             <button type="button" className="btn btn-secondary" disabled={saving} onClick={() => startCounter(transfer)}><RefreshCw size={14} /> {t('transfer.counter')}</button>
             <button type="button" className="btn btn-secondary" disabled={saving} onClick={() => actOnTransfer(transfer, 'reject')}><X size={14} /> {t('transfer.reject')}</button>
           </div>
-        ) : !incoming && transfer.status === 'pending' ? (
+        ) : !incoming && transfer.status === 'pending' && !readOnly ? (
           <button type="button" className="btn btn-secondary" disabled={saving} onClick={() => actOnTransfer(transfer, 'cancel')}>{t('transfer.cancel')}</button>
         ) : null}
       </div>
-      {incoming && transfer.status === 'pending' && oneSidedTrade && (
+      {readOnly && transfer.status === 'pending' && (
+        <p role="note" style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0.6rem 0 0' }}>
+          {t('transfer.pendingInOffers')}
+        </p>
+      )}
+      {incoming && transfer.status === 'pending' && oneSidedTrade && !readOnly && (
         <p role="note" style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0.6rem 0 0' }}>
           {t('transfer.counterRequired')}
         </p>
       )}
       {transfer.message && <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', margin: '0.5rem 0' }}>{transfer.message}</p>}
       <div style={{ marginTop: '0.5rem' }}>
-        {transfer.items.map(item => <TransferItem key={item.id} item={item} currentUserId={user.id} t={t} />)}
+        {transfer.items.map(item => (
+          <TransferItem
+            key={item.id}
+            item={item}
+            currentUserId={user.id}
+            t={t}
+            location={transfer.status === 'pending' ? currentCardLocation(item) : null}
+          />
+        ))}
       </div>
       {transfer.deck_warnings?.map(warning => (
         <div key={`${warning.card_id}-${warning.user_id}`} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--accent-yellow)', fontSize: '0.78rem', marginTop: '0.5rem' }}>
@@ -590,6 +638,13 @@ export default function TransferManager({ user, showToast }) {
     }
     return [...options.values()].sort((a, b) => itemCollator.compare(a.label, b.label));
   }, [myCards, t]);
+  const currentCardLocation = item => (
+    item.item_type === 'card' && item.from_user_id === user.id
+      ? myCardsById.get(item.source_collection_id) || null
+      : null
+  );
+  const originalOfferedItems = countering?.items.filter(item => item.from_user_id === countering.proposer_id) || [];
+  const originalRequestedItems = countering?.items.filter(item => item.from_user_id === countering.recipient_id) || [];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
@@ -629,6 +684,39 @@ export default function TransferManager({ user, showToast }) {
         <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>
           {countering ? t('transfer.countering', { user: countering.proposer_username }) : t('transfer.newProposal')}
         </h3>
+        {countering && (
+          <section className="glass-panel" aria-label={t('transfer.originalProposal')} style={{ padding: '0.75rem' }}>
+            <h4 style={{ color: 'var(--text-strong)', margin: '0 0 0.6rem' }}>{t('transfer.originalProposal')}</h4>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '1rem' }}>
+              <div>
+                <strong style={{ color: 'var(--text-strong)' }}>{t('transfer.originallyOffered')}</strong>
+                {originalOfferedItems.map(item => (
+                  <TransferItem
+                    key={`original-offer-${item.id}`}
+                    item={item}
+                    currentUserId={user.id}
+                    t={t}
+                    location={currentCardLocation(item)}
+                    showCost={false}
+                  />
+                ))}
+              </div>
+              <div>
+                <strong style={{ color: 'var(--text-strong)' }}>{t('transfer.originallyRequested')}</strong>
+                {originalRequestedItems.length ? originalRequestedItems.map(item => (
+                  <TransferItem
+                    key={`original-request-${item.id}`}
+                    item={item}
+                    currentUserId={user.id}
+                    t={t}
+                    location={currentCardLocation(item)}
+                    showCost={false}
+                  />
+                )) : <p style={{ color: 'var(--text-secondary)', margin: '0.45rem 0 0' }}>{t('transfer.noOriginalRequest')}</p>}
+              </div>
+            </div>
+          </section>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.65rem' }}>
           <TransferField id="transfer-recipient" label={t('transfer.recipient')}>
             <select id="transfer-recipient" className="select-control" value={recipientId} disabled={Boolean(countering)} onChange={event => setRecipientId(event.target.value)} required>
@@ -695,7 +783,16 @@ export default function TransferManager({ user, showToast }) {
       <section style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
         <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>{t('transfer.history')}</h3>
         {loading ? <p style={{ color: 'var(--text-secondary)' }}>{t('common.loading')}</p>
-          : history.length ? history.map(item => transferCard(item, item.proposer_id !== user.id))
+          : history.length ? historyGroups.map(group => (
+            <section key={group.root.id} className="glass-panel" style={{ padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+              <h4 style={{ color: 'var(--text-strong)', margin: 0 }}>
+                {t('transfer.negotiationWith', {
+                  user: group.root.proposer_id === user.id ? group.root.recipient_username : group.root.proposer_username
+                })}
+              </h4>
+              {group.transfers.map(item => transferCard(item, item.proposer_id !== user.id, true))}
+            </section>
+          ))
             : <p style={{ color: 'var(--text-secondary)' }}>{t('transfer.noHistory')}</p>}
       </section>
 
