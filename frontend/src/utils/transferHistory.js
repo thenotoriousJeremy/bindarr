@@ -35,8 +35,8 @@ export function groupTransferHistory(transfers) {
     .map(group => ({
       ...group,
       transfers: group.transfers.sort((a, b) =>
-        timestamp(a.created_at || a.updated_at) - timestamp(b.created_at || b.updated_at)
-        || Number(a.id) - Number(b.id)
+        timestamp(b.created_at || b.updated_at) - timestamp(a.created_at || a.updated_at)
+        || Number(b.id) - Number(a.id)
       )
     }))
     .sort((a, b) => b.lastActivity - a.lastActivity || Number(b.root.id) - Number(a.root.id));

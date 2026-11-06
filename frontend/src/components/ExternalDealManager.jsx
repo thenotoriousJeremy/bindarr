@@ -24,10 +24,9 @@ function itemName(item) {
   return snapshot.name || snapshot.product_name || snapshot.card_id || 'Item';
 }
 
-export default function ExternalDealManager({ showToast, onInventoryChange }) {
+export default function ExternalDealManager({ showToast, onInventoryChange, visible = true }) {
   const { t } = useT();
   const [contacts, setContacts] = useState([]);
-  const [transactions, setTransactions] = useState([]);
   const [cards, setCards] = useState([]);
   const [sealedUnits, setSealedUnits] = useState([]);
   const [contactId, setContactId] = useState('');
@@ -54,14 +53,12 @@ export default function ExternalDealManager({ showToast, onInventoryChange }) {
     setLoading(true);
     setError('');
     try {
-      const [contactData, historyData, collectionData, sealedData] = await Promise.all([
+      const [contactData, collectionData, sealedData] = await Promise.all([
         requestJson('/api/transfers/external/contacts'),
-        requestJson('/api/transfers/external'),
         requestJson('/api/collection?list_type=collection'),
         requestJson('/api/sealed/units?opened=0')
       ]);
       setContacts(contactData.contacts || []);
-      setTransactions(historyData.transactions || []);
       setCards(Array.isArray(collectionData) ? collectionData : []);
       setSealedUnits(sealedData.units || []);
     } catch (err) {
@@ -307,7 +304,7 @@ export default function ExternalDealManager({ showToast, onInventoryChange }) {
   );
 
   return (
-    <section className="glass-panel" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+    <section className="glass-panel" style={{ padding: '1rem', display: visible ? 'flex' : 'none', flexDirection: 'column', gap: '0.9rem' }}>
       <header>
         <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>{t('transfer.external.title')}</h3>
         <p style={{ color: 'var(--text-secondary)', margin: '0.35rem 0 0', fontSize: '0.82rem' }}>{t('transfer.external.subtitle')}</p>
@@ -378,9 +375,39 @@ export default function ExternalDealManager({ showToast, onInventoryChange }) {
         </form>
 
       {notice && <div role="status" style={{ color: 'var(--accent-yellow)' }}>{notice}</div>}
-      <div>
-        <h4 style={{ color: 'var(--text-strong)', margin: '0 0 0.5rem' }}>{t('transfer.external.history')}</h4>
-        {transactions.length === 0 ? <p style={{ color: 'var(--text-secondary)' }}>{t('transfer.external.noHistory')}</p> : (
+      </div>
+    </section>
+  );
+}
+
+export function ExternalDealHistory() {
+  const { t } = useT();
+  const [transactions, setTransactions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    requestJson('/api/transfers/external')
+      .then(data => {
+        if (active) setTransactions(data.transactions || []);
+      })
+      .catch(err => {
+        if (active) setError(err.message || t('transfer.external.errLoad'));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [t]);
+
+  return (
+    <section className="glass-panel" style={{ padding: '1rem' }}>
+      <h3 style={{ color: 'var(--text-strong)', margin: '0 0 0.5rem' }}>{t('transfer.external.history')}</h3>
+      {error && <div role="alert" style={{ color: 'var(--accent-red)' }}>{error}</div>}
+      {loading ? <p style={{ color: 'var(--text-secondary)' }}>{t('common.loading')}</p>
+        : error ? null
+          : transactions.length === 0 ? <p style={{ color: 'var(--text-secondary)' }}>{t('transfer.external.noHistory')}</p> : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
             {transactions.map(transaction => (
               <article key={transaction.id} style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.55rem' }}>
@@ -400,8 +427,6 @@ export default function ExternalDealManager({ showToast, onInventoryChange }) {
             ))}
           </div>
         )}
-      </div>
-      </div>
     </section>
   );
 }

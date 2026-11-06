@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { groupTransferHistory } from './transferHistory.js';
 
-test('groups negotiation versions by their root and keeps chronological order', () => {
+test('groups negotiation versions by their root and orders newest first', () => {
   const transfers = [
     { id: 3, response_to_transfer_id: 2, status: 'accepted', created_at: '2026-03-03 10:00:00' },
     { id: 2, response_to_transfer_id: 1, status: 'countered', created_at: '2026-03-02 10:00:00' },
@@ -14,7 +14,8 @@ test('groups negotiation versions by their root and keeps chronological order', 
   const groups = groupTransferHistory(transfers);
 
   assert.deepStrictEqual(groups.map(group => group.root.id), [5, 1]);
-  assert.deepStrictEqual(groups[1].transfers.map(transfer => transfer.id), [1, 2, 3, 4]);
+  assert.strictEqual(groups.length, 2);
+  assert.deepStrictEqual(groups[1].transfers.map(transfer => transfer.id), [4, 3, 2, 1]);
 });
 
 test('keeps a countered one-sided opening proposal grouped with its pending counter', () => {
@@ -26,7 +27,7 @@ test('keeps a countered one-sided opening proposal grouped with its pending coun
   const groups = groupTransferHistory(transfers);
 
   assert.strictEqual(groups.length, 1);
-  assert.deepStrictEqual(groups[0].transfers.map(transfer => transfer.id), [11, 12]);
+  assert.deepStrictEqual(groups[0].transfers.map(transfer => transfer.id), [12, 11]);
 });
 
 test('omits negotiations that have no history yet', () => {

@@ -8,7 +8,7 @@ import { GAMES } from '../utils/games';
 import { groupTransferHistory } from '../utils/transferHistory';
 import { counterSelections } from '../utils/transferSelection';
 import CardImage from './CardImage';
-import ExternalDealManager from './ExternalDealManager';
+import ExternalDealManager, { ExternalDealHistory } from './ExternalDealManager';
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
@@ -132,6 +132,7 @@ export default function TransferManager({ user, showToast }) {
   const [setsList, setSetsList] = useState([]);
   const [markedItems, setMarkedItems] = useState({ cards: [], sealed: [] });
   const [recipientId, setRecipientId] = useState('');
+  const [proposalTarget, setProposalTarget] = useState('bindarr');
   const [transferType, setTransferType] = useState('gift');
   const [offered, setOffered] = useState({});
   const [requested, setRequested] = useState({});
@@ -246,7 +247,6 @@ export default function TransferManager({ user, showToast }) {
   const selectedRequestItems = Object.values(requested);
   const pendingIncoming = transfers.filter(item => item.status === 'pending' && item.recipient_id === user.id);
   const pendingOutgoing = transfers.filter(item => item.status === 'pending' && item.proposer_id === user.id);
-  const history = transfers.filter(item => item.status !== 'pending');
   const historyGroups = useMemo(() => groupTransferHistory(transfers), [transfers]);
 
   const setSelection = (setter, selected, item, isSelected) => {
@@ -270,6 +270,7 @@ export default function TransferManager({ user, showToast }) {
     setMessage('');
     setCountering(null);
     setRecipientId('');
+    setProposalTarget('bindarr');
     setTransferType('gift');
   };
 
@@ -321,6 +322,7 @@ export default function TransferManager({ user, showToast }) {
   const startCounter = (transfer) => {
     setCountering(transfer);
     setActivePage('new');
+    setProposalTarget('bindarr');
     setRecipientId(String(transfer.proposer_id));
     setTransferType('trade');
     const selections = counterSelections(transfer, ownItemsByKey);
@@ -657,9 +659,9 @@ export default function TransferManager({ user, showToast }) {
 
       <nav role="tablist" aria-label={t('transfer.title')} onKeyDown={handleTabKeyDown} style={{ display: 'flex', gap: '0.45rem', overflowX: 'auto', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.65rem' }}>
         {[
-          { id: 'new', label: t('transfer.newProposal') },
+          { id: 'new', label: t('transfer.newTab') },
           { id: 'offers', label: t('transfer.offersTab'), count: pendingIncoming.length + pendingOutgoing.length },
-          { id: 'history', label: t('transfer.historyTab'), count: history.length }
+          { id: 'history', label: t('transfer.historyTab'), count: historyGroups.length }
         ].map(page => (
           <button
             key={page.id}
@@ -680,7 +682,34 @@ export default function TransferManager({ user, showToast }) {
       </nav>
 
       <div id="transfer-panel-new" role="tabpanel" aria-labelledby="transfer-tab-new" tabIndex={0} hidden={activePage !== 'new'}>
-      {activePage === 'new' && <form className="glass-panel" onSubmit={submitProposal} style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+      {!countering && (
+        <TransferField id="transfer-proposal-target" label={t('transfer.createType')}>
+          <select
+            id="transfer-proposal-target"
+            className="select-control"
+            value={proposalTarget}
+            onChange={event => setProposalTarget(event.target.value)}
+          >
+            <option value="bindarr">{t('transfer.inAppProposal')}</option>
+            <option value="external">{t('transfer.external.title')}</option>
+          </select>
+        </TransferField>
+      )}
+      <ExternalDealManager
+        showToast={showToast}
+        onInventoryChange={load}
+        visible={!countering && proposalTarget === 'external'}
+      />
+      <form
+        className="glass-panel"
+        onSubmit={submitProposal}
+        style={{
+          padding: '1rem',
+          display: countering || proposalTarget === 'bindarr' ? 'flex' : 'none',
+          flexDirection: 'column',
+          gap: '0.9rem'
+        }}
+      >
         <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>
           {countering ? t('transfer.countering', { user: countering.proposer_username }) : t('transfer.newProposal')}
         </h3>
@@ -761,7 +790,7 @@ export default function TransferManager({ user, showToast }) {
           </button>
           {countering && <button type="button" className="btn btn-secondary" onClick={resetComposer}>{t('common.cancel')}</button>}
         </div>
-      </form>}
+      </form>
       </div>
 
       <div id="transfer-panel-offers" role="tabpanel" aria-labelledby="transfer-tab-offers" tabIndex={0} hidden={activePage !== 'offers'} style={{ display: activePage === 'offers' ? 'flex' : 'none', flexDirection: 'column', gap: '1rem' }}>
@@ -783,20 +812,41 @@ export default function TransferManager({ user, showToast }) {
       <section style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
         <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>{t('transfer.history')}</h3>
         {loading ? <p style={{ color: 'var(--text-secondary)' }}>{t('common.loading')}</p>
-          : history.length ? historyGroups.map(group => (
-            <section key={group.root.id} className="glass-panel" style={{ padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-              <h4 style={{ color: 'var(--text-strong)', margin: 0 }}>
-                {t('transfer.negotiationWith', {
-                  user: group.root.proposer_id === user.id ? group.root.recipient_username : group.root.proposer_username
-                })}
-              </h4>
-              {group.transfers.map(item => transferCard(item, item.proposer_id !== user.id, true))}
-            </section>
-          ))
+          : historyGroups.length ? historyGroups.map(group => {
+            const otherUser = group.root.proposer_id === user.id
+              ? group.root.recipient_username
+              : group.root.proposer_username;
+            const outcome = group.transfers.find(item =>
+              ['accepted', 'rejected', 'cancelled'].includes(item.status)
+            ) || group.transfers[0];
+            const outcomeItems = outcome.items.map(item => {
+              const snapshot = item.item_snapshot || item;
+              const name = snapshot.name || snapshot.product_name || snapshot.card_id || t('transfer.unknownItem');
+              return item.from_user_id === user.id
+                ? t('transfer.youOfferedItem', { item: name })
+                : t('transfer.theyOfferedItem', { item: name });
+            });
+            return (
+              <details key={group.root.id} className="glass-panel" style={{ padding: '0.75rem' }}>
+                <summary style={{ cursor: 'pointer', color: 'var(--text-strong)' }}>
+                  <strong>{t('transfer.negotiationWith', { user: otherUser })}</strong>
+                  <span style={{ marginLeft: '0.5rem', color: 'var(--text-secondary)' }}>
+                    {t(`transfer.status.${outcome.status}`)}
+                  </span>
+                  <span style={{ display: 'block', marginTop: '0.3rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                    {outcomeItems.join(' · ')}
+                  </span>
+                </summary>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', marginTop: '0.75rem' }}>
+                  {group.transfers.map(item => transferCard(item, item.proposer_id !== user.id, true))}
+                </div>
+              </details>
+            );
+          })
             : <p style={{ color: 'var(--text-secondary)' }}>{t('transfer.noHistory')}</p>}
       </section>
 
-      <ExternalDealManager showToast={showToast} onInventoryChange={load} />
+      <ExternalDealHistory />
       </>}
       </div>
     </div>
