@@ -5,15 +5,19 @@
 // (amber/blue vs amber/gray), and foil overlay treatment, so the same card
 // looked different depending on where you saw it. Everything now routes here.
 
-// Short uppercase badge label shown on card thumbnails.
-export function getPrintingBadgeLabel(printing) {
-  switch (printing) {
-    case 'Holofoil': return 'HOLO';
-    case 'Reverse Holofoil': return 'REV';
-    case '1st Edition': return '1ST';
-    case 'Promo': return 'PRM';
-    default: return '';
-  }
+// Short uppercase badge label shown on card thumbnails (HOLO, REV, 1ST, PRM),
+// translated through printing.badge.*; the stored printing stays English. Empty
+// for Normal, which gets no badge.
+const BADGE_KEYS = {
+  'Holofoil': 'holofoil',
+  'Reverse Holofoil': 'reverseHolofoil',
+  '1st Edition': 'firstEdition',
+  'Promo': 'promo',
+};
+
+export function getPrintingBadgeLabel(printing, t) {
+  const key = BADGE_KEYS[printing];
+  return key ? t(`printing.badge.${key}`) : '';
 }
 
 // Badge background/text colors. Holo and Reverse Holo are deliberately given

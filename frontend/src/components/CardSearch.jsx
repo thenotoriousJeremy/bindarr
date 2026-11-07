@@ -9,7 +9,7 @@ import ScryfallSyntaxHelp from './ScryfallSyntaxHelp';
 import { checkSearchSyntax, syntaxErrorText } from '../utils/scryfallSyntax';
 import { translateJapaneseName, POKEMON_EN_TO_JP, getCardDisplayName } from '../utils/langHelper';
 import { useMultiSelect } from '../utils/useMultiSelect';
-import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
+import { CONDITIONS, PRINTINGS, conditionLabel, printingLabel } from '../utils/cardOptions';
 import { langName, isEnglish, displayName, translatedName, setReference, setCode, getLanguagesForGame, isLanguageSupported } from '../utils/languages';
 import { defaultGame, gameOptions, showGamePicker, gameLabel } from '../utils/games';
 import CardImage from './CardImage';
@@ -703,10 +703,10 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
               style={{ flex: '1 1 180px', fontSize: '1.1rem', fontWeight: 700 }}
             />
             <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)} style={{ fontSize: '0.75rem', maxWidth: '150px' }}>
-              {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+              {CONDITIONS.map(c => <option key={c} value={c}>{conditionLabel(t, c)}</option>)}
             </select>
             <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)} style={{ fontSize: '0.75rem', maxWidth: '150px' }}>
-              {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+              {PRINTINGS.map(p => <option key={p} value={p}>{printingLabel(t, p, game)}</option>)}
             </select>
             <input
               type="number"
@@ -849,10 +849,10 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={clearSelection}>{t('bulk.clear')}</button>
           <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
           <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)} style={{ fontSize: '0.72rem', maxWidth: '150px', padding: '0.3rem 0.4rem' }}>
-            {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+            {CONDITIONS.map(c => <option key={c} value={c}>{conditionLabel(t, c)}</option>)}
           </select>
           <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)} style={{ fontSize: '0.72rem', maxWidth: '150px', padding: '0.3rem 0.4rem' }}>
-            {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+            {PRINTINGS.map(p => <option key={p} value={p}>{printingLabel(t, p, game)}</option>)}
           </select>
           <input
             type="number"
@@ -1013,7 +1013,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                 </div>
               </div>
               <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('search.tcgMarketPrice', { printing })}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('search.tcgMarketPrice', { printing: printingLabel(t, printing, selectedCard.game || game) })}</div>
                 <div style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--accent-yellow)', overflow: 'hidden', textOverflow: 'ellipsis' }}><Price value={resolveCardPrice(selectedCard, printing)} currency={selectedCard.price_currency} /></div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{t('search.rarityLabel')} <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{selectedCard.rarity}</span></div>
               </div>

@@ -5,6 +5,7 @@ import { translatedName, setCode, isEnglish, langCode } from '../utils/languages
 import { formatPrice, priceText } from '../utils/formatPrice';
 import Price from './Price';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
+import { conditionLabel, printingLabel } from '../utils/cardOptions';
 import { tcgplayerUrl, cardmarketUrl, searchUrl, priceSource, noLinkReason } from '../utils/marketplaceLinks';
 import CardImage from './CardImage';
 import CardImageZoom from './CardImageZoom';
@@ -719,7 +720,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                       the same styling as a real one. */}
                   {!(activeCard.market_value > 0) && condition && condition !== 'Near Mint' && (
                     <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '0.1rem', lineHeight: 1.35 }}>
-                      {t('inspector.priceNearMintOnly', { condition })}
+                      {t('inspector.priceNearMintOnly', { condition: conditionLabel(t, condition) })}
                     </div>
                   )}
                 </div>
@@ -786,12 +787,12 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 {activeCard.grader && activeCard.grader !== 'Raw' ? (
                   <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specGrade')}</span> <span style={{ color: 'var(--accent-yellow)', fontWeight: 700 }}>{activeCard.grader}{activeCard.grade != null ? ` ${activeCard.grade}` : ''}</span></div>
                 ) : (
-                  <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specCondition')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.condition}</span></div>
+                  <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specCondition')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{conditionLabel(t, activeCard.condition)}</span></div>
                 )}
                 {activeCard.cert_number && (
                   <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specCert')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.cert_number}</span></div>
                 )}
-                <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specPrinting')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.printing}</span></div>
+                <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specPrinting')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{printingLabel(t, activeCard.printing, activeCard.game || activeCard.supertype)}</span></div>
                 <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specLanguage')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.language}</span></div>
                 <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specSupertype')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.supertype}</span></div>
               </div>

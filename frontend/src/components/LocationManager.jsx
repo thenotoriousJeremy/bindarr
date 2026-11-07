@@ -7,7 +7,7 @@ import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '.
 import CardInspectorModal from './CardInspectorModal';
 import { useMultiSelect } from '../utils/useMultiSelect';
 import { undoToast, placementUndo } from '../utils/undo';
-import { isBinderType as computeIsBinder, binderSpread } from '../utils/cardOptions';
+import { isBinderType as computeIsBinder, binderSpread, conditionLabel, printingLabel } from '../utils/cardOptions';
 import { displayName } from '../utils/languages';
 import CompartmentView, { FocusedCardInfo } from './CompartmentView';
 import BoxMap from './BoxMap';
@@ -2002,7 +2002,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 
                 <div style={{ textAlign: 'center' }}>
                   <strong style={{ fontSize: '1rem', display: 'block' }}>{displayName(filingQueue[filingIndex].entry)}</strong>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{filingQueue[filingIndex].entry.set_name} • {filingQueue[filingIndex].entry.printing}</span>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{filingQueue[filingIndex].entry.set_name} • {printingLabel(t, filingQueue[filingIndex].entry.printing, filingQueue[filingIndex].entry.game)}</span>
                 </div>
                 
                 {(() => {
@@ -2198,7 +2198,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   const isHighlighted = picked || isSelected;
                   const rarityBorder = getCardRarityBorder(card.rarity);
                   const foilClass = getFoilOverlayClass(card.printing);
-                  const printingBadgeLabel = getPrintingBadgeLabel(card.printing);
+                  const printingBadgeLabel = getPrintingBadgeLabel(card.printing, t);
 
                   return (
                     <DraggableCard
@@ -2312,7 +2312,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   const isHighlighted = picked || isSelected;
                   const rarityBorder = getCardRarityBorder(card.rarity);
                   const foilClass = getFoilOverlayClass(card.printing);
-                  const printingBadgeLabel = getPrintingBadgeLabel(card.printing);
+                  const printingBadgeLabel = getPrintingBadgeLabel(card.printing, t);
 
                   return (
                     <DraggableCard
@@ -2358,7 +2358,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           <span>{card.set_name || 'Unset'} {card.number ? `#${card.number}` : ''}</span>
                           {card.condition && (
                             <span style={{ padding: '1px 3px', borderRadius: '2px', background: 'rgba(0,0,0,0.4)', fontSize: '0.55rem', fontWeight: 700 }}>
-                              {card.condition}
+                              {conditionLabel(t, card.condition)}
                             </span>
                           )}
                           {printingBadgeLabel && (
@@ -2420,7 +2420,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   {filingQueue[filingIndex].entry.name}
                 </div>
                 <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {filingQueue[filingIndex].entry.set_name} &middot; {filingQueue[filingIndex].entry.printing}
+                  {filingQueue[filingIndex].entry.set_name} &middot; {printingLabel(t, filingQueue[filingIndex].entry.printing, filingQueue[filingIndex].entry.game)}
                 </div>
               </div>
             </div>

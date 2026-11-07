@@ -509,7 +509,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                       <span>{card.set_name} • {card.rarity}</span>
                       {card.printing && card.printing !== 'Normal' && (
                         <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 4px', borderRadius: '3px', flexShrink: 0, ...getPrintingBadgeStyle(card.printing) }}>
-                          {getPrintingBadgeLabel(card.printing)}
+                          {getPrintingBadgeLabel(card.printing, t)}
                         </span>
                       )}
                     </div>
@@ -549,7 +549,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                         <span>{card.set_name} • #{card.number}</span>
                         {card.printing && card.printing !== 'Normal' && (
                           <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 4px', borderRadius: '3px', flexShrink: 0, ...getPrintingBadgeStyle(card.printing) }}>
-                            {getPrintingBadgeLabel(card.printing)}
+                            {getPrintingBadgeLabel(card.printing, t)}
                           </span>
                         )}
                       </div>

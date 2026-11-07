@@ -131,13 +131,19 @@ translation into something unnatural; the layout is our problem to fix.
 ## What is not translatable yet
 
 A few things you will see in the app are stored values rather than interface
-text, so they are not in `en.json` and stay English for now: card **conditions**
-(Near Mint, Lightly Played, …), **printings** (Normal, Holofoil, Reverse
-Holofoil, …), **rarities**, and the card-language names on the entry form. Each
-one is written into the database and matched against by the filing rules, so
-translating the display needs a value/label split that does not exist yet. If a
-language you are working on makes that gap especially awkward, say so in your
-pull request - that is useful signal for doing it properly.
+text, so they are not in `en.json` and stay English for now: card **rarities**
+and the card-language names on the entry form. Each one is written into the
+database and matched against by the filing rules, so translating the display
+needs a value/label split that does not exist for them yet. If a language you
+are working on makes that gap especially awkward, say so in your pull request -
+that is useful signal for doing it properly.
+
+Card **conditions** and **printings** have that split: the database keeps the
+English value, and what you see comes from the `condition.*` and `printing.*`
+keys. Use the terms collectors in your language actually use - if they say
+"Near Mint" in English, leave it English. The short forms (`condition.short.*`:
+NM, LP, …) and the thumbnail badges (`printing.badge.*`: HOLO, REV, …) have
+very little room, so keep them to a few letters.
 
 ## Interface language is not card language
 

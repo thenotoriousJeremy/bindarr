@@ -1,8 +1,8 @@
 // Shared <select> option lists for collection entry fields, previously
 // copy-pasted across LocationManager, CollectionList, CardSearch, and
 // CameraScanner's quick-add/edit forms.
-import { LANGUAGE_NAMES, getLanguageNamesForGame, getLanguagesForGame } from './languages';
-import { gameInfo } from './games';
+import { LANGUAGE_NAMES, getLanguageNamesForGame, getLanguagesForGame } from './languages.js';
+import { gameInfo } from './games.js';
 
 export const CONDITIONS = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged'];
 export const PRINTINGS = ['Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition', 'Promo'];
@@ -22,6 +22,47 @@ export function getPrintings(game) {
   if (gameInfo(String(game || '').toLowerCase())?.printings === 'foil') return TWO_FINISH_PRINTINGS;
   return PRINTINGS.map(p => ({ value: p, label: p }));
 }
+
+// What a screen shows for a stored condition or printing. The value itself stays
+// the English string above — the CHECK constraints, the filing rules, imports and
+// exports all match on it — so only the label is translated, by the key paired
+// with it here. A value with no key (an older install, a hand-edited row) shows
+// as stored rather than as something it is not.
+const CONDITION_KEYS = {
+  'Near Mint': 'nearMint',
+  'Lightly Played': 'lightlyPlayed',
+  'Moderately Played': 'moderatelyPlayed',
+  'Heavily Played': 'heavilyPlayed',
+  'Damaged': 'damaged',
+};
+// Keyed by the English label getPrintings gives, so Magic's 'Holofoil' reads
+// "Foil" here exactly as it does in the picker.
+const PRINTING_KEYS = {
+  'Normal': 'normal',
+  'Holofoil': 'holofoil',
+  'Reverse Holofoil': 'reverseHolofoil',
+  '1st Edition': 'firstEdition',
+  'Promo': 'promo',
+  'Nonfoil': 'nonfoil',
+  'Foil': 'foil',
+};
+
+export const conditionLabel = (t, condition) => {
+  const key = CONDITION_KEYS[condition];
+  return key ? t(`condition.${key}`) : (condition || '');
+};
+
+// The short grade on a card thumbnail: NM, LP, MP, HP, DMG.
+export const conditionShort = (t, condition) => {
+  const key = CONDITION_KEYS[condition];
+  return key ? t(`condition.short.${key}`) : (condition || '');
+};
+
+export const printingLabel = (t, printing, game) => {
+  const shown = getPrintings(game).find(p => p.value === printing)?.label || printing;
+  const key = PRINTING_KEYS[shown];
+  return key ? t(`printing.${key}`) : (printing || '');
+};
 
 // Grading companies, mirroring the collection.grader CHECK constraint in
 // backend/src/db.js. 'Raw' is the default and means ungraded — not unknown, so it

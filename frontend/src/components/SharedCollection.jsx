@@ -4,7 +4,7 @@ import { Search, Trophy, Compass, Library, ShieldAlert, Sparkles, X, MapPin, Sli
 import Logo from './Logo';
 import RiotNotice from './RiotNotice';
 import Price from './Price';
-import { PRINTINGS } from '../utils/cardOptions';
+import { PRINTINGS, conditionLabel, printingLabel } from '../utils/cardOptions';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { useBackGuard } from '../utils/useBackGuard';
 import { sortCardsByOrder } from '../utils/cardSort';
@@ -361,7 +361,7 @@ function SharedCollection({ shareToken }) {
                 <label>{t('card.printing')}</label>
                 <select className="select-control" value={printingFilter} onChange={(e) => setPrintingFilter(e.target.value)}>
                   <option value="">{t('collection.allPrintings')}</option>
-                  {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+                  {PRINTINGS.map(p => <option key={p} value={p}>{printingLabel(t, p)}</option>)}
                 </select>
               </div>
             </div>
@@ -410,9 +410,9 @@ function SharedCollection({ shareToken }) {
                   {getFoilOverlayClass(card.printing) && (
                     <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
                   )}
-                  {getPrintingBadgeLabel(card.printing) && (
+                  {getPrintingBadgeLabel(card.printing, t) && (
                     <span style={{ position: 'absolute', top: '6px', left: '6px', fontSize: '0.6rem', fontWeight: 800, padding: '2px 5px', borderRadius: '3px', zIndex: 6, ...getPrintingBadgeStyle(card.printing) }}>
-                      {getPrintingBadgeLabel(card.printing)}
+                      {getPrintingBadgeLabel(card.printing, t)}
                     </span>
                   )}
                   {card.quantity > 1 && (
@@ -477,8 +477,8 @@ function SharedCollection({ shareToken }) {
                   {activeCard.subtypes.length > 0 && (<><span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>{t('shared.specSubtypes')}</span> <span style={{ color: 'var(--text-strong)' }}>{activeCard.subtypes.join(', ')}</span></>)}
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.8rem', marginTop: '0.25rem' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>{t('inspector.specCondition')}</span> <span style={{ color: 'var(--text-strong)' }}>{activeCard.condition}</span>
-                  <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>{t('inspector.specPrinting')}</span> <span style={{ color: 'var(--text-strong)' }}>{activeCard.printing}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>{t('inspector.specCondition')}</span> <span style={{ color: 'var(--text-strong)' }}>{conditionLabel(t, activeCard.condition)}</span>
+                  <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>{t('inspector.specPrinting')}</span> <span style={{ color: 'var(--text-strong)' }}>{printingLabel(t, activeCard.printing, activeCard.game)}</span>
                   <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>{t('inspector.specLanguage')}</span> <span style={{ color: 'var(--text-strong)' }}>{activeCard.language}</span>
                 </div>
                 {shareLocations && activeCard.location && (

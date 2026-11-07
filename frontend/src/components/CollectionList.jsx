@@ -5,7 +5,7 @@ import { priceText } from '../utils/formatPrice';
 import Price from './Price';
 import { useFx } from '../utils/useFx';
 import { totalPrices } from '../utils/convertPrice';
-import { CONDITIONS, PRINTINGS, GRADERS, getLanguageNamesForGame } from '../utils/cardOptions';
+import { CONDITIONS, PRINTINGS, GRADERS, getLanguageNamesForGame, conditionLabel, conditionShort, printingLabel } from '../utils/cardOptions';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { sortCardsByOrder } from '../utils/cardSort';
@@ -595,7 +595,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                   allLabel={t('collection.allConditions')}
                   value={conditionFilter}
                   onChange={setConditionFilter}
-                  options={CONDITIONS.map(c => ({value: c, label: c}))}
+                  options={CONDITIONS.map(c => ({value: c, label: conditionLabel(t, c)}))}
                 />
               </Field>
 
@@ -605,7 +605,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                   allLabel={t('collection.allPrintings')}
                   value={printingFilter}
                   onChange={setPrintingFilter}
-                  options={PRINTINGS.map(p => ({value: p, label: p}))}
+                  options={PRINTINGS.map(p => ({value: p, label: printingLabel(t, p)}))}
                 />
               </Field>
 
@@ -749,11 +749,11 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
           <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
           <select className="select-control" value="" disabled={!selectedIds.size} onChange={(e) => { if (e.target.value) runBulk('condition', e.target.value); e.target.value = ''; }} style={{ fontSize: '0.72rem', maxWidth: '150px', padding: '0.3rem 0.4rem' }}>
             <option value="">{t('bulk.setCondition')}</option>
-            {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+            {CONDITIONS.map(c => <option key={c} value={c}>{conditionLabel(t, c)}</option>)}
           </select>
           <select className="select-control" value="" disabled={!selectedIds.size} onChange={(e) => { if (e.target.value) runBulk('printing', e.target.value); e.target.value = ''; }} style={{ fontSize: '0.72rem', maxWidth: '150px', padding: '0.3rem 0.4rem' }}>
             <option value="">{t('bulk.setPrinting')}</option>
-            {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+            {PRINTINGS.map(p => <option key={p} value={p}>{printingLabel(t, p)}</option>)}
           </select>
           <select className="select-control" value="" disabled={!selectedIds.size} onChange={(e) => { if (e.target.value) runBulk('language', e.target.value); e.target.value = ''; }} style={{ fontSize: '0.72rem', maxWidth: '150px', padding: '0.3rem 0.4rem' }}>
             <option value="">{t('bulk.setLanguage')}</option>
@@ -890,10 +890,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                         border: '1px solid rgba(255, 255, 255, 0.1)',
                         textTransform: 'uppercase'
                       }}>
-                        {item.condition === 'Near Mint' ? 'NM' :
-                         item.condition === 'Lightly Played' ? 'LP' :
-                         item.condition === 'Moderately Played' ? 'MP' :
-                         item.condition === 'Heavily Played' ? 'HP' : 'DMG'}
+                        {conditionShort(t, item.condition)}
                       </span>
                     )}
                     {item.printing !== 'Normal' && (
@@ -905,7 +902,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                         ...getPrintingBadgeStyle(item.printing),
                         border: '1px solid rgba(255, 255, 255, 0.2)'
                       }}>
-                        {getPrintingBadgeLabel(item.printing)}
+                        {getPrintingBadgeLabel(item.printing, t)}
                       </span>
                     )}
                   </div>
@@ -966,7 +963,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                             </span>
                           </div>
                           <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
-                            {item.printing} • {item.condition}
+                            {printingLabel(t, item.printing, item.game)} • {conditionLabel(t, item.condition)}
                           </div>
                           {!selectMode && (
                             <div style={{ display: 'flex', gap: '0.35rem', marginTop: '2px' }}>
