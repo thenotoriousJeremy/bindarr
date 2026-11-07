@@ -7,6 +7,7 @@ import { registerServiceWorker } from './utils/registerSw.js'
 import App from './App.jsx'
 import { I18nProvider } from './utils/i18n.jsx'
 import { reloadForStaleBuild } from './utils/chunkReload.js'
+import './fonts.css' // self-hosted; see public/fonts/README.md
 import './index.css'
 
 // Vite raises this for every dynamic import that fails — a view, a locale, the

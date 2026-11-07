@@ -1,5 +1,5 @@
 :root {
-  --font-main: 'Outfit', 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  --font-main: 'Outfit', system-ui, -apple-system, sans-serif;
   
   /* Theme Colors: Sleek Dark Cyberpunk Pokédex */
   --bg-primary: #0a0f1d;
@@ -111,7 +111,7 @@
 
 /* Pokémon (Pokédex) — classic red handheld vibe with electric yellow and cyan sensor accents */
 :root[data-theme="pokemon"] {
-  --font-main: 'Chakra Petch', 'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-main: 'Chakra Petch', system-ui, sans-serif;
 
   --bg-primary: #0f070b;
   --bg-secondary: #1a0c13;
