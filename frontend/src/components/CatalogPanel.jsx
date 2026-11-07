@@ -216,7 +216,7 @@ function ReadyMadeCard({ engine, onDownload, busy, enginePresent, productMaps, m
                 className="select-control" aria-label={t('catalog.thGame')}
                 style={{ minWidth: '10rem', padding: '0.45rem 2rem 0.45rem 0.65rem', fontSize: '0.8rem' }}>
                 {Object.keys(productMaps || { pokemon: 1 }).map(g => (
-                  <option key={g} value={g}>{GAME_LABEL[g] || g}</option>
+                  <option key={g} value={g}>{gameLabel(g)}</option>
                 ))}
               </select>
             </label>
