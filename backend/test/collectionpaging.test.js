@@ -141,7 +141,9 @@ async function main() {
   const holo = slim.find(r => r.card_id === 'pk-1' && r.printing === 'Holofoil');
   assert.strictEqual(holo.price_trend, 9, 'price_trend is still resolved for the printing');
   for (const key of ['name', 'set_name', 'number', 'image_url', 'rarity', 'game', 'condition', 'grader',
-    'location_id', 'added_at', 'favorite', 'checked_out_qty', 'sealed_unit_id']) {
+    'location_id', 'added_at', 'favorite', 'checked_out_qty', 'sealed_unit_id',
+    // Scryfall syntax runs over the loaded rows; a Riftbound battlefield is drawn sideways.
+    'type_line', 'oracle_text', 'mana_cost', 'power', 'toughness', 'keywords', 'orientation']) {
     assert.ok(key in holo, `grid row keeps ${key}`);
   }
   assert.deepStrictEqual(holo.types, ['Lightning'], 'JSON columns are parsed as before');

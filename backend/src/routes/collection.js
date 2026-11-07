@@ -739,6 +739,17 @@ const COLLECTION_GRID_COLUMNS = `
         cc.set_name,
         cc.number,
         cc.image_url,
+        -- A Riftbound battlefield is drawn on its side (CardImage reads it).
+        cc.orientation,
+        cc.attributes,
+        -- What the Scryfall-syntax search box matches the loaded rows against.
+        cc.type_line,
+        cc.oracle_text,
+        cc.mana_cost,
+        cc.power,
+        cc.toughness,
+        cc.loyalty,
+        cc.keywords,
         cc.price_trend,
         cc.price_normal,
         cc.price_holofoil,
