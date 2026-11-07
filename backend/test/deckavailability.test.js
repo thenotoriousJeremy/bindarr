@@ -9,6 +9,7 @@ process.env.DEFAULT_ADMIN_PASSWORD = 'test-admin-password';
 
 const db = require('../src/db');
 const deckRouter = require('../src/routes/decks');
+const { checkoutDeck } = require('../src/utils/deckAllocation');
 const getDeck = deckRouter.stack.find(layer => layer.route?.path === '/:id' && layer.route.methods.get).route.stack[0].handle;
 
 async function testCheckedOutCardsAreUnavailable() {
@@ -17,9 +18,11 @@ async function testCheckedOutCardsAreUnavailable() {
     await db.run(`INSERT INTO card_cache (id, name, game) VALUES ('goblin', 'Goblin', 'mtg')`);
     await db.run(`INSERT INTO collection (card_id, quantity, game, user_id) VALUES ('goblin', 2, 'mtg', 1)`);
     const testing = await db.run(`INSERT INTO decks (name, game, user_id) VALUES ('Testing', 'mtg', 1)`);
-    const stampede = await db.run(`INSERT INTO decks (name, game, checked_out, user_id) VALUES ('Goblin Stampede', 'mtg', 1, 1)`);
+    const stampede = await db.run(`INSERT INTO decks (name, game, user_id) VALUES ('Goblin Stampede', 'mtg', 1)`);
     await db.run(`INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, 'goblin', 1)`, [testing.lastID]);
     await db.run(`INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, 'goblin', 2)`, [stampede.lastID]);
+    // Checking out is what makes a deck hold its copies.
+    await checkoutDeck(stampede.lastID, 1);
 
     const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; } };
     await getDeck({ params: { id: testing.lastID }, user: { id: 1 } }, res);
@@ -30,6 +33,7 @@ async function testCheckedOutCardsAreUnavailable() {
     assert.strictEqual(res.body.cards[0].locked_decks, 'Goblin Stampede');
     assert.strictEqual(res.body.cards[0].quantity > res.body.cards[0].owned_qty - res.body.cards[0].locked_qty, true,
       'Testing must mark cards in checked-out Goblin Stampede unavailable');
+    assert.strictEqual(res.body.cards[0].missing_qty, 1, 'and say how many it lacks');
   } finally {
     try { db.dbConnection.close(); } catch { /* already closed */ }
     for (const suffix of ['', '-wal', '-shm']) {

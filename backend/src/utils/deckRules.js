@@ -1,68 +1,82 @@
 // Deck construction rules, enforced server-side so every path that writes
 // deck_cards (deck builder POST, the collection "add to deck" bulk action)
 // obeys them — the frontend checks were advisory and easy to bypass.
+//
+// The rules themselves live in shared/deckRules.mjs, the one copy the deck builder
+// imports too. It is an ES module because the browser needs one; CommonJS reaches
+// it through import(), which every supported Node has (require() of an ES module
+// needs Node 20.19 or 22.12). Loaded once, on first use.
 const db = require('../db');
 
-function parseSubtypes(raw) {
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw === 'string' && raw) { try { return JSON.parse(raw); } catch { return []; } }
-  return [];
+let rulesModule = null;
+function loadRules() {
+  if (!rulesModule) rulesModule = import('../../../shared/deckRules.mjs');
+  return rulesModule;
 }
 
-// Basic Energy (Pokémon) & Basic Lands (MTG) are exempt from the "max 4 of a
-// card" rule. Mirrors isBasicEnergyOrLand in the frontend DeckBuilder.
-function isBasicEnergyOrLand(card, game = 'pokemon') {
-  if (!card) return false;
-  const subs = parseSubtypes(card.subtypes);
-  if (game === 'mtg' || card.game === 'mtg') {
-    const basicTypes = ['Basic', 'Plains', 'Island', 'Swamp', 'Mountain', 'Forest', 'Wastes'];
-    return (subs.includes('Land') || card.supertype === 'Land') && basicTypes.some(t => subs.includes(t) || card.name === t);
-  }
-  return card.supertype === 'Energy' && !subs.includes('Special');
-}
+// The card_cache columns the shared rules read.
+const RULE_COLUMNS = 'id, name, supertype, subtypes, game, oracle_id, oracle_text';
 
 // Validate setting a deck's copy count of `cardId` to `newQty`.
 // Returns { ok: true } or { ok: false, error }. Enforces:
-//   1. can't exceed the copies actually owned in the collection;
-//   2. at most 4 copies per card name (basic energy/land exempt).
+//   1. can't exceed the copies actually owned in the collection — for a deck that
+//      accepts any printing, owned copies of every printing count, shared with the
+//      deck's other printings of the same card;
+//   2. the format's copy limit per card name (4 in constructed, 1 in Commander;
+//      basics and cards that say otherwise are exempt).
+// Lowering a count always passes: a deck left over a limit (copies sold since, a
+// format changed under it) has to be fixable one click at a time.
 async function validateDeckAddition({ deckId, userId, cardId, newQty, dbClient }) {
   const client = dbClient || db;
   const qty = parseInt(newQty, 10);
   if (!Number.isFinite(qty) || qty < 0) return { ok: false, error: 'Invalid quantity' };
 
-  const card = await client.get(
-    `SELECT id, name, supertype, subtypes, game FROM card_cache WHERE id = ?`, [cardId]
-  );
+  const rules = await loadRules();
+  const card = await client.get(`SELECT ${RULE_COLUMNS} FROM card_cache WHERE id = ?`, [cardId]);
   if (!card) return { ok: false, error: 'Card not found' };
 
-  const ownedRow = await client.get(
-    `SELECT COALESCE(SUM(quantity), 0) AS owned FROM collection
-     WHERE card_id = ? AND user_id = ? AND list_type = 'collection'`, [cardId, userId]
+  const deck = await client.get(`SELECT game, format, any_printing FROM decks WHERE id = ? AND user_id = ?`, [deckId, userId]);
+  const game = (deck && deck.game) || card.game || 'pokemon';
+  const anyPrinting = !!(deck && deck.any_printing) && rules.supportsAnyPrinting(game);
+
+  // Every row of this deck that is this card by name or by printing.
+  const deckRows = await client.all(
+    `SELECT dc.card_id, dc.quantity, cc.name, cc.oracle_id
+     FROM deck_cards dc JOIN card_cache cc ON dc.card_id = cc.id
+     WHERE dc.deck_id = ? AND (dc.card_id = ? OR cc.name = ? OR cc.oracle_id = ?)`,
+    [deckId, cardId, card.name, card.oracle_id]
   );
-  const owned = ownedRow ? ownedRow.owned : 0;
-  if (qty > owned) {
-    return { ok: false, error: `You only own ${owned} ${owned === 1 ? 'copy' : 'copies'} of ${card.name}.` };
+  const current = deckRows.filter(r => r.card_id === cardId).reduce((s, r) => s + r.quantity, 0);
+  if (qty <= current) return { ok: true };
+
+  const owned = await client.all(
+    `SELECT c.card_id, c.quantity, cc.name, cc.oracle_id
+     FROM collection c JOIN card_cache cc ON c.card_id = cc.id
+     WHERE c.user_id = ? AND c.list_type = 'collection'
+       AND (c.card_id = ? OR (? = 1 AND (cc.name = ? OR cc.oracle_id = ?)))`,
+    [userId, cardId, anyPrinting ? 1 : 0, card.name, card.oracle_id]
+  );
+  const ownedQty = owned
+    .filter(o => rules.sameCard(card, o, game, anyPrinting))
+    .reduce((s, o) => s + (o.quantity || 0), 0);
+  const sharing = deckRows
+    .filter(r => r.card_id !== cardId && rules.sameCard(card, r, game, anyPrinting))
+    .reduce((s, r) => s + r.quantity, 0);
+  if (sharing + qty > ownedQty) {
+    return { ok: false, error: `You only own ${ownedQty} ${ownedQty === 1 ? 'copy' : 'copies'} of ${card.name}.` };
   }
 
-  const deck = await client.get(`SELECT game FROM decks WHERE id = ? AND user_id = ?`, [deckId, userId]);
-  const game = (deck && deck.game) || card.game || 'pokemon';
-
-  if (!isBasicEnergyOrLand(card, game)) {
-    // Copies of the same NAME already in the deck under a different card_id
-    // (alt arts / reprints) count toward the 4-card limit.
-    const otherRow = await client.get(
-      `SELECT COALESCE(SUM(dc.quantity), 0) AS other
-       FROM deck_cards dc JOIN card_cache cc ON dc.card_id = cc.id
-       WHERE dc.deck_id = ? AND cc.name = ? AND dc.card_id != ?`,
-      [deckId, card.name, cardId]
-    );
-    const other = otherRow ? otherRow.other : 0;
-    if (other + qty > 4) {
-      return { ok: false, error: `Cannot have more than 4 copies of ${card.name}.` };
-    }
+  // Copies of the same NAME already in the deck under a different card_id
+  // (alt arts / reprints) count toward the limit.
+  const limit = rules.copyLimit(card, rules.rulesFor(game, deck && deck.format));
+  const other = deckRows
+    .filter(r => r.card_id !== cardId && r.name === card.name)
+    .reduce((s, r) => s + r.quantity, 0);
+  if (other + qty > limit) {
+    return { ok: false, error: `Cannot have more than ${limit} ${limit === 1 ? 'copy' : 'copies'} of ${card.name}.` };
   }
 
   return { ok: true };
 }
 
-module.exports = { isBasicEnergyOrLand, validateDeckAddition };
+module.exports = { loadRules, validateDeckAddition };

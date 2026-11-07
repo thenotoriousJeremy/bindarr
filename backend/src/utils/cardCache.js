@@ -12,7 +12,7 @@ const COLUMNS = [
   'price_reverse_holofoil', 'price_avg1', 'price_avg7', 'price_avg30', 'cmc',
   'color_identity', 'game', 'language', 'printed_name',
   'tcgplayer_url', 'cardmarket_url', 'tcgplayer_product_id',
-  'price_currency', 'price_source',
+  'price_currency', 'price_source', 'oracle_id', 'oracle_text',
 ];
 
 // A page of results can be 250 cards and one round trip per card cost more than
@@ -70,6 +70,9 @@ async function cacheNormalizedCards(cards, game, opts = {}) {
         c.tcgplayer_url || null, c.cardmarket_url || null,
         num(c.tcgplayer_product_id),
         c.price_currency || 'USD', c.price_source || null,
+        // Magic only (scryfallApi.normalizeCard); the deck rules read both. Text is
+        // '' for a card read and found blank, null for one never read.
+        c.oracle_id || null, c.oracle_text ?? null,
       );
     }
     await db.run(

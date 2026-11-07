@@ -279,6 +279,12 @@ function normalizeCard(raw, lang) {
   const [normal, foil] = quotes[currency];
   const cmc = raw.cmc != null ? parseFloat(raw.cmc) : null;
   const colorIdentity = raw.color_identity || face.color_identity || [];
+  // A multi-faced card carries its rules text per face, not at the top level, and a
+  // reversible card even its oracle id. The deck rules read both (shared/deckRules.mjs).
+  const faces = Array.isArray(raw.card_faces) ? raw.card_faces : [];
+  const oracleText = raw.oracle_text != null
+    ? raw.oracle_text
+    : faces.map(f => f.oracle_text || '').filter(Boolean).join('\n//\n');
 
   return {
     id: `mtg-${raw.id}`,
@@ -303,6 +309,10 @@ function normalizeCard(raw, lang) {
     price_avg30: null,
     cmc: cmc,
     color_identity: colorIdentity.map(c => COLOR_NAMES[c] || c),
+    // What every printing of this card shares — how a deck that accepts any printing
+    // recognises a copy of another one as the same card.
+    oracle_id: raw.oracle_id || faces.find(f => f.oracle_id)?.oracle_id || null,
+    oracle_text: oracleText,
     game: 'mtg',
     // Which printing this row IS. The quick-add form defaults the copy's language
     // to it, so adding a Japanese card no longer files it as English.
