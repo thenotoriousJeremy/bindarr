@@ -12,6 +12,7 @@ const pokemonProvider = require('../utils/pokemonProvider');
 const languages = require('../utils/languages');
 const { matcher, normName } = require('../utils/setCatalogueMatch');
 const { importLimiter } = require('../middleware/auth');
+const { MAX_QUANTITY, clampImportQuantity } = require('../utils/requestBounds');
 
 // Every row can cost a provider lookup and the whole file is written in one
 // transaction, so a file has to be bounded. Bigger collections import in parts.
@@ -19,6 +20,10 @@ const MAX_IMPORT_ROWS = 5000;
 const tooManyRows = (res, count) => res.status(413).json({
   error: `Too many rows (${count}). Import at most ${MAX_IMPORT_ROWS} at a time.`
 });
+// And so do the copies: a copy is a row (#64), so five thousand rows of 9,999
+// is fifty million INSERTs, all made while the import's transaction holds the
+// database. This many takes a few seconds.
+const MAX_IMPORT_COPIES = 50000;
 
 // Turn an imported row into a card that is really in card_cache, or null.
 //
@@ -234,6 +239,12 @@ router.post('/import', importLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Invalid data payload' });
     }
     if (rawItems.length > MAX_IMPORT_ROWS) return tooManyRows(res, rawItems.length);
+    // Before any row is looked up, so a file that asks for too many copies costs
+    // no provider requests either.
+    const totalCopies = rawItems.reduce((n, item) => n + clampImportQuantity(item && item.quantity).copies, 0);
+    if (totalCopies > MAX_IMPORT_COPIES) {
+      return res.status(413).json({ error: `Too many copies (${totalCopies}). Import at most ${MAX_IMPORT_COPIES} at a time.` });
+    }
 
     // Resolved before the transaction, not inside it: resolving can mean a
     // provider request per row, and a write transaction must not wait on the
@@ -292,7 +303,7 @@ router.post('/import', importLimiter, async (req, res) => {
         name: item.name || '',
         set: item.set_code || item.set_id || item.set_name || '',
         number: item.collector_number || item.number || '',
-        quantity: Math.max(1, parseInt(item.quantity, 10) || 1),
+        quantity: clampImportQuantity(item.quantity).copies,
       });
     }
 
@@ -304,14 +315,17 @@ router.post('/import', importLimiter, async (req, res) => {
     }
 
     let importedCount = 0;
+    let clampedRows = 0;
 
     await db.withTransaction(async () => {
       for (const { item, cardId } of toImport) {
         // A copy is a row, never a quantity on one row: a stacked row cannot be
         // filed into separate slots or lent to a deck one copy at a time (#64).
         // Backups and third-party CSVs still carry a quantity column, so expand
-        // it here, the same way POST /collection does.
-        const copies = Math.max(1, parseInt(item.quantity, 10) || 1);
+        // it here, the same way POST /collection does — clamped into range
+        // rather than refused, so one odd cell does not sink the file.
+        const { copies, clamped } = clampImportQuantity(item.quantity);
+        if (clamped) clampedRows++;
         for (let i = 0; i < copies; i++) {
           await db.run(
             `INSERT INTO collection
@@ -333,12 +347,15 @@ router.post('/import', importLimiter, async (req, res) => {
     });
 
     const unmatched = unmatchedCount ? ` ${unmatchedCount} unmatched ManaBox printings were skipped.` : '';
+    const adjusted = clampedRows
+      ? ` ${clampedRows} row${clampedRows === 1 ? '' : 's'} had a quantity outside 1–${MAX_QUANTITY} and ${clampedRows === 1 ? 'was' : 'were'} imported with the nearest number in range.`
+      : '';
     // Named, not just counted: the list is what lets the user fix the file.
     const examples = unresolved.slice(0, 5).map(r => [r.name, r.set, r.number && `#${r.number}`].filter(Boolean).join(' ')).join(', ');
     const skipped = unresolved.length
       ? ` ${unresolved.length} row${unresolved.length === 1 ? '' : 's'} could not be matched to a card and ${unresolved.length === 1 ? 'was' : 'were'} skipped (${examples}${unresolved.length > 5 ? ', …' : ''}). Check their set and card number, then import them again.`
       : '';
-    return res.json({ success: true, count: importedCount, unresolved, message: `Successfully imported ${importedCount} items.${unmatched}${skipped}` });
+    return res.json({ success: true, count: importedCount, clamped: clampedRows, unresolved, message: `Successfully imported ${importedCount} items.${unmatched}${adjusted}${skipped}` });
   } catch (error) {
     return res.status(500).json({ error: 'Import failed', message: error.message });
   }

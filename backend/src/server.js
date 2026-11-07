@@ -265,12 +265,6 @@ db.initDb()
     dbReady = true;
     console.log('Database tables verified/created successfully.');
 
-    // Un-stack legacy multi-quantity entries so every copy is its own row (one
-    // physical card = one storage slot). No-op once migrated.
-    const { splitStackedEntries } = require('./utils/collectionHelpers');
-    const splitCount = await splitStackedEntries(db);
-    if (splitCount > 0) console.log(`Split ${splitCount} stacked collection copies into individual rows.`);
-
     // Sync sets on startup (both games). WHICH Pokémon provider fills the `sets`
     // table follows the same setting the cards do — this used to be pokemontcg.io
     // unconditionally, so a TCGdex install browsed a set list numbered by a

@@ -9,31 +9,11 @@ import { isBinderType } from '../utils/cardOptions';
 import { displayName } from '../utils/languages';
 import { useLongPress } from '../utils/useLongPress';
 import { pageColumns as resolvePageColumns } from '../utils/binderLayout';
+import { stackPocketCards } from '../utils/stackTiles';
 import CardImage from './CardImage';
 import { useT } from '../utils/i18n';
 
 const infoChipStyle = { fontSize: '0.6rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)', whiteSpace: 'nowrap' };
-
-// Collapse copies of the same card into one pocket, keyed the way the server
-// counts occupancy on a stacking container (card, printing and language; not
-// condition). The first copy holds the slot and the rest ride along in its
-// quantity, so the page lays out from stacks rather than from rows.
-function stackPocketCards(cards) {
-  const stacks = new Map();
-  for (const card of cards) {
-    const key = `${card.card_id}|${card.printing || 'Normal'}|${card.language || 'English'}`;
-    const held = stacks.get(key);
-    if (!held) {
-      stacks.set(key, { ...card, quantity: card.quantity || 1 });
-      continue;
-    }
-    held.quantity += card.quantity || 1;
-    // Whichever copy is actually filed decides where the stack sits; an unplaced
-    // one joining it must not drag the pocket back to "no position".
-    if (!(held.position > 0) && card.position > 0) held.position = card.position;
-  }
-  return Array.from(stacks.values());
-}
 
 // The label a card falls under for a given divider field.
 function categoryForField(card, field, setsList = []) {

@@ -15,10 +15,11 @@ const { searchLimiter } = require('../middleware/auth');
 const { resolveCardPrice, parseCardRow, recordPrice } = require('../utils/priceHelpers');
 const { parseSetList } = require('../utils/setQuery');
 const { compartmentLabel, isBinderType, rebalanceCompartmentByScheme, stackKey, STACK_KEY_SQL } = require('../utils/compartmentSort');
-const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, setStackQuantity } = require('../utils/collectionHelpers');
+const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, setStackQuantity, setTileQuantity, tileMembers, ownedLocation, ownedCompartment } = require('../utils/collectionHelpers');
 const { validateDeckAddition } = require('../utils/deckRules');
 const { splitPrice } = require('../utils/splitPrice');
 const { allocateSealedUnitCost } = require('../utils/sealedCostAllocation');
+const { readQuantity } = require('../utils/requestBounds');
 
 const router = express.Router();
 
@@ -764,6 +765,8 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
   if (!card_id) {
     throw new AddCardError(400, 'card_id is required');
   }
+  const qty = readQuantity(quantity);
+  if (qty.error) throw new AddCardError(400, qty.error);
 
   // Grading, validated here rather than at the two call sites, so the single add
   // and the bulk add cannot disagree about what a slab is.
@@ -836,7 +839,7 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
     // (grader, cert_number) would reject on the second insert anyway, after the
     // first had already been written. Collapse it here so the request succeeds with
     // the row the user actually meant.
-    const count = certValue ? 1 : Math.max(1, parseInt(quantity, 10) || 1);
+    const count = certValue ? 1 : qty.value;
     // Stacking is quantity-on-one-row, which is meaningful only for interchangeable
     // copies. Two slabs are never interchangeable: they have different certs, and
     // usually different grades.
@@ -946,6 +949,7 @@ router.post('/collection', async (req, res) => {
 // 3b. Bulk add: one shared condition/printing/quantity across many cards, so a
 // set browse can be added in one action instead of one drawer per card.
 const BULK_ADD_MAX = 250;
+const BULK_ADD_MAX_COPIES = 10 * BULK_ADD_MAX;
 router.post('/collection/bulk-add', async (req, res) => {
   const { card_ids = [], ...shared } = req.body;
   if (!Array.isArray(card_ids) || card_ids.length === 0) {
@@ -960,6 +964,13 @@ router.post('/collection/bulk-add', async (req, res) => {
   if (shared.cert_number) {
     return res.status(400).json({ error: 'A certification number applies to a single card. Add graded cards one at a time.' });
   }
+  // Checked once here rather than failing every card the same way, and with the
+  // product bounded too: 250 cards at 9,999 each is 2.5 million rows.
+  const qty = readQuantity(shared.quantity, { fallback: 1 });
+  if (qty.error) return res.status(400).json({ error: qty.error });
+  if (card_ids.length * qty.value > BULK_ADD_MAX_COPIES) {
+    return res.status(400).json({ error: `That is ${card_ids.length * qty.value} copies. Add at most ${BULK_ADD_MAX_COPIES} at once.` });
+  }
   // Sequential on purpose: placement resolves against the rows already inserted,
   // so adds must not race each other for the same compartment slot.
   const added = [];
@@ -973,11 +984,10 @@ router.post('/collection/bulk-add', async (req, res) => {
       failed.push({ card_id, error: error instanceof AddCardError ? error.message : 'Failed to add card' });
     }
   }
-  const qty = Math.max(1, parseInt(shared.quantity, 10) || 1);
   res.status(failed.length && !added.length ? 500 : 200).json({
     message: failed.length
       ? `Added ${added.length} of ${card_ids.length} cards; ${failed.length} failed.`
-      : `Added ${added.length} card${added.length === 1 ? '' : 's'}${qty > 1 ? ` (x${qty} each)` : ''} to collection.`,
+      : `Added ${added.length} card${added.length === 1 ? '' : 's'}${qty.value > 1 ? ` (x${qty.value} each)` : ''} to collection.`,
     added: added.length,
     failed
   });
@@ -1007,7 +1017,7 @@ router.put('/collection/:id', async (req, res) => {
     const entry = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!entry) return res.status(404).json({ error: 'Collection entry not found' });
 
-    const isMoving = location_id !== undefined && location_id !== entry.location_id;
+    let isMoving = location_id !== undefined && location_id !== entry.location_id;
     let finalCompartmentId = entry.compartment_id;
     let finalLocationId = entry.location_id;
     let finalPosition = entry.position;
@@ -1020,6 +1030,7 @@ router.put('/collection/:id', async (req, res) => {
         finalCompartmentId = null;
         finalPosition = 0;
       } else {
+        if (!(await ownedLocation(location_id, req.user.id))) return res.status(404).json({ error: 'Location not found' });
         const resolved = await resolveCompartmentAndPosition({
           locationId: location_id,
           userId: req.user.id,
@@ -1027,23 +1038,42 @@ router.put('/collection/:id', async (req, res) => {
           printing: printing !== undefined ? printing : entry.printing,
           language: language !== undefined ? language : entry.language
         });
-        finalCompartmentId = resolved.compartment_id;
-        finalLocationId = resolved.compartment_id ? (resolved.location_id ?? location_id) : null;
-        finalPosition = resolved.position;
-        resolvedFull = !!resolved.full;
-        resolvedRejected = !!resolved.rejected;
+        if (resolved.full) {
+          // No room there. The copy stays where it is rather than being pulled
+          // out of its slot into Unsorted; container_full says why it did not move.
+          resolvedFull = true;
+          isMoving = false;
+        } else {
+          finalCompartmentId = resolved.compartment_id;
+          finalLocationId = resolved.compartment_id ? (resolved.location_id ?? location_id) : null;
+          finalPosition = resolved.position;
+          resolvedRejected = !!resolved.rejected;
+        }
       }
     } else if (compartment_id !== undefined) {
-      finalCompartmentId = compartment_id;
+      // Goes straight into the row, so it has to be one of the user's own
+      // compartments — and the copy takes that compartment's container with it,
+      // so location_id can never name a different one.
+      const comp = compartment_id === null ? null : await ownedCompartment(compartment_id, req.user.id);
+      if (compartment_id !== null && !comp) return res.status(404).json({ error: 'Compartment not found' });
+      finalCompartmentId = comp ? comp.id : null;
+      if (comp) finalLocationId = comp.location_id;
     }
 
     const updates = [];
     const params = [];
 
     // Absolute, not additive: see the reconcile below. Deliberately NOT part of
-    // the UPDATE — setStackQuantity owns the quantity column so the two can
-    // never disagree about how many copies the row stands for.
-    const requestedQty = quantity !== undefined ? Math.max(1, parseInt(quantity, 10) || 1) : null;
+    // the UPDATE — the reconcile owns the quantity column so the two can
+    // never disagree about how many copies the row stands for. Checked before
+    // anything below writes: a bad number is refused, not rounded into range.
+    const qty = readQuantity(quantity, { fallback: null });
+    if (qty.error) return res.status(400).json({ error: qty.error });
+    const requestedQty = qty.value;
+    // The copies that number covers when it is a stacked tile's (see
+    // tileMembers), taken from the row as it is now, before the edit changes it.
+    const tile = requestedQty === null ? null : await tileMembers(db, req.user.id, entry, req.body.stack_entry_ids);
+    if (tile && tile.error) return res.status(400).json({ error: tile.error });
     if (condition !== undefined) { updates.push('condition = ?'); params.push(condition); }
     if (printing !== undefined) { updates.push('printing = ?'); params.push(printing); }
     if (language !== undefined) {
@@ -1171,12 +1201,22 @@ router.put('/collection/:id', async (req, res) => {
 
     // Quantity is absolute — it is how many copies the user says they own, and
     // in the stacked collection view the number in the form is the total across
-    // the identical rows, not this row alone. So reconcile the whole stack to
-    // it, up or down. It used to only ever insert (quantity - 1) extra rows,
+    // the rows of the tile, not this row alone. So reconcile the whole stack to
+    // it, up or down: the tile's rows when the popup named them, else the
+    // identical rows. It used to only ever insert (quantity - 1) extra rows,
     // which made lowering the number a no-op and made every save duplicate the
     // entry instead of editing it.
+    //
+    // One transaction, so two saves of the same stack at once cannot both count
+    // the copies before either has trimmed, and trim twice.
+    let tileIds;
     if (requestedQty !== null) {
-      const changed = await setStackQuantity(db, req.user.id, id, requestedQty);
+      const changed = await db.withTransaction(async () => {
+        if (!tile) return setStackQuantity(db, req.user.id, id, requestedQty);
+        const result = await setTileQuantity(db, req.user.id, id, requestedQty, tile.ids);
+        tileIds = result.ids;
+        return result.change;
+      });
       if (changed !== 0) {
         const row = await db.get(`SELECT compartment_id, location_id FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
         if (row && row.compartment_id && row.location_id) {
@@ -1187,7 +1227,7 @@ router.put('/collection/:id', async (req, res) => {
     }
 
     const finalPlacement = isMoving && finalCompartmentId ? await describePlacement(db, id, req.user.id) : null;
-    res.json({ message: 'Collection entry updated successfully', placement: finalPlacement, container_full: resolvedFull, rule_rejected: resolvedRejected });
+    res.json({ message: 'Collection entry updated successfully', placement: finalPlacement, container_full: resolvedFull, rule_rejected: resolvedRejected, stack_entry_ids: tileIds });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to update entry' });
@@ -1548,6 +1588,7 @@ router.post('/collection/bulk', async (req, res) => {
       if (!loc) return res.status(400).json({ error: 'Invalid location ID' });
     }
     let moved = 0;
+    let noRoom = 0;
     const touched = new Map();
     for (const id of ids) {
       const entry = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
@@ -1560,6 +1601,8 @@ router.post('/collection/bulk', async (req, res) => {
       const resolved = await resolveCompartmentAndPosition({
         locationId, userId: req.user.id, cardId: entry.card_id, printing: entry.printing, language: entry.language
       });
+      // The container filled up part way through: the rest stay where they are.
+      if (resolved.full) { noRoom++; continue; }
       const finalLoc = resolved.compartment_id ? (resolved.location_id ?? locationId) : null;
       await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`, [finalLoc, resolved.compartment_id, resolved.position, id, req.user.id]);
       if (resolved.compartment_id) touched.set(resolved.compartment_id, finalLoc);
@@ -1569,7 +1612,11 @@ router.post('/collection/bulk', async (req, res) => {
       const rbLoc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [locId, req.user.id]);
       if (rbLoc) await rebalanceCompartmentByScheme(db, compId, rbLoc.sort_order, rbLoc.foil_sorting);
     }
-    return res.json({ message: `Moved ${moved} card(s)`, affected: moved });
+    return res.json({
+      message: noRoom ? `Moved ${moved} card(s); ${noRoom} did not fit because the container is full` : `Moved ${moved} card(s)`,
+      affected: moved,
+      container_full: noRoom > 0
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Bulk action failed' });

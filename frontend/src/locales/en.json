@@ -926,6 +926,7 @@
   "inspector.unfavorite": "Remove Favorite",
   "inspector.deleteCard": "Delete Card",
   "inspector.entryUpdated": "Card entry updated.",
+  "inspector.savedContainerFull": "Saved. That container is full, so the card stayed where it was.",
   "inspector.cardUpdated": "Card updated.",
   "inspector.errUpdate": "Failed to update card.",
   "inspector.errEdit": "Error editing card.",

@@ -220,9 +220,11 @@ function start(game = 'pokemon') {
         try {
           const products = await tcgcsv.getProducts(categoryId, g.groupId);
           // One transaction per group. Row-at-a-time inserts across 400 groups is
-          // the difference between seconds and minutes on the same data.
-          await db.run('BEGIN');
-          try {
+          // the difference between seconds and minutes on the same data. Through
+          // withTransaction, not a bare BEGIN: on the one shared connection a bare
+          // BEGIN swept every other request's writes into this group's commit.
+          const mapped = await db.withTransaction(async () => {
+            let rows = 0;
             for (const p of products) {
               const number = displayNumber(tcgcsv.numberOf(p));
               // A product with no collector number is sealed product (a box, pack,
@@ -240,13 +242,11 @@ function start(game = 'pokemon') {
                 [p.productId, categoryId, g.groupId, g.name, setOf.get(g.groupId) || null,
                   p.name || '', number || null, game, p.imageUrl || null, sealedType]
               );
-              job.rows++;
+              rows++;
             }
-            await db.run('COMMIT');
-          } catch (e) {
-            await db.run('ROLLBACK').catch(() => {});
-            throw e;
-          }
+            return rows;
+          });
+          job.rows += mapped;
         } catch (e) {
           // One unreachable group must not abandon the other 399.
           console.warn(`product map: ${g.name} failed (${e.message})`);

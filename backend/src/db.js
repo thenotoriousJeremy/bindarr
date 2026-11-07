@@ -2,6 +2,7 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 
 // The app began life as "PokeKeep", a Pokémon-only tracker, so its database was
 // called pokemon_cards.db. It has handled Magic since v1.4.x, and the file name
@@ -59,51 +60,190 @@ const dbConnection = new sqlite3.Database(dbPath, (err) => {
   }
 });
 
+// --- Connection lock --------------------------------------------------------
+// There is ONE sqlite3 connection, so an open transaction belongs to the
+// connection, not to the code that opened it. Before this lock, a write any
+// other request made while a transaction was open landed inside it — and its
+// ROLLBACK threw that write away — and every reader saw rows nobody had
+// committed.
+//
+// So the connection has an owner. While a transaction is open, statements from
+// outside it queue until its COMMIT or ROLLBACK. Statements issued from inside
+// it, in the callback itself or in any helper the callback awaits, run at once.
+// "Inside" is tracked with AsyncLocalStorage, so helpers keep calling
+// db.run/get/all and need no transaction handle passed down to them.
+//
+// Transactions run one at a time, and each waits for the statements already
+// running to finish before its BEGIN: node-sqlite3 can reorder statements that
+// are in flight together, so "issued before the BEGIN" does not mean "executed
+// before it". The queue is first come, first served. A statement that arrives
+// while a transaction is waiting goes behind it, so a steady stream of reads
+// cannot starve a write.
+//
+// The lock is held for the whole callback. A transaction must never await a
+// network request: every other request in the process would wait with it.
+//
+// A statement from a transaction that has already finished (work the callback
+// started and did not await) is treated as coming from outside: it waits its
+// turn and runs on its own, rather than slipping into whichever transaction
+// holds the connection next.
+const txScope = new AsyncLocalStorage();
+let owner = null;     // the open transaction, if any
+let inFlight = 0;     // statements handed to sqlite3 and not yet answered
+const waiting = [];   // first come, first served: { tx, start }
+
+function dispatch(method, sql, params) {
+  inFlight++;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (err, result) => {
+      if (settled) return;
+      settled = true;
+      inFlight--;
+      if (err) reject(err);
+      else resolve(result);
+      pump();
+    };
+    try {
+      if (method === 'run') {
+        dbConnection.run(sql, params, function (err) {
+          done(err, err ? undefined : { lastID: this.lastID, changes: this.changes });
+        });
+      } else {
+        dbConnection[method](sql, params, done);
+      }
+    } catch (err) {
+      done(err);
+    }
+  });
+}
+
+// Start whatever the free connection can take: queued statements, until the next
+// transaction in line, which then waits for the connection to go quiet.
+function pump() {
+  while (!owner && waiting.length) {
+    if (waiting[0].tx && inFlight > 0) return;
+    waiting.shift().start();
+  }
+}
+
+function schedule(method, sql, params) {
+  if (!owner) {
+    if (waiting.length === 0) return dispatch(method, sql, params);
+  } else {
+    const scope = txScope.getStore();
+    if (scope && scope.tx === owner) return dispatch(method, sql, params);
+  }
+  return new Promise((resolve, reject) => {
+    waiting.push({ tx: false, start: () => dispatch(method, sql, params).then(resolve, reject) });
+  });
+}
+
+function acquire(tx) {
+  return new Promise(resolve => {
+    const start = () => { owner = tx; resolve(); };
+    if (!owner && waiting.length === 0 && inFlight === 0) start();
+    else waiting.push({ tx: true, start });
+  });
+}
+
+function release() {
+  owner = null;
+  pump();
+}
+
+// BEGIN/COMMIT/SAVEPOINT and friends, which only make sense while `tx` still
+// owns the connection. Run after it has gone, a SAVEPOINT would quietly open a
+// brand-new transaction nobody commits.
+function control(tx, sql) {
+  if (owner !== tx) return Promise.reject(new Error(`${sql}: the transaction it belongs to has already finished`));
+  return dispatch('run', sql, []);
+}
+
+// Roll back without letting a failed ROLLBACK replace the error that caused it.
+async function undo(tx, sql) {
+  try {
+    await control(tx, sql);
+  } catch (err) {
+    console.error(`${sql} failed:`, err.message);
+  }
+}
+
 // Helper wrappers for Promise-based SQL operations
 function run(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    dbConnection.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve({ lastID: this.lastID, changes: this.changes });
-    });
-  });
+  return schedule('run', sql, params);
 }
 
 function get(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    dbConnection.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
+  return schedule('get', sql, params);
 }
 
 function all(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    dbConnection.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
+  return schedule('all', sql, params);
 }
 
-// Run fn inside BEGIN IMMEDIATE / COMMIT, rolling back if it throws.
+// Run fn inside BEGIN IMMEDIATE / COMMIT, rolling back if it throws. fn has the
+// connection to itself until it settles (see the connection lock above).
+//
+// Called from inside another transaction, it becomes a SAVEPOINT in that one
+// rather than a second BEGIN (which SQLite refuses): its writes commit or roll
+// back with the outer transaction, but if fn throws, only fn's own writes are
+// undone. That is what lets a caller catch one failed step and carry on.
+// Savepoints under the same parent take turns, because they nest as a stack and
+// two open side by side would release or roll back each other.
 //
 // fn takes no argument on purpose. It used to be handed a `tx` object, but that
 // object was `{ run, get, all, withTransaction }` — the module's own exports under
-// a different name. Callers gained nothing from it, and it read as statement-level
-// isolation this does not provide: there is ONE sqlite3 connection here, so every
-// query in the process is already inside whatever transaction is open. Use `db`
-// directly and the scope is honest.
+// a different name. Use `db` directly: the lock knows which statements are fn's.
 async function withTransaction(fn) {
-  await run('BEGIN IMMEDIATE TRANSACTION');
+  const scope = txScope.getStore();
+  if (owner && scope && scope.tx === owner) return withSavepoint(scope, fn);
+
+  const tx = { savepoints: 0 };
+  await acquire(tx);
   try {
-    const result = await fn();
-    await run('COMMIT');
-    return result;
-  } catch (error) {
-    await run('ROLLBACK');
-    throw error;
+    return await txScope.run({ tx, turn: Promise.resolve() }, async () => {
+      await control(tx, 'BEGIN IMMEDIATE TRANSACTION');
+      try {
+        const result = await fn();
+        await control(tx, 'COMMIT');
+        return result;
+      } catch (error) {
+        await undo(tx, 'ROLLBACK');
+        throw error;
+      }
+    });
+  } finally {
+    release();
+  }
+}
+
+async function withSavepoint(parent, fn) {
+  const previous = parent.turn;
+  let finished;
+  parent.turn = new Promise(resolve => { finished = resolve; });
+  try {
+    await previous;
+    // The transaction this was meant to join ended while it waited for its turn
+    // (its caller did not await it). Run on its own instead.
+    if (owner !== parent.tx) return await txScope.exit(() => withTransaction(fn));
+
+    const { tx } = parent;
+    const name = `sp_${++tx.savepoints}`;
+    return await txScope.run({ tx, turn: Promise.resolve() }, async () => {
+      await control(tx, `SAVEPOINT ${name}`);
+      try {
+        const result = await fn();
+        await control(tx, `RELEASE ${name}`);
+        return result;
+      } catch (error) {
+        await undo(tx, `ROLLBACK TO ${name}`);
+        await undo(tx, `RELEASE ${name}`);
+        throw error;
+      }
+    });
+  } finally {
+    finished();
   }
 }
 
@@ -126,14 +266,23 @@ function hashPassword(password) {
 // quantity above 1 there is a mistake rather than more slabs, and copying it would
 // trip the (grader, cert_number) unique index. It collapses to one copy instead.
 //
-// Runs on every startup. After the first run nothing matches, so it costs one
-// indexed SELECT.
+// Runs on every startup, from initDb, after every column migration — which is
+// what makes copying "every column" mean grading, notes and market value too.
+// This is the only split. server.js used to run a second one straight after
+// initDb, written before those columns existed: it rebuilt each copy from a fixed
+// column list, so a copy came out ungraded, without its notes and value, stamped
+// as added today, and a graded row was duplicated into raw copies of one slab.
+// After the first run nothing matches, so it costs one SELECT.
+//
+// The read is inside the transaction: the server is already taking requests
+// while initDb runs, and a row edited between reading it and splitting it would
+// be split from a quantity it no longer has.
 async function splitStackedRows() {
-  const stacked = await all(`SELECT * FROM collection WHERE quantity > 1`);
-  if (stacked.length === 0) return 0;
-  const cols = (await all(`PRAGMA table_info(collection)`)).map(c => c.name).filter(n => n !== 'id');
-  const placeholders = cols.map(() => '?').join(', ');
-  await withTransaction(async () => {
+  const split = await withTransaction(async () => {
+    const stacked = await all(`SELECT * FROM collection WHERE quantity > 1`);
+    if (stacked.length === 0) return 0;
+    const cols = (await all(`PRAGMA table_info(collection)`)).map(c => c.name).filter(n => n !== 'id');
+    const placeholders = cols.map(() => '?').join(', ');
     for (const row of stacked) {
       if (!row.cert_number) {
         for (let i = 1; i < row.quantity; i++) {
@@ -143,9 +292,10 @@ async function splitStackedRows() {
       }
       await run(`UPDATE collection SET quantity = 1 WHERE id = ?`, [row.id]);
     }
+    return stacked.length;
   });
-  console.log(`Split ${stacked.length} stacked collection row(s) into single copies.`);
-  return stacked.length;
+  if (split) console.log(`Split ${split} stacked collection row(s) into single copies.`);
+  return split;
 }
 
 async function initDb() {
@@ -1061,6 +1211,11 @@ async function initDb() {
   // idx_collection_comp_user_qty below cannot serve it: a composite index is only
   // usable from its leading column, and that one leads with compartment_id.
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_user_game ON collection(user_id, game)`);
+  // "This user's copies of this card": owned counts on search results, deck
+  // availability, the copies a quantity edit adds or trims, and the cards behind
+  // the value timeline (routes/stats.js). user_id alone narrows to the whole
+  // collection and leaves every lookup a scan of it.
+  await run(`CREATE INDEX IF NOT EXISTS idx_collection_user_card ON collection(user_id, card_id)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_comp_user_qty ON collection(compartment_id, user_id, quantity)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_loc_pos ON collection(location_id, position)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_card_cache_set_num ON card_cache(set_id, number)`);
