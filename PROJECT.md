@@ -100,7 +100,7 @@ failing obscurely at session creation.
 
 ### Request lifecycle
 
-`server.js` wires Helmet (with a Report-Only CSP that allow-lists the card-image
+`server.js` wires Helmet (with an enforced CSP, or Report-Only under `CSP_REPORT_ONLY=true`, that allow-lists the card-image
 hosts), JSON body limits, the API routers, then serves the
 built SPA and a SPA fallback. `GET /api/health` is unauthenticated and backs the
 Docker `HEALTHCHECK`. An empty `users` table stays empty unless
@@ -179,9 +179,9 @@ the same way by its own route.
 Authentication is DB-backed session tokens, not JWTs:
 
 - `POST /api/auth/login` verifies a PBKDF2 password hash and inserts a row into `sessions` (`user_id`, `token`, `expires_at`).
-- `authenticateToken` (`middleware/auth.js`) reads the `Bearer` token, looks it up in `sessions` where `expires_at > now`, and sets `req.user = { id, username, role, tcg_api_key, ... }`.
+- `authenticateToken` (`middleware/auth.js`) reads the `Bearer` token, looks up its SHA-256 (`authHelpers.hashSessionToken`; the table never holds the token itself) in `sessions` where `expires_at > now`, and sets `req.user = { id, username, role, tcg_api_key, ... }`.
 - `requireAdmin` gates admin-only routes on `req.user.role === 'admin'`.
-- A bearer token that matches no session is then checked against `users.api_key` — a long-lived read-only credential for external scripts (issue #33). It sets `req.user.via_api_key`, which makes `authenticateToken` refuse any non-GET (403) and `requireAdmin` refuse it outright, and makes `/auth/me` strip the account's other provider keys. Read-only is the whole reason a non-expiring credential is acceptable here; anything that weakens it has to replace it with something scoped.
+- A bearer token that matches no session is then checked against `users.api_key` — a long-lived read-only credential for external scripts (issue #33). It sets `req.user.via_api_key`, which makes `authenticateToken` refuse any non-GET (403) and `requireAdmin` refuse it outright. No user object the server returns (`/auth/me`, login, settings) carries a key: they report `has_*` flags, provider keys are write-only, and the API key is read on demand from `GET /auth/api-key` (login session only). The gate's 401s carry `code: 'session_expired'`; a password change revokes the user's other sessions, an admin reset all of them. Read-only is the whole reason a non-expiring credential is acceptable here; anything that weakens it has to replace it with something scoped.
 - Rate limiters (`authLimiter`, `searchLimiter`, `importLimiter`) protect login and expensive endpoints.
 
 `collection.js` applies `router.use(authenticateToken)` up front, so every
@@ -646,7 +646,7 @@ for cards not yet saved.
 | Table | Purpose / key columns |
 |-------|-----------------------|
 | `users` | `id`, `username`, `password_hash` (PBKDF2, iterations embedded), `role`, `share_token`, `share_enabled`, `tcg_api_key`, `psa_api_token`, `graded_price_api_key`, `api_key` (read-only external credential) |
-| `sessions` | `user_id`, `token`, `expires_at` — Bearer-token auth |
+| `sessions` | `user_id`, `token` (`sha256:` + hash of the bearer token), `expires_at` — Bearer-token auth |
 | `card_cache` | Normalized card metadata keyed by provider `id`: `name` (searchable) and `printed_name` (as printed), `language`, `set_id`/`set_name`, `number`, `image_url`, `types`/`subtypes`/`supertype`, `rarity`, `cmc`, `color_identity`, `price_*` with `price_source`/`price_currency`, `tcgplayer_product_id`, `tcgplayer_url`/`cardmarket_url`, `game`, `last_updated`. Written only through `utils/cardCache.cacheNormalizedCards`, which upserts — `INSERT OR REPLACE` re-created the row and reset every column outside the provider's own list |
 | `collection` | One row per owned stack: `id` (entry_id), `user_id`, `card_id`→card_cache, `quantity`, `condition`, `printing`, `language`, `purchase_price`, `location_id`, `compartment_id`, `position`, `list_type` (`collection`/`trade`), `is_trade`, `game`, `added_at`; per-copy grading (`grader`, `grade`, `cert_number`) and per-copy value (`market_value`, `market_value_source`, `market_value_at`) |
 | `locations` | Physical containers: `user_id`, `name`, `type`, `sort_order`, `foil_sorting`, `rule_type`, `rule_config`, `game` |
@@ -671,7 +671,7 @@ across compartments).
 
 `App.jsx` holds auth state (`token`/`user` in `localStorage` under
 `bindarr_*`), installs a `fetch` wrapper that injects the `Bearer` header on
-`/api/*` calls and dispatches a logout event on `401`, and tab-routes between
+`/api/*` calls and dispatches a logout event only on a `401` marked `session_expired` (`utils/sessionExpiry`), and tab-routes between
 code-split view components. `/share/:token` renders the public view without auth.
 
 | Component | Role |
