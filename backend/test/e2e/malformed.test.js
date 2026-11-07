@@ -97,12 +97,8 @@ function routes() {
       fields: ['card_id', 'quantity', 'condition', 'printing', 'language', 'purchase_price', 'location_id', 'list_type', 'is_trade', 'game', 'stackable', 'grader', 'grade', 'cert_number'] },
     { method: 'POST', path: '/api/collection/bulk-add', base: { card_ids: ['mf-card-2'] }, required: true,
       fields: ['card_ids', 'quantity', 'condition', 'printing', 'language', 'location_id', 'grader', 'grade'] },
-    // compartment_id is left out on purpose: the handler stores it unchecked (a
-    // non-existent id fails the foreign key as a 500, a foreign one is the hole in
-    // isolation.test.js's KNOWN_FAILURES). The parallel slice that owns that branch
-    // validates it; add the field back here when it lands.
     { method: 'PUT', path: `/api/collection/${ids.entry2}`,
-      fields: ['quantity', 'condition', 'printing', 'language', 'purchase_price', 'location_id', 'list_type', 'is_trade', 'favorite', 'game', 'notes', 'grader', 'grade', 'cert_number', 'market_value', 'card_id'] },
+      fields: ['quantity', 'condition', 'printing', 'language', 'purchase_price', 'location_id', 'compartment_id', 'list_type', 'is_trade', 'favorite', 'game', 'notes', 'grader', 'grade', 'cert_number', 'market_value', 'card_id'] },
     { method: 'POST', path: `/api/collection/${ids.entry}/market-value/fetch`, fields: ['grader'], variants: SHORT_VARIANTS.slice(0, 2) },
     { method: 'POST', path: `/api/collection/${ids.entry}/place`, base: { compartment_id: c[0], slot: 1 }, required: true, fields: ['compartment_id', 'slot', 'swap_with'] },
     { method: 'POST', path: '/api/collection/bulk', base: { entry_ids: [ids.entry2], action: 'trade' }, required: true, fields: ['entry_ids', 'action', 'value'] },

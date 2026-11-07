@@ -11,22 +11,11 @@
 // Not repeated here, because test/e2e/authz.test.js already pins them:
 // PUT /api/locations/:id/compartments/:comp_id with a foreign compartment,
 // PUT /api/compartments/:id/filters, and card-art writes.
-//
-// Known failures are listed in KNOWN_FAILURES with the change that fixes them.
-// They still run (last, after the snapshot comparison, since they write) and are
-// reported as SKIP; one that starts passing says so, so the entry can be dropped.
 const assert = require('assert');
 const harness = require('./harness');
 
 const tmp = harness.tempDatabase('isolation');
 const db = require('../../src/db');
-
-const KNOWN_FAILURES = {
-  'PUT /api/collection/:id with a foreign compartment_id':
-    'the route stores any compartment_id without checking its owner, and GET /api/collection joins '
-    + 'compartments unscoped, so the label of another user\'s page reads back. Fixed by the parallel '
-    + 'slice that owns PUT /collection compartment_id.',
-};
 
 // Strings only Alice's data contains. None may appear in a response to Bob.
 const ALICE = {
@@ -343,6 +332,19 @@ async function runTests() {
     assert.ok(landed[0].location_id === null && landed[0].compartment_id === null, 'an import must not file into a location it named');
   });
 
+  await testCase('F9-TC10', "Bob cannot point his own copy at Alice's page", async () => {
+    // Fixed by #123: PUT /collection/:id now checks the compartment's owner. Before
+    // it, the id was stored as sent and GET /api/collection read her page's label back.
+    for (const body of [{ compartment_id: ids.compA1 }, { compartment_id: ids.compA1, location_id: ids.locA }]) {
+      const res = await req('PUT', `/api/collection/${ids.entryB1}`, { as: bob, body });
+      assert.ok(res.status >= 400 && res.status < 500, `${JSON.stringify(body)}: expected 4xx, got ${res.status} ${res.text}`);
+      noLeak(res, 'PUT compartment_id');
+    }
+    const row = await db.get('SELECT location_id, compartment_id FROM collection WHERE id = ?', [ids.entryB1]);
+    assert.ok(row.compartment_id !== ids.compA1 && row.location_id !== ids.locA, "Bob's copy was filed onto Alice's page");
+    noLeak(await req('GET', '/api/collection', { as: bob }), 'GET /api/collection after the attempt');
+  });
+
   await testCase('F9-TC9', 'every row Alice owns is exactly as it was', async () => {
     assert.deepStrictEqual(await aliceSnapshot(), before);
     // And she can still use all of it.
@@ -350,20 +352,7 @@ async function runTests() {
     assert.strictEqual((await req('GET', `/api/decks/${ids.deckA}`, { as: alice })).json.cards.length, 1);
   });
 
-  // Known failures last: they are allowed to write, and must not disturb the
-  // snapshot comparison above.
-  const known = 'PUT /api/collection/:id with a foreign compartment_id';
-  const res = await req('PUT', `/api/collection/${ids.entryB1}`, { as: bob, body: { compartment_id: ids.compA1 } });
-  const row = await db.get(`SELECT compartment_id FROM collection WHERE id = ?`, [ids.entryB1]);
-  const view = await req('GET', '/api/collection', { as: bob });
-  const holds = (res.status >= 400 && res.status < 500) && row.compartment_id !== ids.compA1 && !view.text.includes(ALICE.page);
-  if (holds) {
-    console.log(`NOTE: F9-TC10 - "${known}" is in KNOWN_FAILURES but now holds; drop it from the list.`);
-  } else {
-    console.log(`SKIP: F9-TC10 - known failure: ${known} (status ${res.status}, stored compartment ${row.compartment_id}). ${KNOWN_FAILURES[known]}`);
-  }
-
-  console.log(`isolation.test.js: ${passCount} cases passed, ${Object.keys(KNOWN_FAILURES).length} known failure(s) reported`);
+  console.log(`isolation.test.js: ${passCount} cases passed`);
 }
 
 runTests()

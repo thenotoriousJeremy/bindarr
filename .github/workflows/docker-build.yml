@@ -134,7 +134,8 @@ jobs:
         run: |
           docker run --rm --entrypoint node bindarr:smoke -e \
             "require('sqlite3'); require('sharp'); require('onnxruntime-node'); console.log('native modules load on', process.version, process.arch)"
-          docker run -d --name smoke -p 3001:3001 bindarr:smoke
+          # No TCGCSV sync from a throwaway boot: a fresh database would run a full one.
+          docker run -d --name smoke -p 3001:3001 -e BINDARR_DISABLE_TCGCSV_SYNC=1 bindarr:smoke
           ok=0
           for i in $(seq 1 45); do
             if curl -fsS http://localhost:3001/api/health; then ok=1; break; fi
