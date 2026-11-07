@@ -44,6 +44,7 @@ const PUBLIC_API_MOUNTS = {
   '/api/shared': 'the public share view, by share token, read-only',
   '/api/admin': 'starts with its own authenticateToken + requireAdmin',
   '/api/card-art': 'public reads; its writes sit behind authenticateToken + requireAdmin',
+  '/api/fx': 'public ECB reference rates so shared collections can convert prices (#144)',
 };
 const PUBLIC_API_ROUTES = ['/api/health'];
 // /api/auth routes reachable with no session. Everything else on that router must
@@ -172,11 +173,14 @@ check('card-art: only reads are public, every write is admin-gated', () => {
   assert.ok(art.slice(gate).some(l => l.route), 'card-art writes are expected below its gate');
 });
 
-check('shared is read-only', () => {
-  for (const layer of routerAt('/api/shared').filter(l => l.route)) {
-    assert.deepStrictEqual(methodsOf(layer.route), ['GET'], `/api/shared${layer.route.path} must be GET-only`);
-  }
-});
+// shared also serves binder art, scoped to the share token's owner and container.
+for (const mount of ['/api/shared', '/api/fx']) {
+  check(`${mount} is read-only`, () => {
+    for (const layer of routerAt(mount).filter(l => l.route)) {
+      assert.deepStrictEqual(methodsOf(layer.route), ['GET'], `${mount}${layer.route.path} must be GET-only`);
+    }
+  });
+}
 
 check('every /api/auth route outside the public list authenticates itself', () => {
   const routes = routerAt('/api/auth').filter(l => l.route);
@@ -209,7 +213,14 @@ check('card_cache rows are created only by utils/cardCache.js', () => {
     }
   };
   walk(SRC);
-  const elsewhere = offenders.filter(o => !o.startsWith(path.join('utils', 'cardCache.js') + ':'));
+  // Writers that never re-create a live row, each with why. The rule is about
+  // INSERT OR REPLACE resetting columns on an existing card; restoring a row
+  // that was deleted, whole and with OR IGNORE, cannot do that.
+  const ALLOWED = {
+    'pokemonMigration.js': 'undo puts back rows the migration dropped, saved whole, with INSERT OR IGNORE',
+  };
+  const elsewhere = offenders.filter(o => !o.startsWith(path.join('utils', 'cardCache.js') + ':')
+    && !Object.keys(ALLOWED).some(file => o.startsWith(file + ':')));
   assert.ok(offenders.length > elsewhere.length, 'utils/cardCache.js no longer inserts into card_cache — has the writer moved?');
   assert.deepStrictEqual(elsewhere, [],
     `card_cache written outside cacheNormalizedCards: ${elsewhere.join(', ')}`);

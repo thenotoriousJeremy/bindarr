@@ -30,6 +30,8 @@ const ALICE = {
   tcgKey: 'alice-tcg-key',
   psaToken: 'alice-psa-token',
   card: 'Alicecard',
+  list: 'Alice Wants',
+  channel: 'Alice phone',
 };
 
 let srv;
@@ -93,6 +95,15 @@ async function seedAlice() {
   } }), 'alice settings');
   ids.shareA = settings.user.share_token;
   ids.keyA = (await ok(await req('POST', '/api/auth/api-key', { as: alice }), 'alice api key')).api_key;
+
+  ids.listA = (await ok(await req('POST', '/api/lists', { as: alice, body: { name: ALICE.list, notes: ALICE.note } }), 'alice list', 201)).id;
+  ids.itemA = (await ok(await req('POST', `/api/lists/${ids.listA}/items`, { as: alice, body: { card_id: 'iso-alice-2' } }), 'alice list item', 201)).id;
+  ids.channelA = (await ok(await req('POST', '/api/notifications/channels', { as: alice, body: { type: 'webhook', url: 'http://127.0.0.1:9/alice', name: ALICE.channel } }), 'alice channel', 201)).id;
+  // A batch in her trash: one copy added and deleted.
+  const doomed = (await ok(await req('POST', '/api/collection', { as: alice, body: { card_id: 'iso-shared-1' } }), 'alice add 3')).id;
+  await ok(await req('DELETE', `/api/collection/${doomed}`, { as: alice }), 'alice delete 3');
+  const trash = await ok(await req('GET', '/api/collection/trash', { as: alice }), 'alice trash');
+  ids.batchA = trash.batches[0].batch_id || trash.batches[0].id;
 }
 
 async function seedBob() {
@@ -123,6 +134,10 @@ async function aliceSnapshot() {
     deckCards: await db.all(`SELECT dc.* FROM deck_cards dc JOIN decks d ON d.id = dc.deck_id WHERE d.user_id = ?
                              ORDER BY dc.deck_id, dc.card_id`, [uid]),
     notes: await db.all(`SELECT * FROM notes WHERE user_id = ? ORDER BY id`, [uid]),
+    lists: await db.all(`SELECT * FROM card_lists WHERE user_id = ? ORDER BY id`, [uid]),
+    listItems: await db.all(`SELECT i.* FROM card_list_items i JOIN card_lists l ON l.id = i.list_id WHERE l.user_id = ? ORDER BY i.id`, [uid]),
+    channels: await db.all(`SELECT * FROM notification_channels WHERE user_id = ? ORDER BY id`, [uid]),
+    trash: await db.all(`SELECT * FROM collection_trash WHERE user_id = ? ORDER BY entry_id`, [uid]),
     sessions: (await db.get(`SELECT COUNT(*) AS n FROM sessions WHERE user_id = ?`, [uid])).n,
   };
 }
@@ -347,6 +362,48 @@ async function runTests() {
     const row = await db.get('SELECT location_id, compartment_id FROM collection WHERE id = ?', [ids.entryB1]);
     assert.ok(row.compartment_id !== ids.compA1 && row.location_id !== ids.locA, "Bob's copy was filed onto Alice's page");
     noLeak(await req('GET', '/api/collection', { as: bob }), 'GET /api/collection after the attempt');
+  });
+
+  await testCase('F9-TC11', "Bob cannot reach Alice's lists, notification channels or trash", async () => {
+    const lists = await req('GET', '/api/lists', { as: bob });
+    assert.strictEqual(lists.status, 200);
+    noLeak(lists, 'GET /api/lists');
+    refused(await req('GET', `/api/lists/${ids.listA}`, { as: bob }), 'GET her list');
+    refused(await req('PUT', `/api/lists/${ids.listA}`, { as: bob, body: { name: 'pwned' } }), 'PUT her list');
+    refused(await req('DELETE', `/api/lists/${ids.listA}`, { as: bob }), 'DELETE her list');
+    refused(await req('POST', `/api/lists/${ids.listA}/items`, { as: bob, body: { card_id: 'iso-shared-1' } }), 'add to her list');
+    refused(await req('PUT', `/api/lists/${ids.listA}/items/${ids.itemA}`, { as: bob, body: { quantity: 3 } }), 'PUT her list item');
+    refused(await req('DELETE', `/api/lists/${ids.listA}/items/${ids.itemA}`, { as: bob }), 'DELETE her list item');
+    refused(await req('POST', `/api/decks/${ids.deckA}/missing-list`, { as: bob, body: {} }), 'missing-list from her deck');
+    refused(await req('POST', `/api/decks/${ids.deckA}/add-to-collection`, { as: bob, body: {} }), 'add her deck to his collection');
+    const decksOfCard = await req('GET', '/api/cards/iso-alice-1/decks', { as: bob });
+    assert.ok(decksOfCard.status === 200 || decksOfCard.status === 404, `GET card decks: ${decksOfCard.status}`);
+    noLeak(decksOfCard, 'GET /api/cards/:id/decks');
+
+    const notif = await req('GET', '/api/notifications', { as: bob });
+    assert.strictEqual(notif.status, 200);
+    noLeak(notif, 'GET /api/notifications');
+    refused(await req('PUT', `/api/notifications/channels/${ids.channelA}`, { as: bob, body: { name: 'pwned', enabled: false } }), 'PUT her channel');
+    refused(await req('DELETE', `/api/notifications/channels/${ids.channelA}`, { as: bob }), 'DELETE her channel');
+    refused(await req('POST', `/api/notifications/channels/${ids.channelA}/test`, { as: bob }), 'test her channel');
+
+    const trash = await req('GET', '/api/collection/trash', { as: bob });
+    assert.strictEqual(trash.status, 200);
+    assert.deepStrictEqual(trash.json.batches, [], "Bob's trash lists Alice's batch");
+    refused(await req('POST', `/api/collection/trash/${ids.batchA}/restore`, { as: bob }), 'restore her trash batch');
+    refused(await req('DELETE', `/api/collection/trash/${ids.batchA}`, { as: bob }), 'delete her trash batch');
+    const emptied = await req('DELETE', '/api/collection/trash', { as: bob });
+    assert.strictEqual(emptied.status, 200);
+    assert.strictEqual(emptied.json.removed, 0, "emptying his trash removed Alice's");
+
+    const binderArt = await req('GET', `/api/locations/${ids.locA}/binder-art`, { as: bob });
+    refused(binderArt, 'GET binder art of her binder');
+    refused(await req('PUT', `/api/compartments/${ids.compA1}/binder-art`, { as: bob, body: { artwork_id: 1 } }), 'PUT binder art on her page', [400, 403, 404]);
+    refused(await req('DELETE', `/api/compartments/${ids.compA1}/binder-art`, { as: bob }), 'DELETE binder art on her page');
+
+    const completion = await req('GET', '/api/set-completion', { as: bob });
+    assert.ok(completion.status < 500, `set-completion: ${completion.status}`);
+    noLeak(completion, 'GET /api/set-completion');
   });
 
   await testCase('F9-TC9', 'every row Alice owns is exactly as it was', async () => {

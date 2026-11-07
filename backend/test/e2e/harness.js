@@ -43,6 +43,9 @@ async function startServer(tmp, { env = {} } = {}) {
       HTTPS_PORT: '',
       CV_MODEL_DIR: path.join(tmp.dir, 'models'),
       BINDARR_DISABLE_TCGCSV_SYNC: '1',
+      BINDARR_DISABLE_FX_SYNC: '1',
+      // Notification channels may then point at 127.0.0.1, which nothing here sends to.
+      NOTIFY_ALLOW_PRIVATE: 'true',
       BACKUP_INTERVAL_HOURS: '0',
       DEFAULT_ADMIN_PASSWORD: process.env.DEFAULT_ADMIN_PASSWORD || 'test-admin-password',
       ...env,
@@ -127,7 +130,11 @@ async function admin(db) {
 async function sessionHeaders(db, userId) {
   const token = crypto.randomBytes(24).toString('hex');
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  await db.run(`INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`, [token, userId, expiresAt]);
+  // Stored hashed, as authHelpers.generateSession does; the bearer is the raw token.
+  // Required here, not at the top: authHelpers loads src/db, which must not open
+  // before tempDatabase() has pointed DB_PATH at the throwaway file.
+  const { hashSessionToken } = require('../../src/utils/authHelpers');
+  await db.run(`INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`, [hashSessionToken(token), userId, expiresAt]);
   return { Authorization: `Bearer ${token}` };
 }
 

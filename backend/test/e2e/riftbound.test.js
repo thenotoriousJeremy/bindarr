@@ -19,8 +19,9 @@ const { spawn } = require('child_process');
 
 const tmpDb = path.join(os.tmpdir(), `bindarr-riftbound-e2e-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;
-const port = '3041';
-const base = `http://localhost:${port}`;
+const { freePort } = require('../freePort');
+let port;
+let base;
 const db = require('../../src/db');
 
 const CARDS = require('../fixtures/riftbound/cards.json');
@@ -65,6 +66,8 @@ async function tc(name, fn) {
 }
 
 async function main() {
+  port = String(await freePort());
+  base = `http://localhost:${port}`;
   const { server: riftcodex, hits } = await startRiftcodex();
   const modelDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bindarr-riftbound-models-'));
   const proc = spawn('node', [path.join(__dirname, '../../src/server.js')], {

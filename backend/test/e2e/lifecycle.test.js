@@ -3,6 +3,7 @@ const os = require('os');
 const fs = require('fs');
 const assert = require('assert');
 const { spawn } = require('child_process');
+const { freePort } = require('../freePort');
 const sqlite3 = require('sqlite3');
 
 // Server lifecycle against the real server.js: a database that cannot be
@@ -79,7 +80,7 @@ async function initFailureExits() {
 }
 
 async function backupsAndSchedules() {
-  const port = '3014';
+  const port = String(await freePort());
   const base = `http://localhost:${port}`;
   const dbFile = path.join(scratch, 'bindarr.db');
   const backupDir = path.join(scratch, 'elsewhere', 'backups');

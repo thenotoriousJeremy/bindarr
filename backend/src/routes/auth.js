@@ -501,7 +501,7 @@ router.put('/settings', authenticateToken, async (req, res) => {
     keyUpdates.push([sql, (value || '').trim()]);
   }
 
-  for (const [field, value] of Object.entries({ current_password, password, tcg_api_key, psa_api_token, graded_price_api_key })) {
+  for (const [field, value] of Object.entries({ current_password, password })) {
     if (value !== undefined && typeof value !== 'string') {
       return res.status(400).json({ error: `${field} must be text` });
     }

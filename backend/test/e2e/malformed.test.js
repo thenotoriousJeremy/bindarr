@@ -87,6 +87,9 @@ async function setup() {
   ids.note = (await call('POST', '/api/notes', { title: 'MF', body: 'note' })).note.id;
   const purchase = await call('POST', '/api/sealed/purchases', { product_name: 'MF Booster Box', quantity: 1 });
   ids.purchase = purchase.id || (purchase.purchase && purchase.purchase.id);
+  ids.list = (await call('POST', '/api/lists', { name: 'MF List' })).id;
+  ids.item = (await call('POST', `/api/lists/${ids.list}/items`, { card_id: 'mf-card-2' })).id;
+  ids.channel = (await call('POST', '/api/notifications/channels', { type: 'webhook', url: 'http://127.0.0.1:9/hook' })).id;
 }
 
 // One entry per route. `fields` are what the handler destructures; `base` makes
@@ -153,6 +156,30 @@ function routes() {
     { method: 'PUT', path: `/api/sealed/purchases/${ids.purchase}`,
       fields: ['store', 'purchase_date', 'unit_price', 'notes', 'quantity', 'expected_packs', 'expected_cards', 'contents_note', 'market_value'] },
     { method: 'POST', path: '/api/sealed/templates', base: { product_name: 'MF Template' }, fields: ['product_id', 'product_name', 'game', 'components'] },
+    // lists.js
+    { method: 'POST', path: '/api/lists', base: { name: 'MF List 2' }, required: true, fields: ['name', 'kind', 'game', 'notes', 'any_printing'] },
+    { method: 'PUT', path: `/api/lists/${ids.list}`, fields: ['name', 'kind', 'game', 'notes', 'any_printing'] },
+    { method: 'POST', path: `/api/lists/${ids.list}/items`, base: { card_id: 'mf-card-1' }, required: true,
+      fields: ['card_id', 'quantity', 'condition_min', 'language', 'printing', 'any_printing', 'notes'] },
+    { method: 'PUT', path: `/api/lists/${ids.list}/items/${ids.item}`, fields: ['quantity', 'condition_min', 'language', 'printing', 'any_printing', 'notes'] },
+    { method: 'POST', path: `/api/decks/${ids.deck}/missing-list`, fields: ['name'] },
+    { method: 'POST', path: `/api/decks/${ids.deck}/add-to-collection`, fields: ['location_id'] },
+    // trash.js: an unknown batch id, with whatever body
+    { method: 'POST', path: '/api/collection/trash/not-a-batch/restore', fields: [] },
+    // notifications.js (the /test route sends a real notification, so it is left out)
+    { method: 'POST', path: '/api/notifications/channels', base: { type: 'webhook', url: 'http://127.0.0.1:9/hook2' }, required: true,
+      fields: ['type', 'name', 'url', 'token', 'topic', 'enabled', 'events_price', 'events_admin'] },
+    { method: 'PUT', path: `/api/notifications/channels/${ids.channel}`, fields: ['name', 'url', 'token', 'topic', 'enabled', 'clear_token', 'events_price', 'events_admin'] },
+    { method: 'PUT', path: '/api/notifications/prefs', fields: ['price_enabled', 'price_pct', 'price_abs', 'min_price', 'include_wishlist'] },
+    // precons.js: shares importLimiter (20 an hour) with the two import routes above
+    { method: 'POST', path: '/api/precons/import', fields: [], bodyCases: ['empty object'] },
+    // binderArt.js: the upload takes the raw image, so only the bodies; the layer takes JSON
+    { method: 'POST', path: '/api/binder-art', fields: [] },
+    { method: 'PUT', path: `/api/compartments/${c[1]}/binder-art`, base: { artwork_id: 999999 },
+      fields: ['artwork_id', 'x_mm', 'y_mm', 'width_mm', 'rotation_deg', 'gap_mm', 'pocket_w_mm', 'pocket_h_mm'] },
+    // admin pokemon migration: only malformed plan/run ids, never a real one
+    { method: 'POST', path: '/api/admin/pokemon-migration/apply', fields: ['plan_id'] },
+    { method: 'POST', path: '/api/admin/pokemon-migration/revert', fields: ['run_id'] },
     // cardArt.js (admin writes)
     { method: 'POST', path: '/api/card-art/mf-card-1', base: { image: 'data:image/png;base64,AAAA' }, fields: ['image'] },
   ];
