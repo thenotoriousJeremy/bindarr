@@ -13,7 +13,7 @@
 
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --text-muted: #78869a;
   
   --accent-red: #ff4747;
   --accent-red-glow: rgba(255, 71, 71, 0.4);
@@ -46,6 +46,7 @@
      re-map them. Dark theme keeps the original literals, so dark is unchanged. */
   --text-strong: #fff;                    /* strongest foreground on panels */
   --text-on-accent: #fff;                 /* text/icons on saturated buttons */
+  --focus-ring: var(--accent-blue);       /* keyboard focus outline, every theme */
   --surface-1: rgba(255, 255, 255, 0.03); /* faint fill */
   --surface-2: rgba(255, 255, 255, 0.05); /* hover fill */
   --surface-3: rgba(255, 255, 255, 0.08); /* raised chip */
@@ -86,7 +87,7 @@
 
   --text-primary: #0f172a;
   --text-secondary: #475569;
-  --text-muted: #64748b;
+  --text-muted: #5f6e84;
   --text-strong: #0f172a;
   --text-on-accent: #ffffff;
   /* The rare badge's silver all but vanishes on white. */
@@ -124,7 +125,7 @@
 
   --text-primary: #fdf2f4;
   --text-secondary: #c99ea8;
-  --text-muted: #8a6570;
+  --text-muted: #96747e;
   --text-strong: #ffffff;
   --text-on-accent: #ffffff;
 
@@ -310,7 +311,7 @@
 
   --text-primary: #f8fafc;
   --text-secondary: #9cb0c9;
-  --text-muted: #627288;
+  --text-muted: #738295;
   --text-strong: #fef3c7;
   --text-on-accent: #ffffff;
 
@@ -3891,4 +3892,39 @@ button, input, select, textarea {
     break-after: page;
     page-break-after: always;
   }
+}
+
+/* Keyboard focus. Many controls (.btn, inputs) drop the default outline, so
+   this restores a visible ring for keyboard users only (:focus-visible); mouse
+   and touch focus stay unringed. Last in the file so it beats the
+   same-specificity `outline: none` rules above. --focus-ring follows each
+   theme's accent. */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* The shared <Modal> focuses its own panel on open so screen readers announce
+   it; that panel is not a control, so it gets no ring. */
+.modal-dialog:focus,
+.modal-dialog:focus-visible {
+  outline: none;
+}
+
+/* Pinch-zoom is allowed again (no maximum-scale in index.html), which re-enables
+   iOS Safari's zoom-on-focus for any field under 16px. iOS only, so desktop and
+   Android keep their compact field sizes. */
+@supports (-webkit-touch-callout: none) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    font-size: max(16px, 1em) !important;
+  }
+}
+
+/* Settings switches hide their checkbox (opacity 0), so the ring goes on the
+   visible track that follows it. */
+.switch-control input:focus-visible + .switch-slider {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
