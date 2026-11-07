@@ -602,26 +602,23 @@ router.post('/scan-match', searchLimiter, async (req, res) => {
 });
 
 // 2. Get User's Collection
-router.get('/collection', async (req, res) => {
-  try {
-    const listType = req.query.list_type || 'collection';
-    const isTrade = req.query.is_trade;
-    const compId = req.query.compartment_id;
-
-    let filterSql = `WHERE c.user_id = ? AND c.list_type = ?`;
-    let filterParams = [req.user.id, listType];
-
-    if (isTrade !== undefined) {
-      filterSql += ` AND c.is_trade = ?`;
-      filterParams.push(isTrade === 'true' || isTrade === '1' ? 1 : 0);
-    }
-    if (compId !== undefined) {
-      filterSql += ` AND c.compartment_id = ?`;
-      filterParams.push(compId);
-    }
-
-    const query = `
-      SELECT
+//
+// One row per physical entry, newest first. Two optional knobs exist for the
+// collection grid, which at 20,000 rows spent seconds downloading and parsing a
+// response it mostly did not draw:
+//
+//   fields=grid      only the columns a tile, the grid's filters and its sort
+//                    read: no notes, slab cert, marketplace links, container
+//                    labels or purchase details. The card popup asks for the
+//                    full row when it opens (GET /collection/:id).
+//   limit, offset    one page, with the unpaged total in X-Total-Count. Order is
+//                    added_at DESC then id DESC, so rows added in the same second
+//                    (a bulk add) still have one fixed order, and consecutive
+//                    pages never repeat or skip a row.
+//
+// Without either, the response is what it always was: every row, every column.
+// Storage, sealed and the deck builder all read it that way.
+const COLLECTION_FULL_COLUMNS = `
         c.id as entry_id,
         c.card_id,
         c.quantity,
@@ -703,41 +700,196 @@ router.get('/collection', async (req, res) => {
         l.type as location_type,
         cp.idx as compartment_idx,
         cp.label as compartment_label,
-        cp.capacity as compartment_capacity
+        cp.capacity as compartment_capacity`;
+
+// What CollectionList draws, filters and sorts on. The sealed product's name,
+// store and date stay because the "linked sealed purchase" filter labels its
+// options with them. market_value and the per-printing prices are read only to
+// resolve price_trend, and are dropped from the response afterwards.
+const COLLECTION_GRID_COLUMNS = `
+        c.id as entry_id,
+        c.card_id,
+        c.quantity,
+        c.condition,
+        c.printing,
+        c.language,
+        c.location_id,
+        c.added_at,
+        c.is_trade,
+        c.favorite,
+        c.list_type,
+        c.grader,
+        c.grade,
+        c.market_value,
+        su.id AS sealed_unit_id,
+        sp.product_name AS sealed_product_name,
+        sp.store AS sealed_product_store,
+        sp.purchase_date AS sealed_product_date,
+        CASE WHEN su.id IS NULL THEN NULL ELSE (SELECT COUNT(*) FROM sealed_units unit_order
+          WHERE unit_order.purchase_id = su.purchase_id AND unit_order.id <= su.id) END AS sealed_unit_number,
+        cc.name,
+        cc.printed_name,
+        cc.supertype,
+        cc.subtypes,
+        cc.types,
+        cc.cmc,
+        cc.color_identity,
+        cc.rarity,
+        cc.set_id,
+        cc.set_name,
+        cc.number,
+        cc.image_url,
+        -- A Riftbound battlefield is drawn on its side (CardImage reads it).
+        cc.orientation,
+        cc.attributes,
+        -- What the Scryfall-syntax search box matches the loaded rows against.
+        cc.type_line,
+        cc.oracle_text,
+        cc.mana_cost,
+        cc.power,
+        cc.toughness,
+        cc.loyalty,
+        cc.keywords,
+        cc.price_trend,
+        cc.price_normal,
+        cc.price_holofoil,
+        cc.price_reverse_holofoil,
+        cc.price_1st_edition,
+        cc.price_currency,
+        cc.game`;
+const GRID_PRICE_INPUTS = ['market_value', 'price_normal', 'price_holofoil', 'price_reverse_holofoil', 'price_1st_edition'];
+
+// Owner-scoped: every write checks that a link names the user's own unit, but
+// the read does not rely on that. A row pointing at another user's unit gets no
+// sealed details at all, not that user's.
+const COLLECTION_SEALED_JOINS = `
+      LEFT JOIN sealed_units su ON su.id = c.sealed_unit_id
+        AND EXISTS (SELECT 1 FROM sealed_purchases owner
+                     WHERE owner.id = su.purchase_id AND owner.user_id = c.user_id)
+      LEFT JOIN sealed_purchases sp ON sp.id = su.purchase_id AND sp.user_id = c.user_id`;
+
+const COLLECTION_PAGE_MAX = 5000;
+
+function formatCollectionRows(rows, alloc, grid) {
+  return rows.map(row => {
+    const card = {
+      ...parseCardRow(row),
+      price_trend: resolveCardPrice(row),
+      checked_out_qty: alloc.get(row.entry_id) || 0,
+    };
+    if (grid) {
+      for (const key of GRID_PRICE_INPUTS) delete card[key];
+      return card;
+    }
+    card.compartment_display_label = row.compartment_id
+      ? compartmentLabel({ idx: row.compartment_idx, label: row.compartment_label }, row.location_type)
+      : null;
+    card.sub_location = row.compartment_id
+      ? `${row.location_type === 'Binder' ? 'Page' : 'Row'} ${row.compartment_idx}`
+      : '';
+    return card;
+  });
+}
+
+// A non-negative integer from the query string, the fallback when absent, and
+// null for anything else (which the caller answers with a 400).
+function readPagingInt(value, fallback) {
+  if (value === undefined || value === '') return fallback;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+router.get('/collection', async (req, res) => {
+  try {
+    const listType = req.query.list_type || 'collection';
+    const isTrade = req.query.is_trade;
+    const compId = req.query.compartment_id;
+    const game = req.query.game;
+    const grid = req.query.fields === 'grid';
+    if (req.query.fields !== undefined && !grid) {
+      return res.status(400).json({ error: 'fields must be "grid" when given' });
+    }
+
+    const paged = req.query.limit !== undefined || req.query.offset !== undefined;
+    const limit = readPagingInt(req.query.limit, COLLECTION_PAGE_MAX);
+    const offset = readPagingInt(req.query.offset, 0);
+    if (paged && (limit == null || limit < 1 || limit > COLLECTION_PAGE_MAX || offset == null)) {
+      return res.status(400).json({ error: `limit must be 1-${COLLECTION_PAGE_MAX} and offset a non-negative integer` });
+    }
+
+    let filterSql = `WHERE c.user_id = ? AND c.list_type = ?`;
+    const filterParams = [req.user.id, listType];
+
+    if (isTrade !== undefined) {
+      filterSql += ` AND c.is_trade = ?`;
+      filterParams.push(isTrade === 'true' || isTrade === '1' ? 1 : 0);
+    }
+    if (compId !== undefined) {
+      filterSql += ` AND c.compartment_id = ?`;
+      filterParams.push(compId);
+    }
+    // The deck builder has always sent ?game= and been handed every game back.
+    // A card cached before multi-game support carries no game, and every one of
+    // those is Pokémon, the same default the clients apply to item.game.
+    if (game) {
+      filterSql += ` AND COALESCE(cc.game, 'pokemon') = ?`;
+      filterParams.push(String(game));
+    }
+
+    const query = `
+      SELECT ${grid ? COLLECTION_GRID_COLUMNS : COLLECTION_FULL_COLUMNS}
+      FROM collection c
+      JOIN card_cache cc ON c.card_id = cc.id
+      ${grid ? '' : `LEFT JOIN locations l ON c.location_id = l.id
+      LEFT JOIN compartments cp ON c.compartment_id = cp.id`}
+      ${COLLECTION_SEALED_JOINS}
+      ${filterSql}
+      ORDER BY c.added_at DESC, c.id DESC
+      ${paged ? 'LIMIT ? OFFSET ?' : ''}
+    `;
+    const rows = await db.all(query, paged ? [...filterParams, limit, offset] : filterParams);
+
+    if (paged) {
+      const counted = await db.get(
+        `SELECT COUNT(*) AS n FROM collection c JOIN card_cache cc ON c.card_id = cc.id ${filterSql}`,
+        filterParams
+      );
+      // Header, not the body: a page is still the bare array every caller reads.
+      res.set('X-Total-Count', String(counted.n));
+      res.set('Access-Control-Expose-Headers', 'X-Total-Count');
+    }
+
+    const alloc = await checkedOutAllocation(req.user.id);
+    res.json(formatCollectionRows(rows, alloc, grid));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to fetch collection' });
+  }
+});
+
+// 2a. One entry with every column: what the card popup shows when the grid it
+// was opened from loaded only the grid's columns. A plain :id rather than
+// Express's :id(\\d+), because the on-device router (embedded/router.js) has no
+// inline patterns: anything not a number is passed on to whichever route owns
+// that /collection/<word>.
+router.get('/collection/:id', async (req, res, next) => {
+  if (!/^\d+$/.test(req.params.id)) return next();
+  try {
+    const row = await db.get(`
+      SELECT ${COLLECTION_FULL_COLUMNS}
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       LEFT JOIN locations l ON c.location_id = l.id
       LEFT JOIN compartments cp ON c.compartment_id = cp.id
-      -- Owner-scoped: every write checks that a link names the user's own unit,
-      -- but the read does not rely on that. A row pointing at another user's
-      -- unit gets no sealed details at all, not that user's.
-      LEFT JOIN sealed_units su ON su.id = c.sealed_unit_id
-        AND EXISTS (SELECT 1 FROM sealed_purchases owner
-                     WHERE owner.id = su.purchase_id AND owner.user_id = c.user_id)
-      LEFT JOIN sealed_purchases sp ON sp.id = su.purchase_id AND sp.user_id = c.user_id
-      ${filterSql}
-      ORDER BY c.added_at DESC
-    `;
-    const rows = await db.all(query, filterParams);
-
+      ${COLLECTION_SEALED_JOINS}
+      WHERE c.id = ? AND c.user_id = ?
+    `, [req.params.id, req.user.id]);
+    if (!row) return res.status(404).json({ error: 'Collection entry not found' });
     const alloc = await checkedOutAllocation(req.user.id);
-
-    const formatted = rows.map(row => ({
-      ...parseCardRow(row),
-      price_trend: resolveCardPrice(row),
-      checked_out_qty: alloc.get(row.entry_id) || 0,
-      compartment_display_label: row.compartment_id
-        ? compartmentLabel({ idx: row.compartment_idx, label: row.compartment_label }, row.location_type)
-        : null,
-      sub_location: row.compartment_id
-        ? `${row.location_type === 'Binder' ? 'Page' : 'Row'} ${row.compartment_idx}`
-        : ''
-    }));
-
-    res.json(formatted);
+    res.json(formatCollectionRows([row], alloc, false)[0]);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Failed to fetch collection' });
+    res.status(500).json({ error: 'Failed to fetch collection entry' });
   }
 });
 

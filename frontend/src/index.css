@@ -1533,6 +1533,19 @@ button, input, select, textarea {
   justify-content: space-between;
 }
 
+/* The collection grid mounts only the rows in view, which needs every tile the
+   same height: the set line truncates like the name does instead of wrapping. */
+.tcg-card-meta-single {
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+.tcg-card-meta-single > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tcg-card-meta-single > .tcg-card-price { flex-shrink: 0; }
+
 .tcg-card-price {
   font-weight: 600;
   color: var(--accent-yellow);
@@ -3068,7 +3081,6 @@ button, input, select, textarea {
   position: relative;
   transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
   transform-style: preserve-3d;
-  will-change: transform;
 }
 
 .tilt-card-wrapper:hover {

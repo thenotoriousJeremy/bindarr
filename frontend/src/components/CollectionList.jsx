@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { memo, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Search, Trash2, Edit2, LayoutGrid, List, SlidersHorizontal, X, MousePointerClick, Library } from 'lucide-react';
 import { getCardDisplayName, translateJapaneseName, hasJapaneseText } from '../utils/langHelper';
 import { useNameDictionaries } from '../utils/useNameDictionaries';
@@ -17,6 +17,11 @@ import { undoToast } from '../utils/undo';
 import { stackCollectionRows } from '../utils/stackTiles';
 import { defaultGameFilter, gameOptions, isGameEnabled, showGamePicker } from '../utils/games';
 import { useT } from '../utils/i18n';
+import { useApi } from '../utils/useApi';
+import { LatestRequest, fetchJson, isAbortError } from '../utils/request';
+import { loadCollectionPages } from '../utils/collectionPages';
+import { useStableCallback } from '../utils/useStableCallback';
+import VirtualGrid from './VirtualGrid';
 import CardInspectorModal from './CardInspectorModal';
 import TrashModal from './TrashModal';
 import AddToDeckSelect from './AddToDeckSelect';
@@ -62,12 +67,183 @@ function Field({ label, children }) {
   );
 }
 
+// One gallery tile. Memoized, and every prop is either the row itself, a
+// boolean, or a stable callback, so a render of the list around it (a toast, a
+// keystroke in a filter that leaves this row in place, a scroll mounting new
+// rows) skips it entirely.
+const CollectionTile = memo(function CollectionTile({ item, selected, selectMode, onActivate, pressHandlers, t }) {
+  const foilClass = getFoilOverlayClass(item.printing);
+  return (
+    <div
+      className="tcg-card tilt-card-wrapper"
+      style={{ cursor: 'pointer', touchAction: 'pan-y' }}
+      onClick={(e) => onActivate(item, e)}
+      {...pressHandlers(item.entry_id)}
+    >
+      <div className="tcg-card-inner" style={{ ...getCardRarityBorder(item.rarity), ...(selected ? { outline: '3px solid var(--accent-red)', outlineOffset: '2px' } : {}) }}>
+        {selectMode && (
+          <div style={{ position: 'absolute', top: '6px', right: '6px', zIndex: 20, width: '22px', height: '22px', borderRadius: '50%', background: selected ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-strong)', fontSize: '0.8rem', fontWeight: 900 }}>{selected ? '✓' : ''}</div>
+        )}
+        <CardImage card={item} className="tcg-card-image" loading="lazy" draggable={false} />
+        {foilClass && (
+          <div className={foilClass} style={{ borderRadius: 'var(--radius-sm)' }} />
+        )}
+        {item.quantity > 1 && (
+          <div className="tcg-card-quantity-tag">x{item.quantity}</div>
+        )}
+
+        {/* Rarity badge (shared tier system, matches Storage view) */}
+        <span style={{
+          position: 'absolute',
+          top: '6px',
+          left: '6px',
+          fontSize: '0.55rem',
+          fontWeight: 900,
+          padding: '2px 4px',
+          borderRadius: '3px',
+          zIndex: 10,
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+          ...getRarityBadgeStyle(item.rarity)
+        }}>
+          {getRarityBadgeLabel(item.rarity)}
+        </span>
+
+        {/* Overlay Tags */}
+        <div style={{
+          position: 'absolute',
+          bottom: '6px',
+          left: '6px',
+          right: '6px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: '4px',
+          pointerEvents: 'none'
+        }}>
+          {/* One badge in this slot, not two: a slab's grade replaces the
+              condition rather than sitting beside it, because they answer
+              the same question and the grader's answer is the one that
+              counts. Coloured, because 'PSA 10' in the same grey as 'NM'
+              would bury the distinction that matters most in a grid. */}
+          {item.grader && item.grader !== 'Raw' ? (
+            <span style={{
+              fontSize: '0.6rem',
+              fontWeight: 800,
+              padding: '2px 5px',
+              borderRadius: '3px',
+              background: 'rgba(250, 204, 21, 0.9)',
+              color: '#1a1a1a',
+              border: '1px solid rgba(255, 255, 255, 0.25)',
+              textTransform: 'uppercase'
+            }}>
+              {item.grader}{item.grade != null ? ` ${item.grade}` : ''}
+            </span>
+          ) : (
+            <span style={{
+              fontSize: '0.6rem',
+              fontWeight: 800,
+              padding: '2px 5px',
+              borderRadius: '3px',
+              background: 'rgba(0, 0, 0, 0.75)',
+              color: 'var(--text-strong)',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              textTransform: 'uppercase'
+            }}>
+              {conditionShort(t, item.condition)}
+            </span>
+          )}
+          {item.printing !== 'Normal' && (
+            <span style={{
+              fontSize: '0.6rem',
+              fontWeight: 800,
+              padding: '2px 5px',
+              borderRadius: '3px',
+              ...getPrintingBadgeStyle(item.printing),
+              border: '1px solid rgba(255, 255, 255, 0.2)'
+            }}>
+              {getPrintingBadgeLabel(item.printing, t)}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="tcg-card-info">
+        <div className="tcg-card-name">{getCardDisplayName(item.name, item.language, item.printed_name)}</div>
+        {/* One line, like the name above it: every tile is then the same
+            height, which is what lets the grid mount only the rows in view. */}
+        <div className="tcg-card-meta tcg-card-meta-single">
+          <span style={{ fontSize: '0.7rem' }}>{item.set_name} • #{item.number}</span>
+          <span className="tcg-card-price"><Price value={item.price_trend} currency={item.price_currency} /></span>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+// One list-view row; memoized on the same terms as the tile.
+const CollectionRow = memo(function CollectionRow({ item, selected, selectMode, onActivate, onToggle, onEdit, onDelete, pressHandlers, t }) {
+  const foilClass = getFoilOverlayClass(item.printing);
+  const name = getCardDisplayName(item.name, item.language, item.printed_name);
+  return (
+    <tr style={selected ? { background: 'rgba(255,71,71,0.12)' } : undefined}>
+      <td>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          {selectMode && (
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={() => onToggle(item.entry_id)}
+              style={{ width: '18px', height: '18px', flexShrink: 0, cursor: 'pointer' }}
+            />
+          )}
+          <div
+            onClick={(e) => onActivate(item, e)}
+            {...pressHandlers(item.entry_id)}
+            style={{ position: 'relative', width: '36px', height: '50px', flexShrink: 0, overflow: 'hidden', borderRadius: '4px', cursor: 'pointer', touchAction: 'pan-y', ...getCardRarityBorder(item.rarity) }}
+          >
+            <CardImage card={item} className="collection-row-thumbnail" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px' }} draggable={false} />
+            {foilClass && (
+              <div className={foilClass} style={{ borderRadius: '4px' }} />
+            )}
+          </div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div onClick={(e) => onActivate(item, e)} {...pressHandlers(item.entry_id)} style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{name}</div>
+            <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+              <span>{item.set_name} • #{item.number}</span>
+              <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 3px', borderRadius: '3px', flexShrink: 0, ...getRarityBadgeStyle(item.rarity) }}>
+                {getRarityBadgeLabel(item.rarity)}
+              </span>
+            </div>
+            <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {printingLabel(t, item.printing, item.game)} • {conditionLabel(t, item.condition)}
+            </div>
+            {!selectMode && (
+              <div style={{ display: 'flex', gap: '0.35rem', marginTop: '2px' }}>
+                <button className="btn btn-secondary btn-icon-only" style={{ width: '18px', height: '18px', padding: 0, borderRadius: '3px' }} onClick={() => onEdit(item)} title={t('common.edit')}>
+                  <Edit2 size={9} />
+                </button>
+                <button className="btn btn-danger btn-icon-only" style={{ width: '18px', height: '18px', padding: 0, borderRadius: '3px' }} onClick={() => onDelete(item)} title={t('common.delete')}>
+                  <Trash2 size={9} />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </td>
+      <td style={{ textAlign: 'right', verticalAlign: 'top', paddingTop: '0.6rem' }}>
+        {item.quantity > 1 && (
+          <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.85rem' }}>x{item.quantity}</div>
+        )}
+        <div style={{ fontSize: '0.7rem', color: 'var(--accent-yellow)', fontWeight: 600 }}><Price value={item.price_trend} currency={item.price_currency} /></div>
+      </td>
+    </tr>
+  );
+});
+
 function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter, setSelectedCardFilter, onNavigate, setSelectedLocationId, setFocusEntryId }) {
   const { t } = useT();
-  const [collection, setCollection] = useState([]);
   const [locations, setLocations] = useState([]);
   const [setsList, setSetsList] = useState([]);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (selectedCardFilter) {
@@ -118,7 +294,14 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const {
     selectMode, setSelectMode, selectedIds, setSelectedIds, toggleSelect, selectAt, clearSelection, exitSelectMode,
     bulkMoveTarget, setBulkMoveTarget, pressHandlers, longPressFired, runBulk,
-  } = useMultiSelect({ showToast, onChanged: () => { onUpdate(); fetchCollection(); } });
+  } = useMultiSelect({
+    showToast,
+    onChanged: ({ ids, action }) => {
+      // Gone from the grid at once; the refetch onUpdate triggers confirms it.
+      if (action === 'delete') { const gone = new Set(ids); mutate(rows => (rows || []).filter(r => !gone.has(r.entry_id))); }
+      onUpdate();
+    },
+  });
 
   // Opened, not-yet-linked sealed units, for the "link to sealed purchase" bulk
   // action — only worth fetching once selection mode is actually in use.
@@ -131,36 +314,32 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       .catch(() => {});
   }, [selectMode]);
 
+  // The grid's rows: the slim column set, a first page to paint the first
+  // screen, then the rest in a few large pages committed together. A refetch
+  // (any change elsewhere bumps statsTrigger) keeps the grid as it is until the
+  // new rows are in, rather than blanking it to a spinner; and a newer request
+  // (switching to Wishlist mid-load) always wins over an older one.
+  const collectionUrl = `/api/collection?list_type=${subTab === 'wishlist' ? 'wishlist' : 'collection'}&fields=grid${tradeOnly ? '&is_trade=1' : ''}`;
+  const { data: collectionData, loading: firstLoad, refreshing, error: loadError, refetch: fetchCollection, mutate, optimistic } = useApi(
+    collectionUrl,
+    ({ signal, hasData, push }) => loadCollectionPages(collectionUrl, { signal, push: hasData ? null : push }),
+    { deps: [statsTrigger] }
+  );
+  const collection = useMemo(() => collectionData || [], [collectionData]);
+  const loading = firstLoad && !collectionData;
+
   useEffect(() => {
-    fetchCollection();
+    if (loadError) {
+      console.error(loadError);
+      showToast(t('collection.errLoad'));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- toast once per failure
+  }, [loadError]);
+
+  useEffect(() => {
     fetchLocations();
     fetchSets();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statsTrigger, subTab, tradeOnly]);
-
-  const fetchCollection = async () => {
-    try {
-      setLoading(true);
-      let url = '/api/collection?list_type=collection';
-      if (subTab === 'wishlist') {
-        url = '/api/collection?list_type=wishlist';
-      }
-      if (tradeOnly) {
-        url += '&is_trade=1';
-      }
-
-      const response = await fetch(url);
-      if (response.ok) {
-        const data = await response.json();
-        setCollection(data);
-      }
-    } catch (err) {
-      console.error(err);
-      showToast(t('collection.errLoad'));
-    } finally {
-      setLoading(false);
-    }
-  };
+  }, [statsTrigger]);
 
   const fetchLocations = async () => {
     try {
@@ -188,39 +367,65 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       return;
     }
 
+    // Off the grid immediately; put back if the server refuses. The toast's
+    // Undo restores it from the trash and refetches.
+    let refused = false;
     try {
-      const response = await fetch(`/api/collection/${entryId}`, {
-        method: 'DELETE'
-      });
-
-      if (response.ok) {
-        const data = await response.json().catch(() => ({}));
-        showToast(t('collection.cardRemoved', { name: cardName }), undoToast(
-          data.trash_batch && { kind: 'trash', batch: data.trash_batch },
-          { showToast, t, onDone: () => { onUpdate(); fetchCollection(); } }
-        ));
-        onUpdate();
-      } else {
-        showToast(t('collection.errDelete'));
-      }
+      let data = {};
+      await optimistic(
+        rows => (rows || []).filter(r => r.entry_id !== entryId),
+        async () => {
+          const response = await fetch(`/api/collection/${entryId}`, { method: 'DELETE' });
+          if (!response.ok) { refused = true; throw new Error(`HTTP ${response.status}`); }
+          data = await response.json().catch(() => ({}));
+        }
+      );
+      showToast(t('collection.cardRemoved', { name: cardName }), undoToast(
+        data.trash_batch && { kind: 'trash', batch: data.trash_batch },
+        { showToast, t, onDone: () => { onUpdate(); fetchCollection(); } }
+      ));
+      onUpdate();
     } catch (err) {
       console.error(err);
-      showToast(t('common.errBackend'));
+      showToast(t(refused ? 'collection.errDelete' : 'common.errBackend'));
     }
   };
 
-  const openEdit = (item) => {
-    setInspectorCard(item);
-    setInspectorStartEdit(true);
+  // The grid holds slim rows; the popup edits every field (notes, cert,
+  // purchase price), so it opens on the full row, fetched by id. Opened on the
+  // slim row, its edit form would start blank for those fields and save the
+  // blanks back. A stacked tile keeps its own quantity and member ids, which
+  // are the stack's, not the one row's.
+  const inspectorReq = useRef(null);
+  if (!inspectorReq.current) inspectorReq.current = new LatestRequest();
+  useEffect(() => () => inspectorReq.current.cancel(), []);
+  const openInspector = async (item, edit) => {
+    const req = inspectorReq.current.begin();
+    try {
+      const { data: full } = await fetchJson(`/api/collection/${item.entry_id}`, { signal: req.signal });
+      if (!req.isLatest()) return;
+      setInspectorCard({ ...item, ...full, quantity: item.quantity, ...(item.member_ids ? { member_ids: item.member_ids } : {}) });
+      setInspectorStartEdit(edit);
+    } catch (err) {
+      if (isAbortError(err) || !req.isLatest()) return;
+      console.error(err);
+      showToast(t('collection.errOpenCard'));
+    }
   };
+
+  // Stable identities for the memoized tiles below: a toast, a filter panel
+  // opening or a selection change elsewhere must not re-render every tile.
+  const openEdit = useStableCallback((item) => openInspector(item, true));
+  const onToggle = useStableCallback(toggleSelect);
+  const confirmDelete = useStableCallback((item) => handleDelete(item.entry_id, getCardDisplayName(item.name, item.language, item.printed_name)));
 
   // Tap: swallowed if a long-press just armed selection; otherwise toggle (in
   // select mode) or open the inspector.
-  const activateCard = (item, event) => {
+  const activateCard = useStableCallback((item, event) => {
     if (longPressFired.current) { longPressFired.current = false; return; }
     if (selectMode) selectAt(item.entry_id, displayCards.map(i => i.entry_id), event?.shiftKey);
-    else { setInspectorCard(item); setInspectorStartEdit(false); }
-  };
+    else openInspector(item, false);
+  });
 
   const handleViewStorage = (card) => {
     setInspectorCard(null);
@@ -388,6 +593,34 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     ),
     [displayCards, displayCurrency, fx]
   );
+
+  // Stable across renders unless the selection or select mode changes, and the
+  // memoized tiles then re-render only where `selected` actually flipped.
+  const renderTile = useCallback((item) => (
+    <CollectionTile
+      key={item.entry_id}
+      item={item}
+      selected={selectedIds.has(item.entry_id)}
+      selectMode={selectMode}
+      onActivate={activateCard}
+      pressHandlers={pressHandlers}
+      t={t}
+    />
+  ), [selectedIds, selectMode, activateCard, pressHandlers, t]);
+  const renderRow = useCallback((item) => (
+    <CollectionRow
+      key={item.entry_id}
+      item={item}
+      selected={selectedIds.has(item.entry_id)}
+      selectMode={selectMode}
+      onActivate={activateCard}
+      onToggle={onToggle}
+      onEdit={openEdit}
+      onDelete={confirmDelete}
+      pressHandlers={pressHandlers}
+      t={t}
+    />
+  ), [selectedIds, selectMode, activateCard, onToggle, openEdit, confirmDelete, pressHandlers, t]);
 
   return (
     <div>
@@ -724,7 +957,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       {/* Result summary bar */}
       {!loading && !selectMode && (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', fontSize: '0.78rem', color: 'var(--text-secondary)', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <span><strong style={{ color: 'var(--text-strong)' }}>{displayCards.length}</strong> {t('collection.cardUnit', { count: displayCards.length })}</span>
+          <span><strong style={{ color: 'var(--text-strong)' }}>{displayCards.length}</strong> {t('collection.cardUnit', { count: displayCards.length })}{refreshing ? ` · ${t('collection.loadingMore')}` : ''}</span>
           <span>{t('collection.totalValue')} <strong
             style={{ color: 'var(--accent-yellow)' }}
             title={totalValue.converted
@@ -736,7 +969,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
               : totalValue.subtotals.map(x => priceText(x.amount, x.currency)).join(' + ')}
           </strong></span>
           {/* Every copy behind the rows on screen, after search and filters. */}
-          <ExportShownButton entryIds={() => filteredCollection.map(i => i.entry_id)} showToast={showToast} />
+          <ExportShownButton entryIds={() => filteredCollection.map(i => i.entry_id)} showToast={showToast} disabled={refreshing} />
         </div>
       )}
 
@@ -811,118 +1044,8 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
           <p>{t('collection.noMatches')} {t(activeFilterCount > 0 ? 'collection.noMatchesFiltered' : 'collection.noMatchesEmpty')}</p>
         </div>
       ) : viewMode === 'gallery' ? (
-        /* Visual Cards Grid Gallery View */
-        <div className="card-grid">
-          {displayCards.map((item) => {
-            const rarityStyle = getCardRarityBorder(item.rarity);
-            const selected = selectedIds.has(item.entry_id);
-
-            return (
-              <div
-                key={item.entry_id}
-                className="tcg-card tilt-card-wrapper"
-                style={{ cursor: 'pointer', touchAction: 'pan-y' }}
-                onClick={(e) => activateCard(item, e)}
-                {...pressHandlers(item.entry_id)}
-              >
-                <div className="tcg-card-inner" style={{ ...rarityStyle, ...(selected ? { outline: '3px solid var(--accent-red)', outlineOffset: '2px' } : {}) }}>
-                  {selectMode && (
-                    <div style={{ position: 'absolute', top: '6px', right: '6px', zIndex: 20, width: '22px', height: '22px', borderRadius: '50%', background: selected ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-strong)', fontSize: '0.8rem', fontWeight: 900 }}>{selected ? '✓' : ''}</div>
-                  )}
-                  <CardImage card={item} className="tcg-card-image" loading="lazy" draggable={false} />
-                  {getFoilOverlayClass(item.printing) && (
-                    <div className={getFoilOverlayClass(item.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
-                  )}
-                  {item.quantity > 1 && (
-                    <div className="tcg-card-quantity-tag">x{item.quantity}</div>
-                  )}
-
-                  {/* Rarity badge (shared tier system, matches Storage view) */}
-                  <span style={{
-                    position: 'absolute',
-                    top: '6px',
-                    left: '6px',
-                    fontSize: '0.55rem',
-                    fontWeight: 900,
-                    padding: '2px 4px',
-                    borderRadius: '3px',
-                    zIndex: 10,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                    ...getRarityBadgeStyle(item.rarity)
-                  }}>
-                    {getRarityBadgeLabel(item.rarity)}
-                  </span>
-
-                  {/* Overlay Tags */}
-                  <div style={{
-                    position: 'absolute',
-                    bottom: '6px',
-                    left: '6px',
-                    right: '6px',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    gap: '4px',
-                    pointerEvents: 'none'
-                  }}>
-                    {/* One badge in this slot, not two: a slab's grade replaces the
-                        condition rather than sitting beside it, because they answer
-                        the same question and the grader's answer is the one that
-                        counts. Coloured, because 'PSA 10' in the same grey as 'NM'
-                        would bury the distinction that matters most in a grid. */}
-                    {item.grader && item.grader !== 'Raw' ? (
-                      <span style={{
-                        fontSize: '0.6rem',
-                        fontWeight: 800,
-                        padding: '2px 5px',
-                        borderRadius: '3px',
-                        background: 'rgba(250, 204, 21, 0.9)',
-                        color: '#1a1a1a',
-                        border: '1px solid rgba(255, 255, 255, 0.25)',
-                        textTransform: 'uppercase'
-                      }}>
-                        {item.grader}{item.grade != null ? ` ${item.grade}` : ''}
-                      </span>
-                    ) : (
-                      <span style={{
-                        fontSize: '0.6rem',
-                        fontWeight: 800,
-                        padding: '2px 5px',
-                        borderRadius: '3px',
-                        background: 'rgba(0, 0, 0, 0.75)',
-                        color: 'var(--text-strong)',
-                        border: '1px solid rgba(255, 255, 255, 0.1)',
-                        textTransform: 'uppercase'
-                      }}>
-                        {conditionShort(t, item.condition)}
-                      </span>
-                    )}
-                    {item.printing !== 'Normal' && (
-                      <span style={{
-                        fontSize: '0.6rem',
-                        fontWeight: 800,
-                        padding: '2px 5px',
-                        borderRadius: '3px',
-                        ...getPrintingBadgeStyle(item.printing),
-                        border: '1px solid rgba(255, 255, 255, 0.2)'
-                      }}>
-                        {getPrintingBadgeLabel(item.printing, t)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="tcg-card-info">
-                  <div className="tcg-card-name">{getCardDisplayName(item.name, item.language, item.printed_name)}</div>
-                  <div className="tcg-card-meta">
-                    <span style={{ fontSize: '0.7rem' }}>{item.set_name} • #{item.number}</span>
-                    <span className="tcg-card-price"><Price value={item.price_trend} currency={item.price_currency} /></span>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        /* Visual Cards Grid Gallery View: only the rows near the viewport are mounted. */
+        <VirtualGrid items={displayCards} renderItem={renderTile} className="card-grid" />
       ) : (
         /* Traditional List Table View */
         <div className="glass-panel" style={{ padding: 0, overflow: 'hidden' }}>
@@ -934,65 +1057,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                   <th style={{ width: '70px', textAlign: 'right' }}>{t('collection.colQtyValue')}</th>
                 </tr>
               </thead>
-              <tbody>
-                {displayCards.map((item) => {
-                  const selected = selectedIds.has(item.entry_id);
-                  return (
-                  <tr key={item.entry_id} style={selected ? { background: 'rgba(255,71,71,0.12)' } : undefined}>
-                    <td>
-                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                        {selectMode && (
-                          <input
-                            type="checkbox"
-                            checked={selected}
-                            onChange={() => toggleSelect(item.entry_id)}
-                            style={{ width: '18px', height: '18px', flexShrink: 0, cursor: 'pointer' }}
-                          />
-                        )}
-                        <div
-                          onClick={(e) => activateCard(item, e)}
-                          {...pressHandlers(item.entry_id)}
-                          style={{ position: 'relative', width: '36px', height: '50px', flexShrink: 0, overflow: 'hidden', borderRadius: '4px', cursor: 'pointer', touchAction: 'pan-y', ...getCardRarityBorder(item.rarity) }}
-                        >
-                          <CardImage card={item} className="collection-row-thumbnail" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px' }} draggable={false} />
-                          {getFoilOverlayClass(item.printing) && (
-                            <div className={getFoilOverlayClass(item.printing)} style={{ borderRadius: '4px' }} />
-                          )}
-                        </div>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div onClick={(e) => activateCard(item, e)} {...pressHandlers(item.entry_id)} style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{getCardDisplayName(item.name, item.language, item.printed_name)}</div>
-                          <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                            <span>{item.set_name} • #{item.number}</span>
-                            <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 3px', borderRadius: '3px', flexShrink: 0, ...getRarityBadgeStyle(item.rarity) }}>
-                              {getRarityBadgeLabel(item.rarity)}
-                            </span>
-                          </div>
-                          <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
-                            {printingLabel(t, item.printing, item.game)} • {conditionLabel(t, item.condition)}
-                          </div>
-                          {!selectMode && (
-                            <div style={{ display: 'flex', gap: '0.35rem', marginTop: '2px' }}>
-                              <button className="btn btn-secondary btn-icon-only" style={{ width: '18px', height: '18px', padding: 0, borderRadius: '3px' }} onClick={() => openEdit(item)} title={t('common.edit')}>
-                                <Edit2 size={9} />
-                              </button>
-                              <button className="btn btn-danger btn-icon-only" style={{ width: '18px', height: '18px', padding: 0, borderRadius: '3px' }} onClick={() => handleDelete(item.entry_id, getCardDisplayName(item.name, item.language, item.printed_name))} title={t('common.delete')}>
-                                <Trash2 size={9} />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                    <td style={{ textAlign: 'right', verticalAlign: 'top', paddingTop: '0.6rem' }}>
-                      {item.quantity > 1 && (
-                        <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.85rem' }}>x{item.quantity}</div>
-                      )}
-                      <div style={{ fontSize: '0.7rem', color: 'var(--accent-yellow)', fontWeight: 600 }}><Price value={item.price_trend} currency={item.price_currency} /></div>
-                    </td>
-                  </tr>
-                  );
-                })}
-              </tbody>
+              <VirtualGrid items={displayCards} renderItem={renderRow} as="tbody" spacer="rows" spacerColSpan={2} />
             </table>
           </div>
         </div>
@@ -1019,4 +1084,5 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   );
 }
 
-export default CollectionList;
+// Memoized: App re-renders on every toast, and its props here are stable.
+export default memo(CollectionList);

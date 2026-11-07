@@ -1,4 +1,4 @@
-import { Suspense, useState, useEffect } from 'react';
+import { memo, Suspense, useState } from 'react';
 import { TrendingUp, Coins, Library, Trophy, Plus, ArrowUpRight } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { priceText, currencySymbol } from '../utils/formatPrice';
@@ -15,6 +15,7 @@ const charts = () => import('./charts/DashboardCharts');
 const ValueTimeline = lazyNamed(charts, 'ValueTimeline');
 const SetValueBars = lazyNamed(charts, 'SetValueBars');
 const DistributionDonut = lazyNamed(charts, 'DistributionDonut');
+import { useApi } from '../utils/useApi';
 import CardInspectorModal from './CardInspectorModal';
 import CardImage from './CardImage';
 import { PokemonMigrationNotice } from './PokemonMigrationBanner';
@@ -57,67 +58,35 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
   // Money and dates follow the interface language, not the browser's: a user who
   // picked German sees 1.234,56 and 3.8.2026 even on an en-US browser.
   const money = (n) => (n || 0).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const [stats, setStats] = useState(null);
   // The server converts the totals into this (review item 9), so it is part of
   // every stats request and a change in Settings refetches them.
   const { currency: displayCurrency, show } = useFx();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [timePeriod, setTimePeriod] = useState('30d');
   // '' | 'pokemon' | 'mtg'. Collapses to the only visible game when the other is
   // hidden in Settings, so the totals never include cards the user cannot see.
   const [gameFilter, setGameFilter] = useState(() => defaultGameFilter());
   
-  // Timeline Chart State
-  const [historyData, setHistoryData] = useState([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Clickable Card Inspector State
   const [inspectorCard, setInspectorCard] = useState(null);
 
-  useEffect(() => {
-    fetchStats();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statsTrigger, gameFilter, displayCurrency]);
+  // Both refetch whenever anything changes the collection (statsTrigger), and
+  // neither blanks the page to do it: the figures already on screen stay until
+  // the new ones arrive. Switching game, period or currency mid-request cannot
+  // leave the older answer on screen, because only the latest request lands.
+  const statsQuery = useApi(`/api/stats?currency=${displayCurrency}${gameFilter ? `&game=${gameFilter}` : ''}`, null, { deps: [statsTrigger] });
+  const stats = statsQuery.data || null;
+  const loading = statsQuery.loading && !stats;
+  const error = !stats && statsQuery.error ? (statsQuery.error.status ? t('dash.errStats') : statsQuery.error.message) : null;
+  const fetchStats = statsQuery.refetch;
 
-  useEffect(() => {
-    if (stats && stats.summary.totalCards > 0) {
-      fetchTimelineHistory();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timePeriod, stats, gameFilter]);
-
-  const fetchStats = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`/api/stats?currency=${displayCurrency}${gameFilter ? `&game=${gameFilter}` : ''}`);
-      if (!response.ok) {
-        throw new Error(t('dash.errStats'));
-      }
-      const data = await response.json();
-      setStats(data);
-    } catch (err) {
-      console.error(err);
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchTimelineHistory = async () => {
-    try {
-      setLoadingHistory(true);
-      const response = await fetch(`/api/stats/history?period=${timePeriod}&currency=${displayCurrency}${gameFilter ? `&game=${gameFilter}` : ''}`);
-      if (response.ok) {
-        const data = await response.json();
-        setHistoryData(data);
-      }
-    } catch (err) {
-      console.error('Error loading history timeline:', err);
-    } finally {
-      setLoadingHistory(false);
-    }
-  };
+  const historyQuery = useApi(
+    `/api/stats/history?period=${timePeriod}&currency=${displayCurrency}${gameFilter ? `&game=${gameFilter}` : ''}`,
+    null,
+    { enabled: !!(stats && stats.summary.totalCards > 0), deps: [statsTrigger] }
+  );
+  const historyData = Array.isArray(historyQuery.data) ? historyQuery.data : [];
+  const loadingHistory = historyQuery.loading && !historyQuery.data;
 
   const renderGameTabs = () => {
     // One game shown: "All" and that game are the same list, so there is nothing
@@ -545,4 +514,4 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
   );
 }
 
-export default Dashboard;
+export default memo(Dashboard);

@@ -2128,5 +2128,7 @@
   "fx.noRatesTotal": "No exchange rates yet, so these are not added together.",
   "fx.gainNeedsRate": "Needs an exchange rate to compare with what you paid",
   "offline.banner": "Offline: showing the last data this device loaded. Read-only until the connection is back.",
-  "offline.writeBlocked": "You're offline, so this change wasn't saved. Try again once the connection is back."
+  "offline.writeBlocked": "You're offline, so this change wasn't saved. Try again once the connection is back.",
+  "collection.loadingMore": "loading the rest…",
+  "collection.errOpenCard": "Could not load this card."
 }
