@@ -193,8 +193,13 @@ router.post('/import', importLimiter, async (req, res) => {
     } else {
       let lines = [];
       if (typeof data === 'string') {
-        lines = data.split('\n').map(l => l.trim()).filter(Boolean);
+        lines = data.replace(/^\uFEFF/, '').split('\n').map(l => l.trim()).filter(Boolean);
       }
+      // Excel's delimiter hint ("sep=,"), which Dragon Shield writes above its
+      // header row. Read as the header, it left every column unnamed.
+      const sep = (lines[0] || '').match(/^"?sep=(.)"?$/i);
+      if (sep) lines.shift();
+      const delimiter = sep ? sep[1] : ',';
       if (lines.length <= 1) {
         return res.status(400).json({ error: 'CSV file is empty or missing headers' });
       }
@@ -207,7 +212,7 @@ router.post('/import', importLimiter, async (req, res) => {
           const char = line[i];
           if (char === '"') {
             inQuotes = !inQuotes;
-          } else if (char === ',' && !inQuotes) {
+          } else if (char === delimiter && !inQuotes) {
             result.push(current.trim());
             current = '';
           } else {
@@ -239,6 +244,15 @@ router.post('/import', importLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Invalid data payload' });
     }
     if (rawItems.length > MAX_IMPORT_ROWS) return tooManyRows(res, rawItems.length);
+    // A row stating zero copies (or a quantity nobody can read) names a card the
+    // file's owner does not have. `|| 1` below used to import one copy of it.
+    const stated = (item) => (item.quantity == null || item.quantity === '' ? 1 : parseInt(item.quantity, 10));
+    const noCopies = rawItems.filter(item => !(stated(item) >= 1)).length;
+    rawItems = rawItems.filter(item => stated(item) >= 1);
+    if (rawItems.length === 0 && noCopies) {
+      return res.status(400).json({ error: 'No rows to import: every row has a quantity of 0.' });
+    }
+
     // Before any row is looked up, so a file that asks for too many copies costs
     // no provider requests either.
     const totalCopies = rawItems.reduce((n, item) => n + clampImportQuantity(item && item.quantity).copies, 0);
@@ -273,7 +287,10 @@ router.post('/import', importLimiter, async (req, res) => {
       const id = item.card_id || item.id;
       const set = item.set_code || item.set_id;
       const number = String(item.collector_number || item.number || '').trim().replace(/^0+(?=\d)/, '');
-      if (item.game !== 'mtg' || !set || !number) continue;
+      // A Scryfall id (ManaBox, Archidekt) names the printing outright, so that
+      // row is asked for by id in the same batch, set and number or not.
+      const scryfallId = /^mtg-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id || '');
+      if (item.game !== 'mtg' || (!scryfallId && (!set || !number))) continue;
       if (id && await db.get(`SELECT id FROM card_cache WHERE id = ?`, [id])) continue;
       mtgRows.push({ ...item, set_id: set, number, key: importKey(item) });
     }
@@ -347,6 +364,9 @@ router.post('/import', importLimiter, async (req, res) => {
     });
 
     const unmatched = unmatchedCount ? ` ${unmatchedCount} unmatched ManaBox printings were skipped.` : '';
+    const empty = noCopies
+      ? ` ${noCopies} row${noCopies === 1 ? '' : 's'} with a quantity of 0 ${noCopies === 1 ? 'was' : 'were'} skipped.`
+      : '';
     const adjusted = clampedRows
       ? ` ${clampedRows} row${clampedRows === 1 ? '' : 's'} had a quantity outside 1–${MAX_QUANTITY} and ${clampedRows === 1 ? 'was' : 'were'} imported with the nearest number in range.`
       : '';
@@ -355,7 +375,7 @@ router.post('/import', importLimiter, async (req, res) => {
     const skipped = unresolved.length
       ? ` ${unresolved.length} row${unresolved.length === 1 ? '' : 's'} could not be matched to a card and ${unresolved.length === 1 ? 'was' : 'were'} skipped (${examples}${unresolved.length > 5 ? ', …' : ''}). Check their set and card number, then import them again.`
       : '';
-    return res.json({ success: true, count: importedCount, clamped: clampedRows, unresolved, message: `Successfully imported ${importedCount} items.${unmatched}${adjusted}${skipped}` });
+    return res.json({ success: true, count: importedCount, clamped: clampedRows, unresolved, message: `Successfully imported ${importedCount} items.${unmatched}${empty}${adjusted}${skipped}` });
   } catch (error) {
     return res.status(500).json({ error: 'Import failed', message: error.message });
   }
