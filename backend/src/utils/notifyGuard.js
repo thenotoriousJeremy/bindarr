@@ -27,27 +27,36 @@ const net = require('net');
 const allowPrivate = () => process.env.NOTIFY_ALLOW_PRIVATE === 'true';
 
 // Never reachable, flag or not: link-local, "this network", multicast, reserved.
-const ALWAYS_BLOCKED = new net.BlockList();
-ALWAYS_BLOCKED.addSubnet('0.0.0.0', 8, 'ipv4');
-ALWAYS_BLOCKED.addSubnet('169.254.0.0', 16, 'ipv4');
-ALWAYS_BLOCKED.addSubnet('224.0.0.0', 4, 'ipv4');
-ALWAYS_BLOCKED.addSubnet('240.0.0.0', 4, 'ipv4');
-ALWAYS_BLOCKED.addAddress('::', 'ipv6');
-ALWAYS_BLOCKED.addSubnet('fe80::', 10, 'ipv6');
-ALWAYS_BLOCKED.addSubnet('ff00::', 8, 'ipv6');
-
 // Reachable only with NOTIFY_ALLOW_PRIVATE=true: loopback, RFC 1918, carrier-grade
 // NAT, the IETF/benchmark blocks, and IPv6 unique-local.
-const PRIVATE = new net.BlockList();
-PRIVATE.addSubnet('10.0.0.0', 8, 'ipv4');
-PRIVATE.addSubnet('100.64.0.0', 10, 'ipv4');
-PRIVATE.addSubnet('127.0.0.0', 8, 'ipv4');
-PRIVATE.addSubnet('172.16.0.0', 12, 'ipv4');
-PRIVATE.addSubnet('192.0.0.0', 24, 'ipv4');
-PRIVATE.addSubnet('192.168.0.0', 16, 'ipv4');
-PRIVATE.addSubnet('198.18.0.0', 15, 'ipv4');
-PRIVATE.addAddress('::1', 'ipv6');
-PRIVATE.addSubnet('fc00::', 7, 'ipv6');
+//
+// Built on first use, not at load: the phone build bundles this module (the price
+// sweeps' failure paths require notify.js) with `net` stubbed out, and it must
+// still load there. Device mode never sends anything, so it never gets this far.
+let lists = null;
+function blockLists() {
+  if (lists) return lists;
+  const always = new net.BlockList();
+  always.addSubnet('0.0.0.0', 8, 'ipv4');
+  always.addSubnet('169.254.0.0', 16, 'ipv4');
+  always.addSubnet('224.0.0.0', 4, 'ipv4');
+  always.addSubnet('240.0.0.0', 4, 'ipv4');
+  always.addAddress('::', 'ipv6');
+  always.addSubnet('fe80::', 10, 'ipv6');
+  always.addSubnet('ff00::', 8, 'ipv6');
+  const priv = new net.BlockList();
+  priv.addSubnet('10.0.0.0', 8, 'ipv4');
+  priv.addSubnet('100.64.0.0', 10, 'ipv4');
+  priv.addSubnet('127.0.0.0', 8, 'ipv4');
+  priv.addSubnet('172.16.0.0', 12, 'ipv4');
+  priv.addSubnet('192.0.0.0', 24, 'ipv4');
+  priv.addSubnet('192.168.0.0', 16, 'ipv4');
+  priv.addSubnet('198.18.0.0', 15, 'ipv4');
+  priv.addAddress('::1', 'ipv6');
+  priv.addSubnet('fc00::', 7, 'ipv6');
+  lists = { always, priv };
+  return lists;
+}
 
 // ::ffff:10.0.0.1 is 10.0.0.1 to the kernel, so it is judged as one.
 function unmap(address) {
@@ -61,8 +70,9 @@ function addressProblem(address) {
   const family = net.isIP(ip);
   if (!family) return 'not an IP address';
   const type = family === 6 ? 'ipv6' : 'ipv4';
-  if (ALWAYS_BLOCKED.check(ip, type)) return 'that address range is never allowed';
-  if (PRIVATE.check(ip, type) && !allowPrivate()) {
+  const { always, priv } = blockLists();
+  if (always.check(ip, type)) return 'that address range is never allowed';
+  if (priv.check(ip, type) && !allowPrivate()) {
     return 'private and local network addresses are blocked (an admin can set NOTIFY_ALLOW_PRIVATE=true)';
   }
   return null;

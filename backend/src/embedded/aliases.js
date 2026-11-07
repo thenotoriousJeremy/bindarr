@@ -28,6 +28,9 @@ module.exports = {
   zlib: unavailable,
   http: unavailable,
   https: unavailable,
+  // notify.js's SSRF guard (utils/notifyGuard); device mode sends no notifications.
+  net: unavailable,
+  dns: unavailable,
   os: unavailable,
   assert: unavailable,
   selfsigned: unavailable,

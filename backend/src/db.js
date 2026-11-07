@@ -886,7 +886,7 @@ async function initDb() {
       sent_at DATETIME
     )
   `);
-  await run(`CREATE INDEX IF NOT EXISTS idx_notification_log_pending ON notification_log(status, next_attempt_at)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_notification_log_queue ON notification_log(status, next_attempt_at)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_notification_log_dedupe ON notification_log(user_id, dedupe_key, created_at)`);
 
   // Binder artwork: a picture one user uploaded, not a card. It never joins
