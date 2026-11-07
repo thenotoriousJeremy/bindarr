@@ -361,6 +361,18 @@ Outbound requests are serialized and spaced by at least 100 ms. If TCGCSV return
 
 To route all Bindarr TCGCSV traffic through a reverse-proxy/read-through cache, set the server-side `TCGCSV_BASE_URL` environment variable to its base URL (for example, `http://tcgcsv-cache:8080`). The cache must serve `last-updated.txt` and the `/tcgplayer/...` endpoints. This setting covers sync, catalog, and price-refresh requests; it defaults to `https://tcgcsv.com`. Configure it in the server's environment or Docker Compose, not in the browser app.
 
+### TCGCSV mirror (not live yet)
+
+Pokémon TCGplayer prices come from [TCGCSV](https://tcgcsv.com), a free service run by one person. Every install syncing from it separately adds up, so the project is preparing a single shared copy instead: one scheduled job syncs TCGCSV's Pokémon data (categories 3 and 85) once a day, politely, and publishes it with TCGCSV's own path layout to the `tcgcsv-mirror` branch of this repository.
+
+**It is not switched on yet** — it waits on the TCGCSV maintainer's approval. Once it is live, an install can read from it instead of tcgcsv.com:
+
+```sh
+TCGCSV_BASE_URL=https://raw.githubusercontent.com/thenotoriousJeremy/bindarr/tcgcsv-mirror
+```
+
+Set it in the server's environment or Docker Compose, not in the browser app. Until this section says the mirror is live, leave the variable unset. The sync script and workflow are `scripts/tcgcsv-mirror/sync.mjs` and `.github/workflows/tcgcsv-mirror.yml`.
+
 ## API access
 
 For reading your collection from somewhere else — a finance tracker, a dashboard widget, a script — generate a key under **Settings → API Keys** and send it as a Bearer token:

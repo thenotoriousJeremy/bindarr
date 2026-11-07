@@ -58,7 +58,9 @@ router.post('/:cardId', async (req, res) => {
     res.json({ success: true, url: `/api/card-art/${cardId}.png`, ...saved });
   } catch (error) {
     console.error('Card art upload failed:', error.message);
-    res.status(400).json({ error: 'Could not read that image', message: error.message });
+    // The sharp/decoder detail stays in the log: it names internals, not anything
+    // the uploader can act on.
+    res.status(400).json({ error: 'Could not read that image' });
   }
 });
 

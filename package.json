@@ -9,6 +9,7 @@
     "dev:frontend": "npm run dev --prefix frontend",
     "build:frontend": "npm run build --prefix frontend",
     "test": "npm test --prefix backend && npm test --prefix frontend",
+    "test:mirror": "node --test scripts/tcgcsv-mirror/sync.test.mjs",
     "start": "npm start --prefix backend"
   },
   "devDependencies": {
