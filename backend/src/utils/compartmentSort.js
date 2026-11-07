@@ -792,7 +792,14 @@ async function recommendSlot(database, location, cardMetadata, overrideCompartme
   return null;
 }
 
-async function rebalanceCompartmentByScheme(database, compartmentId, sortOrder, foilSorting) {
+// The new order is computed from one read and written back in chunks, so it is
+// one transaction: a write landing in between would be overwritten from stale
+// positions, and a chunk failing part way would leave two cards on one slot.
+function rebalanceCompartmentByScheme(database, compartmentId, sortOrder, foilSorting) {
+  return db.withTransaction(() => rebalanceCompartment(database, compartmentId, sortOrder, foilSorting));
+}
+
+async function rebalanceCompartment(database, compartmentId, sortOrder, foilSorting) {
   const dbClient = database || db;
   const cards = await dbClient.all(
     `SELECT c.*, cc.name, cc.printed_name, cc.set_id, cc.set_id as set_code, cc.set_name, cc.number, cc.types, cc.subtypes, cc.supertype, cc.game, cc.rarity, cc.price_trend
