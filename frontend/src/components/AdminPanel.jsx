@@ -3,6 +3,7 @@ import { Shield, UserPlus, Key, Trash2, ToggleLeft, ToggleRight, Search, Users, 
 import { useBackGuard } from '../utils/useBackGuard';
 import CatalogPanel from './CatalogPanel';
 import SetupWizard from './SetupWizard';
+import PokemonMigrationBanner from './PokemonMigrationBanner';
 import { currencySymbol } from '../utils/formatPrice';
 import { useT } from '../utils/i18n';
 
@@ -388,6 +389,9 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
           </div>
         </div>
       </div>
+
+      {/* pokemontcg.io card-id migration; hides itself when there is nothing to do. */}
+      <PokemonMigrationBanner showToast={showToast} onProviderChanged={fetchSettings} />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '1.5rem' }} className="admin-grid-layout">
         {/* Registration Panel */}

@@ -238,6 +238,39 @@ still use TCGdex, and upgrades keep the provider already configured.
 | pokemontcg.io (deprecated) | English; other languages use TCGdex | Optional `POKEMON_TCG_API_KEY`. Registrations are closed and keys stop working on 1 March 2027; an install still on it gets a warning in the server log at every boot |
 | pokemontcgapi.com (optional) | English, Japanese and Simplified Chinese; other languages use TCGdex | Required `POKEMONTCGAPI_KEY` |
 
+### Before 1 March 2027: migrate pokemontcg.io card ids
+
+pokemontcg.io stops serving on **1 March 2027**. Every card your install
+collected while it was the provider is keyed by a pokemontcg.io id (`sv1-1`),
+and switching provider does not change those: after a switch the same set shows
+up twice (`sv1-*` and `tcgdex-en-sv01-*`), and after the shutdown the old half
+can no longer be refreshed or priced.
+
+**Admin** shows a migration panel while any such ids remain (admins also get a
+one-line notice on the Dashboard):
+
+1. **Preview migration** matches every pokemontcg.io id your data references
+   against TCGdex (or pokemontcgapi.com, if that is your provider) by set and
+   collector number, cross-checked by card name and TCGplayer product id. It
+   changes nothing and lists what can move, what is ambiguous and what has no
+   match, with who owns each card that cannot move.
+2. **Migrate N cards** takes a database backup, then re-keys collection,
+   decks, price history, product links, uploaded card art and any other table
+   holding card ids, in one transaction. Binder fixed slots and set rules move
+   with their set when that is safe. An install still on pokemontcg.io is
+   switched to TCGdex at the same time. Card details are then refreshed from
+   the new provider in the background.
+3. **Undo migration** reverses the newest run from its log. The backup it took
+   is listed under Admin → Backups; download it if you want to keep it past the
+   backup rotation.
+
+Ambiguous and unmatched cards stay on their old ids. Re-running is safe: it
+moves only what is left and retries any card details that failed to refresh.
+After migrating, rebuild the English Pokémon scan catalog (Admin → Catalogs) so
+scans return the new provider's cards.
+
+### pokemontcgapi.com
+
 To enable pokemontcgapi.com, set `POKEMONTCGAPI_KEY` in the **backend server's**
 environment and restart it, then select **pokemontcgapi.com** and save in the
 Admin panel. For Docker, add `POKEMONTCGAPI_KEY: ${POKEMONTCGAPI_KEY}` under the
