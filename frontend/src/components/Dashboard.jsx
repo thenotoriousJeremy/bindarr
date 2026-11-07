@@ -9,6 +9,7 @@ import { useT } from '../utils/i18n';
 import CardInspectorModal from './CardInspectorModal';
 import CardImage from './CardImage';
 import { PokemonMigrationNotice } from './PokemonMigrationBanner';
+import RiotNotice from './RiotNotice';
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
@@ -355,7 +356,8 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '1.5rem' }}>
             {/* Type Distribution Donut Chart */}
             <div className="glass-panel">
-              <h3 className="chart-title">{t(gameFilter === 'mtg' ? 'dash.colorDistribution' : 'dash.typeDistribution')}</h3>
+              <h3 className="chart-title">{t(gameFilter === 'mtg' ? 'dash.colorDistribution' : gameFilter === 'riftbound' ? 'dash.domainDistribution' : 'dash.typeDistribution')}</h3>
+              {gameFilter === 'riftbound' && <RiotNotice style={{ margin: '0 0 0.5rem' }} />}
               <div className="chart-container" style={{ height: '220px' }}>
                 {typeChartData.length === 0 ? (
                   <div className="chart-empty">{t('dash.noTypeData')}</div>

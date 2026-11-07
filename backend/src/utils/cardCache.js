@@ -14,6 +14,10 @@ const COLUMNS = [
   'color_identity', 'game', 'language', 'printed_name',
   'tcgplayer_url', 'cardmarket_url', 'tcgplayer_product_id',
   'price_currency', 'price_source', 'oracle_id', 'oracle_text',
+  // Card fields Riftbound brought (riftcodexApi): which way the card is printed,
+  // its artist, its rules text, and its numeric stats as JSON. Generic on purpose;
+  // null for every provider that does not fill them.
+  'orientation', 'artist', 'card_text', 'attributes',
 ];
 // Magic's rules text (type line, oracle text, cost, stats, keywords), which
 // Scryfall-syntax filtering reads. Always last, matching rulesTextParams below.
@@ -35,6 +39,22 @@ const SET_CLAUSE = COLUMNS
   .map(c => `${c} = excluded.${c}`)
   .join(', ');
 
+// The columns a price sweep owns, for a provider that has no prices of its own.
+// RiftCodex carries none, so its catalogue re-caches with every one of these
+// null — and the upsert above would write those nulls over every price the
+// Riftbound sweep found, emptying it on each weekly refresh with nothing in the
+// logs. `keepPrices` keeps the stored value wherever the incoming one is null.
+const PRICE_COLUMNS = new Set([
+  'price_trend', 'price_normal', 'price_holofoil', 'price_reverse_holofoil',
+  'price_avg1', 'price_avg7', 'price_avg30', 'price_source',
+]);
+const KEEP_PRICES_SET_CLAUSE = COLUMNS
+  .filter(c => c !== 'id' && c !== 'name')
+  .map(c => (PRICE_COLUMNS.has(c)
+    ? `${c} = COALESCE(excluded.${c}, card_cache.${c})`
+    : `${c} = excluded.${c}`))
+  .join(', ');
+
 // `name` is the one column an incoming row can be WORSE at. A non-English TCGdex
 // card carries its localized name in both `name` and `printed_name` because TCGdex
 // has no English name to give (see tcgdexApi.normalizeCard) — but one may since have
@@ -53,8 +73,11 @@ const NAME_CLAUSE = `name = CASE
 // stamped as already-stale so every freshness check in the app treats it as
 // needing a refetch, instead of it looking current forever and showing a real
 // card with $0.00 and the wrong rarity.
+//
+// `opts.keepPrices`: the provider carries no prices; see PRICE_COLUMNS above.
 async function cacheNormalizedCards(cards, game, opts = {}) {
   const stamp = opts.incomplete ? `'1970-01-01 00:00:00'` : 'CURRENT_TIMESTAMP';
+  const setClause = opts.keepPrices ? KEEP_PRICES_SET_CLAUSE : SET_CLAUSE;
   const rowSql = `(${COLUMNS.map(() => '?').join(', ')}, ${stamp})`;
   const rows = (cards || []).filter(c => c && c.id);
   for (let i = 0; i < rows.length; i += CHUNK) {
@@ -77,13 +100,15 @@ async function cacheNormalizedCards(cards, game, opts = {}) {
         // Magic only (scryfallApi.normalizeCard); the deck rules read both. Text is
         // '' for a card read and found blank, null for one never read.
         c.oracle_id || null, c.oracle_text ?? null,
+        c.orientation || null, c.artist || null, c.card_text || null,
+        c.attributes ? JSON.stringify(c.attributes) : null,
       );
       params.push(...rulesTextParams(c));
     }
     await db.run(
       `INSERT INTO card_cache (${COLUMNS.join(', ')}, last_updated)
        VALUES ${chunk.map(() => rowSql).join(', ')}
-       ON CONFLICT(id) DO UPDATE SET ${NAME_CLAUSE}, ${SET_CLAUSE}, last_updated = ${stamp}`,
+       ON CONFLICT(id) DO UPDATE SET ${NAME_CLAUSE}, ${setClause}, last_updated = ${stamp}`,
       params
     );
   }

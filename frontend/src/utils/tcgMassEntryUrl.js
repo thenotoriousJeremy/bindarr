@@ -10,7 +10,8 @@
 //                stays raw — the form TCGplayer's "Create a Shareable Link" emits.
 //   productline  matched by NAME, case-insensitively, against TCGplayer's product
 //                lines (GET mpapi.tcgplayer.com/v2/massentry/productLines):
-//                'Magic' (1), 'Pokemon' (3), 'Pokemon Japan' (85), 'Lorcana TCG' (71).
+//                'Magic' (1), 'Pokemon' (3), 'Pokemon Japan' (85), 'Lorcana TCG' (71),
+//                'Riftbound League of Legends Trading Card Game' (89).
 //                Japanese Pokémon is its own catalogue there, so it is its own line.
 //
 // A `qty-productId` entry names the exact product, which beats any name search:
@@ -26,7 +27,11 @@
 export const MASS_ENTRY_URL = 'https://www.tcgplayer.com/massentry';
 export const MAX_URL_LENGTH = 8000;
 
-const PRODUCT_LINES = { mtg: 'Magic', pokemon: 'Pokemon', lorcana: 'Lorcana TCG' };
+const PRODUCT_LINES = {
+  mtg: 'Magic', pokemon: 'Pokemon', lorcana: 'Lorcana TCG',
+  // Verified against the productLines endpoint on 2026-11-07 (productLineId 89).
+  riftbound: 'Riftbound League of Legends Trading Card Game',
+};
 
 export function productLine(game, language) {
   const g = String(game || '').toLowerCase();

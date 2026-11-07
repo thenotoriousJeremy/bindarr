@@ -6,6 +6,9 @@ const REVERSE_CONDITION_MAP = {
 const EXPORT_STRATEGIES = {
   internal: (item) => ({
     'Card ID': item.card_id,
+    // csvMappers.internal has always read a Game column; this side never wrote
+    // one, so a backup restored every Magic and Lorcana copy as Pokémon.
+    'Game': item.game || '',
     'Name': item.name || item.card_name || '',
     'Set Name': item.set_name || '',
     'Set ID': item.set_id || item.set_code || '',

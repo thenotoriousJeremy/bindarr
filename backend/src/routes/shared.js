@@ -40,7 +40,7 @@ router.get('/:share_token/containers/:id', async (req, res) => {
       SELECT c.id AS entry_id, c.card_id, c.compartment_id, c.position, c.quantity, c.condition,
              c.printing, c.language, c.favorite, c.is_trade, c.market_value,
              cc.name, cc.printed_name, cc.supertype, cc.subtypes, cc.types, cc.rarity,
-             cc.set_id, cc.set_name, cc.number, cc.image_url, cc.game, cc.cmc, cc.color_identity,
+             cc.set_id, cc.set_name, cc.number, cc.image_url, cc.orientation, cc.game, cc.cmc, cc.color_identity,
              cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
@@ -154,7 +154,7 @@ router.get('/:share_token', async (req, res) => {
         cc.set_id,
         cc.set_name,
         cc.number,
-        cc.image_url,
+        cc.image_url, cc.orientation,
         cc.price_trend,
         cc.price_normal,
         cc.price_holofoil,

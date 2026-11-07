@@ -18,6 +18,7 @@ const path = require('path');
 const sharp = require('sharp');
 const ort = require('onnxruntime-node');
 const { loadNpz } = require('./utils/npz');
+const games = require('./utils/games');
 
 const MODEL_DIR = process.env.CV_MODEL_DIR || path.join(__dirname, '..', 'data', 'models');
 const CORN_SIZE = 384;     // cornelius input
@@ -100,6 +101,14 @@ const localMeta = (game, lang) => path.join(MODEL_DIR, `milo-${game}${suffix(lan
 function catalogPath(game) {
   return path.join(MODEL_DIR, `milo-${game}.npz`);
 }
+
+// How a PUBLISHED catalog keys its rows: TCGplayer product ids (Pokémon,
+// Lorcana) or the provider's own card id, unprefixed (Magic). From the registry;
+// a locally built catalog is always keyed by card_cache.id whatever this says.
+const publishedIds = (game) => games.get(game)?.scan?.publishedIds || 'cardId';
+// A card id with its game prefix stripped, which is how a published catalog
+// that keys by provider id writes it.
+const ID_PREFIX_RE = new RegExp(`^(?:${games.VALUES.map(g => g.replace(/[^a-z0-9]/gi, '')).join('|')})-`);
 
 // A locally built catalog wins when present. Its ids are card_cache primary keys,
 // so every hit resolves by construction — which the published Pokemon catalog
@@ -429,7 +438,7 @@ async function match(imageBuffer, game = 'mtg', topK = 8, opts = {}) {
   // narrowed the scan on purpose, and an unscoped sweep of the other language is
   // exactly the wrong-card answer the scope was meant to prevent.
   const wanted = (opts.sets || []).map(x => String(x).toLowerCase()).filter(Boolean);
-  const want = new Set(wanted.flatMap(x => [x, x.replace(/^(mtg|lorcana)-/, ''), `${game}-${x.replace(/^(mtg|lorcana)-/, '')}`]));
+  const want = new Set(wanted.flatMap(x => [x, games.bareSetId(x), `${game}-${games.bareSetId(x)}`]));
   let scoped = null;
   const search = [];
   for (const c of cats) {
@@ -508,7 +517,7 @@ async function match(imageBuffer, game = 'mtg', topK = 8, opts = {}) {
     // A local catalog is already keyed by card_cache.id for any game; only the
     // published catalogs need their provider id translated.
     candidates.push(h.c.local ? { cardId: id, score: h.sim, catalogLang: h.c.lang }
-      : (game === 'pokemon' || game === 'lorcana') ? { productId: Number(id), score: h.sim, catalogLang: h.c.lang }
+      : publishedIds(game) === 'productId' ? { productId: Number(id), score: h.sim, catalogLang: h.c.lang }
         : { cardId: `${game}-${id}`, score: h.sim, catalogLang: h.c.lang });
     if (candidates.length >= topK) break;
   }
@@ -579,7 +588,7 @@ async function scoreCards(imageBuffer, game = 'mtg', cards = [], opts = {}) {
     }
 
     let prodMap = null;
-    if (game === 'pokemon' || game === 'lorcana') {
+    if (publishedIds(game) === 'productId') {
       const db = require('./db');
       const cardIds = cards.map(c => c.id).filter(Boolean);
       if (cardIds.length) {
@@ -599,7 +608,7 @@ async function scoreCards(imageBuffer, game = 'mtg', cards = [], opts = {}) {
       const possibleIds = [];
       if (card.id) {
         possibleIds.push(String(card.id));
-        possibleIds.push(String(card.id).replace(/^(mtg|pokemon|lorcana)-/, ''));
+        possibleIds.push(String(card.id).replace(ID_PREFIX_RE, ''));
       }
       if (card.scryfall_id) possibleIds.push(String(card.scryfall_id));
       if (card.tcgplayer_id) possibleIds.push(String(card.tcgplayer_id));

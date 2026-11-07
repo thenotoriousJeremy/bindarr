@@ -437,6 +437,9 @@ const dbMod = require('../src/db');
     Object.keys(tcgcsv.SUBTYPE_TO_COLUMN).sort(),
     'the slim cache must keep exactly the finishes the sweep can price'
   );
+  assert.deepStrictEqual([...require('../src/utils/tcgcsvSlim').RIFTBOUND_SUBTYPES].sort(),
+    Object.keys(require('../src/riftboundPrices').FINISH_COLUMN).sort(),
+    'and for category 89, exactly the finishes the Riftbound sweep prices');
   assert.strictEqual(
     (await dbMod.get(`SELECT COUNT(*) n FROM tcgcsv_cache WHERE data_version != ?`, [remoteVersion])).n, 0,
     'older versions are deleted once a sync completes'

@@ -82,7 +82,8 @@ function compartmentAcceptsCard(compartment, cardMetadata) {
 
 function locationAcceptsCard(location, cardMetadata) {
   if (location.game && location.game !== 'any') {
-    const cardGame = cardMetadata.game || 'pokemon';
+    // A row with no game predates multi-game support (utils/games LEGACY_GAME).
+    const cardGame = cardMetadata.game || require('./games').LEGACY_GAME;
     if (cardGame !== location.game) return false;
   }
 
@@ -489,7 +490,7 @@ async function recommendSlot(database, location, cardMetadata, overrideCompartme
 
   const allLocationCards = await dbClient.all(`
     SELECT c.id as entry_id, c.card_id, c.compartment_id, c.position, c.quantity, c.condition, c.printing, c.language, c.purchase_price, c.added_at, c.is_trade, c.favorite, c.list_type,
-           cc.name, cc.printed_name, cc.supertype, cc.game, cc.types, cc.subtypes, cc.rarity, cc.set_id, cc.set_name, cc.number, cc.image_url,
+           cc.name, cc.printed_name, cc.supertype, cc.game, cc.types, cc.subtypes, cc.rarity, cc.set_id, cc.set_name, cc.number, cc.image_url, cc.orientation,
            cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
     FROM collection c
     JOIN card_cache cc ON c.card_id = cc.id

@@ -16,6 +16,8 @@ import CardArtEditor from './CardArtEditor';
 import { useBackGuard } from '../utils/useBackGuard';
 import { useT } from '../utils/i18n';
 import { undoToast } from '../utils/undo';
+import RiotNotice from './RiotNotice';
+import { isLandscape } from '../utils/riftbound';
 
 // MTG color identity pip colors (WUBRG), approximating the printed mana colors.
 const MTG_COLOR_BG = {
@@ -449,7 +451,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
             className="ci-image-wrap"
             onClick={() => setIsFullScreen(true)}
             title={t('inspector.zoomHint')}
-            style={{ position: 'relative', width: '100%', maxWidth: '300px', cursor: 'pointer' }}
+            style={{ position: 'relative', width: '100%', maxWidth: isLandscape(faceCard) ? '420px' : '300px', cursor: 'pointer' }}
           >
             {/* CardImage, not a bare <img>: this was the last call site still
                 reading card.image_url directly, so contributed art uploaded
@@ -460,7 +462,8 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               card={faceCard}
               style={{
                 width: '100%',
-                aspectRatio: 0.718,
+                // A battlefield is shown the way it is printed: sideways.
+                aspectRatio: isLandscape(faceCard) ? 1 / 0.718 : 0.718,
                 objectFit: 'cover',
                 borderRadius: 'var(--radius-md)',
                 boxShadow: '0 12px 36px rgba(0,0,0,0.6), 0 0 20px rgba(255,255,255,0.05)',
@@ -566,6 +569,27 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 {Array.isArray(activeCard.subtypes) && activeCard.subtypes.length > 0 && (
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{activeCard.subtypes.join(' ')}</span>
                 )}
+              </div>
+            )}
+            {/* Riftbound: domains, type, stats, the official rules text, artist, and
+                the notice Riot requires next to its cards. */}
+            {activeCard.game === 'riftbound' && (
+              <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  {(Array.isArray(activeCard.types) ? activeCard.types : []).map(d => (
+                    <span key={d} style={{ fontSize: '0.6rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.15rem 0.45rem', borderRadius: '999px', background: 'var(--surface-2, rgba(255,255,255,0.1))', color: 'var(--text-strong)' }}>{d}</span>
+                  ))}
+                  <span>{[activeCard.supertype, ...(Array.isArray(activeCard.subtypes) ? activeCard.subtypes : [])].filter(Boolean).join(' · ')}</span>
+                </div>
+                {(() => {
+                  let stats = activeCard.attributes;
+                  if (typeof stats === 'string') { try { stats = JSON.parse(stats); } catch { stats = null; } }
+                  const parts = stats ? ['energy', 'might', 'power'].filter(k => stats[k] != null).map(k => `${t(`riftbound.${k}`)} ${stats[k]}`) : [];
+                  return parts.length ? <div style={{ fontSize: '0.78rem', color: 'var(--text-strong)', fontWeight: 600 }}>{parts.join(' · ')}</div> : null;
+                })()}
+                {activeCard.card_text && <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0, whiteSpace: 'pre-line' }}>{activeCard.card_text}</p>}
+                {activeCard.artist && <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{t('riftbound.artist', { artist: activeCard.artist })}</div>}
+                <RiotNotice style={{ marginTop: '0.25rem' }} />
               </div>
             )}
           </div>

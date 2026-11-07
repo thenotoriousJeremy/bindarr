@@ -5,7 +5,7 @@ features, see [README.md](README.md); this document explains **how the system is
 built and why**.
 
 Bindarr is a self-hosted trading-card collection manager for **Pokémon**,
-**Magic: The Gathering**, and **Disney Lorcana**. It identifies cards from a phone photo (no typing),
+**Magic: The Gathering**, **Disney Lorcana** and **Riftbound**. It identifies cards from a phone photo (no typing),
 tracks their real-world physical location (which binder page / box row slot),
 values the collection over time, and helps you pull and re-file the cards for a
 deck.
@@ -258,6 +258,25 @@ the rest of the app is game-agnostic. Every card carries a `game` field
 (`pokemon` | `mtg`) and a `language`. A user's Pokémon TCG API key (stored
 per-user) is passed through where available.
 
+#### The game registry
+
+Which games exist is one table, `shared/games.json` (with an ESM twin,
+`shared/games.js`, for the frontend and bare-Node tests; `test/games.test.js`
+fails if they differ). Each entry carries the game's value and labels, card-id
+prefixes, provider, printed languages, printing scheme, feature flags (prices,
+scan, grading, graded prices, decks), default deck format and size, card-back
+key, marketplace link kinds and how a published scan catalog keys its rows.
+`backend/src/utils/games.js` and `frontend/src/utils/games.js` wrap it. Lists of
+games (validation, pickers, catalog builds, container restrictions, the
+languages each game is printed in) read it; genuinely game-specific behaviour
+stays in the provider that owns it.
+
+`games.gameOfId` is explicit about card ids: a registered prefix names its game;
+an unprefixed id is pokemontcg.io's only in that API's `<set>-<number>` shape;
+anything else is unknown, and `cardApi.getCardById` answers null (the routes,
+404) instead of asking pokemontcg.io about it. A new game must register a prefix
+— the shape check cannot tell a foreign `abc-1` from a Pokémon one.
+
 `utils/pokemonProvider.js` owns the Pokémon provider decision. It is asked,
 never re-derived from the language: four call sites once derived it themselves and
 four of them disagreed, which is how 21,828 rows were cached with the wrong
@@ -368,6 +387,37 @@ Tests: `test/pokemonidmap.test.js` (the mapping table, from
 `test/fixtures/pokemonmigration`), `test/pokemonmigration.test.js` (preview,
 apply, re-run, revert over a temp DB through the admin router),
 `test/pokemonmigrationapi.test.js` (pokemontcgapi.com target).
+
+#### Riftbound
+
+`riftcodexApi.js` reads RiftCodex (free, no key, `RIFTCODEX_BASE_URL`). The
+catalogue is fetched whole (pages of 100) on first use — a search, the set list, an
+id, a catalog build — cached through `cacheNormalizedCards` with `keepPrices` (it
+carries no prices, so its re-cache must not null the swept ones), and refreshed by
+the weekly set refresh only on installs that hold Riftbound cards. Search reads the
+cache, with domain/type/rarity/supertype filters.
+
+Ids are `riftbound-` + the lowercased `riftbound_id` with every character outside
+`[a-z0-9-]` written as `.` + hex (`unl-229*-219` → `riftbound-unl-229.2a-219`),
+which round-trips and needs no escaping in URLs, SQL or CSV. Records sharing a
+`riftbound_id` are either one printing listed twice (identical faces; the record
+with a TCGplayer product is kept) or distinct printings (OPP promo and Metal): the
+canonical one keeps the plain id, the others get `~<RiftCodex id>`. Names never
+merge printings. New card columns: `orientation` (battlefields are landscape),
+`artist`, `card_text`, `attributes` (energy/might/power JSON; energy is also `cmc`).
+
+Prices: `riftboundPrices.js` reads TCGCSV category 89 from `tcgcsvApi`'s cache
+(same pacing, 403 cooldown and base URL). Category 89 is synced only once the
+install has a Riftbound card, and backfilled into the current version the first
+time. Match is by product id only; Normal → `price_normal`, Foil →
+`price_holofoil`, trend prefers Normal; a missing quote leaves the stored price.
+Own clock: `riftbound_prices_swept_at`.
+
+Deck rules are the `riftbound` entry in `shared/deckRules.mjs`: per-zone copy
+limits (enforced on add) and Riot's construction rules as deck warnings. Scan: `cardSets` lists
+cached sets, `catalog.embedUrl` embeds Riot's full-width art; landscape art is
+squashed into the square as printed, like the camera dewarp of a card held the way
+it is printed. Real-model accuracy is unmeasured.
 
 #### Two names per card, and which is which
 
@@ -758,7 +808,7 @@ only `decks.checked_out` changes.
 - **Backend has no auto-reload** in production/local `node src/server.js`; restart it after backend changes so new routes/data load. Frontend uses Vite HMR.
 - **SQLite runs in WAL mode** — checkpoint/stop before file-level backups so `-wal`/`-shm` are flushed. A clean stop (SIGTERM/SIGINT) closes the connection, which does the checkpoint.
 - **Background work goes in `server.js`'s scheduler job list**, not a new `setInterval`: an in-memory timer resets on every restart. A new price provider is one `utils/priceSweeps.js` entry plus its `SWEEP_COLUMN` key (`test/pricesweeplist.test.js` holds the two together).
-- **Everything is game-scoped** (`pokemon` | `mtg`); new card fields must be threaded through both `tcgApi.js` and `scryfallApi.js` normalization.
+- **Everything is game-scoped** (the values in `shared/games.json`); new card fields must be threaded through every provider's normalization, and a new game is a registry entry first.
 - **`position = slot * 1000`** is the single source of truth for slot order; never assume packed array index equals slot.
 - **Scanning needs a catalog**: the two ONNX models identify nothing on their own, and there is no second matcher to fall back to. `/api/scan-match` answers `503 notBuilt` with the fix in the message rather than an empty candidate list, which reads to the user as "your card could not be identified". A catalog is per (game, language) and only as complete as the provider's data for that language.
 - **Frontend lint is strict**: CI runs `eslint --max-warnings 0`, so unused vars/imports and empty blocks fail the Docker build.

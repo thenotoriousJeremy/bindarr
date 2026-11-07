@@ -30,7 +30,7 @@ async function loadEntries(entryIds, userId) {
   const holes = entryIds.map(() => '?').join(',');
   const rows = await db.all(`
     SELECT c.id, c.id AS entry_id, c.card_id, c.printing, c.language, c.favorite, c.is_trade, c.list_type,
-           cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.supertype, cc.rarity, cc.image_url,
+           cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.supertype, cc.rarity, cc.image_url, cc.orientation,
            cc.game, cc.cmc, cc.color_identity,
            cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
     FROM collection c
@@ -115,7 +115,9 @@ router.get('/locations', async (req, res) => {
 });
 
 const RULE_TYPES = ['any', 'alphabetical_range', 'specific_sets', 'compound'];
-const GAME_RESTRICTIONS = ['any', 'pokemon', 'mtg'];
+// Every game in the registry. This list once named only Pokémon and Magic, so a
+// container could not be restricted to Lorcana even though the picker offered it.
+const GAME_RESTRICTIONS = ['any', ...require('../utils/games').VALUES];
 
 // Binder page width in pockets. null (or '') means automatic: the client lays the
 // page out from its capacity. Capped at 12, wider than any common pocket page, so
@@ -823,7 +825,7 @@ router.post('/locations/:id/resort', async (req, res) => {
 
       const cards = await db.all(`
         SELECT c.id as entry_id, c.card_id, c.printing, c.language, c.quantity, c.favorite, c.is_trade, c.list_type,
-               cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.image_url, cc.game,
+               cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.image_url, cc.orientation, cc.game,
                cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id

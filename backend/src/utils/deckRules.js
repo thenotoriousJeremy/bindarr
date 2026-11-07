@@ -15,7 +15,7 @@ function loadRules() {
 }
 
 // The card_cache columns the shared rules read.
-const RULE_COLUMNS = 'id, name, supertype, subtypes, game, oracle_id, oracle_text';
+const RULE_COLUMNS = 'id, name, supertype, subtypes, types, game, oracle_id, oracle_text';
 
 // Validate setting a deck's copy count of `cardId` to `newQty`.
 // Returns { ok: true } or { ok: false, error }. Enforces:
@@ -39,12 +39,15 @@ async function validateDeckAddition({ deckId, userId, cardId, newQty, dbClient }
   const game = (deck && deck.game) || card.game || 'pokemon';
   const anyPrinting = !!(deck && deck.any_printing) && rules.supportsAnyPrinting(game);
 
-  // Every row of this deck that is this card by name or by printing.
+  // Every row of this deck that is this card by name or by printing — or, for a
+  // game that decides "the same card" itself (Riftbound's printings carry the
+  // printing in their names), every row, for its copyKey to sort out.
+  const ownKey = rules.copyKey(card, game) !== rules.copyKey({ name: card.name }, 'pokemon');
   const deckRows = await client.all(
-    `SELECT dc.card_id, dc.quantity, cc.name, cc.oracle_id
+    `SELECT dc.card_id, dc.quantity, cc.name, cc.oracle_id, cc.supertype, cc.subtypes
      FROM deck_cards dc JOIN card_cache cc ON dc.card_id = cc.id
-     WHERE dc.deck_id = ? AND (dc.card_id = ? OR cc.name = ? OR cc.oracle_id = ?)`,
-    [deckId, cardId, card.name, card.oracle_id]
+     WHERE dc.deck_id = ? AND (? = 1 OR dc.card_id = ? OR cc.name = ? OR cc.oracle_id = ?)`,
+    [deckId, ownKey ? 1 : 0, cardId, card.name, card.oracle_id]
   );
   const current = deckRows.filter(r => r.card_id === cardId).reduce((s, r) => s + r.quantity, 0);
   if (qty <= current) return { ok: true };
@@ -70,7 +73,7 @@ async function validateDeckAddition({ deckId, userId, cardId, newQty, dbClient }
   // (alt arts / reprints) count toward the limit.
   const limit = rules.copyLimit(card, rules.rulesFor(game, deck && deck.format));
   const other = deckRows
-    .filter(r => r.card_id !== cardId && r.name === card.name)
+    .filter(r => r.card_id !== cardId && rules.copyKey(r, game) === rules.copyKey(card, game))
     .reduce((s, r) => s + r.quantity, 0);
   if (other + qty > limit) {
     return { ok: false, error: `Cannot have more than ${limit} ${limit === 1 ? 'copy' : 'copies'} of ${card.name}.` };

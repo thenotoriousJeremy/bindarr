@@ -209,6 +209,9 @@ async function listAllSets(game, lang) {
     }
     return rows.map(r => r.ptcgo_code || r.id.replace(/^lorcana-/, ''));
   }
+  // Riftbound's catalogue is cached whole (riftcodexApi), so its sets are read
+  // from what is cached — fetching the catalogue first if nothing is.
+  if (game === 'riftbound') return require('./riftcodexApi').listSetCodes();
   if (game === 'pokemon') {
     if (await pokemonProvider.providerFor(code) === pokemonProvider.POKEMONTCGAPI) {
       return (await require('./pokemontcgapi').listSets(code)).filter(s => s.total > 0).map(s => s.id);
@@ -379,7 +382,15 @@ async function fetchPokemonSet(set) {
 // it. Returns the fetched cards so a caller can count them.
 async function cacheSetCards(game, set, lang, { excludeChildCodes = [] } = {}) {
   const code = langOf(lang);
-  if (game !== 'mtg' && game !== 'pokemon' && game !== 'lorcana') throw new Error('only mtg/pokemon/lorcana');
+  if (!require('./utils/games').hasFeature(game, 'scan')) throw new Error(`no catalog source for game ${game}`);
+  if (game === 'riftbound') {
+    // Already in card_cache: the whole catalogue is cached in one fetch, which is
+    // also what keeps collision ids stable (they depend on the whole set of
+    // records sharing a code, never on one page of it).
+    const cards = await require('./riftcodexApi').getCardsBySet(set);
+    if (!cards.length) throw absent(`no cards for set ${set}`);
+    return cards.map(c => ({ name: c.name, set: c.set_id, number: c.number, img: c.image_url, raw: c }));
+  }
   if (game === 'lorcana') {
     const lorcastApi = require('./lorcastApi');
     const cleanSet = String(set || '').replace(/^lorcana-/, '');

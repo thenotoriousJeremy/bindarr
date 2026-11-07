@@ -4,7 +4,7 @@
 
 # Bindarr
 
-**Self-hosted collection manager for Pokémon, Magic: The Gathering, and Disney Lorcana cards.**
+**Self-hosted collection manager for Pokémon, Magic: The Gathering, Disney Lorcana and Riftbound cards.**
 
 Identify cards with your phone camera, track prices, record which binder page and slot each card lives in, and pull decks back out again.
 
@@ -28,7 +28,7 @@ Try it without installing anything at **[thenotoriousjeremy.github.io/bindarr](h
 
 ## Features
 
-- **Camera scanning** — photograph a card and the server identifies it from the image alone. Works for Magic, Pokémon, and Lorcana.
+- **Camera scanning** — photograph a card and the server identifies it from the image alone. Works for Magic, Pokémon, Lorcana and Riftbound.
 - **Physical location tracking** — binders by page and slot (1–9), boxes by row and divider, with layout and scalable image-list views. Drag cards between pockets to arrange a binder, or file them by tapping on a phone.
 - **Deck Builder & checkout** — build decks, edit their properties, import ManaBox decklists, reserve cards for play, and see exactly which checked-out deck makes a copy unavailable.
 - **Search and bulk add** — search or browse a whole set with multi-select; pin a set and add by collector number one keystroke at a time.
@@ -236,6 +236,27 @@ If your server's certificate comes from your own (private) CA, install that CA c
 - **iOS:** install the CA profile, then turn on full trust for it under Settings → General → About → Certificate Trust Settings.
 
 ---
+
+## Riftbound
+
+Riftbound (Riot Games' League of Legends trading card game, published by UVS
+Games) is the fourth game. Card data comes from [RiftCodex](https://riftcodex.com),
+a free community API with no key: the whole catalogue (~1.5k cards, English only)
+is fetched the first time anything needs a Riftbound card, cached, and refreshed
+weekly — and never on an install that has not used Riftbound. Card art is
+hotlinked from Riot's own CDN (`cmsassets.rgpub.io`); none is bundled. Prices are
+TCGplayer market prices via TCGCSV (category 89), matched by each card's TCGplayer
+product id. Scanning works once a Riftbound catalog is built in Admin → Catalogs;
+battlefields are matched as printed, in landscape. Riftbound decks are checked
+against Riot's construction rules (one Champion Legend, a 40+ Main Deck with the
+Chosen Champion, three of a card, twelve runes, three different battlefields,
+domain identity) and shown as warnings. `RIFTCODEX_BASE_URL` overrides the API
+host. Riftbound is hidden in the store-distributed mobile app: Riot's fan policy
+does not allow its IP in App Store or Google Play apps without a licence or an
+approved Riot API key.
+
+Bindarr was created under Riot Games' "Legal Jibber Jabber" policy using assets
+owned by Riot Games. Riot Games does not endorse or sponsor this project.
 
 ## Pokémon data providers
 

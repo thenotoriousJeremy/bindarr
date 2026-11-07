@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Database, Play, Square, RefreshCw, Check, AlertTriangle, Cpu, Download, ListFilter, Languages, Zap } from 'lucide-react';
 import SetTree from './SetTree';
 import { useT } from '../utils/i18n';
+import { gameInfo, gameLabel } from '../utils/games';
 
 // Scan catalogs.
 //
@@ -17,7 +18,6 @@ import { useT } from '../utils/i18n';
 // a side effect of building a scan index, so a set nobody indexed simply was not
 // in the database — which is why Pokemon sat at 35% of the real card pool while
 // looking, from the old panel, entirely built.
-const GAME_LABEL = { mtg: 'Magic: The Gathering', pokemon: 'Pokémon', lorcana: 'Disney Lorcana' };
 const POLL_MS = 1000;
 
 // The house style, so this panel reads as part of Admin rather than its own app.
@@ -173,7 +173,7 @@ function ReadyMadeCard({ engine, onDownload, busy, enginePresent, productMaps, m
           <tbody>
             {cats.map(c => (
               <tr key={c.name}>
-                <td style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{GAME_LABEL[c.game] || c.game}</td>
+                <td style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{gameLabel(c.game)}</td>
                 <td>{mb(c.bytes)}</td>
                 <td className="hide-mobile">{c.snapshot}</td>
                 <td style={{ textAlign: 'right' }}>
@@ -216,7 +216,7 @@ function ReadyMadeCard({ engine, onDownload, busy, enginePresent, productMaps, m
                 className="select-control" aria-label={t('catalog.thGame')}
                 style={{ minWidth: '10rem', padding: '0.45rem 2rem 0.45rem 0.65rem', fontSize: '0.8rem' }}>
                 {Object.keys(productMaps || { pokemon: 1 }).map(g => (
-                  <option key={g} value={g}>{GAME_LABEL[g] || g}</option>
+                  <option key={g} value={g}>{gameLabel(g)}</option>
                 ))}
               </select>
             </label>
@@ -261,11 +261,12 @@ function BuildPicker({ game, lang, disabled, onBuild, showToast, label }) {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const codeOf = (s) => game === 'mtg'
-    ? (s.ptcgo_code || (s.id || '').replace(/^mtg-/, ''))
-    : game === 'lorcana'
-      ? (s.ptcgo_code || (s.id || '').replace(/^lorcana-/, ''))
-      : s.id;
+  // A game whose set ids carry a prefix (shared/games.json setIdPrefix) builds by
+  // its bare code; Pokémon's ids are the code already.
+  const setPrefix = gameInfo(game)?.setIdPrefix;
+  const codeOf = (s) => setPrefix
+    ? (s.ptcgo_code || (s.id || '').replace(new RegExp('^' + setPrefix), ''))
+    : s.id;
 
   useEffect(() => {
     if (!open || sets.length) return;
@@ -641,7 +642,7 @@ export default function CatalogPanel({ showToast }) {
       <details key={`${c.game}|${c.lang}`} style={INNER}>
         <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-strong)' }}>
-            {GAME_LABEL[c.game] || c.game}
+            {gameLabel(c.game)}
             <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}> · {c.lang}</span>
           </span>
           <span style={{ fontSize: '0.8rem', color: c.built ? 'var(--type-grass)' : 'var(--text-secondary)' }}>
@@ -788,7 +789,7 @@ export default function CatalogPanel({ showToast }) {
           <div style={INNER}>
             <div style={ROW}>
               <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-strong)' }}>
-                {GAME_LABEL[running.game] || running.game} · {running.lang}
+                {gameLabel(running.game)} · {running.lang}
               </span>
               <button type="button" className="btn btn-secondary btn-sm" onClick={stop} disabled={running.cancelled}
                 style={BTN}>
@@ -807,7 +808,7 @@ export default function CatalogPanel({ showToast }) {
           <p style={{ ...HINT, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             {last.phase === 'error'
               ? <><AlertTriangle size={15} color="var(--accent-red)" /> {t('catalog.lastBuildFailed', { message: last.message })}</>
-              : <><Check size={15} color="var(--type-grass)" /> {GAME_LABEL[last.game] || last.game} · {last.lang}: {last.message}</>}
+              : <><Check size={15} color="var(--type-grass)" /> {gameLabel(last.game)} · {last.lang}: {last.message}</>}
           </p>
         )}
 

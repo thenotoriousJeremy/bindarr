@@ -2426,6 +2426,22 @@ button, input, select, textarea {
   border-radius: 4px;
 }
 
+/* A landscape card (a Riftbound battlefield) in a portrait slot lies on its side,
+   the way it sits in a real binder pocket, instead of being cropped to its middle
+   third. The box is sized landscape — the slot's height by its width — then turned
+   a quarter, so it fills the slot exactly. Needs a positioned 0.718 parent, which
+   these three are. */
+.tcg-card-inner > img[data-orientation="landscape"],
+.binder-pocket > img[data-orientation="landscape"],
+.box-coverflow-card > img[data-orientation="landscape"] {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: calc(100% / 0.718);
+  height: calc(100% * 0.718);
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
 .binder-pocket-empty {
   aspect-ratio: 0.718;
   border-radius: 4px;

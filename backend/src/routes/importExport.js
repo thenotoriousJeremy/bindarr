@@ -3,11 +3,11 @@ const router = express.Router();
 const db = require('../db');
 const { parseThirdPartyCSV, parseManaboxText } = require('../utils/csvMappers');
 const scryfallApi = require('../scryfallApi');
-const lorcastApi = require('../lorcastApi');
 const { generateExportCSV } = require('../utils/csvExporters');
 const { resolveCardPrice } = require('../utils/priceHelpers');
 const { isBinderType } = require('../utils/compartmentSort');
 const cardApi = require('../utils/cardApi');
+const games = require('../utils/games');
 const pokemonProvider = require('../utils/pokemonProvider');
 const languages = require('../utils/languages');
 const { matcher, normName } = require('../utils/setCatalogueMatch');
@@ -36,8 +36,12 @@ const MAX_IMPORT_COPIES = 50000;
 // number, actually has the card. A name alone is never enough: it names every
 // printing of the card.
 async function resolveImportedCard(item, user, setsFor) {
-  const game = item.game || 'pokemon';
   const id = item.card_id || item.id;
+  // The id says which game a row is before the file's Game column does: Bindarr's
+  // own CSV export carried no Game column at all until the registry change, so
+  // every Magic and Lorcana row in an older backup reads as Pokémon.
+  const game = cardApi.gameOf(id, item.game) || games.parseGame(item.game);
+  if (!game) return null;
   if (id) {
     if (await db.get(`SELECT id FROM card_cache WHERE id = ?`, [id])) return id;
     const card = await cardApi.getCardById(id, { game, tcgApiKey: user.tcg_api_key }).catch(() => null);
@@ -50,8 +54,11 @@ async function resolveImportedCard(item, user, setsFor) {
   // route); one that reaches here is a printing Scryfall does not have.
   if (game === 'mtg' || !number || !set) return null;
 
-  if (game === 'lorcana') {
-    const { cards } = await lorcastApi.searchCards({ set, number, limit: 250 });
+  // Every game but Pokémon has one provider, and it searches by set + number.
+  if (game !== 'pokemon') {
+    const api = await cardApi.apiForGame(game);
+    if (!api) return null;
+    const { cards } = await api.searchCards({ set, number, limit: 250 });
     return pick(cards, item.name);
   }
 
@@ -94,6 +101,7 @@ async function sendExport(req, res, entryIds = null) {
         c.purchase_price,
         c.added_at,
         cc.id as card_id,
+        cc.game,
         cc.name as name,
         cc.supertype,
         cc.types,
@@ -355,6 +363,16 @@ router.post('/import', importLimiter, async (req, res) => {
       });
     }
 
+    // Each copy is filed under the game of the card it resolved to, not the
+    // file's Game column — which older exports did not have, so it defaulted
+    // every Magic and Lorcana row to Pokémon.
+    const gameOfCard = new Map();
+    for (const { cardId } of toImport) {
+      if (gameOfCard.has(cardId)) continue;
+      const row = await db.get(`SELECT game FROM card_cache WHERE id = ?`, [cardId]);
+      gameOfCard.set(cardId, (row && games.isGame(row.game) && row.game) || cardApi.gameOf(cardId) || games.LEGACY_GAME);
+    }
+
     let importedCount = 0;
     let clampedRows = 0;
 
@@ -379,7 +397,7 @@ router.post('/import', importLimiter, async (req, res) => {
               item.printing || 'Normal',
               item.language || 'English',
               item.purchase_price || 0,
-              item.game || 'pokemon'
+              gameOfCard.get(cardId)
             ]
           );
           importedCount++;

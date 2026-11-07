@@ -24,12 +24,14 @@ const cardSets = require('./cardSets');
 const languages = require('./utils/languages');
 const cvScan = require('./cvScan');
 const pokemonProvider = require('./utils/pokemonProvider');
+const games = require('./utils/games');
 
 const MODEL_DIR = process.env.CV_MODEL_DIR || path.join(__dirname, '..', 'data', 'models');
 const SIZE = 448;
 const MEAN = [0.485, 0.456, 0.406];
 const STD = [0.229, 0.224, 0.225];
-const GAMES = ['mtg', 'pokemon', 'lorcana'];
+// Every game the registry marks scannable (shared/games.json).
+const GAMES = games.withFeature('scan');
 
 const suffix = (lang) => (!lang || lang === 'en' || lang === 'English' ? '' : `-${String(lang).toLowerCase()}`);
 const binPath = (game, lang) => path.join(MODEL_DIR, `milo-${game}${suffix(lang)}-local.bin`);
@@ -147,7 +149,7 @@ async function newSetCount(game, lang = 'English') {
     // The `sets` table prefixes ids ("mtg-fdn", "lorcana-tfc") while card_cache
     // holds the bare code ("fdn"). Both forms are checked, which is what the OR in
     // the old query did — dropping either one reports every set as new.
-    const bare = (id) => String(id).toLowerCase().replace(/^(?:mtg|lorcana)-/, '');
+    const bare = (id) => games.bareSetId(String(id).toLowerCase());
     return rows.filter(r =>
       !gaps.has(bare(r.id))
       && !cached.has(String(r.id).toLowerCase())
@@ -297,7 +299,7 @@ async function setCounts(game, lang = 'English') {
   const sets = {};
   for (const r of rows) {
     const sid = r.sid;
-    const bare = sid.replace(/^(mtg|lorcana)-/, '');
+    const bare = games.bareSetId(sid);
     const e = sets[sid] || (sets[sid] = { cached: 0, embedded: 0 });
     e.cached++;
     if (embedded && embedded.has(r.id)) e.embedded++;
@@ -392,6 +394,25 @@ function keptFromPrev(prev, embeddedIds) {
   return out;
 }
 
+// The image the SCANNER should match against, which is not always the one the UI
+// displays. TCGdex's cached url is `/low.png` — 245x337, chosen so card grids do
+// not pull 312 KB per thumbnail — and this resizes to 448, so every TCGdex row was
+// embedded from an upscaled blur while the camera hands over a sharp 448 crop.
+// The same asset at `/high.png` is 600x825.
+//
+// Swapped here rather than in tcgdexApi.imageUrl on purpose: card_cache's url is
+// what the frontend renders, and making every grid thumbnail high-res would cost
+// the whole app bandwidth to fix one pipeline.
+function embedUrl(row) {
+  let url = row.image_url.replace(/\/low\.png$/, '/high.png');
+  if (url.includes('cards.lorcast.io/card/digital/')) {
+    url = url.replace(/\/card\/digital\/(?:small|normal)\//, '/card/digital/large/');
+  }
+  // Riftbound rows store a 480px rendition of Riot's art; embed the full width.
+  if (String(row.id).startsWith('riftbound-')) url = require('./riftcodexApi').embedImageUrl(url);
+  return url;
+}
+
 // --- phase 2 -----------------------------------------------------------------
 async function embedPhase(job) {
   // A scoped build embeds only the chosen sets' cards. The catalog it writes is
@@ -401,7 +422,7 @@ async function embedPhase(job) {
   // it embedded.
   const scoped = job.sets && job.sets.length;
   const setFilter = scoped ? job.sets.flatMap(s => {
-    const bare = s.replace(/^(mtg|lorcana)-/, '');
+    const bare = games.bareSetId(s);
     return [bare, `${job.game}-${bare}`];
   }) : [];
   const rows = await db.all(
@@ -440,22 +461,6 @@ async function embedPhase(job) {
   const inflight = new Map();
   const CONCURRENCY = 8;
 
-  // The image the SCANNER should match against, which is not always the one the UI
-  // displays. TCGdex's cached url is `/low.png` — 245x337, chosen so card grids do
-  // not pull 312 KB per thumbnail — and this resizes to 448, so every TCGdex row was
-  // embedded from an upscaled blur while the camera hands over a sharp 448 crop.
-  // The same asset at `/high.png` is 600x825.
-  //
-  // Swapped here rather than in tcgdexApi.imageUrl on purpose: card_cache's url is
-  // what the frontend renders, and making every grid thumbnail high-res would cost
-  // the whole app bandwidth to fix one pipeline.
-  const embedUrl = (row) => {
-    let url = row.image_url.replace(/\/low\.png$/, '/high.png');
-    if (url.includes('cards.lorcast.io/card/digital/')) {
-      url = url.replace(/\/card\/digital\/(?:small|normal)\//, '/card/digital/large/');
-    }
-    return url;
-  };
 
   // Scryfall's image CDN rejects a request with no User-Agent — 400, not 403, which
   // reads like a bad URL. Version comes from package.json rather than a literal: the
@@ -580,4 +585,4 @@ function start(game, lang = 'English', opts = {}) {
 let last = null;
 const lastResult = () => last;
 
-module.exports = { list, listLanguages, setCounts, newSetCount, keptFromPrev, start, stop, state, lastResult, binPath, metaPath, GAMES };
+module.exports = { list, listLanguages, setCounts, newSetCount, keptFromPrev, embedUrl, start, stop, state, lastResult, binPath, metaPath, GAMES };

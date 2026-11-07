@@ -114,7 +114,9 @@ function testIdDispatchIsAboutTheIdNotTheSetting() {
 
   for (const junk of [null, undefined, '', 0]) {
     assert.strictEqual(cardApi.isMtgId(junk), false, `isMtgId survives ${JSON.stringify(junk)}`);
-    assert.strictEqual(cardApi.gameOf(junk), 'pokemon', `gameOf survives ${JSON.stringify(junk)}`);
+    // No id names no game. This used to answer 'pokemon', which is how junk ids
+    // were sent to pokemontcg.io (see utils/games.gameOfId, test/games.test.js).
+    assert.strictEqual(cardApi.gameOf(junk), null, `gameOf survives ${JSON.stringify(junk)}`);
   }
 }
 

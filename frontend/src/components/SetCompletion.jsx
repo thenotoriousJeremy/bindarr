@@ -149,7 +149,7 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
     window.open(massEntryPage(data.game, data.lang), '_blank', 'noopener');
   };
 
-  const setCodeShown = data ? String(data.set.id || '').replace(/^(mtg|lorcana)-/, '').toUpperCase() : '';
+  const setCodeShown = data ? String(data.set.id || '').replace(/^(mtg|lorcana|riftbound)-/, '').toUpperCase() : '';
   const art = data ? (data.set.logo_url || data.set.symbol_url) : null;
 
   return (
@@ -200,7 +200,7 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
                 <button key={`mine-${s.set_id}`} type="button" onClick={() => pick({ id: s.set_id, lang: s.lang })}
                   style={{ display: 'flex', width: '100%', gap: '0.5rem', alignItems: 'center', padding: '0.45rem 0.75rem', background: 'none', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', textAlign: 'left', fontSize: '0.82rem' }}>
                   <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.set_name || s.set_id}</span>
-                  <code style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{String(s.set_id).replace(/^(mtg|lorcana)-/, '').toUpperCase()}</code>
+                  <code style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{String(s.set_id).replace(/^(mtg|lorcana|riftbound)-/, '').toUpperCase()}</code>
                   <span style={{ fontSize: '0.68rem', color: 'var(--type-grass)' }}>{t('sets.ownedCards', { count: s.owned })}</span>
                 </button>
               ))}
@@ -209,7 +209,7 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
                 <button key={`all-${s.id}`} type="button" onClick={() => pick({ id: s.id })}
                   style={{ display: 'flex', width: '100%', gap: '0.5rem', alignItems: 'center', padding: '0.45rem 0.75rem', background: 'none', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', textAlign: 'left', fontSize: '0.82rem' }}>
                   <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
-                  <code style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{String(s.id).replace(/^(mtg|lorcana)-/, '').toUpperCase()}</code>
+                  <code style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{String(s.id).replace(/^(mtg|lorcana|riftbound)-/, '').toUpperCase()}</code>
                   {s.release_date && <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{String(s.release_date).slice(0, 4)}</span>}
                 </button>
               ))}

@@ -6,11 +6,43 @@
 // data, and nothing on the server needs to know about it. Hiding a game hides its
 // pickers and its cards from the browsing views; nothing is deleted, and export
 // still contains everything.
-export const GAMES = [
-  { value: 'pokemon', label: 'Pokémon', short: 'Pokémon' },
-  { value: 'mtg', label: 'Magic: The Gathering', short: 'MTG' },
-  { value: 'lorcana', label: 'Disney Lorcana', short: 'Lorcana' },
-];
+//
+// Which games exist at all is not decided here: it is shared/games.json, the one
+// registry the backend reads too (this imports its ESM twin, shared/games.js, so
+// the bare-Node tests can load it). Each entry carries its value and labels plus
+// what the game supports — see gameInfo below.
+import GAME_TABLE from '../../../shared/games.js';
+
+// A game marked `nativeApp: false` is left out of the store-distributed native
+// app. Riftbound is: Riot's fan policy (Legal Jibber Jabber, section 3) does not
+// allow projects using its IP on the App Store or Google Play without a licence
+// or an approved Riot API key, and Bindarr has neither. The web app is unaffected.
+// window.Capacitor is what the native shell injects; bare Node has none.
+const isNativeShell = () => !!globalThis.Capacitor?.isNativePlatform?.();
+export const GAMES = GAME_TABLE.filter(g => g.nativeApp !== false || !isNativeShell());
+
+const byValue = new Map(GAMES.map(g => [g.value, g]));
+
+// The whole registry entry for a game, or null.
+export const gameInfo = (game) => byValue.get(String(game || '')) || null;
+
+// The game rows from before multi-game support belong to.
+export const LEGACY_GAME = (GAMES.find(g => g.legacy) || GAMES[0]).value;
+
+// The game a card belongs to: its own `game` field when it has one, else what its
+// id says (a registered prefix, or the legacy pokemontcg.io id shape). Mirrors
+// backend/src/utils/games.gameOfId, from the same table.
+const PREFIXES = GAMES
+  .flatMap(g => (g.idPrefixes || []).map(prefix => ({ prefix, game: g.value })))
+  .sort((a, b) => b.prefix.length - a.prefix.length);
+const legacyEntry = gameInfo(LEGACY_GAME);
+const LEGACY_ID = legacyEntry?.legacyIdPattern ? new RegExp(legacyEntry.legacyIdPattern) : null;
+export function gameOfCard(card) {
+  if (card?.game && byValue.has(card.game)) return card.game;
+  const id = String(card?.card_id || card?.id || '');
+  for (const { prefix, game } of PREFIXES) if (id.startsWith(prefix)) return game;
+  return LEGACY_ID && LEGACY_ID.test(id) ? LEGACY_GAME : null;
+}
 
 const KEY = 'hidden_games';
 const ALL = GAMES.map(g => g.value);

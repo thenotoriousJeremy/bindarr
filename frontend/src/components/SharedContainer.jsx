@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import Logo from './Logo';
+import RiotNotice from './RiotNotice';
 import { isBinderType, binderSpread } from '../utils/cardOptions';
 import CompartmentView from './CompartmentView';
 import { artPocketsByPage } from '../utils/binderArtGeometry';
@@ -163,6 +164,7 @@ function SharedContainer({ shareToken, containerId }) {
           )}
         </>
       )}
+      {JSON.stringify(data || {}).includes('"game":"riftbound"') && <RiotNotice style={{ textAlign: 'center', padding: '0 1rem 1.5rem' }} />}
     </div>
   );
 }

@@ -65,9 +65,6 @@ async function sealedExtraEnabled() {
   return !!(row && row.sealed_tcg_extra_enabled);
 }
 
-async function syncCategories() {
-  return (await sealedExtraEnabled()) ? SYNC_CATEGORIES : BASE_SYNC_CATEGORIES;
-}
 
 // Which of those categories something on THIS instance actually needs. A fresh
 // install, and every dev or test boot on a throwaway database, has nothing to
@@ -79,6 +76,7 @@ async function syncCategories() {
 //          purchase.
 //   1, 71  the Magic/Lorcana sealed gate is on AND a Magic or Lorcana sealed
 //          purchase exists.
+//   89     a Riftbound card in any collection (riftboundPrices.js).
 //
 // `explicit` is an admin acting on purpose: building a product map (which the
 // first Pokémon scan-catalog download does, before any card exists) or turning
@@ -92,9 +90,15 @@ async function demandedCategories({ explicit = false } = {}) {
       EXISTS (SELECT 1 FROM collection c JOIN card_cache cc ON cc.id = c.card_id
                WHERE cc.game = 'pokemon')
       OR EXISTS (SELECT 1 FROM sealed_purchases WHERE game = 'pokemon') AS pokemon,
-      EXISTS (SELECT 1 FROM sealed_purchases WHERE game IN ('mtg', 'lorcana')) AS extra
+      EXISTS (SELECT 1 FROM sealed_purchases WHERE game IN ('mtg', 'lorcana')) AS extra,
+      EXISTS (SELECT 1 FROM collection WHERE game = 'riftbound') AS riftbound
   `);
-  return allowed.filter(c => (BASE_SYNC_CATEGORIES.includes(c) ? !!row.pokemon : !!row.extra));
+  const wanted = (c) => {
+    if (BASE_SYNC_CATEGORIES.includes(c)) return !!row.pokemon;
+    if (OPTIONAL_SYNC_CATEGORIES.some(o => o.categoryId === c)) return !!row.riftbound;
+    return !!row.extra;
+  };
+  return allowed.filter(wanted);
 }
 
 // Turning the gate on mid-dataset must not wait for tomorrow's last-updated.txt,
@@ -113,6 +117,21 @@ async function setSealedExtraEnabled(enabled) {
     `);
     syncIfUpdatedSafely('enabling Magic/Lorcana sealed tracking', { explicit: true });
   }
+}
+
+// Categories synced only while something in this install reads them. Riftbound
+// (89) is priced straight off its groups by riftboundPrices.js, but an install
+// that has never cached a Riftbound card has nothing to price, and this mirror
+// is free: 1 + 2 x (its groups) requests a day are not asked of it for nothing.
+const OPTIONAL_SYNC_CATEGORIES = [{ categoryId: 89, game: 'riftbound' }];
+
+async function syncCategories() {
+  const wanted = [...((await sealedExtraEnabled()) ? SYNC_CATEGORIES : BASE_SYNC_CATEGORIES)];
+  for (const { categoryId, game } of OPTIONAL_SYNC_CATEGORIES) {
+    const used = await db.get(`SELECT 1 AS used FROM card_cache WHERE game = ? LIMIT 1`, [game]).catch(() => null);
+    if (used) wanted.push(categoryId);
+  }
+  return wanted;
 }
 
 // TCGCSV rejects a request with no identifying User-Agent — a 401 with a note
@@ -374,9 +393,13 @@ async function runSync(categories) {
     }
     if (!dataVersion) return { updated: false, checked: true, requests: requestsThisRun() };
   } else if (!dataVersion) {
-    if (!state.checked_stale) return { updated: false, checked: false, requests: 0 };
+    if (!state.checked_stale) {
+      await backfillCategories(state.tcgcsv_data_version, categories);
+      return { updated: false, checked: false, requests: requestsThisRun() };
+    }
     dataVersion = await checkLastUpdated(state.tcgcsv_data_version);
     if (!dataVersion) {
+      await backfillCategories(state.tcgcsv_data_version, categories);
       return { updated: false, checked: true, dataVersion: state.tcgcsv_data_version, requests: requestsThisRun() };
     }
   }
@@ -422,6 +445,25 @@ async function runSync(categories) {
     `${requests} requests this run (${expectedRequests} for a full sync).`
   );
   return { updated: true, dataVersion, groups: groupCount, expectedRequests, requests };
+}
+
+// A category this install has only just started reading (its first Riftbound
+// card) is not in the version already cached, and a current version is not
+// synced again until TCGCSV publishes a new one — up to a day of no prices for
+// no reason. Fill just that category into the current version instead.
+async function backfillCategories(dataVersion, categories) {
+  if (!dataVersion) return;
+  for (const categoryId of categories) {
+    const path = `/tcgplayer/${categoryId}/groups`;
+    const have = await db.get(`SELECT 1 AS have FROM tcgcsv_cache WHERE path = ? AND data_version = ?`, [path, dataVersion]);
+    if (have) continue;
+    const groups = await syncResults(path, dataVersion);
+    for (const group of groups) {
+      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/products`, dataVersion, { perGroup: true });
+      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/prices`, dataVersion, { perGroup: true });
+    }
+    console.log(`TCGCSV: added category ${categoryId} (${groups.length} groups) to cached version ${dataVersion}.`);
+  }
 }
 
 // Logged once per stretch with nothing to sync, not on every hourly tick.

@@ -10,7 +10,7 @@ import { syntaxErrorText } from '../utils/scryfallSyntax';
 import { useBackGuard } from '../utils/useBackGuard';
 import { buildDeckExport, parseDeckLine, pickDeckLineCard } from '../utils/deckText';
 import { buildMassEntry, massEntryPage } from '../utils/tcgMassEntryUrl';
-import { defaultGame, gameOptions, showGamePicker, isGameEnabled } from '../utils/games';
+import { defaultGame, gameOptions, showGamePicker, LEGACY_GAME } from '../utils/games';
 import CardImage from './CardImage';
 import DeckListActions from './DeckListActions';
 import { useT } from '../utils/i18n';
@@ -19,6 +19,8 @@ import {
   copyLimit, isBasicEnergyOrLand, deckWarnings, ruleWarningText,
 } from '../utils/deckRules';
 import { deckCardUndo, undoToast } from '../utils/undo';
+import RiotNotice from './RiotNotice';
+import { RIFTBOUND_GROUPS, riftboundGroup } from '../utils/riftbound';
 
 // Total copies of a card (matched by name) already in a deck's card list.
 const deckCountByName = (deckCards, name) =>
@@ -51,6 +53,17 @@ function AnyPrintingField({ t, checked, onChange }) {
     </label>
   );
 }
+
+// How each game's button looks in the new-deck picker. Presentation only: which
+// games exist, and what a deck starts as, come from the registry. A game with no
+// entry still gets a button, just a plain one.
+const GAME_PICKER_LOOK = {
+  pokemon: { Icon: Zap, color: 'var(--accent-yellow)', tint: 'rgba(234, 179, 8, 0.12)', titleKey: 'deck.gamePokemonWithSystem', subKey: 'deck.standard60' },
+  mtg: { Icon: Swords, color: '#ef4444', tint: 'rgba(239, 68, 68, 0.12)', titleKey: 'deck.gameMtgWithSystem', subKey: 'deck.constructedCommander' },
+  lorcana: { Icon: Layers, color: '#a855f7', tint: 'rgba(168, 85, 247, 0.12)', titleKey: 'deck.gameLorcanaWithSystem', subKey: 'deck.standard60' },
+  riftbound: { Icon: Swords, color: '#38bdf8', tint: 'rgba(56, 189, 248, 0.12)', subKey: 'deck.riftboundConstructed' },
+};
+const PLAIN_PICKER_LOOK = { Icon: Gamepad2, color: 'var(--text-strong)', tint: 'rgba(255, 255, 255, 0.08)' };
 
 const formatCardLocations = (locations) => locations.map(({ take, location_name, compartment_display }) =>
   `${take > 1 ? `×${take} ` : ''}${location_name}${compartment_display ? ` · ${compartment_display}` : ''}`
@@ -792,6 +805,7 @@ function DeckBuilder({ showToast }) {
     return 'Character';
   };
   const cardGroup = (card) => {
+    if (deckGame === 'riftbound') return riftboundGroup(card);
     if (deckGame === 'mtg') return mtgCardType(card);
     if (deckGame === 'lorcana') return lorcanaCardType(card);
     let type = card.supertype || 'Pokémon';
@@ -800,7 +814,7 @@ function DeckBuilder({ showToast }) {
   };
 
   // Groups order based on game
-  const GROUP_ORDER = deckGame === 'mtg'
+  const GROUP_ORDER = deckGame === 'riftbound' ? RIFTBOUND_GROUPS : deckGame === 'mtg'
     ? ['Creature', 'Planeswalker', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Battle', 'Land', 'Other']
     : (deckGame === 'lorcana'
       ? ['Character', 'Action', 'Item', 'Location', 'Other']
@@ -915,9 +929,7 @@ function DeckBuilder({ showToast }) {
 
   // --- SELECTION MENU METRICS & FILTERING ---
   const totalDecksCount = decks.length;
-  const pokemonDecksCount = decks.filter(d => (d.game || 'pokemon') === 'pokemon').length;
-  const mtgDecksCount = decks.filter(d => d.game === 'mtg').length;
-  const lorcanaDecksCount = decks.filter(d => d.game === 'lorcana').length;
+  const decksOfGame = (game) => decks.filter(d => (d.game || LEGACY_GAME) === game).length;
 
   const filteredDecks = decks.filter(deck => {
     const q = deckSearchTerm.trim().toLowerCase();
@@ -999,7 +1011,7 @@ function DeckBuilder({ showToast }) {
               <div className="sub-nav-tabs" style={{ margin: 0, background: 'rgba(0,0,0,0.25)', padding: '3px', borderRadius: 'var(--radius-sm)' }}>
                 {[
                   ['all', 'All Decks', totalDecksCount],
-                  ...gameOptions().map(g => [g.value, g.short, g.value === 'mtg' ? mtgDecksCount : (g.value === 'lorcana' ? lorcanaDecksCount : pokemonDecksCount)]),
+                  ...gameOptions().map(g => [g.value, g.short, decksOfGame(g.value)]),
                 ].map(([val, label, count]) => (
                   <button
                     key={val}
@@ -1911,6 +1923,8 @@ function DeckBuilder({ showToast }) {
                     {t('deck.healthTitle')}
                   </h3>
 
+                  {deckGame === 'riftbound' && <RiotNotice style={{ marginTop: 0 }} />}
+
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', fontSize: '0.8rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
                       <span>{t('deck.targetDeckSize')}</span>
@@ -2062,71 +2076,33 @@ function DeckBuilder({ showToast }) {
               <div className="form-group">
                 <label style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-strong)', marginBottom: '0.4rem', display: 'block' }}>{t('deck.gameSystem')}</label>
                 <div style={{ display: 'grid', gridTemplateColumns: `repeat(${gameOptions().length}, 1fr)`, gap: '0.75rem' }}>
-                  {isGameEnabled('pokemon') && (
-                    <div
-                      onClick={() => pickNewDeckGame('pokemon')}
-                      style={{
-                        padding: '0.75rem',
-                        borderRadius: 'var(--radius-sm)',
-                        border: newDeckGame === 'pokemon' ? '2px solid var(--accent-yellow)' : '1px solid var(--border-glass)',
-                        background: newDeckGame === 'pokemon' ? 'rgba(234, 179, 8, 0.12)' : 'rgba(0, 0, 0, 0.2)',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        gap: '0.3rem',
-                        transition: 'all 0.15s'
-                      }}
-                    >
-                      <Zap size={22} style={{ color: newDeckGame === 'pokemon' ? 'var(--accent-yellow)' : 'var(--text-muted)' }} />
-                      <span style={{ fontSize: '0.85rem', fontWeight: 700, color: newDeckGame === 'pokemon' ? 'var(--accent-yellow)' : 'var(--text-secondary)' }}>{t('deck.gamePokemonWithSystem')}</span>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{t('deck.standard60')}</span>
-                    </div>
-                  )}
-
-                  {isGameEnabled('mtg') && (
-                    <div
-                      onClick={() => pickNewDeckGame('mtg')}
-                      style={{
-                        padding: '0.75rem',
-                        borderRadius: 'var(--radius-sm)',
-                        border: newDeckGame === 'mtg' ? '2px solid #ef4444' : '1px solid var(--border-glass)',
-                        background: newDeckGame === 'mtg' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(0, 0, 0, 0.2)',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        gap: '0.3rem',
-                        transition: 'all 0.15s'
-                      }}
-                    >
-                      <Swords size={22} style={{ color: newDeckGame === 'mtg' ? '#ef4444' : 'var(--text-muted)' }} />
-                      <span style={{ fontSize: '0.85rem', fontWeight: 700, color: newDeckGame === 'mtg' ? '#ef4444' : 'var(--text-secondary)' }}>{t('deck.gameMtgWithSystem')}</span>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{t('deck.constructedCommander')}</span>
-                    </div>
-                  )}
-
-                  {isGameEnabled('lorcana') && (
-                    <div
-                      onClick={() => pickNewDeckGame('lorcana')}
-                      style={{
-                        padding: '0.75rem',
-                        borderRadius: 'var(--radius-sm)',
-                        border: newDeckGame === 'lorcana' ? '2px solid #a855f7' : '1px solid var(--border-glass)',
-                        background: newDeckGame === 'lorcana' ? 'rgba(168, 85, 247, 0.12)' : 'rgba(0, 0, 0, 0.2)',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        gap: '0.3rem',
-                        transition: 'all 0.15s'
-                      }}
-                    >
-                      <Layers size={22} style={{ color: newDeckGame === 'lorcana' ? '#a855f7' : 'var(--text-muted)' }} />
-                      <span style={{ fontSize: '0.85rem', fontWeight: 700, color: newDeckGame === 'lorcana' ? '#a855f7' : 'var(--text-secondary)' }}>{t('deck.gameLorcanaWithSystem')}</span>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{t('deck.standard60')}</span>
-                    </div>
-                  )}
+                  {gameOptions().map(({ value, label }) => {
+                    const look = GAME_PICKER_LOOK[value] || PLAIN_PICKER_LOOK;
+                    const on = newDeckGame === value;
+                    const { Icon } = look;
+                    return (
+                      <div
+                        key={value}
+                        onClick={() => pickNewDeckGame(value)}
+                        style={{
+                          padding: '0.75rem',
+                          borderRadius: 'var(--radius-sm)',
+                          border: on ? `2px solid ${look.color}` : '1px solid var(--border-glass)',
+                          background: on ? look.tint : 'rgba(0, 0, 0, 0.2)',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: '0.3rem',
+                          transition: 'all 0.15s'
+                        }}
+                      >
+                        <Icon size={22} style={{ color: on ? look.color : 'var(--text-muted)' }} />
+                        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: on ? look.color : 'var(--text-secondary)' }}>{look.titleKey ? t(look.titleKey) : label}</span>
+                        {look.subKey && <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{t(look.subKey)}</span>}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
               )}
