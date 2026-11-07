@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, X, ChevronLeft, Play, BarChart2, Search, LogOut, PackageCheck, LayoutGrid, List, Download, Upload, Eye, Filter, CheckCircle, AlertTriangle, Layers, Zap, Swords, Gamepad2, SlidersHorizontal, ArrowRight, FolderPlus, FileText, MapPin } from 'lucide-react';
+import { Plus, Trash2, X, ChevronLeft, Play, BarChart2, Search, LogOut, PackageCheck, LayoutGrid, List, Download, Upload, Eye, Filter, CheckCircle, AlertTriangle, Layers, Zap, Swords, Gamepad2, SlidersHorizontal, ArrowRight, FolderPlus, FileText, MapPin, Crown } from 'lucide-react';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { shuffleArray } from '../utils/shuffle';
 import { translateJapaneseName } from '../utils/langHelper';
@@ -10,29 +10,19 @@ import { buildDeckExport, parseDeckLine, pickDeckLineCard } from '../utils/deckT
 import { defaultGame, gameOptions, showGamePicker, isGameEnabled } from '../utils/games';
 import CardImage from './CardImage';
 import { useT } from '../utils/i18n';
-
-// Basic Energy (Pokémon) & Basic Lands (MTG) are exempt from the "max 4 of a card" deck rule.
-const isBasicEnergyOrLand = (card, game = 'pokemon') => {
-  if (!card) return false;
-  if (game === 'mtg' || card.game === 'mtg') {
-    const subs = card.subtypes || [];
-    const basicTypes = ['Basic', 'Plains', 'Island', 'Swamp', 'Mountain', 'Forest', 'Wastes'];
-    return (subs.includes('Land') || card.supertype === 'Land') && basicTypes.some(t => subs.includes(t) || card.name === t);
-  }
-  return card.supertype === 'Energy' && (!card.subtypes || !card.subtypes.includes('Special'));
-};
+import {
+  rulesFor, formatNames, defaultFormat, defaultTargetSize, copyLimit, isBasicEnergyOrLand, deckWarnings, ruleWarningText,
+} from '../utils/deckRules';
 
 // Total copies of a card (matched by name) already in a deck's card list.
 const deckCountByName = (deckCards, name) =>
   (deckCards || []).filter(c => c.name === name).reduce((s, c) => s + c.quantity, 0);
 
-// What a new deck starts as for a game. Pulled out because it is now needed in
-// the Game System buttons and the initial state, which has to
-// match the game the picker opens on.
+// What a new deck starts as for a game: the first format the rules table lists for
+// it, sized the way that format is (100 for Commander, 60 otherwise).
 const newDeckDefaults = (game) => {
-  if (game === 'mtg') return { format: 'Commander / EDH', targetSize: 100 };
-  if (game === 'lorcana') return { format: 'Core (Constructed)', targetSize: 60 };
-  return { format: 'Standard', targetSize: 60 };
+  const format = defaultFormat(game);
+  return { format, targetSize: defaultTargetSize(game, format) };
 };
 
 const formatCardLocations = (locations) => locations.map(({ take, location_name, compartment_display }) =>
@@ -53,10 +43,8 @@ function DeckBuilder({ showToast }) {
   const [deckCardSortBy, setDeckCardSortBy] = useState('type');
   const [previewCard, setPreviewCard] = useState(null);
 
-  // Deck Creation States & Constants
-  const POKEMON_FORMATS = ['Standard', 'Expanded', 'GLC (Gym Leader Challenge)', 'Unlimited', 'Retro'];
-  const MTG_FORMATS = ['Commander / EDH', 'Standard', 'Modern', 'Pioneer', 'Legacy', 'Vintage', 'Pauper'];
-  const LORCANA_FORMATS = ['Core (Constructed)', 'Casual', 'Draft / Sealed'];
+  // Deck Creation States & Constants. The format lists come from the rules table
+  // (shared/deckRules.mjs), so a format added there is offered here too.
   const DECK_CATEGORIES = ['Competitive', 'Casual', 'Tournament', 'Theorycraft', 'Proxy', 'Trade'];
   const DECK_ACCENT_COLORS = [
     { name: 'Gold', hex: '#eab308' },
@@ -176,11 +164,9 @@ function DeckBuilder({ showToast }) {
         showToast(t('deck.created'));
         setNewDeckName('');
         setNewDeckDesc('');
-        setNewDeckGame(defaultGame());
-        setNewDeckFormat(newDeckDefaults(defaultGame()).format);
+        pickNewDeckGame(defaultGame());
         setNewDeckCategory('Competitive');
         setNewDeckAccentColor('#eab308');
-        setNewDeckTargetSize(newDeckDefaults(defaultGame()).targetSize);
         setNewDeckImportText('');
         setNewDeckImportFormat('plain');
         setShowImportDecklistArea(false);
@@ -193,6 +179,14 @@ function DeckBuilder({ showToast }) {
       console.error(err);
       showToast(t('deck.errCreateGeneric'));
     }
+  };
+
+  // A new deck's format and size follow the game picked.
+  const pickNewDeckGame = (game) => {
+    const defaults = newDeckDefaults(game);
+    setNewDeckGame(game);
+    setNewDeckFormat(defaults.format);
+    setNewDeckTargetSize(defaults.targetSize);
   };
 
   const handleManaBoxDeckFile = (event) => {
@@ -306,8 +300,8 @@ function DeckBuilder({ showToast }) {
         return;
       }
       
-      if (!isBasicEnergyOrLand(card, activeDeck.game) && deckCountByName(activeDeck.cards, card.name) >= 4) {
-        showToast(t('deck.errCopyLimit', { count: 4, name: displayName(card) }));
+      if (atCopyLimit(card)) {
+        showToast(copyLimitText(card));
         return;
       }
     }
@@ -328,6 +322,27 @@ function DeckBuilder({ showToast }) {
     } catch (err) {
       console.error(err);
       showToast(t('deck.errQuantity'));
+    } finally {
+      setSavingCard(false);
+    }
+  };
+
+  // Mark or unmark a card as the deck's commander. Legality is reported in Deck
+  // Health, not enforced: a command zone is built one card at a time.
+  const handleToggleCommander = async (card) => {
+    if (!activeDeck || savingCard) return;
+    setSavingCard(true);
+    try {
+      const response = await fetch(`/api/decks/${activeDeck.id}/cards/${encodeURIComponent(card.id)}/commander`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commander: !card.is_commander })
+      });
+      if (response.ok) await loadDeckDetails(activeDeck.id);
+      else showToast(t('deck.errCommander'));
+    } catch (err) {
+      console.error(err);
+      showToast(t('deck.errCommander'));
     } finally {
       setSavingCard(false);
     }
@@ -710,6 +725,18 @@ function DeckBuilder({ showToast }) {
 
   // The game the active deck is built for (legacy decks default to Pokémon).
   const deckGame = activeDeck?.game || 'pokemon';
+  // The rules its format holds it to — the same table the server enforces — and
+  // everything the deck currently breaks, for Deck Health.
+  const deckRules = rulesFor(deckGame, activeDeck?.format);
+  const hasCommandZone = !!deckRules.commander;
+  const ruleWarnings = activeDeck ? deckWarnings({ game: deckGame, format: activeDeck.format, cards: activeDeck.cards }) : [];
+  // Judged off the deck's own copy of the card when it has one: a search result
+  // carries no card text, and the text is what exempts Relentless Rats.
+  const limitFor = (card) => copyLimit((activeDeck?.cards || []).find(c => c.name === card.name) || card, deckRules);
+  const atCopyLimit = (card) => deckCountByName(activeDeck?.cards, card.name) >= limitFor(card);
+  const copyLimitText = (card) => (limitFor(card) === 1
+    ? t('deck.errSingleton', { name: displayName(card) })
+    : t('deck.errCopyLimit', { count: limitFor(card), name: displayName(card) }));
 
   // MTG card-type buckets, read off the parsed type line stored in subtypes.
   const MTG_MAIN_TYPES = ['Creature', 'Planeswalker', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Battle', 'Land'];
@@ -755,10 +782,15 @@ function DeckBuilder({ showToast }) {
             || displayName(a).localeCompare(displayName(b));
         })
       }]
-    : GROUP_ORDER.map(name => ({
-        name,
-        cards: activeDeck?.cards.filter(card => cardGroup(card).toLowerCase() === name.toLowerCase()) || []
-      }));
+    : [
+        // A deck's commanders head the list, ahead of their card types.
+        ...(hasCommandZone ? [{ name: 'Commander', cards: activeDeck?.cards.filter(card => card.is_commander) || [] }] : []),
+        ...GROUP_ORDER.map(name => ({
+          name,
+          cards: activeDeck?.cards.filter(card => !(hasCommandZone && card.is_commander)
+            && cardGroup(card).toLowerCase() === name.toLowerCase()) || []
+        })),
+      ];
 
   // --- CHART DATA GENERATION ---
   const getSupertypeChartData = () => {
@@ -1399,7 +1431,8 @@ function DeckBuilder({ showToast }) {
                   <label className="form-group" style={{ margin: 0 }}>
                     {t('deck.format')}
                     <select className="input-control" value={deckDraft.format} onChange={(event) => setDeckDraft({ ...deckDraft, format: event.target.value })}>
-                      {(activeDeck.game === 'mtg' ? MTG_FORMATS : activeDeck.game === 'lorcana' ? LORCANA_FORMATS : POKEMON_FORMATS).map(format => <option key={format} value={format}>{format}</option>)}
+                      {/* A format saved before the lists existed stays selectable. */}
+                      {[...new Set([...formatNames(deckGame), deckDraft.format].filter(Boolean))].map(format => <option key={format} value={format}>{format}</option>)}
                     </select>
                   </label>
                   <label className="form-group" style={{ margin: 0 }}>
@@ -1626,7 +1659,7 @@ function DeckBuilder({ showToast }) {
                           const qtyInDeck = existingInDeck ? existingInDeck.quantity : 0;
                           const ownedQty = card.owned_qty || 0;
                           const isAtMaxOwned = qtyInDeck >= ownedQty;
-                          const isAtRuleMax = !isBasicEnergyOrLand(card, deckGame) && deckCountByName(activeDeck?.cards, card.name) >= 4;
+                          const isAtRuleMax = atCopyLimit(card);
                           const disabledAdd = savingCard || isAtMaxOwned || isAtRuleMax;
 
                           return (
@@ -1642,7 +1675,7 @@ function DeckBuilder({ showToast }) {
                                 <button className="btn btn-secondary btn-icon-only" style={{ padding: '0.2rem' }} onClick={() => setPreviewCard(card)} title={t('deck.previewArt')}>
                                   <Eye size={12} />
                                 </button>
-                                <button className="btn btn-primary btn-icon-only" style={{ padding: '0.2rem' }} disabled={disabledAdd} onClick={() => handleAddCardToDeck(card)} title={isAtRuleMax ? "4-copy limit reached" : isAtMaxOwned ? "Not enough owned copies" : "Add to deck"}>
+                                <button className="btn btn-primary btn-icon-only" style={{ padding: '0.2rem' }} disabled={disabledAdd} onClick={() => handleAddCardToDeck(card)} title={isAtRuleMax ? copyLimitText(card) : isAtMaxOwned ? "Not enough owned copies" : "Add to deck"}>
                                   <Plus size={12} />
                                 </button>
                               </div>
@@ -1734,6 +1767,18 @@ function DeckBuilder({ showToast }) {
                                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.locked_decks ? t('deck.unavailableCopiesInDecks', { count: card.quantity - ((card.owned_qty || 0) - (card.locked_qty || 0)), decks: card.locked_decks }) : t('deck.unavailableCopies', { count: card.quantity - ((card.owned_qty || 0) - (card.locked_qty || 0)) })}</span>
                                       </span>
                                     )}
+                                    {hasCommandZone && (
+                                      <button
+                                        className={`btn ${card.is_commander ? 'btn-primary' : 'btn-secondary'} btn-icon-only`}
+                                        style={{ width: '26px', height: '26px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                                        disabled={savingCard}
+                                        onClick={() => handleToggleCommander(card)}
+                                        title={t(card.is_commander ? 'deck.unsetCommander' : 'deck.setCommander')}
+                                        aria-pressed={!!card.is_commander}
+                                      >
+                                        <Crown size={12} />
+                                      </button>
+                                    )}
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-glass)', flexShrink: 0 }}>
                                       <button
                                         className={`btn ${card.quantity === 1 ? 'btn-danger' : 'btn-secondary'} btn-icon-only`}
@@ -1748,7 +1793,7 @@ function DeckBuilder({ showToast }) {
                                       <button
                                         className="btn btn-secondary btn-icon-only"
                                         style={{ width: '22px', height: '22px', padding: 0 }}
-                                        disabled={savingCard || card.quantity >= (card.owned_qty || 0) || (!isBasicEnergyOrLand(card, deckGame) && deckCountByName(activeDeck.cards, card.name) >= 4)}
+                                        disabled={savingCard || card.quantity >= (card.owned_qty || 0) || atCopyLimit(card)}
                                         onClick={() => handleUpdateCardQty(card.id, card.quantity + 1)}
                                       >
                                         +
@@ -1786,7 +1831,12 @@ function DeckBuilder({ showToast }) {
                                       <button className={`btn ${card.quantity === 1 ? 'btn-danger' : 'btn-secondary'} btn-icon-only`} style={{ width: '20px', height: '20px', fontSize: '0.7rem', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} disabled={savingCard} onClick={() => handleUpdateCardQty(card.id, card.quantity - 1)} title={t(card.quantity === 1 ? 'deck.removeFromDeck' : 'deck.decreaseQty')}>
                                         {card.quantity === 1 ? <Trash2 size={10} /> : '-'}
                                       </button>
-                                      <button className="btn btn-secondary btn-icon-only" style={{ width: '20px', height: '20px', fontSize: '0.7rem', padding: 0 }} disabled={savingCard || card.quantity >= (card.owned_qty || 0) || (!isBasicEnergyOrLand(card, deckGame) && deckCountByName(activeDeck.cards, card.name) >= 4)} onClick={() => handleUpdateCardQty(card.id, card.quantity + 1)}>+</button>
+                                      <button className="btn btn-secondary btn-icon-only" style={{ width: '20px', height: '20px', fontSize: '0.7rem', padding: 0 }} disabled={savingCard || card.quantity >= (card.owned_qty || 0) || atCopyLimit(card)} onClick={() => handleUpdateCardQty(card.id, card.quantity + 1)}>+</button>
+                                      {hasCommandZone && (
+                                        <button className={`btn ${card.is_commander ? 'btn-primary' : 'btn-secondary'} btn-icon-only`} style={{ width: '20px', height: '20px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} disabled={savingCard} onClick={() => handleToggleCommander(card)} title={t(card.is_commander ? 'deck.unsetCommander' : 'deck.setCommander')} aria-pressed={!!card.is_commander}>
+                                          <Crown size={10} />
+                                        </button>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -1807,7 +1857,7 @@ function DeckBuilder({ showToast }) {
                 {/* Deck Health & Summary Status */}
                 <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                   <h3 style={{ fontSize: '0.95rem', color: 'var(--text-strong)', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    {totalDeckCardsCount === targetDeckCardsCount ? (
+                    {totalDeckCardsCount === targetDeckCardsCount && ruleWarnings.length === 0 ? (
                       <CheckCircle size={15} style={{ color: 'var(--type-grass)' }} />
                     ) : (
                       <AlertTriangle size={15} style={{ color: 'var(--accent-yellow)' }} />
@@ -1830,6 +1880,22 @@ function DeckBuilder({ showToast }) {
                         {activeDeck.cards.filter(c => isBasicEnergyOrLand(c, deckGame)).reduce((s, c) => s + c.quantity, 0)} {deckGame === 'mtg' ? t('deck.basicLandsCount', { count: activeDeck.cards.filter(c => isBasicEnergyOrLand(c, deckGame)).reduce((s, c) => s + c.quantity, 0) }) : t('deck.basicEnergyCount', { count: activeDeck.cards.filter(c => isBasicEnergyOrLand(c, deckGame)).reduce((s, c) => s + c.quantity, 0) })}
                       </strong>
                     </div>
+                  </div>
+
+                  {/* What the format says about the deck. Warnings, never refusals:
+                      an unfinished deck is what a deck being built looks like. */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', fontSize: '0.75rem', borderTop: '1px solid var(--border-glass)', paddingTop: '0.6rem' }}>
+                    <span style={{ fontWeight: 700, color: 'var(--text-secondary)' }}>{t('deck.formatRulesTitle', { format: deckRules.format })}</span>
+                    {ruleWarnings.length === 0 ? (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--type-grass)' }}>
+                        <CheckCircle size={13} style={{ flexShrink: 0 }} /> {t('deck.rulesMet', { format: deckRules.format })}
+                      </span>
+                    ) : ruleWarnings.map((warning, index) => (
+                      <span key={`${warning.code}-${index}`} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.35rem', color: 'var(--accent-yellow)', overflowWrap: 'anywhere' }}>
+                        <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: '1px' }} />
+                        <span>{ruleWarningText(t, warning, deckRules.format)}</span>
+                      </span>
+                    ))}
                   </div>
                 </div>
 
@@ -1952,11 +2018,7 @@ function DeckBuilder({ showToast }) {
                 <div style={{ display: 'grid', gridTemplateColumns: `repeat(${gameOptions().length}, 1fr)`, gap: '0.75rem' }}>
                   {isGameEnabled('pokemon') && (
                     <div
-                      onClick={() => {
-                        setNewDeckGame('pokemon');
-                        setNewDeckFormat('Standard');
-                        setNewDeckTargetSize(60);
-                      }}
+                      onClick={() => pickNewDeckGame('pokemon')}
                       style={{
                         padding: '0.75rem',
                         borderRadius: 'var(--radius-sm)',
@@ -1978,11 +2040,7 @@ function DeckBuilder({ showToast }) {
 
                   {isGameEnabled('mtg') && (
                     <div
-                      onClick={() => {
-                        setNewDeckGame('mtg');
-                        setNewDeckFormat('Commander / EDH');
-                        setNewDeckTargetSize(100);
-                      }}
+                      onClick={() => pickNewDeckGame('mtg')}
                       style={{
                         padding: '0.75rem',
                         borderRadius: 'var(--radius-sm)',
@@ -2004,11 +2062,7 @@ function DeckBuilder({ showToast }) {
 
                   {isGameEnabled('lorcana') && (
                     <div
-                      onClick={() => {
-                        setNewDeckGame('lorcana');
-                        setNewDeckFormat('Core (Constructed)');
-                        setNewDeckTargetSize(60);
-                      }}
+                      onClick={() => pickNewDeckGame('lorcana')}
                       style={{
                         padding: '0.75rem',
                         borderRadius: 'var(--radius-sm)',
@@ -2041,12 +2095,11 @@ function DeckBuilder({ showToast }) {
                     onChange={(e) => {
                       const selectedFmt = e.target.value;
                       setNewDeckFormat(selectedFmt);
-                      if (selectedFmt.includes('Commander')) setNewDeckTargetSize(100);
-                      else if (selectedFmt.includes('Standard') || selectedFmt.includes('Expanded') || selectedFmt.includes('GLC') || selectedFmt.includes('Modern') || selectedFmt.includes('Pioneer') || selectedFmt.includes('Core')) setNewDeckTargetSize(60);
+                      setNewDeckTargetSize(defaultTargetSize(newDeckGame, selectedFmt));
                     }}
                     style={{ fontSize: '0.85rem' }}
                   >
-                    {(newDeckGame === 'pokemon' ? POKEMON_FORMATS : (newDeckGame === 'lorcana' ? LORCANA_FORMATS : MTG_FORMATS)).map(fmt => (
+                    {formatNames(newDeckGame).map(fmt => (
                       <option key={fmt} value={fmt} style={{ background: '#1e293b', color: '#fff' }}>{fmt}</option>
                     ))}
                   </select>
@@ -2181,11 +2234,7 @@ function DeckBuilder({ showToast }) {
                         onChange={(e) => {
                           const format = e.target.value;
                           setNewDeckImportFormat(format);
-                          if (format === 'manabox') {
-                            setNewDeckGame('mtg');
-                            setNewDeckFormat('Commander / EDH');
-                            setNewDeckTargetSize(100);
-                          }
+                          if (format === 'manabox') pickNewDeckGame('mtg');
                         }}
                         style={{ flex: 1, fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
                       >

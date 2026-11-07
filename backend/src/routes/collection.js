@@ -1398,8 +1398,8 @@ router.post('/collection/bulk', async (req, res) => {
         const existing = await db.get(`SELECT quantity FROM deck_cards WHERE deck_id = ? AND card_id = ?`, [deckId, row.card_id]);
         const current = existing ? existing.quantity : 0;
         const newQty = current + row.total_qty;
-        // Enforce deck rules (owned cap + max 4 per name) so this path can't
-        // bypass the limits the deck builder enforces.
+        // Enforce deck rules (owned cap + the format's copy limit) so this path
+        // can't bypass the limits the deck builder enforces.
         const check = await validateDeckAddition({ deckId, userId: req.user.id, cardId: row.card_id, newQty });
         if (!check.ok) { rejected.push(check.error); continue; }
         await db.run(

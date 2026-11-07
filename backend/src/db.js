@@ -1299,6 +1299,28 @@ async function initDb() {
 
   await splitStackedRows();
 
+  // --- DECK FORMATS ---
+  // What the deck rules (shared/deckRules.mjs) read off a Magic card beyond its type
+  // line and colour identity. `oracle_id` is what every printing of one card has in
+  // common; `oracle_text` is where a card says it can be a commander, partners with
+  // another, or may appear in any number. Written by scryfallApi.normalizeCard; null
+  // for the other games. Not backfilled: until a row is re-cached the rules fall back
+  // to the card's name and a short list, and the daily price sweep re-caches every
+  // owned and decked Magic card — the only rows a deck ever compares.
+  const deckRuleCols = await all(`PRAGMA table_info(card_cache)`);
+  if (!deckRuleCols.some(c => c.name === 'oracle_id')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN oracle_id TEXT`);
+  }
+  if (!deckRuleCols.some(c => c.name === 'oracle_text')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN oracle_text TEXT`);
+  }
+  // The card(s) leading a Commander-style deck, whose colour identity every other
+  // card is checked against.
+  const deckCardFormatCols = await all(`PRAGMA table_info(deck_cards)`);
+  if (!deckCardFormatCols.some(c => c.name === 'is_commander')) {
+    await run(`ALTER TABLE deck_cards ADD COLUMN is_commander INTEGER NOT NULL DEFAULT 0`);
+  }
+
   // --- PERFORMANCE INDEXES ---
   // `user_id` first, because it is the predicate on essentially every read in the
   // app — every collection query, every stats aggregate — and nothing indexed it.

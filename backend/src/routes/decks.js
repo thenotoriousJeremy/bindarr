@@ -131,6 +131,7 @@ router.get('/:id', async (req, res) => {
     const cardsQuery = `
       SELECT
         dc.quantity,
+        dc.is_commander,
         cc.id,
         cc.name, cc.printed_name,
         cc.supertype,
@@ -142,6 +143,12 @@ router.get('/:id', async (req, res) => {
         cc.number,
         cc.image_url,
         cc.price_trend,
+        -- What the deck rules read (shared/deckRules.mjs runs in the deck builder).
+        cc.cmc,
+        cc.color_identity,
+        cc.oracle_id,
+        cc.oracle_text,
+        cc.game,
         (SELECT COALESCE(SUM(quantity), 0) FROM collection WHERE card_id = cc.id AND user_id = ? AND list_type = 'collection') AS owned_qty,
         (SELECT COALESCE(SUM(dc2.quantity), 0)
          FROM deck_cards dc2 JOIN decks d2 ON dc2.deck_id = d2.id
@@ -328,8 +335,8 @@ router.post('/:id/cards', async (req, res) => {
       }
     }
 
-    // Enforce deck rules (owned-copy cap + max 4 per name). quantity here is the
-    // absolute new count for this card, so validate it directly.
+    // Enforce deck rules (owned-copy cap + the format's copy limit per name).
+    // quantity here is the absolute new count for this card, so validate it directly.
     const check = await validateDeckAddition({ deckId: id, userId: req.user.id, cardId: card_id, newQty: quantity });
     if (!check.ok) return res.status(400).json({ error: check.error });
 
@@ -366,6 +373,30 @@ router.delete('/:id/cards/:card_id', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to remove card from deck' });
+  }
+});
+
+// Mark a card as (one of) the deck's commander(s), or unmark it. Whether the
+// command zone is legal — how many, which pairs, colour identity — is a warning in
+// the deck builder, not a refusal here: a zone is built one card at a time.
+router.put('/:id/cards/:card_id/commander', async (req, res) => {
+  const { id, card_id } = req.params;
+  try {
+    const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!deck) {
+      return res.status(404).json({ error: 'Deck not found or unauthorized' });
+    }
+    const result = await db.run(
+      `UPDATE deck_cards SET is_commander = ? WHERE deck_id = ? AND card_id = ?`,
+      [req.body && req.body.commander ? 1 : 0, id, card_id]
+    );
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Card is not in this deck' });
+    }
+    res.json({ message: 'Commander updated' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to update commander' });
   }
 });
 
