@@ -125,6 +125,20 @@ async function resolveCompartmentAndPosition(arg1, locationId, cardId, userId) {
   return { compartment_id: recommended.compartment_id, position: recommended.position, location_id: recommended.location_id, label: recommended.label };
 }
 
+// A container or compartment the user may file a copy into: one of their own.
+// Both kinds of id are global, so one a client sends can exist and still be
+// somebody else's — PUT /collection/:id took compartment_id on trust, which let
+// any user file their cards into another user's binder. Null when not theirs.
+async function ownedLocation(locationId, userId) {
+  return db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
+}
+
+async function ownedCompartment(compartmentId, userId) {
+  return db.get(`
+    SELECT cp.id, cp.location_id FROM compartments cp JOIN locations l ON l.id = cp.location_id
+    WHERE cp.id = ? AND l.user_id = ?`, [compartmentId, userId]);
+}
+
 async function describePlacement(database, entryId, userId) {
   let dbClient = db;
   let eId = entryId;
@@ -235,6 +249,8 @@ module.exports = {
   checkedOutAllocation,
   resolveCompartmentAndPosition,
   describePlacement,
+  ownedLocation,
+  ownedCompartment,
   normalizeRuleConfig,
   setStackQuantity,
 };

@@ -15,7 +15,7 @@ const { searchLimiter } = require('../middleware/auth');
 const { resolveCardPrice, parseCardRow, recordPrice } = require('../utils/priceHelpers');
 const { parseSetList } = require('../utils/setQuery');
 const { compartmentLabel, isBinderType, rebalanceCompartmentByScheme, stackKey, STACK_KEY_SQL } = require('../utils/compartmentSort');
-const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, setStackQuantity } = require('../utils/collectionHelpers');
+const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, setStackQuantity, ownedLocation, ownedCompartment } = require('../utils/collectionHelpers');
 const { validateDeckAddition } = require('../utils/deckRules');
 const { splitPrice } = require('../utils/splitPrice');
 const { allocateSealedUnitCost } = require('../utils/sealedCostAllocation');
@@ -1030,6 +1030,7 @@ router.put('/collection/:id', async (req, res) => {
         finalCompartmentId = null;
         finalPosition = 0;
       } else {
+        if (!(await ownedLocation(location_id, req.user.id))) return res.status(404).json({ error: 'Location not found' });
         const resolved = await resolveCompartmentAndPosition({
           locationId: location_id,
           userId: req.user.id,
@@ -1050,7 +1051,13 @@ router.put('/collection/:id', async (req, res) => {
         }
       }
     } else if (compartment_id !== undefined) {
-      finalCompartmentId = compartment_id;
+      // Goes straight into the row, so it has to be one of the user's own
+      // compartments — and the copy takes that compartment's container with it,
+      // so location_id can never name a different one.
+      const comp = compartment_id === null ? null : await ownedCompartment(compartment_id, req.user.id);
+      if (compartment_id !== null && !comp) return res.status(404).json({ error: 'Compartment not found' });
+      finalCompartmentId = comp ? comp.id : null;
+      if (comp) finalLocationId = comp.location_id;
     }
 
     const updates = [];
