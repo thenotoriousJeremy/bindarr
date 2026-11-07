@@ -118,9 +118,11 @@ async function backupsAndSchedules() {
     console.log('PASS: F9-TC3');
 
     // F9-TC4: the boot recorded the schedules — and did not back up a database it
-    // had just created. The first check runs once the boot's set sync is done.
+    // had just created. The first check runs once the boot's set sync is done,
+    // which on a fresh database is a real fetch of every game's set list, so this
+    // waits as long as a slow provider can take rather than a fixed few seconds.
     let runs = [];
-    for (let i = 0; i < 300 && !runs.some(r => r.name === 'backup'); i++) {
+    for (let i = 0; i < 1200 && !runs.some(r => r.name === 'backup'); i++) {
       await new Promise(resolve => setTimeout(resolve, 100));
       runs = await readJobRuns(dbFile);
     }
