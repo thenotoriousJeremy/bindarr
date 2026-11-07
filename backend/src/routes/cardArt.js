@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db');
 const cardArt = require('../cardArt');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { sendFileAt } = require('../utils/sendFileAt');
 
 const router = express.Router();
 
@@ -28,7 +29,7 @@ router.get('/:cardId.png', (req, res) => {
   const file = cardArt.resolve(req.params.cardId);
   if (!file) return res.status(404).json({ error: 'No art for this card' });
   res.set('Cache-Control', 'public, max-age=0, must-revalidate');
-  res.sendFile(file);
+  sendFileAt(res, file);
 });
 
 // Everything below changes files on disk. Admin-only: the art is instance-wide

@@ -16,6 +16,7 @@
 // route in server.js, already worked this way for the same reason.
 const path = require('path');
 const express = require('express');
+const { sendFileAt } = require('./sendFileAt');
 
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 const REVALIDATE = 'public, no-cache';
@@ -41,7 +42,7 @@ function serveFrontend(distPath) {
     if (req.path.startsWith('/api')) return next();
     // Revalidated like everything unhashed: it names the hashed bundle, so a copy
     // kept without asking would hold a browser on the previous release.
-    res.sendFile(path.join(distPath, 'index.html'), { headers: { 'Cache-Control': REVALIDATE } });
+    sendFileAt(res, path.join(distPath, 'index.html'), { headers: { 'Cache-Control': REVALIDATE } });
   });
   return router;
 }

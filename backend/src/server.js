@@ -22,6 +22,7 @@ const { createScheduler } = require('./scheduler');
 const { runPriceSweeps, requestStop: stopPriceSweeps } = require('./utils/priceSweeps');
 const { createShutdown, whenTrue } = require('./utils/shutdown');
 const { serveFrontend } = require('./utils/staticCache');
+const { sendFileAt } = require('./utils/sendFileAt');
 
 // Say the provider deprecation out loud at boot, to the installs it applies to.
 //
@@ -616,7 +617,7 @@ app.use('/api/notifications', notificationRoutes);
 // catch-all like any other unknown path.
 app.get(PWA_FILES, (req, res, next) => {
   setPwaHeaders(req, res);
-  res.sendFile(path.join(__dirname, '../../frontend/dist', req.path), (err) => {
+  sendFileAt(res, path.join(__dirname, '../../frontend/dist', req.path), (err) => {
     if (err && !res.headersSent) next();
   });
 });
@@ -639,7 +640,7 @@ app.get('/models/cornelius.onnx', (req, res) => {
   // the persisted volume (CV_MODEL_DIR=/app/database/models). Hardcoded, this
   // 404'd in every Docker install, the worker fell back to the pure-JS contour
   // detector, and detection went from ~80ms to 200ms+ with the CPU pegged.
-  res.sendFile(path.join(require('./utils/modelAssets').MODEL_DIR, 'cornelius.onnx'), (err) => {
+  sendFileAt(res, path.join(require('./utils/modelAssets').MODEL_DIR, 'cornelius.onnx'), (err) => {
     if (err && !res.headersSent) res.status(404).end();
   });
 });
