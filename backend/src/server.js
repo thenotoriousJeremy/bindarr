@@ -122,13 +122,24 @@ if (process.env.TRUST_PROXY) {
   app.set('trust proxy', tp === 'true' ? true : (Number.isNaN(Number(tp)) ? tp : Number(tp)));
 }
 
-// Content Security Policy. Identification is server-side (the client POSTs a
-// photo to /api/scan-match); the browser only runs the corner model that draws
-// the aiming outline. Either way it needs nothing beyond the app's own bundle
-// plus the card-image hosts. Kept Report-Only for now: flip
-// `reportOnly` to false to enforce once a production smoke test confirms the
-// scan flow and card images load cleanly under these directives.
-// ponytail: Report-Only ceiling — enforce after a prod verification pass.
+// Content Security Policy, enforced. Identification is server-side (the client
+// POSTs a photo to /api/scan-match); the browser only runs the corner model that
+// draws the aiming outline. So the page needs nothing beyond the app's own bundle,
+// the card-image hosts and Google Fonts -- checked against a production build with
+// every view and the scanner open, not just read off the code.
+//
+// What it does not allow is the point: no inline or third-party script, so markup
+// injected into the page cannot run. The one inline script index.html had (the
+// pre-paint theme) is public/theme-init.js now for that reason.
+//
+// CSP_REPORT_ONLY=true sends the same policy as Report-Only: the browser logs what
+// it would block instead of blocking it. It is the escape hatch for an install
+// whose card art comes from a host not listed below -- a provider moving to a new
+// CDN, say -- until the list is updated.
+const cspReportOnly = process.env.CSP_REPORT_ONLY === 'true';
+if (cspReportOnly) {
+  console.warn('CSP_REPORT_ONLY=true: the Content-Security-Policy is reported, not enforced.');
+}
 app.use(helmet({
   // HSTS pins the host to HTTPS in the browser. When we terminate TLS ourselves
   // with a self-signed certificate that is a lockout: Chrome stops offering the
@@ -137,23 +148,42 @@ app.use(helmet({
   // with a real certificate.
   hsts: !selfSignedTls(),
   contentSecurityPolicy: {
-    reportOnly: true,
+    reportOnly: cspReportOnly,
     directives: {
       defaultSrc: ["'self'"],
       // 'wasm-unsafe-eval' is what lets the browser compile WebAssembly. The card
       // scanner runs the cornelius corner model locally through onnxruntime-web to
       // find the card in the frame, and without this the wasm is refused outright.
-      // Harmless today because the policy is report-only, but it would silently
-      // break scanning the moment that flips.
+      // The worker that runs it, and the onnxruntime glue it imports from /ort/,
+      // are same-origin files that get this same header.
       scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
+      // blob: for canvas-confetti, which draws on an OffscreenCanvas in a worker it
+      // builds from a Blob. Only script already running here can make a blob: URL.
+      workerSrc: ["'self'", 'blob:'],
+      // Every request the page itself makes is to this server; provider APIs are
+      // called server-side, so no key or API host ever appears here.
       connectSrc: ["'self'"],
-      imgSrc: ["'self'", 'data:', 'blob:', 'https://images.pokemontcg.io', 'https://cards.scryfall.io', 'https://c1.scryfall.com', 'https://img.scryfall.com', 'https://assets.tcgdex.net', 'https://cards.lorcast.io', 'https://media.rarebit.app'],
+      // Card art, set symbols and logos, straight from each provider's CDN (the
+      // URLs are whatever the provider's API returned):
+      //   pokemontcg.io      images.pokemontcg.io, and images.scrydex.com for its newer sets
+      //   TCGdex             assets.tcgdex.net
+      //   Scryfall           cards.scryfall.io, svgs.scryfall.io (set icons), and
+      //                      c1/img.scryfall.com, still in rows cached years ago
+      //   Lorcast            cards.lorcast.io
+      //   pokemontcgapi.com  media.rarebit.app
+      //   Riftbound          cmsassets.rgpub.io
+      // data: and blob: are the scanner's captures and previews.
+      imgSrc: [
+        "'self'", 'data:', 'blob:',
+        'https://images.pokemontcg.io', 'https://images.scrydex.com', 'https://assets.tcgdex.net',
+        'https://cards.scryfall.io', 'https://svgs.scryfall.io', 'https://c1.scryfall.com', 'https://img.scryfall.com',
+        'https://cards.lorcast.io', 'https://media.rarebit.app', 'https://cmsassets.rgpub.io'
+      ],
       // index.html loads Antonio, Outfit and Plus Jakarta Sans from Google Fonts,
       // which is two separate origins: the stylesheet comes from fonts.googleapis
       // .com and the .woff2 files it then references come from fonts.gstatic.com.
-      // Neither was listed, so every font on every page was a CSP violation —
-      // survivable only because the policy is report-only. Enforced as it stood,
-      // the whole app would have dropped to the fallback system font.
+      // 'unsafe-inline' because React renders a few <style> blocks (the scanner and
+      // the deck builder); style cannot run script, so it is the cheap one to allow.
       styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
       objectSrc: ["'none'"],

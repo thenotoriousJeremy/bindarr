@@ -179,7 +179,7 @@ async function settle() {
 let base;
 async function session(userId) {
   const token = crypto.randomBytes(24).toString('hex');
-  await db.run(`INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`, [token, userId, new Date(Date.now() + 864e5).toISOString()]);
+  await db.run(`INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`, [require('../src/utils/authHelpers').hashSessionToken(token), userId, new Date(Date.now() + 864e5).toISOString()]);
   return token;
 }
 async function call(method, url, token, body) {

@@ -14,32 +14,56 @@ const DeviceScanSetup = lazy(() => import('./DeviceScanSetup'));
 // One secret: what it is called, what it buys you, and where to get one. Three of
 // these replaced three near-identical panels, so a fourth provider is a few lines
 // rather than another screenful.
-function KeyField({ id, label, hint, link, linkLabel, value, onChange, disabled, placeholder, t }) {
+//
+// Write-only. The server says whether a key is set (`configured`), never what it
+// is, so the box is only ever for typing a NEW key, and leaving it empty leaves the
+// saved one alone. Clearing is its own button rather than "save an empty box",
+// which would make every untouched field a delete.
+function KeyField({ id, label, hint, link, linkLabel, configured, value, onChange, onClear, disabled, placeholder, t }) {
   const [shown, setShown] = useState(false);
   return (
     <div className="form-group" style={{ marginBottom: 0 }}>
-      <label htmlFor={id}>{label}</label>
-      <div style={{ position: 'relative' }}>
-        <input
-          id={id}
-          type={shown ? 'text' : 'password'}
-          autoComplete="off"
-          className="input-control"
-          placeholder={placeholder}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          style={{ fontFamily: 'monospace', paddingRight: '2.4rem', width: '100%' }}
-        />
-        <button
-          type="button"
-          onClick={() => setShown((v) => !v)}
-          aria-label={t(shown ? 'settings.hideApiKey' : 'settings.showApiKey')}
-          title={t(shown ? 'settings.hideApiKey' : 'settings.showApiKey')}
-          style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
-        >
-          {shown ? <EyeOff size={16} /> : <Eye size={16} />}
-        </button>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '0.5rem' }}>
+        <label htmlFor={id}>{label}</label>
+        <span style={{ fontSize: '0.72rem', fontWeight: 600, color: configured ? 'var(--accent-yellow)' : 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap' }}>
+          {configured && <Check size={12} />}
+          {t(configured ? 'settings.keyConfigured' : 'settings.keyNotSet')}
+        </span>
+      </div>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+        <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+          <input
+            id={id}
+            type={shown ? 'text' : 'password'}
+            autoComplete="off"
+            className="input-control"
+            placeholder={configured ? t('settings.keyReplacePlaceholder') : placeholder}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={disabled}
+            style={{ fontFamily: 'monospace', paddingRight: '2.4rem', width: '100%' }}
+          />
+          <button
+            type="button"
+            onClick={() => setShown((v) => !v)}
+            aria-label={t(shown ? 'settings.hideApiKey' : 'settings.showApiKey')}
+            title={t(shown ? 'settings.hideApiKey' : 'settings.showApiKey')}
+            style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
+          >
+            {shown ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
+        {configured && (
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onClear}
+            disabled={disabled}
+            style={{ padding: '0.5rem 0.9rem', fontSize: '0.8rem', flexShrink: 0 }}
+          >
+            {t('settings.keyClear')}
+          </button>
+        )}
       </div>
       {/* The link carries a whole clause rather than sitting mid-sentence: a
           translator gets two complete units instead of two fragments whose order
@@ -69,11 +93,16 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
   const [shareLoading, setShareLoading] = useState(false);
   const [containers, setContainers] = useState([]);
 
-  const [tcgApiKey, setTcgApiKey] = useState(user?.tcg_api_key || '');
-  const [psaToken, setPsaToken] = useState(user?.psa_api_token || '');
-  const [gradedKey, setGradedKey] = useState(user?.graded_price_api_key || '');
+  // New values typed for the provider keys, not the saved ones -- the server never
+  // sends those (see KeyField). Empty means "keep what is saved".
+  const [tcgApiKey, setTcgApiKey] = useState('');
+  const [psaToken, setPsaToken] = useState('');
+  const [gradedKey, setGradedKey] = useState('');
   const [keysLoading, setKeysLoading] = useState(false);
-  const [accessKey, setAccessKey] = useState(user?.api_key || '');
+  // The read-only API key, held here only once fetched on request (or just made):
+  // the stored user object knows only that one exists.
+  const hasAccessKey = !!user?.has_api_key;
+  const [accessKey, setAccessKey] = useState('');
   const [showAccessKey, setShowAccessKey] = useState(false);
   const [accessKeyLoading, setAccessKeyLoading] = useState(false);
 
@@ -282,10 +311,6 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
     if (user) {
       setShareEnabled(user.share_enabled === 1 || user.share_enabled === true);
       setShareLocations(user.share_locations === 1 || user.share_locations === true);
-      setTcgApiKey(user.tcg_api_key || '');
-      setPsaToken(user.psa_api_token || '');
-      setGradedKey(user.graded_price_api_key || '');
-      setAccessKey(user.api_key || '');
     }
   }, [user]);
 
@@ -424,26 +449,28 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
     }
   };
 
-  // All three provider keys in one PUT. They are independent services, but they
-  // are set up in one sitting and the settings route takes them together, so three
-  // buttons only ever meant three chances to save two of them.
-  const handleSaveKeys = async (e) => {
-    e.preventDefault();
+  // One PUT for the provider keys. The keys are write-only, so it carries only the
+  // ones typed into: an empty box means "keep the saved key", not "delete it".
+  const typedKeys = Object.fromEntries(
+    [['tcg_api_key', tcgApiKey], ['psa_api_token', psaToken], ['graded_price_api_key', gradedKey]]
+      .filter(([, value]) => value.trim())
+  );
+  const putKeys = async (keys, okMessage) => {
     setKeysLoading(true);
     try {
       const response = await fetch('/api/auth/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tcg_api_key: tcgApiKey,
-          psa_api_token: psaToken,
-          graded_price_api_key: gradedKey
-        })
+        body: JSON.stringify(keys)
       });
       const data = await response.json().catch(() => null);
       if (response.ok) {
         onUpdateUser(data.user);
-        showToast(t('settings.keysUpdated'));
+        // Typed keys are saved now; the boxes go back to "replace".
+        if ('tcg_api_key' in keys) setTcgApiKey('');
+        if ('psa_api_token' in keys) setPsaToken('');
+        if ('graded_price_api_key' in keys) setGradedKey('');
+        showToast(t(okMessage));
       } else {
         showToast(data?.error || t('settings.errKeys'));
       }
@@ -455,10 +482,45 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
     }
   };
 
+  const handleSaveKeys = (e) => {
+    e.preventDefault();
+    if (Object.keys(typedKeys).length) putKeys(typedKeys, 'settings.keysUpdated');
+  };
+
+  // Removing a key is deliberate, and it cannot be undone from here -- the saved
+  // value is not shown anywhere to copy back.
+  const handleClearKey = (field) => {
+    if (!window.confirm(t('settings.keyConfirmClear'))) return;
+    putKeys({ [field]: '' }, 'settings.keyCleared');
+  };
+
+  // Show or hide the read-only API key. Fetched only when asked for, and kept in
+  // this component's state: the user object App stores knows only has_api_key.
+  const toggleAccessKey = async () => {
+    if (showAccessKey) { setShowAccessKey(false); return; }
+    if (accessKey) { setShowAccessKey(true); return; }
+    setAccessKeyLoading(true);
+    try {
+      const response = await fetch('/api/auth/api-key');
+      const data = await response.json().catch(() => null);
+      if (response.ok && data?.api_key) {
+        setAccessKey(data.api_key);
+        setShowAccessKey(true);
+      } else {
+        showToast(data?.error || t('settings.errAccessKey'));
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(t('settings.errAccessKey'));
+    } finally {
+      setAccessKeyLoading(false);
+    }
+  };
+
   // Create/rotate/revoke the read-only API key. Rotating and revoking both break
   // whatever is already using the old key, so both ask first.
   const handleAccessKey = async (action) => {
-    if (action === 'create' && accessKey && !window.confirm(t('settings.accessConfirmRotate'))) return;
+    if (action === 'create' && hasAccessKey && !window.confirm(t('settings.accessConfirmRotate'))) return;
     if (action === 'revoke' && !window.confirm(t('settings.accessConfirmRevoke'))) return;
     setAccessKeyLoading(true);
     try {
@@ -468,7 +530,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
         const next = action === 'revoke' ? '' : (data?.api_key || '');
         setAccessKey(next);
         setShowAccessKey(action !== 'revoke');
-        onUpdateUser({ ...user, api_key: next });
+        onUpdateUser({ ...user, has_api_key: !!next });
         showToast(t(action === 'revoke' ? 'settings.accessRevoked' : 'settings.accessCreated'));
       } else {
         showToast(data?.error || t('settings.errAccessKey'));
@@ -824,24 +886,27 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
             <KeyField
               id="settings-tcg-api-key" label={t('settings.apiKeyTitle')} hint={t('settings.apiKeyIntro')}
               link="https://dev.pokemontcg.io" linkLabel={t('settings.apiKeyGetOne')}
+              configured={!!user?.has_tcg_api_key} onClear={() => handleClearKey('tcg_api_key')}
               value={tcgApiKey} onChange={setTcgApiKey} disabled={keysLoading} t={t}
               placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
             />
             <KeyField
               id="settings-psa-token" label={t('settings.psaTokenTitle')} hint={t('settings.psaTokenIntro')}
               link="https://www.psacard.com/publicapi/documentation" linkLabel={t('settings.psaTokenGetOne')}
+              configured={!!user?.has_psa_api_token} onClear={() => handleClearKey('psa_api_token')}
               value={psaToken} onChange={setPsaToken} disabled={keysLoading} t={t}
             />
             <KeyField
               id="settings-graded-key" label={t('settings.gradedKeyTitle')} hint={t('settings.gradedKeyIntro')}
               link="https://www.pokemonpricetracker.com/api" linkLabel={t('settings.gradedKeyGetOne')}
+              configured={!!user?.has_graded_price_api_key} onClear={() => handleClearKey('graded_price_api_key')}
               value={gradedKey} onChange={setGradedKey} disabled={keysLoading} t={t}
             />
 
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={keysLoading}
+              disabled={keysLoading || !Object.keys(typedKeys).length}
               style={{ padding: '0.6rem 1.2rem', alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
             >
               {keysLoading ? (
@@ -851,28 +916,32 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
           </form>
 
           {/* The one key that points the other way: not a credential Bindarr uses
-              to reach a service, but one something else uses to read Bindarr. Shown
-              in full rather than once-at-creation — read-only is what makes that
-              acceptable, and a write-once secret is one people rotate repeatedly
-              until they manage to catch it. */}
+              to reach a service, but one something else uses to read Bindarr. It
+              can be shown again rather than only once at creation — read-only is
+              what makes that acceptable, and a write-once secret is one people
+              rotate repeatedly until they manage to catch it. Shown on request
+              only, though: it is fetched when the eye is pressed and lives in this
+              component, never in the user object App keeps in localStorage. */}
           {!deviceMode && (
             <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label htmlFor="settings-access-key">{t('settings.accessTitle')}</label>
-                {accessKey ? (
+                {hasAccessKey ? (
                   <div style={{ position: 'relative' }}>
                     <input
                       id="settings-access-key"
-                      type={showAccessKey ? 'text' : 'password'}
+                      type="text"
                       readOnly
                       className="input-control"
-                      value={accessKey}
+                      value={showAccessKey ? accessKey : ''}
+                      placeholder="bnd_••••••••••••••••••••••••"
                       onClick={(e) => e.target.select()}
                       style={{ fontFamily: 'monospace', paddingRight: '2.4rem', width: '100%' }}
                     />
                     <button
                       type="button"
-                      onClick={() => setShowAccessKey((v) => !v)}
+                      onClick={toggleAccessKey}
+                      disabled={accessKeyLoading}
                       aria-label={t(showAccessKey ? 'settings.hideApiKey' : 'settings.showApiKey')}
                       title={t(showAccessKey ? 'settings.hideApiKey' : 'settings.showApiKey')}
                       style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
@@ -887,7 +956,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
                   {t('settings.accessIntro')} {t('settings.accessNetWorth')}
                 </div>
                 <pre style={{ margin: '0.4rem 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                  {`curl -H "Authorization: Bearer ${accessKey || '<key>'}" ${origin}/api/stats/networth`}
+                  {`curl -H "Authorization: Bearer ${(showAccessKey && accessKey) || '<key>'}" ${origin}/api/stats/networth`}
                 </pre>
               </div>
 
@@ -901,9 +970,9 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
                 >
                   {accessKeyLoading ? (
                     <div className="spinner" style={{ width: '14px', height: '14px', margin: 0, borderWidth: '2px' }}></div>
-                  ) : t(accessKey ? 'settings.accessRotate' : 'settings.accessCreate')}
+                  ) : t(hasAccessKey ? 'settings.accessRotate' : 'settings.accessCreate')}
                 </button>
-                {accessKey && (
+                {hasAccessKey && (
                   <button
                     type="button"
                     className="btn btn-secondary"

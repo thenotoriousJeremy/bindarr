@@ -179,6 +179,7 @@ All optional.
 | `OIDC_TOKEN_ENDPOINT_AUTH_METHOD` | `client_secret_basic` | Token endpoint client authentication method. Set to client_secret_basic or client_secret_post. |
 | `NODE_EXTRA_CA_CERTS` | — | PEM file of a private root CA to trust, for an identity provider whose certificate it signed. See [SSO with a private CA](#sso-with-a-private-ca). |
 | `TRUST_PROXY` | — | Number of proxy hops (usually `1`) when a reverse proxy terminates TLS, so rate limiting sees the real client IP. |
+| `CSP_REPORT_ONLY` | unset | The Content-Security-Policy is enforced, so the browser blocks scripts that are not Bindarr's own and card images from hosts it does not list. If card art stops loading after a provider moves to a new image host, set `true` until Bindarr is updated. The policy is then only reported in the browser console. |
 | `CV_MODEL_DIR` | `/app/database/models` in the image | Where the scan models and catalogs live. Must be on persistent storage, or an image update discards every catalog you built. |
 | `CV_SCAN_GAP` | `0.10` | How far a match must stand above its runner-ups before it counts as an answer rather than "this card is not in the catalog". Lower accepts more guesses. |
 | `BACKUP_DIR` | `backups/` beside `DB_PATH` | Where automatic, manual and pre-upgrade snapshots are written, listed and downloaded from. See [Backup and restore](#backup-and-restore). |
@@ -190,6 +191,8 @@ All optional.
 Register `<PUBLIC_BASE_URL>/api/auth/oidc/callback` as the redirect URI at your identity provider (e.g. `https://cards.example.com/api/auth/oidc/callback`). Without `PUBLIC_BASE_URL` it is built from the request's host; `OIDC_REDIRECT_URI` overrides it outright.
 
 The Android and iOS apps use that same redirect URI: SSO opens in the system browser, and the server's callback hands the login back to the app through the `bindarr://oidc` link with a one-time code. There is no extra redirect URI to register at the provider.
+
+In the browser the callback never puts a session in the URL either. It returns a one-time code that only the browser which started the login can redeem, using a short-lived cookie set when the login began. Start SSO from the address your redirect URI points at (`PUBLIC_BASE_URL`, when it is set). A login started on another address cannot be finished.
 
 If the provider's certificate is signed by your own root CA, SSO login fails with `fetch failed` and the container log names a certificate error such as `UNABLE_TO_VERIFY_LEAF_SIGNATURE` or `SELF_SIGNED_CERT_IN_CHAIN`. Node ships its own CA list and does not read the operating system's certificate store, so adding the CA to the container's system store does not help. Mount the CA's PEM file and point `NODE_EXTRA_CA_CERTS` at it:
 
@@ -464,7 +467,13 @@ docker run --rm -v bindarr-data:/data -v "$PWD":/backup alpine cp /data/bindarr.
 
 Restore by dropping the file back into the volume with the container stopped. Individual users can also export their own account from the app: **Export full backup** (Settings → Collection Backup) holds everything they own — storage and where each copy sits, decks, notes, and the card data behind them — and **Import Backup** restores it, here or on another Bindarr, replacing what the account has. On a member's account, the card details are looked up again from the card databases rather than taken from the file, so restoring there needs internet access; an admin's restore uses the file's copy. CSV and JSON exports remain for spreadsheets and other apps.
 
-**Lost the admin password?** There's no self-service reset, and `DEFAULT_ADMIN_PASSWORD` will not change an existing account — it is only used when no accounts exist. Delete the database file to start fresh and create the owner account again.
+**Lost the admin password?** Reset it from the command line. Your collection stays as it is:
+
+```bash
+docker exec -it bindarr node scripts/reset-password.js admin
+```
+
+This prints a new random password, or uses one you pass with `-e NEW_PASSWORD=...`. It also signs that account out of every session. It works for any username, and exits non-zero if there is no such user. If you run it as root, the script switches to the user that owns the database first, so it cannot leave files the server is unable to write. Without Docker, run `node scripts/reset-password.js <username>` from the `backend` folder; it reads the same `DB_PATH` and `.env` as the server. `DEFAULT_ADMIN_PASSWORD` will not change an existing account. It is only used when no accounts exist.
 
 > **Upgrading from before v1.5.0:** the database file was renamed `pokemon_cards.db` → `bindarr.db`. First start renames it automatically, sidecars included. Old `pokemon_cards.*.bak` backups still restore.
 

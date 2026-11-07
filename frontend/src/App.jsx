@@ -7,6 +7,9 @@ import { pushBackGuard } from './utils/useBackGuard';
 import { useT } from './utils/i18n';
 import { isNative, isDeviceMode, setDeviceMode } from './apiBase';
 import { parseOidcReturn, takeVerifier } from './utils/nativeOidc';
+import { isSessionExpired } from './utils/sessionExpiry';
+import { loadStoredUser, saveStoredUser } from './utils/storedUser';
+import { readOidcCode } from './utils/webOidc';
 
 // View components are code-split so heavy deps (recharts in the chart views)
 // load on demand instead of in the initial bundle.
@@ -87,8 +90,11 @@ window.fetch = function (input, options = {}) {
   }
   return originalFetch(input, finalOptions).then(response => {
     if (response.status === 401 && !isPublicOrAuthRoute) {
-      // Dispatch custom event to trigger logout without page refresh
-      window.dispatchEvent(new Event('bindarr_logout'));
+      // Only the auth gate's "this session is gone" signs out -- not every 401
+      // (utils/sessionExpiry). Read off a clone, so the caller still gets the body.
+      isSessionExpired(response).then(expired => {
+        if (expired) window.dispatchEvent(new Event('bindarr_logout'));
+      });
     }
     return response;
   });
@@ -104,14 +110,9 @@ const handledOidcReturns = new Set();
 function App() {
   const { t } = useT();
   const [token, setToken] = useState(localStorage.getItem('bindarr_token'));
-  const [user, setUser] = useState(() => {
-    try {
-      const u = localStorage.getItem('bindarr_user');
-      return u ? JSON.parse(u) : null;
-    } catch {
-      return null;
-    }
-  });
+  // Through utils/storedUser, which also strips the API keys older builds kept in
+  // this copy.
+  const [user, setUser] = useState(() => loadStoredUser());
 
   const [activeTab, setActiveTab] = useState('dashboard');
   // First-run scanning setup. Asked once per session, only for an admin, and only
@@ -194,38 +195,39 @@ function App() {
     setToast({ message, ...(options || {}), id: Date.now() + Math.random() });
   };
 
-  // Handle OIDC / SSO token in URL redirect
+  // Web SSO return. The callback sends the browser back with ?oidc_code=..., a
+  // one-time code that redeems only together with the HttpOnly cookie set when
+  // THIS browser started the login (utils/webOidc) -- never the session itself,
+  // which the old ?oidc_token= / ?token= sign-in took from any link. Off the URL
+  // before it is used, so a reload or the history cannot present it again; and,
+  // as with the native hand-off below, the answer is not dropped on a re-run (the
+  // code is spent by then, and a second pass finds nothing left to read).
   useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const oidcToken = params.get('oidc_token') || params.get('token');
-      if (oidcToken && !token) {
-        // Clean URL parameters immediately
-        const newUrl = window.location.pathname + (window.location.hash || '');
-        window.history.replaceState({}, document.title, newUrl);
-
-        // Fetch user profile with the token to complete login
-        fetch('/api/auth/me', {
-          headers: { 'Authorization': `Bearer ${oidcToken}` }
-        })
-          .then(res => res.ok ? res.json() : Promise.reject(new Error('Failed to fetch profile')))
-          .then(data => {
-            if (data.user) {
-              setToken(oidcToken);
-              setUser(data.user);
-              localStorage.setItem('bindarr_token', oidcToken);
-              localStorage.setItem('bindarr_user', JSON.stringify(data.user));
-              showToast(t('toast.welcomeBack', { name: data.user.username }));
-              setActiveTab('dashboard');
-            }
-          })
-          .catch(err => {
-            console.error('OIDC token verification failed:', err);
-            showToast(t('login.errOidcFailed'));
-          });
-      }
-    } catch { /* ignore URL parse error */ }
-  }, [t, token]);
+    if (isNative) return;
+    const ret = readOidcCode(window.location.href);
+    if (!ret) return;
+    window.history.replaceState(window.history.state, document.title, ret.cleanUrl);
+    fetch('/api/auth/oidc/exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: ret.code })
+    })
+      .then(res => res.json().then(data => (res.ok ? data : Promise.reject(new Error(data.error || 'exchange failed')))))
+      .then(data => {
+        if (!data.token || !data.user) return;
+        // Same completion as handleLoginSuccess, as in the native hand-off.
+        setToken(data.token);
+        setUser(data.user);
+        localStorage.setItem('bindarr_token', data.token);
+        saveStoredUser(data.user);
+        showToast(t('toast.welcomeBack', { name: data.user.username }));
+        setActiveTab('dashboard');
+      })
+      .catch(err => {
+        console.error('OIDC exchange failed:', err);
+        showToast(t('login.errOidcFailed'));
+      });
+  }, [t]);
 
   // Native SSO return (issue #94). The login ran in the system browser; the
   // server sends it back as bindarr://oidc?code=... (or ?oidc_error=...), either
@@ -267,7 +269,7 @@ function App() {
           setToken(data.token);
           setUser(data.user);
           localStorage.setItem('bindarr_token', data.token);
-          localStorage.setItem('bindarr_user', JSON.stringify(data.user));
+          saveStoredUser(data.user);
           showToast(t('toast.welcomeBack', { name: data.user.username }));
           setActiveTab('dashboard');
         })
@@ -382,6 +384,24 @@ function App() {
     return () => window.removeEventListener('bindarr_logout', handleAutoLogout);
   }, [t]);
 
+  // The stored user is a copy, and one saved by an older build has no has_* key
+  // flags (it had the keys themselves, which loadStoredUser drops), so Settings
+  // would call every saved key "not set". Re-read it once per session start. An
+  // unchanged answer keeps the same object, so nothing keyed on `user` re-runs.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    fetch('/api/auth/me')
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (cancelled || !data || !data.user) return;
+        setUser(prev => (JSON.stringify(prev) === JSON.stringify(data.user) ? prev : data.user));
+        saveStoredUser(data.user);
+      })
+      .catch(() => { /* offline or server down: the stored copy stands */ });
+    return () => { cancelled = true; };
+  }, [token]);
+
   // Pointer-reactive foil: one delegated listener drives --px/--py (0-100%) on
   // whichever card the pointer is over, so the holo/reverse-holo rainbow tracks
   // the cursor (MTG-style). CSS custom props inherit down to the overlay div.
@@ -410,7 +430,7 @@ function App() {
     setToken(newToken);
     setUser(newUser);
     localStorage.setItem('bindarr_token', newToken);
-    localStorage.setItem('bindarr_user', JSON.stringify(newUser));
+    saveStoredUser(newUser);
     showToast(isDeviceMode() ? t('toast.deviceReady') : t('toast.welcomeBack', { name: newUser.username }));
     setActiveTab('dashboard');
   };
@@ -440,7 +460,7 @@ function App() {
 
   const handleUpdateUser = (updatedUser) => {
     setUser(updatedUser);
-    localStorage.setItem('bindarr_user', JSON.stringify(updatedUser));
+    saveStoredUser(updatedUser);
   };
 
   const triggerRefresh = () => {
@@ -459,9 +479,16 @@ function App() {
     );
   }
 
-  // Render login screen if unauthenticated
+  // Render login screen if unauthenticated. The toast too: "your session expired"
+  // and a failed SSO hand-off are said exactly when this screen is showing, and
+  // without it here they were never seen.
   if (!token || !user) {
-    return <Login onLoginSuccess={handleLoginSuccess} />;
+    return (
+      <>
+        <Login onLoginSuccess={handleLoginSuccess} />
+        {toast && <div className="toast">{toast}</div>}
+      </>
+    );
   }
 
   // One account and no server: the Admin tab's account, backup and catalog

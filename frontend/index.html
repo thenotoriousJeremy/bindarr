@@ -5,15 +5,9 @@
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Bindarr</title>
-    <!-- Apply saved theme before first paint so there's no flash of the wrong theme. -->
-    <script>
-      (function () {
-        try {
-          const urlTheme = new URLSearchParams(window.location.search).get('theme');
-          document.documentElement.setAttribute('data-theme', urlTheme || localStorage.getItem('theme') || 'dark');
-        } catch (e) { /* private mode / storage blocked: stay on dark */ }
-      })();
-    </script>
+    <!-- Apply saved theme before first paint so there's no flash of the wrong theme.
+         A file, not inline: the Content-Security-Policy blocks inline scripts. -->
+    <script src="/theme-init.js"></script>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
