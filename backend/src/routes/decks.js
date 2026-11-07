@@ -2,12 +2,24 @@ const express = require('express');
 const db = require('../db');
 const cardApi = require('../utils/cardApi');
 const { parseCardRow, recordPrice } = require('../utils/priceHelpers');
-const { compartmentLabel } = require('../utils/compartmentSort');
-const { validateDeckAddition } = require('../utils/deckRules');
+const { validateDeckAddition, loadRules } = require('../utils/deckRules');
+const {
+  DeckAllocationError, deckAvailability, locationsFor, checkoutDeck, returnDeck, deleteDeck, syncDeckAllocation,
+} = require('../utils/deckAllocation');
 const scryfallApi = require('../scryfallApi');
 const { parseManaboxText, parseDecklistLine } = require('../utils/csvMappers');
 
 const router = express.Router();
+
+// An allocation refusal carries its own status (and, for a short checkout, the
+// cards missing); anything else is a genuine 500.
+function sendAllocationError(res, error, fallback) {
+  if (error instanceof DeckAllocationError) {
+    return res.status(error.status).json(error.details ? { error: error.message, details: error.details } : { error: error.message });
+  }
+  console.error(error);
+  return res.status(500).json({ error: fallback });
+}
 
 // Get User Decks
 router.get('/', async (req, res) => {
@@ -22,6 +34,7 @@ router.get('/', async (req, res) => {
         d.category,
         d.accent_color,
         d.target_size,
+        d.any_printing,
         d.created_at,
         d.checked_out,
         d.checked_out_at,
@@ -51,10 +64,11 @@ router.post('/', async (req, res) => {
     category = 'Competitive',
     accent_color = '#eab308',
     target_size = 60,
+    any_printing,
     decklist_text = '',
     decklist_format = 'plain'
   } = req.body;
-  
+
   if (!name) {
     return res.status(400).json({ error: 'Deck name is required' });
   }
@@ -62,9 +76,14 @@ router.post('/', async (req, res) => {
   const targetSizeNum = parseInt(target_size, 10) || 60;
 
   try {
+    // Unset means the game's default: on for Magic and Lorcana, never for Pokémon,
+    // whose printings are not interchangeable.
+    const rules = await loadRules();
+    const anyPrinting = rules.supportsAnyPrinting(deckGame)
+      && (any_printing === undefined ? rules.defaultAnyPrinting(deckGame) : !!any_printing);
     const result = await db.run(
-      `INSERT INTO decks (name, description, game, format, category, accent_color, target_size, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [name, description, deckGame, format, category, accent_color, targetSizeNum, req.user.id]
+      `INSERT INTO decks (name, description, game, format, category, accent_color, target_size, any_printing, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [name, description, deckGame, format, category, accent_color, targetSizeNum, anyPrinting ? 1 : 0, req.user.id]
     );
     const newDeckId = result.lastID;
 
@@ -128,7 +147,10 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Deck not found' });
     }
 
-    const cardsQuery = `
+    // The card text the deck rules read comes along (shared/deckRules.mjs runs in
+    // the deck builder too); ownership comes from the allocation plan, one pass over
+    // the collection for the whole deck.
+    const cards = await db.all(`
       SELECT
         dc.quantity,
         dc.is_commander,
@@ -143,29 +165,34 @@ router.get('/:id', async (req, res) => {
         cc.number,
         cc.image_url,
         cc.price_trend,
-        -- What the deck rules read (shared/deckRules.mjs runs in the deck builder).
         cc.cmc,
         cc.color_identity,
         cc.oracle_id,
         cc.oracle_text,
-        cc.game,
-        (SELECT COALESCE(SUM(quantity), 0) FROM collection WHERE card_id = cc.id AND user_id = ? AND list_type = 'collection') AS owned_qty,
-        (SELECT COALESCE(SUM(dc2.quantity), 0)
-         FROM deck_cards dc2 JOIN decks d2 ON dc2.deck_id = d2.id
-         WHERE d2.checked_out = 1 AND d2.user_id = ? AND d2.id != ? AND dc2.card_id = cc.id) AS locked_qty,
-        (SELECT GROUP_CONCAT(d2.name, ', ')
-         FROM deck_cards dc2 JOIN decks d2 ON dc2.deck_id = d2.id
-         WHERE d2.checked_out = 1 AND d2.user_id = ? AND d2.id != ? AND dc2.card_id = cc.id) AS locked_decks
+        cc.game
       FROM deck_cards dc
       JOIN card_cache cc ON dc.card_id = cc.id
       WHERE dc.deck_id = ?
-    `;
-    const cards = await db.all(cardsQuery, [req.user.id, req.user.id, id, req.user.id, id, id]);
-    const formatted = cards.map(parseCardRow);
+    `, [id]);
+    const availability = await deckAvailability(deck, req.user.id);
 
     res.json({
       ...deck,
-      cards: formatted
+      cards: cards.map(row => {
+        const p = availability.get(row.id);
+        return {
+          ...parseCardRow(row),
+          // Copies of this card (any printing, when the deck accepts it) owned, and
+          // how many of those other checked-out decks hold.
+          owned_qty: p ? p.owned : 0,
+          locked_qty: p ? p.locked : 0,
+          locked_decks: p && p.lockedBy.size ? [...p.lockedBy].join(', ') : null,
+          // How many copies the deck has to play with — what it holds when checked
+          // out, what a checkout would take otherwise — and how many it lacks.
+          allocated_qty: p ? row.quantity - p.need : 0,
+          missing_qty: p ? p.need : row.quantity,
+        };
+      })
     });
   } catch (error) {
     console.error(error);
@@ -177,73 +204,13 @@ router.get('/:id', async (req, res) => {
 router.get('/:id/locations', async (req, res) => {
   const { id } = req.params;
   try {
-    const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    const deck = await db.get(`SELECT * FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!deck) return res.status(404).json({ error: 'Deck not found' });
 
-    // Find how many of each card are in the deck
-    const requiredCards = await db.all(`SELECT card_id, quantity FROM deck_cards WHERE deck_id = ?`, [id]);
-    const requiredMap = new Map(requiredCards.map(r => [r.card_id, r.quantity]));
-
-    // Find all owned instances of those cards
-    const query = `
-      SELECT 
-        c.id as entry_id, c.card_id, c.quantity as owned_qty, c.position, c.location_id, c.compartment_id,
-        cc.name as card_name, cc.printed_name, cc.set_name, cc.number,
-        l.name as location_name, l.type as location_type,
-        cp.label as compartment_label, cp.idx as compartment_idx
-      FROM collection c
-      JOIN card_cache cc ON c.card_id = cc.id
-      LEFT JOIN locations l ON c.location_id = l.id
-      LEFT JOIN compartments cp ON c.compartment_id = cp.id
-      WHERE c.user_id = ? AND c.list_type = 'collection' AND c.card_id IN (SELECT card_id FROM deck_cards WHERE deck_id = ?)
-      ORDER BY (c.location_id IS NOT NULL) DESC, cc.name ASC, c.added_at DESC
-    `;
-    const instances = await db.all(query, [req.user.id, id]);
-    
-    // Group them and figure out what to tell the user
-    // We only need to tell them where to find \`required\` amount.
-    const results = [];
-    for (const [cardId, requiredQty] of requiredMap.entries()) {
-      let needed = requiredQty;
-      const cardInstances = instances.filter(i => i.card_id === cardId);
-      
-      const foundLocations = [];
-      for (const inst of cardInstances) {
-        if (needed <= 0) break;
-        const take = Math.min(inst.owned_qty, needed);
-        needed -= take;
-        
-        const compDisplay = inst.compartment_idx !== null
-          ? compartmentLabel({ label: inst.compartment_label, idx: inst.compartment_idx }, inst.location_type)
-          : inst.compartment_label;
-
-        foundLocations.push({
-          take,
-          // A pull list is display-only, so the name is the one printed on the card
-          // — nothing downstream keys off it.
-          card_name: inst.printed_name || inst.card_name,
-          set_name: inst.set_name,
-          number: inst.number,
-          location_name: inst.location_name || 'Unassigned Pile',
-          location_type: inst.location_type,
-          compartment_display: compDisplay,
-          position: inst.location_name ? inst.position : null,
-          location_id: inst.location_id,
-          compartment_id: inst.compartment_id,
-          entry_id: inst.entry_id
-        });
-      }
-      
-      results.push({
-        card_id: cardId,
-        required: requiredQty,
-        found: requiredQty - needed,
-        missing: needed,
-        locations: foundLocations
-      });
-    }
-
-    res.json(results);
+    // A checked-out deck's pull list is the copies it actually holds; any other
+    // deck's is what checking it out would take. Copies another checked-out deck
+    // holds are never offered — they are not in storage to be pulled.
+    res.json(locationsFor(await deckAvailability(deck, req.user.id)));
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to retrieve card locations' });
@@ -253,7 +220,7 @@ router.get('/:id/locations', async (req, res) => {
 // Update Deck Metadata
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, description = '', format, category, accent_color, target_size } = req.body;
+  const { name, description = '', format, category, accent_color, target_size, any_printing } = req.body;
 
   if (!name || !String(name).trim()) {
     return res.status(400).json({ error: 'Deck name is required' });
@@ -264,16 +231,28 @@ router.put('/:id', async (req, res) => {
   }
 
   try {
-    const result = await db.run(
+    const deck = await db.get(`SELECT id, game, checked_out, any_printing FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!deck) {
+      return res.status(404).json({ error: 'Deck not found or unauthorized' });
+    }
+    const rules = await loadRules();
+    const anyPrinting = any_printing === undefined
+      ? null
+      : (rules.supportsAnyPrinting(deck.game || 'pokemon') && !!any_printing ? 1 : 0);
+
+    await db.run(
       `UPDATE decks
        SET name = ?, description = ?, format = COALESCE(?, format), category = COALESCE(?, category),
-           accent_color = COALESCE(?, accent_color), target_size = COALESCE(?, target_size)
+           accent_color = COALESCE(?, accent_color), target_size = COALESCE(?, target_size),
+           any_printing = COALESCE(?, any_printing)
        WHERE id = ? AND user_id = ?`,
-      [String(name).trim(), description, format, category, accent_color, targetSize, id, req.user.id]
+      [String(name).trim(), description, format, category, accent_color, targetSize, anyPrinting, id, req.user.id]
     );
 
-    if (result.changes === 0) {
-      return res.status(404).json({ error: 'Deck not found or unauthorized' });
+    // Out on the table, a deck that stops accepting other printings gives those
+    // copies back (and one that starts may pick some up).
+    if (deck.checked_out && anyPrinting !== null && anyPrinting !== deck.any_printing) {
+      await syncDeckAllocation(deck.id, req.user.id);
     }
 
     res.json({ message: 'Deck updated successfully' });
@@ -287,20 +266,11 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    // Verify ownership
-    const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-    if (!deck) {
-      return res.status(404).json({ error: 'Deck not found or unauthorized' });
-    }
-
-    // Manual cascade deletion
-    await db.run(`DELETE FROM deck_cards WHERE deck_id = ?`, [id]);
-    await db.run(`DELETE FROM decks WHERE id = ?`, [id]);
-
+    // Ownership is checked inside, and the cascade (cards, held copies) is manual.
+    await deleteDeck(id, req.user.id);
     res.json({ message: 'Deck deleted successfully' });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Failed to delete deck' });
+    sendAllocationError(res, error, 'Failed to delete deck');
   }
 });
 
@@ -315,7 +285,7 @@ router.post('/:id/cards', async (req, res) => {
 
   try {
     // Verify deck ownership
-    const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    const deck = await db.get(`SELECT id, checked_out FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!deck) {
       return res.status(404).json({ error: 'Deck not found or unauthorized' });
     }
@@ -346,6 +316,7 @@ router.post('/:id/cards', async (req, res) => {
       VALUES (?, ?, ?)
       ON CONFLICT(deck_id, card_id) DO UPDATE SET quantity = ?
     `, [id, card_id, parseInt(quantity, 10), parseInt(quantity, 10)]);
+    if (deck.checked_out) await syncDeckAllocation(deck.id, req.user.id);
 
     // Record initial price history trend if card is added
     const cacheCard = await db.get(`SELECT price_trend FROM card_cache WHERE id = ?`, [card_id]);
@@ -363,12 +334,13 @@ router.delete('/:id/cards/:card_id', async (req, res) => {
   const { id, card_id } = req.params;
   try {
     // Verify deck ownership
-    const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    const deck = await db.get(`SELECT id, checked_out FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!deck) {
       return res.status(404).json({ error: 'Deck not found or unauthorized' });
     }
 
     await db.run(`DELETE FROM deck_cards WHERE deck_id = ? AND card_id = ?`, [id, card_id]);
+    if (deck.checked_out) await syncDeckAllocation(deck.id, req.user.id);
     res.json({ message: 'Card removed from deck successfully' });
   } catch (error) {
     console.error(error);
@@ -400,69 +372,25 @@ router.put('/:id/cards/:card_id/commander', async (req, res) => {
   }
 });
 
-// Checkout Deck (mark as in play)
+// Checkout Deck (mark as in play). Claims the exact copies the deck takes, all or
+// none: a shortfall is a 400 naming each missing card, and copies claimed by a
+// concurrent checkout are a 409 — never two decks holding one card.
 router.put('/:id/checkout', async (req, res) => {
-  const { id } = req.params;
   try {
-    const deck = await db.get(`SELECT id, name FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-    if (!deck) {
-      return res.status(404).json({ error: 'Deck not found or unauthorized' });
-    }
-
-    // Validate that we have enough cards physically available
-    const validationQuery = `
-      SELECT 
-        dc.card_id, 
-        cc.name, cc.printed_name, 
-        dc.quantity AS required_qty,
-        (SELECT COALESCE(SUM(quantity), 0) FROM collection WHERE card_id = dc.card_id AND user_id = ? AND list_type = 'collection') AS owned_qty,
-        (SELECT COALESCE(SUM(dc2.quantity), 0) FROM deck_cards dc2 JOIN decks d2 ON dc2.deck_id = d2.id WHERE d2.checked_out = 1 AND d2.user_id = ? AND d2.id != ? AND dc2.card_id = dc.card_id) AS locked_qty
-      FROM deck_cards dc
-      JOIN card_cache cc ON dc.card_id = cc.id
-      WHERE dc.deck_id = ?
-    `;
-    const cards = await db.all(validationQuery, [req.user.id, req.user.id, id, id]);
-    
-    let errors = [];
-    for (const card of cards) {
-      const available = card.owned_qty - card.locked_qty;
-      if (card.required_qty > available) {
-        const deficit = card.required_qty - available;
-        errors.push(`Missing ${deficit}x ${card.printed_name || card.name} (Owned: ${card.owned_qty}, In Use: ${card.locked_qty})`);
-      }
-    }
-
-    if (errors.length > 0) {
-      return res.status(400).json({ error: 'Not enough cards available to check out this deck.', details: errors });
-    }
-
-    await db.run(
-      `UPDATE decks SET checked_out = 1, checked_out_at = CURRENT_TIMESTAMP WHERE id = ?`,
-      [id]
-    );
+    await checkoutDeck(req.params.id, req.user.id);
     res.json({ message: 'Deck checked out successfully' });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Failed to checkout deck' });
+    sendAllocationError(res, error, 'Failed to checkout deck');
   }
 });
 
-// Return Deck (mark as returned to storage)
+// Return Deck (mark as returned to storage), releasing the copies it held.
 router.put('/:id/return', async (req, res) => {
-  const { id } = req.params;
   try {
-    const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-    if (!deck) {
-      return res.status(404).json({ error: 'Deck not found or unauthorized' });
-    }
-    await db.run(
-      `UPDATE decks SET checked_out = 0, checked_out_at = NULL WHERE id = ?`,
-      [id]
-    );
+    await returnDeck(req.params.id, req.user.id);
     res.json({ message: 'Deck returned to storage successfully' });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Failed to return deck' });
+    sendAllocationError(res, error, 'Failed to return deck');
   }
 });
 

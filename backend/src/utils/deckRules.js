@@ -19,7 +19,9 @@ const RULE_COLUMNS = 'id, name, supertype, subtypes, game, oracle_id, oracle_tex
 
 // Validate setting a deck's copy count of `cardId` to `newQty`.
 // Returns { ok: true } or { ok: false, error }. Enforces:
-//   1. can't exceed the copies actually owned in the collection;
+//   1. can't exceed the copies actually owned in the collection — for a deck that
+//      accepts any printing, owned copies of every printing count, shared with the
+//      deck's other printings of the same card;
 //   2. the format's copy limit per card name (4 in constructed, 1 in Commander;
 //      basics and cards that say otherwise are exempt).
 // Lowering a count always passes: a deck left over a limit (copies sold since, a
@@ -33,25 +35,34 @@ async function validateDeckAddition({ deckId, userId, cardId, newQty, dbClient }
   const card = await client.get(`SELECT ${RULE_COLUMNS} FROM card_cache WHERE id = ?`, [cardId]);
   if (!card) return { ok: false, error: 'Card not found' };
 
-  const deck = await client.get(`SELECT game, format FROM decks WHERE id = ? AND user_id = ?`, [deckId, userId]);
+  const deck = await client.get(`SELECT game, format, any_printing FROM decks WHERE id = ? AND user_id = ?`, [deckId, userId]);
   const game = (deck && deck.game) || card.game || 'pokemon';
+  const anyPrinting = !!(deck && deck.any_printing) && rules.supportsAnyPrinting(game);
 
   // Every row of this deck that is this card by name or by printing.
   const deckRows = await client.all(
-    `SELECT dc.card_id, dc.quantity, cc.name
+    `SELECT dc.card_id, dc.quantity, cc.name, cc.oracle_id
      FROM deck_cards dc JOIN card_cache cc ON dc.card_id = cc.id
-     WHERE dc.deck_id = ? AND (dc.card_id = ? OR cc.name = ?)`,
-    [deckId, cardId, card.name]
+     WHERE dc.deck_id = ? AND (dc.card_id = ? OR cc.name = ? OR cc.oracle_id = ?)`,
+    [deckId, cardId, card.name, card.oracle_id]
   );
   const current = deckRows.filter(r => r.card_id === cardId).reduce((s, r) => s + r.quantity, 0);
   if (qty <= current) return { ok: true };
 
-  const ownedRow = await client.get(
-    `SELECT COALESCE(SUM(quantity), 0) AS owned FROM collection
-     WHERE card_id = ? AND user_id = ? AND list_type = 'collection'`, [cardId, userId]
+  const owned = await client.all(
+    `SELECT c.card_id, c.quantity, cc.name, cc.oracle_id
+     FROM collection c JOIN card_cache cc ON c.card_id = cc.id
+     WHERE c.user_id = ? AND c.list_type = 'collection'
+       AND (c.card_id = ? OR (? = 1 AND (cc.name = ? OR cc.oracle_id = ?)))`,
+    [userId, cardId, anyPrinting ? 1 : 0, card.name, card.oracle_id]
   );
-  const ownedQty = ownedRow ? ownedRow.owned : 0;
-  if (qty > ownedQty) {
+  const ownedQty = owned
+    .filter(o => rules.sameCard(card, o, game, anyPrinting))
+    .reduce((s, o) => s + (o.quantity || 0), 0);
+  const sharing = deckRows
+    .filter(r => r.card_id !== cardId && rules.sameCard(card, r, game, anyPrinting))
+    .reduce((s, r) => s + r.quantity, 0);
+  if (sharing + qty > ownedQty) {
     return { ok: false, error: `You only own ${ownedQty} ${ownedQty === 1 ? 'copy' : 'copies'} of ${card.name}.` };
   }
 

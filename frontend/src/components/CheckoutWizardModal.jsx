@@ -37,7 +37,8 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose, onCanc
     for (const card of locationsData || []) {
       for (const loc of card.locations || []) pulls.push({ ...loc, card_id: card.card_id });
       if (card.missing > 0) {
-        const name = card.locations?.[0]?.card_name || card.card_id;
+        // The deck card's own name: a card with no copy at all has no location to read it from.
+        const name = card.card_name || card.locations?.[0]?.card_name || card.card_id;
         missing.push({ card_id: card.card_id, name, qty: card.missing });
       }
     }

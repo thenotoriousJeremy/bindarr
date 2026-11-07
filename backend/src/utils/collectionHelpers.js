@@ -19,34 +19,17 @@ function defaultCompartmentPlan(type) {
 }
 
 // How many copies of each collection entry are physically pulled for a
-// checked-out deck. Sums required quantity per card across all of the user's
-// checked-out decks, then allocates greedily onto their owned entries using the
-// same ordering the checkout locator uses (located copies first, newest first),
-// so storage greys out the same copies the wizard told them to grab.
+// checked-out deck: exactly the copies checkout claimed (utils/deckAllocation.js),
+// so storage greys out the same copies the wizard told them to grab. One query —
+// this used to re-derive the claim with a query per card on every collection load.
 async function checkedOutAllocation(userId) {
-  const required = await db.all(`
-    SELECT dc.card_id, SUM(dc.quantity) AS req
-    FROM deck_cards dc
-    JOIN decks d ON dc.deck_id = d.id
+  const rows = await db.all(`
+    SELECT a.entry_id, a.quantity
+    FROM deck_allocations a
+    JOIN decks d ON a.deck_id = d.id
     WHERE d.user_id = ? AND d.checked_out = 1
-    GROUP BY dc.card_id
   `, [userId]);
-  const alloc = new Map();
-  for (const { card_id, req } of required) {
-    let need = req;
-    const entries = await db.all(`
-      SELECT id AS entry_id, quantity FROM collection
-      WHERE user_id = ? AND list_type = 'collection' AND card_id = ?
-      ORDER BY (location_id IS NOT NULL) DESC, added_at DESC
-    `, [userId, card_id]);
-    for (const e of entries) {
-      if (need <= 0) break;
-      const take = Math.min(e.quantity, need);
-      need -= take;
-      alloc.set(e.entry_id, take);
-    }
-  }
-  return alloc;
+  return new Map(rows.map(r => [r.entry_id, r.quantity]));
 }
 
 // Resolves where a card should actually land. Supports both object destructuring signature

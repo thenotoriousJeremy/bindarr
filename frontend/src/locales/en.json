@@ -1551,6 +1551,8 @@
   "deck.reqQuantity": "Req: {count}",
   "deck.unavailableCopies": "{count} unavailable",
   "deck.unavailableCopiesInDecks": "{count} unavailable — {decks}",
+  "deck.anyPrinting": "Accept any printing",
+  "deck.anyPrintingHint": "Your copies of other printings of a card count toward this deck. The printing listed is used first.",
   "deck.formatRulesTitle": "{format} rules",
   "deck.rulesMet": "Meets the {format} deck rules.",
   "deck.ruleSizeExact": "{format} decks have exactly {expected} cards; this one has {actual}.",

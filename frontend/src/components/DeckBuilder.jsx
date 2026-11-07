@@ -11,7 +11,8 @@ import { defaultGame, gameOptions, showGamePicker, isGameEnabled } from '../util
 import CardImage from './CardImage';
 import { useT } from '../utils/i18n';
 import {
-  rulesFor, formatNames, defaultFormat, defaultTargetSize, copyLimit, isBasicEnergyOrLand, deckWarnings, ruleWarningText,
+  rulesFor, formatNames, defaultFormat, defaultTargetSize, supportsAnyPrinting, defaultAnyPrinting,
+  copyLimit, isBasicEnergyOrLand, deckWarnings, ruleWarningText,
 } from '../utils/deckRules';
 
 // Total copies of a card (matched by name) already in a deck's card list.
@@ -22,8 +23,29 @@ const deckCountByName = (deckCards, name) =>
 // it, sized the way that format is (100 for Commander, 60 otherwise).
 const newDeckDefaults = (game) => {
   const format = defaultFormat(game);
-  return { format, targetSize: defaultTargetSize(game, format) };
+  return { format, targetSize: defaultTargetSize(game, format), anyPrinting: defaultAnyPrinting(game) };
 };
+
+// Copies a deck has no copy for: what it holds when checked out, what checkout would
+// take otherwise. A server older than the app (the mobile app can be) sends only
+// owned/locked, so fall back to those.
+const missingCopies = (card) => (card.missing_qty !== undefined
+  ? card.missing_qty
+  : Math.max(0, card.quantity - ((card.owned_qty || 0) - (card.locked_qty || 0))));
+
+// The "accept any printing" switch, in both the create and the edit form. Offered
+// only for games where printings can stand in for each other (not Pokémon).
+function AnyPrintingField({ t, checked, onChange }) {
+  return (
+    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', margin: 0, cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-strong)' }}>
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} style={{ marginTop: '2px' }} />
+      <span>
+        <span style={{ fontWeight: 700 }}>{t('deck.anyPrinting')}</span>
+        <span style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>{t('deck.anyPrintingHint')}</span>
+      </span>
+    </label>
+  );
+}
 
 const formatCardLocations = (locations) => locations.map(({ take, location_name, compartment_display }) =>
   `${take > 1 ? `×${take} ` : ''}${location_name}${compartment_display ? ` · ${compartment_display}` : ''}`
@@ -65,6 +87,7 @@ function DeckBuilder({ showToast }) {
   const [newDeckCategory, setNewDeckCategory] = useState('Competitive');
   const [newDeckAccentColor, setNewDeckAccentColor] = useState('#eab308');
   const [newDeckTargetSize, setNewDeckTargetSize] = useState(() => newDeckDefaults(defaultGame()).targetSize);
+  const [newDeckAnyPrinting, setNewDeckAnyPrinting] = useState(() => newDeckDefaults(defaultGame()).anyPrinting);
   const [newDeckImportText, setNewDeckImportText] = useState('');
   const [newDeckImportFormat, setNewDeckImportFormat] = useState('plain');
   const [showImportDecklistArea, setShowImportDecklistArea] = useState(false);
@@ -155,6 +178,7 @@ function DeckBuilder({ showToast }) {
           category: newDeckCategory,
           accent_color: newDeckAccentColor,
           target_size: newDeckTargetSize,
+          any_printing: newDeckAnyPrinting,
           decklist_text: newDeckImportText,
           decklist_format: newDeckImportFormat
         })
@@ -181,12 +205,13 @@ function DeckBuilder({ showToast }) {
     }
   };
 
-  // A new deck's format and size follow the game picked.
+  // A new deck's format, size and any-printing setting all follow the game picked.
   const pickNewDeckGame = (game) => {
     const defaults = newDeckDefaults(game);
     setNewDeckGame(game);
     setNewDeckFormat(defaults.format);
     setNewDeckTargetSize(defaults.targetSize);
+    setNewDeckAnyPrinting(defaults.anyPrinting);
   };
 
   const handleManaBoxDeckFile = (event) => {
@@ -217,6 +242,8 @@ function DeckBuilder({ showToast }) {
       setDeckDraft(null);
       fetchDecks();
       showToast(data.message);
+      // Accepting any printing (or not) changes which copies count as owned.
+      if (!!deckDraft.any_printing !== !!activeDeck.any_printing) await loadDeckDetails(activeDeck.id);
     } catch (error) {
       console.error(error);
       showToast(error.message);
@@ -1440,6 +1467,9 @@ function DeckBuilder({ showToast }) {
                     <input type="number" min="1" max="300" className="input-control" value={deckDraft.target_size} onChange={(event) => setDeckDraft({ ...deckDraft, target_size: event.target.value })} />
                   </label>
                 </div>
+                {supportsAnyPrinting(deckGame) && (
+                  <AnyPrintingField t={t} checked={!!deckDraft.any_printing} onChange={(checked) => setDeckDraft({ ...deckDraft, any_printing: checked })} />
+                )}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '0.75rem', alignItems: 'end' }}>
                   <label className="form-group" style={{ margin: 0 }}>
                     {t('deck.category')}
@@ -1525,7 +1555,8 @@ function DeckBuilder({ showToast }) {
                   format: activeDeck.format || newDeckDefaults(activeDeck.game).format,
                   category: activeDeck.category || 'Competitive',
                   accent_color: activeDeck.accent_color || '#eab308',
-                  target_size: activeDeck.target_size || newDeckDefaults(activeDeck.game).targetSize
+                  target_size: activeDeck.target_size || newDeckDefaults(activeDeck.game).targetSize,
+                  any_printing: !!activeDeck.any_printing
                 })}
                 style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
               >
@@ -1743,7 +1774,7 @@ function DeckBuilder({ showToast }) {
                                 // Wraps so a wide warning drops the controls to their own
                                 // line instead of squeezing the name to nothing; the
                                 // name's 10rem basis is what decides when to wrap.
-                                <div key={card.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', background: card.quantity > (card.owned_qty || 0) - (card.locked_qty || 0) ? 'rgba(127,29,29,0.16)' : 'rgba(255,255,255,0.01)', borderRadius: 'var(--radius-sm)', border: card.quantity > (card.owned_qty || 0) - (card.locked_qty || 0) ? '1px solid var(--accent-red)' : '1px solid var(--border-glass)', gap: '0.6rem' }}>
+                                <div key={card.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', background: missingCopies(card) > 0 ? 'rgba(127,29,29,0.16)' : 'rgba(255,255,255,0.01)', borderRadius: 'var(--radius-sm)', border: missingCopies(card) > 0 ? '1px solid var(--accent-red)' : '1px solid var(--border-glass)', gap: '0.6rem' }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', minWidth: 0, flex: '1 1 10rem' }} onClick={() => setPreviewCard(card)}>
                                     <CardImage card={card} style={{ width: '32px', height: '44px', objectFit: 'cover', borderRadius: '2px', flexShrink: 0 }} />
                                     <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
@@ -1761,10 +1792,10 @@ function DeckBuilder({ showToast }) {
                                       card, so it is unbounded: it truncates (full text in
                                       the tooltip) rather than setting the row's width. */}
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0, marginLeft: 'auto' }}>
-                                    {card.quantity > (card.owned_qty || 0) - (card.locked_qty || 0) && (
-                                      <span style={{ color: 'var(--accent-red)', fontSize: '0.7rem', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '3px', minWidth: 0, maxWidth: '14rem' }} title={card.locked_decks ? t('deck.unavailableCopiesInDecks', { count: card.quantity - ((card.owned_qty || 0) - (card.locked_qty || 0)), decks: card.locked_decks }) : t('deck.unavailableCopies', { count: card.quantity - ((card.owned_qty || 0) - (card.locked_qty || 0)) })}>
+                                    {missingCopies(card) > 0 && (
+                                      <span style={{ color: 'var(--accent-red)', fontSize: '0.7rem', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '3px', minWidth: 0, maxWidth: '14rem' }} title={card.locked_decks ? t('deck.unavailableCopiesInDecks', { count: missingCopies(card), decks: card.locked_decks }) : t('deck.unavailableCopies', { count: missingCopies(card) })}>
                                         <AlertTriangle size={13} style={{ flexShrink: 0 }} />
-                                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.locked_decks ? t('deck.unavailableCopiesInDecks', { count: card.quantity - ((card.owned_qty || 0) - (card.locked_qty || 0)), decks: card.locked_decks }) : t('deck.unavailableCopies', { count: card.quantity - ((card.owned_qty || 0) - (card.locked_qty || 0)) })}</span>
+                                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.locked_decks ? t('deck.unavailableCopiesInDecks', { count: missingCopies(card), decks: card.locked_decks }) : t('deck.unavailableCopies', { count: missingCopies(card) })}</span>
                                       </span>
                                     )}
                                     {hasCommandZone && (
@@ -1809,15 +1840,15 @@ function DeckBuilder({ showToast }) {
                           {cardDisplayMode === 'grid' && (
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '0.75rem' }}>
                               {list.map(card => (
-                                <div key={card.id} style={{ position: 'relative', borderRadius: '6px', overflow: 'hidden', border: card.quantity > (card.owned_qty || 0) - (card.locked_qty || 0) ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)', background: card.quantity > (card.owned_qty || 0) - (card.locked_qty || 0) ? 'rgba(127,29,29,0.16)' : 'rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', transition: 'transform 0.15s' }}>
+                                <div key={card.id} style={{ position: 'relative', borderRadius: '6px', overflow: 'hidden', border: missingCopies(card) > 0 ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)', background: missingCopies(card) > 0 ? 'rgba(127,29,29,0.16)' : 'rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', transition: 'transform 0.15s' }}>
                                   <div style={{ position: 'relative', width: '100%', aspectRatio: 0.718, cursor: 'pointer' }} onClick={() => setPreviewCard(card)}>
                                     <CardImage card={card} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                                     <span style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.85)', color: 'var(--accent-yellow)', fontSize: '0.75rem', fontWeight: 800, padding: '1px 6px', borderRadius: '10px', border: '1px solid var(--accent-yellow)' }}>
                                       x{card.quantity}
                                     </span>
-                                    {card.quantity > (card.owned_qty || 0) - (card.locked_qty || 0) && (
-                                      <span style={{ position: 'absolute', top: '4px', left: '4px', background: 'rgba(127,29,29,0.92)', color: '#fff', fontSize: '0.65rem', fontWeight: 800, padding: '2px 5px', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '2px' }} title={card.locked_decks || t('deck.unavailableCopies', { count: card.quantity - ((card.owned_qty || 0) - (card.locked_qty || 0)) })}>
-                                        <AlertTriangle size={10} /> {card.quantity - ((card.owned_qty || 0) - (card.locked_qty || 0))}
+                                    {missingCopies(card) > 0 && (
+                                      <span style={{ position: 'absolute', top: '4px', left: '4px', background: 'rgba(127,29,29,0.92)', color: '#fff', fontSize: '0.65rem', fontWeight: 800, padding: '2px 5px', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '2px' }} title={card.locked_decks || t('deck.unavailableCopies', { count: missingCopies(card) })}>
+                                        <AlertTriangle size={10} /> {missingCopies(card)}
                                       </span>
                                     )}
                                   </div>
@@ -2118,6 +2149,10 @@ function DeckBuilder({ showToast }) {
                   />
                 </div>
               </div>
+
+              {supportsAnyPrinting(newDeckGame) && (
+                <AnyPrintingField t={t} checked={newDeckAnyPrinting} onChange={setNewDeckAnyPrinting} />
+              )}
 
               {/* Deck Name */}
               <div className="form-group">

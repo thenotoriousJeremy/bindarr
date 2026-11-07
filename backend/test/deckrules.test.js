@@ -273,8 +273,8 @@ async function own(userId, cardId, copies) {
     await db.run(`INSERT INTO collection (card_id, quantity, game, user_id) VALUES (?, 1, 'mtg', ?)`, [cardId, userId]);
   }
 }
-async function deck(userId, format) {
-  return (await db.run(`INSERT INTO decks (name, game, format, user_id) VALUES (?, 'mtg', ?, ?)`, [format, format, userId])).lastID;
+async function deck(userId, format, anyPrinting = 0) {
+  return (await db.run(`INSERT INTO decks (name, game, format, any_printing, user_id) VALUES (?, 'mtg', ?, ?, ?)`, [format, format, anyPrinting, userId])).lastID;
 }
 const put = (deckId, cardId, quantity) => db.run(
   `INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, ?, ?) ON CONFLICT(deck_id, card_id) DO UPDATE SET quantity = excluded.quantity`,
@@ -313,9 +313,16 @@ async function testEnforcement() {
   assert.strictEqual((await check(edh, SOL_RING.id, 3)).ok, true, 'lowering an over-limit count always passes');
   assert.strictEqual((await check(edh, SOL_RING.id, 5)).ok, false, 'raising it does not');
 
-  // Ownership: one C21 Sol Ring owned, so a deck may not list two of them.
-  const exact = await deck(userId, 'Modern');
-  assert.strictEqual((await check(exact, ringC21.id, 2)).ok, false, 'only one C21 owned');
+  // Ownership: one C21 Sol Ring owned. An exact deck may not list two of them; a
+  // deck accepting any printing counts the other four.
+  const exact = await deck(userId, 'Modern', 0);
+  assert.strictEqual((await check(exact, ringC21.id, 2)).ok, false, 'exact printing: only one C21 owned');
+  const anyDeck = await deck(userId, 'Modern', 1);
+  assert.strictEqual((await check(anyDeck, ringC21.id, 4)).ok, true, 'any printing: five owned in all');
+  await put(anyDeck, SOL_RING.id, 2);
+  const over = await check(anyDeck, ringC21.id, 4);
+  assert.strictEqual(over.ok, false, 'printings listed together share the copies owned');
+  assert.match(over.error, /only own 5 copies/);
 }
 
 async function main() {
