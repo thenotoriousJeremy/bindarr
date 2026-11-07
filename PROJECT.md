@@ -636,9 +636,10 @@ for cards not yet saved.
 `notify.js` is the whole surface: `notify.emit({ type, ... })` returns at once
 and never throws. Price sweeps, the auto-backup and catalog builds call it from
 their failure paths (`price_sweep_failed`, `backup_failed`,
-`catalog_build_failed`, sent only to channels of current admins), and server.js
-emits `price_sweep_done` once every sweep of a round has settled. That runs the
-price-move check: for each user with a price channel, every owned (and, if
+`catalog_build_failed`, sent only to channels of current admins), and the
+scheduler's `price-sweeps` job emits `price_sweep_done` with the
+`utils/priceSweeps` summary once a run finishes (a sweep that threw is reported
+from that summary). That runs the price-move check: for each user with a price channel, every owned (and, if
 enabled, wishlisted — `collection.list_type = 'wishlist'` or `card_lists` when
 present) card's latest `price_history` point is compared with the price the user
 was last told about (`notification_price_state`). Over either per-user bar

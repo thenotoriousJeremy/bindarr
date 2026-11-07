@@ -374,6 +374,13 @@ async function main() {
   assert.strictEqual(await notify.notifyAdmins({ type: 'price_sweep_failed', source: 'scryfall', error: 'x' }), 0, 'deduped');
   assert.strictEqual(await notify.notifyAdmins({ type: 'price_sweep_failed', source: 'lorcast', error: 'x' }), 2);
   assert.strictEqual(await notify.notifyAdmins({ type: 'catalog_build_failed', game: 'mtg', lang: 'English', error: 'x' }), 2);
+  // A sweep that threw shows up in utils/priceSweeps' summary and is reported from there.
+  received.length = 0;
+  notify.emit({ type: 'price_sweep_done', summary: { skipped: false, sweeps: [{ key: 'tcgdex', status: 'error', error: 'ECONNRESET' }, { key: 'mtg', status: 'ok' }] } });
+  await new Promise(r2 => setTimeout(r2, 50));
+  await notify.flush();
+  assert.strictEqual(received.filter(m => m.body && m.body.event === 'price_sweep_failed').length, 1, 'the failed sweep reaches the admin webhook');
+  assert.strictEqual(received.find(m => m.body && m.body.event === 'price_sweep_failed').body.data.source, 'tcgdex');
   await notify.flush();
   // emit() is fire-and-forget: it returns at once and never throws.
   assert.strictEqual(notify.emit(undefined), undefined);
