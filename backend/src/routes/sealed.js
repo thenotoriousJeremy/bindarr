@@ -7,6 +7,53 @@ const { allocateSealedUnitCost } = require('../utils/sealedCostAllocation');
 
 const router = express.Router();
 
+const GAMES = ['pokemon', 'mtg', 'lorcana'];
+// Units, extra units and recipe components are written one row each inside a
+// write transaction on the shared connection, so the count is bounded: nobody
+// buys more than a thousand of one product in one go, and an unbounded value
+// would hold the database for as long as the loop takes.
+const MAX_QUANTITY = 1000;
+const MAX_TEMPLATE_COMPONENTS = 100;
+
+class ValidationError extends Error {}
+
+// Integer 1..MAX_QUANTITY, or the fallback when the field was not sent.
+function parseQuantity(value, field, fallback = 1) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_QUANTITY) {
+    throw new ValidationError(`${field} must be a whole number from 1 to ${MAX_QUANTITY}`);
+  }
+  return n;
+}
+
+// A finite number >= 0, or null when blank. Prices, card counts and market
+// values all share this shape; NaN or Infinity in any of them poisons every
+// SUM() the stats and cost-allocation code run over the column.
+function parseAmount(value, field, { integer = false } = {}) {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || (integer && !Number.isInteger(n))) {
+    throw new ValidationError(`${field} must be ${integer ? 'a whole number' : 'a number'} of 0 or more`);
+  }
+  return n;
+}
+
+function parseGame(value, fallback = 'pokemon') {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (!GAMES.includes(value)) throw new ValidationError(`game must be one of: ${GAMES.join(', ')}`);
+  return value;
+}
+
+// Client-safe failure: a ValidationError (or a deliberate status) carries its own
+// message; anything else is logged here and answered with the generic one.
+function fail(res, error, fallbackStatus, message) {
+  if (error instanceof ValidationError) return res.status(400).json({ error: error.message });
+  if (error && error.clientStatus) return res.status(error.clientStatus).json({ error: error.message });
+  console.error(`${message}:`, error);
+  return res.status(fallbackStatus).json({ error: message });
+}
+
 // A product's contents the user already matches by product identity: by
 // product_id when the purchase is catalog-linked, else an exact product_name
 // match. Returns the template plus its components, or null.
@@ -24,7 +71,11 @@ async function matchTemplate(userId, productId, productName) {
 // brand-new sealed purchases (their own units, not priced individually — cost
 // basis stays on the parent) that can be opened and linked later like any other
 // sealed product. Idempotent via sealed_units.components_applied_at.
-async function applyTemplateComponents(unit, purchase, template, { includeCards = true } = {}) {
+//
+// Runs inside the open-unit write transaction, so it must not touch the network:
+// every card component arrives already resolved in `resolvedCards` (card_id ->
+// resolveCardForAdd result), fetched before the transaction began.
+async function applyTemplateComponents(unit, purchase, template, { includeCards = true, resolvedCards = new Map() } = {}) {
   const { addCardToCollection } = require('./collection');
   const productComponentsByKey = new Map();
   for (const component of template.components) {
@@ -56,10 +107,12 @@ async function applyTemplateComponents(unit, purchase, template, { includeCards 
   for (const c of template.components) {
     if (c.component_type === 'card') {
       if (!includeCards || !c.card_id) continue;
+      const resolved = resolvedCards.get(c.card_id);
+      if (!resolved) throw new Error(`recipe card ${c.card_id} was not resolved before the transaction`);
       await addCardToCollection({ id: purchase.user_id }, {
         card_id: c.card_id, quantity: c.quantity || 1, game: c.game || purchase.game,
         sealed_unit_id: unit.id, purchase_price: componentUnitPrice,
-      });
+      }, { resolvedCard: resolved });
       applied.push(c);
     }
   }
@@ -138,7 +191,7 @@ router.get('/sealed/catalog/search', async (req, res) => {
     );
     res.json({ products });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to search sealed catalog', message: error.message });
+    fail(res, error, 500, 'Failed to search sealed catalog');
   }
 });
 
@@ -200,7 +253,7 @@ router.get('/sealed/purchases', async (req, res) => {
     }
     res.json({ purchases });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch sealed purchases', message: error.message });
+    fail(res, error, 500, 'Failed to fetch sealed purchases');
   }
 });
 
@@ -217,7 +270,7 @@ router.get('/sealed/purchases/:id', async (req, res) => {
     );
     res.json({ purchase, units });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch sealed purchase', message: error.message });
+    fail(res, error, 500, 'Failed to fetch sealed purchase');
   }
 });
 
@@ -252,7 +305,7 @@ router.post('/sealed/purchases/:id/refresh-value', async (req, res) => {
     const updated = await db.get(`SELECT market_value, market_value_source, market_value_at FROM sealed_purchases WHERE id = ?`, [purchase.id]);
     res.json({ ...updated });
   } catch (error) {
-    res.status(502).json({ error: 'Failed to refresh sealed product market value', message: error.message });
+    fail(res, error, 502, 'Failed to refresh sealed product market value');
   }
 });
 
@@ -266,7 +319,17 @@ router.post('/sealed/purchases', async (req, res) => {
     expected_packs = null, expected_cards = null, contents_note = '', market_value = null,
   } = req.body || {};
 
-  const qty = Math.max(1, parseInt(quantity, 10) || 1);
+  let qty, gameValue, unitPrice, expectedPacks, expectedCards, marketValue;
+  try {
+    qty = parseQuantity(quantity, 'quantity');
+    gameValue = parseGame(game);
+    unitPrice = parseAmount(unit_price, 'unit_price');
+    expectedPacks = parseAmount(expected_packs, 'expected_packs', { integer: true });
+    expectedCards = parseAmount(expected_cards, 'expected_cards', { integer: true });
+    marketValue = parseAmount(market_value, 'market_value');
+  } catch (error) {
+    return fail(res, error, 400, 'Invalid sealed purchase');
+  }
   let name = product_name, setName = set_name, type = sealed_type, image = image_url;
 
   try {
@@ -285,9 +348,6 @@ router.post('/sealed/purchases', async (req, res) => {
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'product_name is required' });
     }
-    if (market_value != null && market_value !== '' && (!(Number(market_value) >= 0) || !Number.isFinite(Number(market_value)))) {
-      return res.status(400).json({ error: 'market_value must be a number of 0 or more' });
-    }
     const trimmedName = String(name).trim();
     const template = await matchTemplate(req.user.id, product_id || null, trimmedName);
 
@@ -297,13 +357,13 @@ router.post('/sealed/purchases', async (req, res) => {
            (user_id, product_id, product_name, set_name, sealed_type, game, image_url, store, purchase_date, unit_price, quantity, notes,
             expected_packs, expected_cards, contents_note, template_id, market_value, market_value_source, market_value_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)`,
-        [req.user.id, product_id || null, trimmedName, setName || null, type || null, game,
-          image || null, store, purchase_date, unit_price, qty, notes,
-          expected_packs === '' ? null : expected_packs, expected_cards === '' ? null : expected_cards, contents_note,
+        [req.user.id, product_id || null, trimmedName, setName || null, type || null, gameValue,
+          image || null, store, purchase_date, unitPrice, qty, notes,
+          expectedPacks, expectedCards, contents_note,
            template ? template.id : null,
-           market_value === '' || market_value == null ? null : Number(market_value),
-           market_value === '' || market_value == null ? null : 'manual',
-           market_value === '' || market_value == null ? null : Number(market_value)]
+           marketValue,
+           marketValue == null ? null : 'manual',
+           marketValue]
       );
       for (let i = 0; i < qty; i++) {
         await db.run(`INSERT INTO sealed_units (purchase_id) VALUES (?)`, [result.lastID]);
@@ -312,7 +372,7 @@ router.post('/sealed/purchases', async (req, res) => {
     });
     res.status(201).json({ purchase });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to create sealed purchase', message: error.message });
+    fail(res, error, 500, 'Failed to create sealed purchase');
   }
 });
 
@@ -333,23 +393,20 @@ router.put('/sealed/purchases/:id', async (req, res) => {
     const params = [];
     if (store !== undefined) { sets.push('store = ?'); params.push(store); }
     if (purchase_date !== undefined) { sets.push('purchase_date = ?'); params.push(purchase_date); }
-    if (expected_packs !== undefined) { sets.push('expected_packs = ?'); params.push(expected_packs === '' ? null : expected_packs); }
-    if (expected_cards !== undefined) { sets.push('expected_cards = ?'); params.push(expected_cards === '' ? null : expected_cards); }
+    if (expected_packs !== undefined) { sets.push('expected_packs = ?'); params.push(parseAmount(expected_packs, 'expected_packs', { integer: true })); }
+    if (expected_cards !== undefined) { sets.push('expected_cards = ?'); params.push(parseAmount(expected_cards, 'expected_cards', { integer: true })); }
     if (contents_note !== undefined) { sets.push('contents_note = ?'); params.push(contents_note); }
-    if (unit_price !== undefined) { sets.push('unit_price = ?'); params.push(unit_price); }
+    if (unit_price !== undefined) { sets.push('unit_price = ?'); params.push(parseAmount(unit_price, 'unit_price')); }
     if (notes !== undefined) { sets.push('notes = ?'); params.push(notes); }
+    const newQty = quantity !== undefined ? parseQuantity(quantity, 'quantity', purchase.quantity) : null;
     if (market_value !== undefined) {
-      if (market_value != null && market_value !== '' && (!(Number(market_value) >= 0) || !Number.isFinite(Number(market_value)))) {
-        return res.status(400).json({ error: 'market_value must be a number of 0 or more' });
-      }
-      const value = market_value === '' || market_value == null ? null : Number(market_value);
+      const value = parseAmount(market_value, 'market_value');
       sets.push('market_value = ?', 'market_value_source = ?', 'market_value_at = CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END');
       params.push(value, value == null ? null : 'manual', value);
     }
 
     await withTransaction(async () => {
-      if (quantity !== undefined) {
-        const newQty = Math.max(1, parseInt(quantity, 10) || 1);
+      if (newQty != null) {
         const delta = newQty - purchase.quantity;
         if (delta > 0) {
           for (let i = 0; i < delta; i++) {
@@ -359,12 +416,13 @@ router.put('/sealed/purchases/:id', async (req, res) => {
           const removable = await db.all(
             `SELECT id FROM sealed_units
                WHERE purchase_id = ? AND opened_at IS NULL
-                 AND id NOT IN (SELECT sealed_unit_id FROM collection WHERE sealed_unit_id IS NOT NULL)
+                 AND id NOT IN (SELECT sealed_unit_id FROM collection
+                                 WHERE sealed_unit_id IS NOT NULL AND user_id = ?)
                LIMIT ?`,
-            [purchase.id, -delta]
+            [purchase.id, req.user.id, -delta]
           );
           if (removable.length < -delta) {
-            throw Object.assign(new Error('Not enough unopened, unlinked units to remove'), { status: 400 });
+            throw Object.assign(new Error('Not enough unopened, unlinked units to remove'), { clientStatus: 400 });
           }
           for (const u of removable) {
             await db.run(`DELETE FROM sealed_units WHERE id = ?`, [u.id]);
@@ -382,7 +440,7 @@ router.put('/sealed/purchases/:id', async (req, res) => {
     const updated = await db.get(`SELECT * FROM sealed_purchases WHERE id = ?`, [purchase.id]);
     res.json({ purchase: updated });
   } catch (error) {
-    res.status(error.status || 500).json({ error: error.status ? error.message : 'Failed to update sealed purchase', message: error.message });
+    fail(res, error, 500, 'Failed to update sealed purchase');
   }
 });
 
@@ -473,7 +531,7 @@ router.put('/sealed/purchases/:id/source-unit', async (req, res) => {
     );
     res.json({ success: true, source_unit_id: newSourceUnitId, unit_price: updated.unit_price });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to link sealed purchase', message: error.message });
+    fail(res, error, 500, 'Failed to link sealed purchase');
   }
 });
 
@@ -488,7 +546,7 @@ router.delete('/sealed/purchases/:id', async (req, res) => {
     if (result.changes === 0) return res.status(404).json({ error: 'Purchase not found' });
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to delete sealed purchase', message: error.message });
+    fail(res, error, 500, 'Failed to delete sealed purchase');
   }
 });
 
@@ -505,39 +563,58 @@ router.put('/sealed/units/:id/open', async (req, res) => {
     );
     if (!unit) return res.status(404).json({ error: 'Unit not found' });
 
+    // Everything that can reach a card provider happens here, BEFORE the write
+    // transaction: resolving the recipe and hydrating/fetching each of its card
+    // components. BEGIN IMMEDIATE holds the one shared connection, so a provider
+    // request inside it would stall every other query in the process for as long
+    // as the provider takes. A card that cannot be resolved fails the request
+    // here, before anything is written, which keeps the open all-or-nothing.
+    let purchase = null;
+    let template = null;
+    let attachTemplate = false;
+    const resolvedCards = new Map();
+    const includeCards = !unit.components_applied_at;
+    if (opened) {
+      purchase = await db.get(`SELECT * FROM sealed_purchases WHERE id = ? AND user_id = ?`, [unit.purchase_id, req.user.id]);
+      template = purchase?.template_id
+        ? await db.get(`SELECT * FROM sealed_templates WHERE id = ? AND user_id = ?`, [purchase.template_id, req.user.id])
+        : null;
+      if (template) {
+        template.components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
+      } else if (purchase) {
+        template = await matchTemplate(purchase.user_id, purchase.product_id, purchase.product_name);
+        attachTemplate = !!template;
+      }
+      if (template && includeCards) {
+        const { resolveCardForAdd } = require('./collection');
+        const user = { id: req.user.id, tcg_api_key: req.user.tcg_api_key };
+        for (const c of template.components) {
+          if (c.component_type !== 'card' || !c.card_id || resolvedCards.has(c.card_id)) continue;
+          resolvedCards.set(c.card_id, await resolveCardForAdd(user, { card_id: c.card_id, game: c.game || purchase.game }));
+        }
+      }
+    }
+
     let applied = null;
     await withTransaction(async () => {
       await db.run(
         `UPDATE sealed_units SET opened_at = ? WHERE id = ?`,
         [opened ? new Date().toISOString() : null, unit.id]
       );
-      if (opened) {
-        const purchase = await db.get(`SELECT * FROM sealed_purchases WHERE id = ?`, [unit.purchase_id]);
-        let template = purchase?.template_id
-          ? await db.get(`SELECT * FROM sealed_templates WHERE id = ?`, [purchase.template_id])
-          : null;
-        if (template) {
-          template.components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
-        } else if (purchase) {
-          template = await matchTemplate(purchase.user_id, purchase.product_id, purchase.product_name);
-          if (template) await db.run(`UPDATE sealed_purchases SET template_id = ? WHERE id = ?`, [template.id, purchase.id]);
-        }
-        {
-          if (template) {
-            const freshUnit = await db.get(`SELECT * FROM sealed_units WHERE id = ?`, [unit.id]);
-            const newlyApplied = await applyTemplateComponents(freshUnit, purchase, template, {
-              includeCards: !unit.components_applied_at,
-            });
-            if (newlyApplied.length > 0) applied = newlyApplied;
-          }
-        }
+      if (opened && template) {
+        if (attachTemplate) await db.run(`UPDATE sealed_purchases SET template_id = ? WHERE id = ?`, [template.id, purchase.id]);
+        const freshUnit = await db.get(`SELECT * FROM sealed_units WHERE id = ?`, [unit.id]);
+        const newlyApplied = await applyTemplateComponents(freshUnit, purchase, template, { includeCards, resolvedCards });
+        if (newlyApplied.length > 0) applied = newlyApplied;
       }
     });
 
     const updated = await db.get(`SELECT * FROM sealed_units WHERE id = ?`, [unit.id]);
     res.json({ unit: updated, applied });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to update sealed unit', message: error.message });
+    const { AddCardError } = require('./collection');
+    if (AddCardError && error instanceof AddCardError) return res.status(error.status).json({ error: error.message });
+    fail(res, error, 500, 'Failed to update sealed unit');
   }
 });
 
@@ -560,7 +637,7 @@ router.get('/sealed/units/:id/cards', async (req, res) => {
     );
     res.json({ cards });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch linked cards', message: error.message });
+    fail(res, error, 500, 'Failed to fetch linked cards');
   }
 });
 
@@ -574,7 +651,8 @@ router.get('/sealed/units', async (req, res) => {
   if (opened === '0') where.push(`u.opened_at IS NULL`);
   if (unlinked === '1') where.push(`(
     p.expected_cards IS NULL
-      AND u.id NOT IN (SELECT sealed_unit_id FROM collection WHERE sealed_unit_id IS NOT NULL)
+      AND u.id NOT IN (SELECT c.sealed_unit_id FROM collection c
+                        WHERE c.sealed_unit_id IS NOT NULL AND c.user_id = p.user_id)
     OR p.expected_cards IS NOT NULL
       AND COALESCE((SELECT SUM(c.quantity) FROM collection c WHERE c.sealed_unit_id = u.id AND c.user_id = p.user_id), 0) < p.expected_cards
   )`);
@@ -594,7 +672,7 @@ router.get('/sealed/units', async (req, res) => {
     );
     res.json({ units });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch sealed units', message: error.message });
+    fail(res, error, 500, 'Failed to fetch sealed units');
   }
 });
 
@@ -635,7 +713,7 @@ router.get('/sealed/stats', async (req, res) => {
       openedValue: sealedVsOpened?.opened_value || 0,
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch sealed stats', message: error.message });
+    fail(res, error, 500, 'Failed to fetch sealed stats');
   }
 });
 
@@ -647,7 +725,7 @@ router.get('/sealed/templates/match', async (req, res) => {
     const template = await matchTemplate(req.user.id, product_id ? Number(product_id) : null, product_name || '');
     res.json({ template });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to match template', message: error.message });
+    fail(res, error, 500, 'Failed to match template');
   }
 });
 
@@ -659,7 +737,7 @@ router.get('/sealed/templates', async (req, res) => {
     }
     res.json({ templates });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch templates', message: error.message });
+    fail(res, error, 500, 'Failed to fetch templates');
   }
 });
 
@@ -676,10 +754,32 @@ router.post('/sealed/templates', async (req, res) => {
   if (!Array.isArray(components) || components.length === 0) {
     return res.status(400).json({ error: 'At least one component is required' });
   }
-  for (const c of components) {
-    if (!COMPONENT_TYPES.includes(c.component_type)) {
-      return res.status(400).json({ error: `Invalid component_type. One of: ${COMPONENT_TYPES.join(', ')}` });
+  if (components.length > MAX_TEMPLATE_COMPONENTS) {
+    return res.status(400).json({ error: `A recipe can have at most ${MAX_TEMPLATE_COMPONENTS} components` });
+  }
+  let templateGame;
+  const parsedComponents = [];
+  try {
+    templateGame = parseGame(game);
+    for (const c of components) {
+      if (!c || !COMPONENT_TYPES.includes(c.component_type)) {
+        throw new ValidationError(`Invalid component_type. One of: ${COMPONENT_TYPES.join(', ')}`);
+      }
+      parsedComponents.push({
+        ...c,
+        quantity: parseQuantity(c.quantity, 'component quantity'),
+        game: c.game ? parseGame(c.game) : null,
+        expected_cards: parseAmount(c.expected_cards, 'component expected_cards', { integer: true }),
+      });
     }
+    // Opening a unit writes one row per component copy, so bound the recipe's
+    // total as well as each line of it.
+    const total = parsedComponents.reduce((sum, c) => sum + c.quantity, 0);
+    if (total > MAX_QUANTITY) {
+      throw new ValidationError(`A recipe can hold at most ${MAX_QUANTITY} items in total`);
+    }
+  } catch (error) {
+    return fail(res, error, 400, 'Invalid recipe');
   }
   try {
     const existing = await matchTemplate(req.user.id, product_id, String(product_name).trim());
@@ -690,17 +790,16 @@ router.post('/sealed/templates', async (req, res) => {
       } else {
         const result = await db.run(
           `INSERT INTO sealed_templates (user_id, product_id, product_name, game) VALUES (?, ?, ?, ?)`,
-          [req.user.id, product_id || null, String(product_name).trim(), game]
+          [req.user.id, product_id || null, String(product_name).trim(), templateGame]
         );
         templateId = result.lastID;
       }
-      for (const c of components) {
-        const qty = Math.max(1, parseInt(c.quantity, 10) || 1);
+      for (const c of parsedComponents) {
         await db.run(
             `INSERT INTO sealed_template_components (template_id, component_type, quantity, card_id, product_name, sealed_type, product_id, game, expected_cards)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-             [templateId, c.component_type, qty, c.card_id || null, c.product_name || null, c.sealed_type || null, c.product_id || null, c.game || null,
-              c.expected_cards == null || c.expected_cards === '' ? null : Math.max(0, parseInt(c.expected_cards, 10) || 0)]
+             [templateId, c.component_type, c.quantity, c.card_id || null, c.product_name || null, c.sealed_type || null, c.product_id || null, c.game,
+              c.expected_cards]
         );
       }
       // Attach purchases made before this recipe existed (e.g. imports).
@@ -720,7 +819,7 @@ router.post('/sealed/templates', async (req, res) => {
     template.components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
     res.status(201).json({ template });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to save template', message: error.message });
+    fail(res, error, 500, 'Failed to save template');
   }
 });
 
@@ -732,7 +831,7 @@ router.get('/sealed/templates/:id', async (req, res) => {
     template.components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
     res.json({ template });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch template', message: error.message });
+    fail(res, error, 500, 'Failed to fetch template');
   }
 });
 
@@ -742,7 +841,7 @@ router.delete('/sealed/templates/:id', async (req, res) => {
     if (result.changes === 0) return res.status(404).json({ error: 'Template not found' });
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to delete template', message: error.message });
+    fail(res, error, 500, 'Failed to delete template');
   }
 });
 

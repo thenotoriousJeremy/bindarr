@@ -144,7 +144,7 @@ export default function SealedTemplateEditor({ productId, productName, game, sho
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
           {components.map((c, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-strong)' }}>
-              <input type="number" min="1" className="input-control" value={c.quantity} onChange={(e) => updateQuantity(i, e.target.value)} onBlur={() => c.quantity === '' && updateQuantity(i, '1')} style={{ width: '3.5rem', padding: '0.2rem' }} />
+              <input type="number" min="1" max="1000" className="input-control" value={c.quantity} onChange={(e) => updateQuantity(i, e.target.value)} onBlur={() => c.quantity === '' && updateQuantity(i, '1')} style={{ width: '3.5rem', padding: '0.2rem' }} />
               <span style={{ flex: 1 }}>{c.label} <span style={{ color: 'var(--text-secondary)' }}>({t(c.component_type === 'card' ? 'sealed.componentCard' : 'sealed.componentProduct')})</span>
                 {c.component_type === 'product' && (
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', marginLeft: '0.5rem' }}>

@@ -92,7 +92,7 @@ export default function SealedPurchaseForm({ initial, onSaved, onCancel, showToa
         </div>
         <div className="form-group">
           <label>{t('sealed.quantity')}</label>
-          <input type="number" min="1" className="input-control" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+          <input type="number" min="1" max="1000" className="input-control" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
         </div>
         <div className="form-group">
           <label>{t('sealed.unitPrice')}</label>
