@@ -78,8 +78,9 @@ function pick(cards = [], name) {
 const importKey = (item) => JSON.stringify([item.card_id || item.id, item.game, item.set_code || item.set_id,
   item.set_name, item.collector_number || item.number, item.language, item.name]);
 
-// Export endpoint
-router.get('/export', async (req, res) => {
+// Export endpoint. `entryIds`, when given, narrows it to those collection rows
+// in that order (POST /export below); the columns are the same either way.
+async function sendExport(req, res, entryIds = null) {
   const { format = 'csv', ecosystem = 'internal' } = req.query;
   const targetFormat = (ecosystem || format || 'internal').toLowerCase();
 
@@ -115,12 +116,14 @@ router.get('/export', async (req, res) => {
         cp.label as compartment_label,
         c.position
       FROM collection c
+      ${entryIds ? 'JOIN json_each(?) sel ON sel.value = c.id' : ''}
       JOIN card_cache cc ON c.card_id = cc.id
       LEFT JOIN locations l ON c.location_id = l.id
       LEFT JOIN compartments cp ON c.compartment_id = cp.id
       WHERE c.user_id = ?
+      ${entryIds ? 'ORDER BY sel.key' : ''}
     `;
-    const raw = await db.all(query, [req.user.id]);
+    const raw = await db.all(query, entryIds ? [JSON.stringify(entryIds), req.user.id] : [req.user.id]);
     // market_price used to be cc.price_trend flat, which exported the wrong number
     // for every foil, every 1st Edition and every slab — the same three cases
     // resolveCardPrice exists to get right. An export that disagrees with the
@@ -156,6 +159,20 @@ router.get('/export', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: 'Export failed', message: error.message });
   }
+}
+router.get('/export', (req, res) => sendExport(req, res));
+
+// Export exactly the rows a filtered collection view is showing: the client
+// sends their entry ids (too many for a query string). Rows that are not the
+// caller's are dropped by the user_id predicate like any other.
+const EXPORT_SELECTION_MAX = 50000;
+router.post('/export', (req, res) => {
+  const raw = req.body && req.body.entry_ids;
+  if (!Array.isArray(raw) || raw.length === 0) return res.status(400).json({ error: 'entry_ids is required' });
+  if (raw.length > EXPORT_SELECTION_MAX) return res.status(400).json({ error: `Cannot export more than ${EXPORT_SELECTION_MAX} rows at once.` });
+  const ids = [...new Set(raw.map(n => Number(n)).filter(n => Number.isInteger(n) && n > 0))];
+  if (ids.length === 0) return res.status(400).json({ error: 'No valid entry_ids' });
+  return sendExport(req, res, ids);
 });
 
 // Import endpoint
