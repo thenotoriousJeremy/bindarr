@@ -2,6 +2,8 @@
 // between two users, owned/missing with mixed currencies, deck -> missing list,
 // add a deck to the collection, used-in-decks, and the filtered CSV export.
 // Every card is seeded into card_cache, so nothing here reaches a provider.
+// A fresh database would otherwise run a full TCGCSV sync at boot.
+process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
