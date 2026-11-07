@@ -10,7 +10,7 @@ const { compartmentLabel, rebalanceCompartmentByScheme } = require('../../utils/
 const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, setStackQuantity, setTileQuantity, tileMembers, ownedLocation, ownedCompartment } = require('../../utils/collectionHelpers');
 const { readQuantity } = require('../../utils/requestBounds');
 const { trashEntries } = require('../../utils/collectionTrash');
-const { conflictingSealedLinks, GRADERS, ownsSealedUnit, cardIdForLanguage } = require('./shared');
+const { conflictingSealedLinks, GRADERS, CONDITIONS, PRINTINGS, ownsSealedUnit, cardIdForLanguage } = require('./shared');
 
 // 2. Get User's Collection
 //
@@ -374,6 +374,8 @@ async function updateEntry(req, res) {
     // tileMembers), taken from the row as it is now, before the edit changes it.
     const tile = requestedQty === null ? null : await tileMembers(db, req.user.id, entry, req.body.stack_entry_ids);
     if (tile && tile.error) return res.status(400).json({ error: tile.error });
+    if (condition !== undefined && !CONDITIONS.includes(condition)) return res.status(400).json({ error: 'Invalid condition' });
+    if (printing !== undefined && !PRINTINGS.includes(printing)) return res.status(400).json({ error: 'Invalid printing' });
     if (condition !== undefined) { updates.push('condition = ?'); params.push(condition); }
     if (printing !== undefined) { updates.push('printing = ?'); params.push(printing); }
     if (language !== undefined) {

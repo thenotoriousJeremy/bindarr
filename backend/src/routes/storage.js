@@ -118,6 +118,8 @@ const RULE_TYPES = ['any', 'alphabetical_range', 'specific_sets', 'compound'];
 // Every game in the registry. This list once named only Pokémon and Magic, so a
 // container could not be restricted to Lorcana even though the picker offered it.
 const GAME_RESTRICTIONS = ['any', ...require('../utils/games').VALUES];
+// Mirrors the locations.type CHECK constraint in db.js.
+const LOCATION_TYPES = ['Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other'];
 
 // Binder page width in pockets. null (or '') means automatic: the client lays the
 // page out from its capacity. Capped at 12, wider than any common pocket page, so
@@ -144,6 +146,9 @@ router.post('/locations', async (req, res) => {
 
   if (!name || !type) {
     return res.status(400).json({ error: 'name and type are required' });
+  }
+  if (typeof name !== 'string' || !LOCATION_TYPES.includes(type)) {
+    return res.status(400).json({ error: `name must be text and type one of: ${LOCATION_TYPES.join(', ')}` });
   }
   if (!RULE_TYPES.includes(rule_type)) {
     return res.status(400).json({ error: 'Invalid rule_type' });
@@ -217,6 +222,9 @@ router.get('/locations/:id', async (req, res) => {
 router.put('/locations/:id', async (req, res) => {
   const { id } = req.params;
   const { name, type, sort_order, foil_sorting, rule_type, rule_config, game, locked, allow_stacking, fixed_slots, page_columns } = req.body;
+  if (type !== undefined && !LOCATION_TYPES.includes(type)) {
+    return res.status(400).json({ error: 'Invalid location type' });
+  }
   if (rule_type !== undefined && !RULE_TYPES.includes(rule_type)) {
     return res.status(400).json({ error: 'Invalid rule_type' });
   }

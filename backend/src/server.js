@@ -648,6 +648,12 @@ app.use((err, req, res, next) => {
   if (err && err.type === 'entity.too.large') {
     return res.status(413).json({ error: 'Upload too large. Try exporting/importing in smaller batches.' });
   }
+  // body-parser's other refusals (broken JSON, a body that is a bare string,
+  // number or null, an unsupported charset) are the client's mistake and carry a
+  // 4xx. Answering them 500 blamed the server and logged a stack per request.
+  if (err && err.expose && err.status >= 400 && err.status < 500) {
+    return res.status(err.status).json({ error: err.type === 'entity.parse.failed' ? 'Request body is not valid JSON' : 'Bad request body' });
+  }
   console.error(err);
   res.status(500).json({ error: 'Internal server error' });
 });

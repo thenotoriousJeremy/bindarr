@@ -301,6 +301,9 @@ router.post('/:id/cards', async (req, res) => {
   if (quantity === null) {
     return res.status(400).json({ error: `quantity must be a whole number from 1 to ${MAX_DECK_QUANTITY}` });
   }
+  if (typeof card_id !== 'string') {
+    return res.status(400).json({ error: 'card_id must be a string' });
+  }
 
   try {
     // Verify deck ownership

@@ -79,6 +79,12 @@ async function searchCards(req, res) {
   const query = req.method === 'POST' ? { ...req.query, ...req.body } : req.query;
   const { name: rawName, number: rawNumber, set: rawSet, scope = 'database', game = 'pokemon', lang, prints, q, image, cropped, embedding } = query;
   const { name, number, set } = normalizeSearchParams({ name: rawName, number: rawNumber, set: rawSet, q });
+  // SQLite refuses a LIKE pattern over 50,000 bytes, so a pasted wall of text
+  // failed as a 500 once the cache had rows to compare. No card name or set list
+  // comes anywhere near this.
+  if ([name, number, set].some(v => v.length > 1000)) {
+    return res.status(400).json({ error: 'Search terms are too long' });
+  }
   // 1-based page over `limit`-sized pages. 250 is the pokemontcg.io ceiling and
   // a sane cap on how much one Scryfall search will page through per request.
   const page = Math.max(1, parseInt(query.page, 10) || 1);
