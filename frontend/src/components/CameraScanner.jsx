@@ -3109,7 +3109,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: 0, wordBreak: 'break-word' }}>{selectedCard.set_name}</p>
                 <LangFallbackNote card={selectedCard} style={{ justifyContent: 'flex-start' }} />
               </div>
-              <button className="btn btn-secondary btn-icon-only" onClick={closeDrawer} style={{ borderRadius: '50%', flexShrink: 0 }}>
+              <button type="button" className="btn btn-secondary btn-icon-only" onClick={closeDrawer} aria-label={t('common.close')} style={{ borderRadius: '50%', flexShrink: 0 }}>
                 <X size={18} />
               </button>
             </div>

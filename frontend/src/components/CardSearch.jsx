@@ -1017,7 +1017,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                   {' • '}#{selectedCard.number})
                 </p>
               </div>
-              <button className="btn btn-secondary btn-icon-only" onClick={closeDrawer} style={{ borderRadius: '50%', flexShrink: 0 }}>
+              <button type="button" className="btn btn-secondary btn-icon-only" onClick={closeDrawer} aria-label={t('common.close')} style={{ borderRadius: '50%', flexShrink: 0 }}>
                 <X size={18} />
               </button>
             </div>
