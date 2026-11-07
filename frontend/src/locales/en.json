@@ -1357,7 +1357,7 @@
   "catalog.btnBuilding": "Building…",
   "catalog.btnRefresh": "Refresh",
   "catalog.btnBuild": "Build",
-  "catalog.productMapDesc": "What turns a TCGplayer product id into a set and a card number, so a Pokémon match can be looked up and cached like any search. One request per set from tcgcsv.com, a few hundred in total. Refresh it after new sets release; Magic does not use it.",
+  "catalog.productMapDesc": "What turns a TCGplayer product id into a set and a card number, so a Pokémon match can be looked up and cached like any search. Built from the TCGCSV data the server syncs from tcgcsv.com at most once a day, not fetched per set. Rebuild it after new sets release; Magic does not use it.",
   "catalog.listingSets": "Listing sets",
   "catalog.readingSets": "Reading sets",
   "catalog.productMapCardsCount": "{done}/{total} · {cards} cards",

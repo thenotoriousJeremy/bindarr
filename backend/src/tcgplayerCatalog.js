@@ -15,8 +15,8 @@
 // resolves through the ordinary search path — including fetching and caching the
 // card from the provider, exactly like a manual search would.
 //
-// One request per group, ~400 groups across the two Pokémon categories, and the
-// result is a few tens of thousands of rows. Re-runnable: rows are replaced, never
+// Reads the TCGCSV daily-sync cache (tcgcsvApi.syncIfUpdated), not the network:
+// ~400 groups across the two Pokémon categories, a few tens of thousands of rows. Re-runnable: rows are replaced, never
 // deleted, so a rebuild after a new set release is additive.
 const db = require('./db');
 const tcgcsv = require('./tcgcsvApi');
@@ -129,6 +129,9 @@ function start() {
   current = job;
   (async () => {
     try {
+      // A failed sync leaves the last complete version cached, which is enough to
+      // build from; getGroups below throws only when nothing has ever synced.
+      await tcgcsv.syncIfUpdatedSafely('product map');
       const groupsByCategory = {};
       for (const categoryId of Object.values(tcgcsv.CATEGORY)) {
         groupsByCategory[categoryId] = await tcgcsv.getGroups(categoryId);
