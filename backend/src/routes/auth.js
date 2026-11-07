@@ -251,7 +251,7 @@ const OWNER_USERNAME = 'admin';
 
 router.post('/bootstrap', authLimiter, async (req, res) => {
   const { password } = req.body;
-  if (!password) {
+  if (!password || typeof password !== 'string') {
     return res.status(400).json({ error: 'A password is required' });
   }
   if (password.length < 8) {
@@ -297,25 +297,32 @@ router.post('/bootstrap', authLimiter, async (req, res) => {
   }
 });
 
+// A JSON body can carry any type, and these routes are unauthenticated: a number
+// or object where a string belongs used to throw on `.trim()` outside the try,
+// which took the whole process down. Reject it as a bad request instead.
+function isCredential(value) {
+  return typeof value === 'string' && value.length > 0;
+}
+
 // Register a new user
 router.post('/register', authLimiter, async (req, res) => {
   if (!REGISTRATION_ENABLED) {
     return res.status(403).json({ error: 'Registration is disabled. Ask an administrator for an account.' });
   }
   const { username, password } = req.body;
-  if (!username || !password) {
+  if (!isCredential(username) || !isCredential(password)) {
     return res.status(400).json({ error: 'Username and password are required' });
   }
 
-  const cleanUsername = username.trim().toLowerCase();
-  if (cleanUsername.length < 3) {
-    return res.status(400).json({ error: 'Username must be at least 3 characters' });
-  }
-  if (password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
-  }
-
   try {
+    const cleanUsername = username.trim().toLowerCase();
+    if (cleanUsername.length < 3) {
+      return res.status(400).json({ error: 'Username must be at least 3 characters' });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+
     const existingUser = await db.get(`SELECT id FROM users WHERE username = ?`, [cleanUsername]);
     if (existingUser) {
       return res.status(400).json({ error: 'Username is already taken' });
@@ -351,13 +358,12 @@ router.post('/register', authLimiter, async (req, res) => {
 // Login user
 router.post('/login', authLimiter, async (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password) {
+  if (!isCredential(username) || !isCredential(password)) {
     return res.status(400).json({ error: 'Username and password are required' });
   }
 
-  const cleanUsername = username.trim().toLowerCase();
-
   try {
+    const cleanUsername = username.trim().toLowerCase();
     const user = await db.get(`SELECT * FROM users WHERE username = ?`, [cleanUsername]);
     if (!user || !verifyPassword(password, user.password_hash)) {
       return res.status(401).json({ error: 'Invalid username or password' });

@@ -474,6 +474,11 @@ router.put('/locations/:id/compartments/:comp_id', async (req, res) => {
   try {
     const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) return res.status(404).json({ error: 'Location not found' });
+    // The location check alone does not cover comp_id: the assignment rewrite
+    // below keys on comp_id only, so a caller pairing their own location with
+    // someone else's compartment id would rewrite that compartment's filters.
+    const comp = await db.get(`SELECT id FROM compartments WHERE id = ? AND location_id = ?`, [comp_id, id]);
+    if (!comp) return res.status(404).json({ error: 'Compartment not found' });
 
     let ruleConfigJson;
     if (rule_config !== undefined) {

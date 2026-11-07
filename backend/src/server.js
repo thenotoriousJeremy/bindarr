@@ -58,6 +58,12 @@ const { startHttps, selfSignedTls } = require('./utils/tls');
 
 
 const app = express();
+// A rejected promise nobody awaited is a bug in one request, not a reason to
+// drop every other user's connection: Node's default turns it into an exit.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason && reason.stack ? reason.stack : reason);
+});
+
 const PORT = process.env.PORT || 3001;
 
 // The model directory is created here, at startup, as the app's own user —
@@ -207,12 +213,14 @@ app.use(cors({
 // Applying 15mb to every route means an UNAUTHENTICATED POST /api/auth/login can
 // hand the process 15 MB, which is a free memory amplifier for anyone who can
 // reach the port. body-parser skips a request whose body is already parsed, so
-// registering these first and the small default after is all the scoping needed.
-const bigJson = express.json({ limit: '15mb' });
-app.use('/api/import', bigJson);
-app.use('/api/scan-match', bigJson);
-app.use('/api/search', bigJson);
-app.use(express.json({ limit: '1mb' }));
+// registering the big one first and the small default after is all the scoping
+// needed — but the big one is registered below the auth gate, not here, so an
+// unauthenticated request to those paths is refused before its body is read
+// rather than after 15 MB of it is buffered. Here they are only skipped.
+const BIG_BODY_PATHS = ['/api/import', '/api/scan-match', '/api/search'];
+const isBigBodyPath = (p) => BIG_BODY_PATHS.some(b => p === b || p.startsWith(`${b}/`));
+const smallJson = express.json({ limit: '1mb' });
+app.use((req, res, next) => (isBigBodyPath(req.path) ? next() : smallJson(req, res, next)));
 
 // Rebuild any catalog that has fallen behind, right after the weekly set refresh
 // discovers new releases.
@@ -444,6 +452,7 @@ app.use('/api/card-art', cardArtRoutes);
 // on its way to notes, so it ran authenticateToken — and its sessions⋈users
 // SELECT — four times per request.
 app.use('/api', authenticateToken);
+app.use(BIG_BODY_PATHS, express.json({ limit: '15mb' }));
 
 // --- AUTHENTICATED API ROUTES ---
 app.use('/api', collectionRoutes);

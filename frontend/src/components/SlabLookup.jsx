@@ -184,7 +184,7 @@ export default function SlabLookup({ onAddSuccess, showToast }) {
                       so it is shown as context for identifying the printing, not as
                       what the slab is worth. */}
                   <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                    {t('slab.rawPrice', { price: priceText(card.price_trend) })}
+                    {t('slab.rawPrice', { price: priceText(card.price_trend, card.price_currency) })}
                   </div>
                   <button
                     type="button"
