@@ -185,8 +185,14 @@ Authentication is DB-backed session tokens, not JWTs:
 - A bearer token that matches no session is then checked against `users.api_key` — a long-lived read-only credential for external scripts (issue #33). It sets `req.user.via_api_key`, which makes `authenticateToken` refuse any non-GET (403) and `requireAdmin` refuse it outright. No user object the server returns (`/auth/me`, login, settings) carries a key: they report `has_*` flags, provider keys are write-only, and the API key is read on demand from `GET /auth/api-key` (login session only). The gate's 401s carry `code: 'session_expired'`; a password change revokes the user's other sessions, an admin reset all of them. Read-only is the whole reason a non-expiring credential is acceptable here; anything that weakens it has to replace it with something scoped.
 - Rate limiters (`authLimiter`, `searchLimiter`, `importLimiter`) protect login and expensive endpoints.
 
-`collection.js` applies `router.use(authenticateToken)` up front, so every
-collection/location/deck-adjacent route requires a valid session.
+`server.js` mounts ONE `app.use('/api', authenticateToken)` gate, and every
+router below it requires a valid session. Only the deliberate public mounts sit
+above it — `/api/health`, `/api/auth` (whose non-public routes carry
+`authenticateToken` themselves), `/api/shared` (GET-only), `/api/admin` (opens with
+`authenticateToken` + `requireAdmin`) and `/api/card-art` (public reads, admin-gated
+writes). `backend/test/invariants.test.js` inspects the composed app and fails if
+anything else appears above the gate, if an exported rate limiter is not mounted, or
+if `card_cache` gains a writer other than `cacheNormalizedCards`.
 
 ### Route map
 
