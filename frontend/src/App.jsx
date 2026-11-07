@@ -33,6 +33,14 @@ class ErrorBoundary extends React.Component {
   componentDidCatch(error, errorInfo) {
     console.error("ErrorBoundary caught an error", error, errorInfo);
   }
+  // Tabs stay mounted while hidden, so a crash would otherwise persist until a
+  // manual reload. Clearing it when its tab is left gives the view a fresh try
+  // the next time it is opened.
+  componentDidUpdate(prevProps) {
+    if (prevProps.active && !this.props.active && this.state.hasError) {
+      this.setState({ hasError: false, error: null });
+    }
+  }
   render() {
     if (this.state.hasError) {
       // Class component, so no hook: App hands t down as a prop.
@@ -116,6 +124,41 @@ function App() {
 
   const tabGuardRef = useRef(null);
 
+  // Every tab opened this session stays mounted (hidden when inactive), so its
+  // filters, search, open deck/container and inner scroll boxes are still there
+  // when you come back. Mounted lazily: a tab costs nothing until first opened.
+  // Adjusted during render rather than in an effect so the new tab mounts in
+  // the same commit that activates it.
+  const [mountedTabs, setMountedTabs] = useState([activeTab]);
+  if (!mountedTabs.includes(activeTab)) setMountedTabs([...mountedTabs, activeTab]);
+
+  // The page itself (window) is the scroller, shared by every tab, so each
+  // tab's offset is read as you leave it (showTab, before the DOM changes — a
+  // scroll listener would race the page shrinking) and put back when it
+  // returns (the restoring layout effect sits below the tab-bar fit check).
+  const scrollByTabRef = useRef({});
+  const shownTabRef = useRef(activeTab);
+  const showTab = (tab) => {
+    scrollByTabRef.current[shownTabRef.current] = window.scrollY;
+    setActiveTab(tab);
+  };
+
+  // A focus request is consumed by the storage tab; clear it once you leave so
+  // the same card can be located again, and so a stale target doesn't keep
+  // suppressing storage's own default selection.
+  useEffect(() => {
+    if (activeTab !== 'storage') setFocusEntryId(null);
+  }, [activeTab]);
+
+  // A new session starts with only the landing tab mounted, so nothing from the
+  // previous account's views lingers. Used by both logout paths; it touches only
+  // state setters and a ref, so the 401 listener can call it without re-binding.
+  const resetTabs = () => {
+    setActiveTab('dashboard');
+    setMountedTabs(['dashboard']);
+    scrollByTabRef.current = {};
+  };
+
   // Navigate tabs through here so each change pushes a history entry: a back
   // gesture then returns to the PREVIOUS tab (not always dashboard), and modals
   // stack their own guards on top. We never dispose the old tab guard — each
@@ -127,9 +170,9 @@ function App() {
     const prev = activeTab;
     tabGuardRef.current = pushBackGuard(() => {
       tabGuardRef.current = null;
-      setActiveTab(prev);
+      showTab(prev);
     });
-    setActiveTab(tab);
+    showTab(tab);
   };
 
   // Detect public share route on load
@@ -296,6 +339,16 @@ function App() {
     return () => window.removeEventListener('resize', check);
   }, [token, user, activeTab, t]);
 
+  // Put the shown tab's page offset back (see showTab). Before paint, so there
+  // is no flash of the old offset, and declared after the fit check above on
+  // purpose: that check resizes the header, and scroll anchoring would shift a
+  // restore made before it by a few pixels. Storage's focus-a-card scroll runs
+  // later (passive effect) and wins.
+  useLayoutEffect(() => {
+    shownTabRef.current = activeTab;
+    window.scrollTo(0, scrollByTabRef.current[activeTab] || 0);
+  }, [activeTab]);
+
   // Offer first-run setup to an admin until it is finished or skipped. The flag
   // lives on the server, so closing the wizard halfway resumes it at the next
   // login on any device; everything it configures is also reachable from Settings
@@ -317,6 +370,7 @@ function App() {
       setUser(null);
       localStorage.removeItem('bindarr_token');
       localStorage.removeItem('bindarr_user');
+      resetTabs();
       showToast(t('toast.sessionExpired'));
     };
     window.addEventListener('bindarr_logout', handleAutoLogout);
@@ -364,6 +418,7 @@ function App() {
     setUser(null);
     localStorage.removeItem('bindarr_token');
     localStorage.removeItem('bindarr_user');
+    resetTabs();
     showToast(t('toast.loggedOut'));
   };
 
@@ -393,12 +448,12 @@ function App() {
     return <Login onLoginSuccess={handleLoginSuccess} />;
   }
 
-  const renderContent = () => {
-    switch (activeTab) {
+  const renderTab = (tab) => {
+    switch (tab) {
       case 'dashboard':
         return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
       case 'add-cards':
-        return <AddCards onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab} />;
+        return <AddCards active={activeTab === 'add-cards'} onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab} />;
       case 'collection':
         return (
           <CollectionList 
@@ -556,16 +611,22 @@ function App() {
 
       {/* Main Content Area */}
       <main style={{ flex: 1, marginTop: '1rem' }}>
-        {/* key on activeTab remounts the boundary per tab, so a crash in one
-            view clears when you navigate away instead of persisting until a
-            manual reload. */}
-        <ErrorBoundary key={activeTab} t={t}>
-          <div className="view-transition">
-            <Suspense fallback={<ChunkFallback />}>
-              {renderContent()}
-            </Suspense>
+        {/* One pane per tab opened so far (see mountedTabs). Inactive panes are
+            hidden, not unmounted; the active one carries .view-transition, so
+            the fade replays on every switch. Each has its own boundary, so a
+            crash stays in its tab and clears when you leave it. */}
+        {mountedTabs.map(tab => (
+          <div
+            key={tab}
+            className={tab === activeTab ? 'tab-pane view-transition' : 'tab-pane tab-pane-hidden'}
+          >
+            <ErrorBoundary active={tab === activeTab} t={t}>
+              <Suspense fallback={<ChunkFallback />}>
+                {renderTab(tab)}
+              </Suspense>
+            </ErrorBoundary>
           </div>
-        </ErrorBoundary>
+        ))}
       </main>
 
       {/* Toast Notification */}

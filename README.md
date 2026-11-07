@@ -344,11 +344,19 @@ Owned and decked cards have their prices re-fetched automatically, and only wher
 
 Daily is what the free providers publish, so leave it there unless you have a reason. Turn it down if you are on a provider that charges per card refreshed, or if you have a very large collection and only look at its value occasionally. **Never** stops automatic refreshes entirely; prices already stored stay as they are.
 
+### TCGCSV data sync
+
+Bindarr downloads TCGCSV data from the server and stores it in the local SQLite database; app and catalog operations use that cache instead of fetching data for each request. At startup and during scheduled work, Bindarr checks TCGCSV's `last-updated.txt` no more than once every 24 hours and only downloads a new dataset when the timestamp advances. A new dataset is staged until the full sync succeeds, so the last complete cache remains available if a refresh fails, and price refreshes keep using it. Only the Pokémon categories (3 and 85) are synced, about 1 + 2 + 2 × (number of sets) requests per new dataset, and only the fields Bindarr reads are stored. A set that TCGCSV answers with a 404 or an error is recorded as empty rather than blocking the sync; a dataset that still has not completed after 24 hours is abandoned and `last-updated.txt` is checked again.
+
+Outbound requests are serialized and spaced by at least 100 ms. If TCGCSV returns HTTP 403, Bindarr logs the response and pauses further TCGCSV requests for 24 hours.
+
+To route all Bindarr TCGCSV traffic through a reverse-proxy/read-through cache, set the server-side `TCGCSV_BASE_URL` environment variable to its base URL (for example, `http://tcgcsv-cache:8080`). The cache must serve `last-updated.txt` and the `/tcgplayer/...` endpoints. This setting covers sync, catalog, and price-refresh requests; it defaults to `https://tcgcsv.com`. Configure it in the server's environment or Docker Compose, not in the browser app.
+
 ### TCGCSV mirror (not live yet)
 
 Pokémon TCGplayer prices come from [TCGCSV](https://tcgcsv.com), a free service run by one person. Every install syncing from it separately adds up, so the project is preparing a single shared copy instead: one scheduled job syncs TCGCSV's Pokémon data (categories 3 and 85) once a day, politely, and publishes it with TCGCSV's own path layout to the `tcgcsv-mirror` branch of this repository.
 
-**It is not switched on yet** — it waits on the TCGCSV maintainer's approval. Once it is live, an install on a release that supports `TCGCSV_BASE_URL` can read from it instead of tcgcsv.com:
+**It is not switched on yet** — it waits on the TCGCSV maintainer's approval. Once it is live, an install can read from it instead of tcgcsv.com:
 
 ```sh
 TCGCSV_BASE_URL=https://raw.githubusercontent.com/thenotoriousJeremy/bindarr/tcgcsv-mirror

@@ -5,7 +5,10 @@ import CardSearch from './CardSearch';
 import SlabLookup from './SlabLookup';
 import { useT } from '../utils/i18n';
 
-function AddCards({ onAddSuccess, showToast, setActiveTab, initialMode = 'scan' }) {
+// `active` is false while another tab is showing: the tab stays mounted so the
+// chosen mode and search survive, but the scanner is unmounted so the camera
+// (and its detection loop) never runs behind a hidden tab.
+function AddCards({ active = true, onAddSuccess, showToast, setActiveTab, initialMode = 'scan' }) {
   const { t } = useT();
   const [mode, setMode] = useState(initialMode);
 
@@ -55,7 +58,7 @@ function AddCards({ onAddSuccess, showToast, setActiveTab, initialMode = 'scan' 
       </div>
 
       <div>
-        {mode === 'scan' && <CameraScanner onAddSuccess={onAddSuccess} showToast={showToast} setActiveTab={setActiveTab} />}
+        {mode === 'scan' && active && <CameraScanner onAddSuccess={onAddSuccess} showToast={showToast} setActiveTab={setActiveTab} />}
         {mode === 'search' && <CardSearch onAddSuccess={onAddSuccess} showToast={showToast} setActiveTab={setActiveTab} />}
         {mode === 'slab' && <SlabLookup onAddSuccess={onAddSuccess} showToast={showToast} />}
       </div>

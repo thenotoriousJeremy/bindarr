@@ -6,6 +6,10 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+### Changed
+- **TCGCSV data is synced into a persistent local cache.** Bindarr checks TCGCSV's `last-updated.txt` at most once every 24 hours and downloads a new dataset only when its timestamp advances. Cached group, product and price data is reused by the application; sync requests are serialized and spaced by at least 100 ms. A 403 response pauses further TCGCSV requests for 24 hours.
+- **The TCGCSV sync is bounded and cannot stall pricing.** Only the Pokémon categories (3 and 85) are synced, and only the fields Bindarr reads are stored (an earlier cache table is slimmed in place on startup). One set answering 404, `success:false` or a non-JSON page is recorded as empty instead of wedging the sync, a dataset unfinished after 24 hours is abandoned, and a failed or paused sync no longer stops the price refresh or the scan product map from using the last complete cache. Each sync logs how many requests it sent.
+
 ## [1.8.8] - 2026-10-26
 
 ### Added
