@@ -110,7 +110,7 @@ export function clearIntended(storage = globalThis.sessionStorage) {
 // Read-once. Re-validated on the way out: only an app path on this origin, never
 // a '//host' or absolute URL, whatever ended up in storage.
 export function takeIntended(storage = globalThis.sessionStorage) {
-  let path = null;
+  let path;
   try {
     path = storage.getItem(INTENDED_KEY);
     storage.removeItem(INTENDED_KEY);
