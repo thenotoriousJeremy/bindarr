@@ -13,9 +13,13 @@ const helmet = require('helmet');
 const compression = require('compression');
 const path = require('path');
 const db = require('./db');
-const tcgApi = require('./tcgApi');
 const scryfallApi = require('./scryfallApi');
 const lorcastApi = require('./lorcastApi');
+const backup = require('./backup');
+const { createScheduler } = require('./scheduler');
+const { runPriceSweeps, requestStop: stopPriceSweeps } = require('./utils/priceSweeps');
+const { createShutdown, whenTrue } = require('./utils/shutdown');
+const { serveFrontend } = require('./utils/staticCache');
 
 // Which module owns the Pokémon `sets` table. Asked per call rather than resolved
 // once: the provider is a setting an admin can change while the server is up, and
@@ -254,143 +258,217 @@ async function autoUpdateCatalogs() {
   }
 }
 
+// Every game's set list, in the order startup has always fetched them. Forced,
+// each provider refetches its list; unforced, a provider whose table already has
+// rows skips the request, which is all the boot fill needs. WHICH Pokémon
+// provider fills the `sets` table follows the same setting the cards do — this
+// used to be pokemontcg.io unconditionally, so a TCGdex install browsed a set
+// list numbered by a provider none of its cards came from.
+async function syncSets(force) {
+  await (await pokemonSetSource()).fetchAndCacheSets(force);
+  await scryfallApi.fetchAndCacheSets(force);
+  await lorcastApi.fetchAndCacheSets(force);
+}
+
+const HOUR = 60 * 60 * 1000;
+
+// Background work, on clocks kept in the database (scheduler.js) and checked
+// every 15 minutes rather than on in-memory timers: a restart resets nothing, and
+// whatever fell due while the server was down runs at the first check after boot.
+const scheduler = createScheduler({
+  jobs: [
+    {
+      // Weekly: refresh sets (picks up newly released ones), reload the
+      // in-memory sets cache so chronological sorting stays current without a
+      // restart, and catch any built scan catalog up with what the refresh found.
+      // Scryfall's guidance is that gameplay/set data changes rarely and weekly is
+      // plenty — prices are on their own schedule below.
+      name: 'sets-refresh',
+      every: () => 7 * 24 * HOUR,
+      run: async () => {
+        await syncSets(true);
+        await require('./utils/compartmentSort').loadSetsCache(db);
+        await autoUpdateCatalogs();
+      },
+    },
+    {
+      // The local TCGCSV cache the Pokémon prices and the scan product map read.
+      // Hourly, because tcgcsvApi decides for itself: it asks TCGCSV's
+      // last-updated.txt at most once a day (tcgcsv_last_checked_at), downloads
+      // only a new dataset, and resumes one that a failed or interrupted run left
+      // half-synced. Between those, a call is one indexed read. The TCGCSV price
+      // sweep syncs too, and joins a sync already in progress.
+      name: 'tcgcsv-sync',
+      every: () => (process.env.BINDARR_DISABLE_TCGCSV_SYNC === '1' ? 0 : HOUR),
+      run: async () => {
+        const tcgcsvApi = require('./tcgcsvApi');
+        try {
+          await tcgcsvApi.syncIfUpdated();
+        } catch (err) {
+          // TCGCSV answered 403 and asked to be left alone. tcgcsvApi has said
+          // until when, and prices come from the existing cache meanwhile.
+          if (!tcgcsvApi.isCooldownError(err)) throw err;
+        }
+      },
+    },
+    {
+      // Prices. Hourly, and NOT forced — shouldSweepPrices decides whether each
+      // provider is actually due, from the admin's price_refresh_days.
+      //
+      // This used to tick daily and pass `force: true`, on the reasoning that the
+      // timer was itself the right cadence. Two things came of that. The interval
+      // could not be configured, which is a problem now that one selectable
+      // provider charges credits per card refreshed. And because the forced path
+      // never called shouldSweepPrices, a provider missing from its SWEEP_COLUMN
+      // map still looked like it was working: Lorcana has been in that state
+      // since it was added, and nobody could have noticed from the outside.
+      //
+      // Hourly rather than daily because a daily tick against a daily interval
+      // skips on any clock drift at all — "23h 59m elapsed" is not due, so the
+      // refresh silently becomes every other day. An hourly run that refuses in
+      // one indexed read per provider costs nothing and has no such edge. Nor is
+      // a restart a reason to sweep again: under nodemon that was a full sweep on
+      // every code edit, for data that cannot have changed since the last one.
+      //
+      // utils/priceSweeps owns the list and its order, and runs the sweeps one
+      // after another.
+      name: 'price-sweeps',
+      every: () => HOUR,
+      run: () => runPriceSweeps(),
+    },
+    {
+      // Expired sessions, so the table doesn't grow unbounded. Lookups already
+      // ignore them; this is housekeeping.
+      name: 'session-purge',
+      every: () => 24 * HOUR,
+      run: () => db.run(`DELETE FROM sessions WHERE expires_at <= DATETIME('now')`),
+    },
+    {
+      // BACKUP_INTERVAL_HOURS (default 24; 0 disables). backup.js explains where
+      // the first period is counted from.
+      name: 'backup',
+      every: backup.intervalMs,
+      since: backup.lastBackupAt,
+      run: backup.runScheduledBackup,
+    },
+  ],
+});
+
+// The HTTP and (optional) HTTPS listeners, assigned at the bottom of this file.
+let httpServer = null;
+let httpsServer = null;
+
+// SIGTERM (docker stop) and SIGINT (Ctrl+C) stop the listeners and the job
+// timers, give running work a bounded few seconds to reach a safe point, close
+// the database and exit 0; a second signal exits at once. utils/shutdown.js has
+// the sequence and the reasons.
+const shutdown = createShutdown({
+  servers: () => [httpServer, httpsServer],
+  stopJobs: () => {
+    scheduler.stop();
+    // Between two sweeps, not mid-sweep; a catalog build after its in-flight
+    // images, writing what it has (atomically) so a resume reuses all of it.
+    stopPriceSweeps();
+    require('./catalog').stop();
+  },
+  pendingWork: () => {
+    const catalog = require('./catalog');
+    return [
+      { name: 'database startup', promise: dbInit },
+      ...scheduler.inFlight(),
+      { name: 'backup', promise: backup.pending() },
+      { name: 'catalog build', promise: catalog.state() ? whenTrue(() => !catalog.state()) : null },
+    ];
+  },
+  closeDb: () => new Promise((resolve, reject) => db.dbConnection.close(err => (err ? reject(err) : resolve()))),
+});
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Warm the scan models and catalogs. Two ONNX sessions plus an embedding table
+// take ~400 ms to load; paying that on the first scan instead would make the
+// slowest scan of a session the one a user is most likely to judge. Not awaited
+// — listening must not wait on it, and a scan arriving before it finishes just
+// pays the load itself.
+function warmScanCatalogs() {
+  try {
+    const cvScan = require('./cvScan');
+    const warm = ['mtg', 'pokemon', 'lorcana'].filter(g => cvScan.isBuilt(g));
+    for (const g of warm) {
+      cvScan.load(g).catch(err => console.warn(`cvScan ${g} warm-up failed:`, err.message));
+      // Locally built non-English catalogs too (e.g. German Pokémon, #80): they
+      // were only loaded by the first scan in that language, which then paid the
+      // whole catalog read.
+      for (const lang of cvScan.builtLangs(g).filter(l => l !== 'English')) {
+        cvScan.load(g, lang).catch(err => console.warn(`cvScan ${g} ${lang} warm-up failed:`, err.message));
+      }
+    }
+    // There is no second matcher to fall back to, so say what is missing. The
+    // models alone identify nothing.
+    if (!warm.length) console.warn('cvScan: no catalogs present — scanning is disabled until one is built (Admin → Catalogs)');
+  } catch (err) {
+    console.warn('cvScan unavailable:', err.message);
+  }
+}
+
+// Once the database is up, before the scheduler's first check. None of it is
+// what the server needs in order to answer requests, so a failure here is logged
+// and the boot carries on.
+async function startupTasks() {
+  // Sets, first, as they always have been. When the weekly refresh is overdue —
+  // on the first boot that has never run it, and on an install that restarts
+  // more often than weekly, which the old in-memory timer never refreshed at all
+  // — it runs here, forced, in place of the boot fill. Otherwise the fill only
+  // fetches a game whose set table is still empty.
+  if (!(await scheduler.runIfDue('sets-refresh'))) await syncSets(false);
+
+  // pokemontcg.io has an end date, and static documentation does not reach
+  // someone who set this up two years ago and has not opened Settings since.
+  // The startup log is the surface self-hosters actually read, so say it there
+  // — once per boot, only to the installs it applies to, and only until the
+  // date passes, after which it is no longer a warning but a description of
+  // why things stopped working, which the provider's own errors will cover.
+  await warnIfProviderSunsetting();
+
+  // Load sets into compartmentSort memory cache
+  const { loadSetsCache } = require('./utils/compartmentSort');
+  await loadSetsCache(db);
+
+  warmScanCatalogs();
+}
+
 // Initialize Database on startup
 let dbReady = false;
-db.initDb()
-  .then(async () => {
-    // Before dbReady, so no request can normalize a Magic card against the
-    // default price source on an install configured for Cardmarket. One indexed
-    // read, and it never throws (see scryfallApi.loadPriceSource).
-    await scryfallApi.loadPriceSource();
-    dbReady = true;
-    console.log('Database tables verified/created successfully.');
+const dbInit = db.initDb()
+  // Before dbReady, so no request can normalize a Magic card against the
+  // default price source on an install configured for Cardmarket. One indexed
+  // read, and it never throws (see scryfallApi.loadPriceSource).
+  .then(() => scryfallApi.loadPriceSource());
 
-    // Sync sets on startup (both games). WHICH Pokémon provider fills the `sets`
-    // table follows the same setting the cards do — this used to be pokemontcg.io
-    // unconditionally, so a TCGdex install browsed a set list numbered by a
-    // provider none of its cards came from.
-    await (await pokemonSetSource()).fetchAndCacheSets();
-    await scryfallApi.fetchAndCacheSets();
-    await lorcastApi.fetchAndCacheSets();
+dbInit.then(async () => {
+  dbReady = true;
+  console.log('Database tables verified/created successfully.');
 
-    // pokemontcg.io has an end date, and static documentation does not reach
-    // someone who set this up two years ago and has not opened Settings since.
-    // The startup log is the surface self-hosters actually read, so say it there
-    // — once per boot, only to the installs it applies to, and only until the
-    // date passes, after which it is no longer a warning but a description of
-    // why things stopped working, which the provider's own errors will cover.
-    await warnIfProviderSunsetting();
-
-    // Load sets into compartmentSort memory cache
-    const { loadSetsCache } = require('./utils/compartmentSort');
-    await loadSetsCache(db);
-
-    if (process.env.BINDARR_DISABLE_TCGCSV_SYNC !== '1') {
-      const tcgcsvApi = require('./tcgcsvApi');
-      tcgcsvApi.syncIfUpdated().catch(err => {
-        if (!tcgcsvApi.isCooldownError(err)) {
-          console.error('TCGCSV startup sync failed:', err.message);
-        }
-      });
-    }
-
-    // Warm the scan models and catalogs. Two ONNX sessions plus an embedding table
-    // take ~400 ms to load; paying that on the first scan instead would make the
-    // slowest scan of a session the one a user is most likely to judge. Not awaited
-    // — listening must not wait on it, and a scan arriving before it finishes just
-    // pays the load itself.
-    try {
-      const cvScan = require('./cvScan');
-      const warm = ['mtg', 'pokemon', 'lorcana'].filter(g => cvScan.isBuilt(g));
-      for (const g of warm) {
-        cvScan.load(g).catch(err => console.warn(`cvScan ${g} warm-up failed:`, err.message));
-        // Locally built non-English catalogs too (e.g. German Pokémon, #80): they
-        // were only loaded by the first scan in that language, which then paid the
-        // whole catalog read.
-        for (const lang of cvScan.builtLangs(g).filter(l => l !== 'English')) {
-          cvScan.load(g, lang).catch(err => console.warn(`cvScan ${g} ${lang} warm-up failed:`, err.message));
-        }
-      }
-      // There is no second matcher to fall back to, so say what is missing. The
-      // models alone identify nothing.
-      if (!warm.length) console.warn('cvScan: no catalogs present — scanning is disabled until one is built (Admin → Catalogs)');
-    } catch (err) {
-      console.warn('cvScan unavailable:', err.message);
-    }
-
-    // Weekly: refresh sets (picks up newly released ones) and reload the
-    // in-memory sets cache so chronological sorting stays current without a
-    // restart. Scryfall's guidance is that gameplay/set data changes rarely and
-    // weekly is plenty — prices are on their own schedule below.
-    setInterval(async () => {
-      try {
-        await (await pokemonSetSource()).fetchAndCacheSets(true);
-        await scryfallApi.fetchAndCacheSets(true);
-        await lorcastApi.fetchAndCacheSets(true);
-        await loadSetsCache(db);
-        await autoUpdateCatalogs();
-      } catch (err) {
-        console.error('Weekly sets refresh failed:', err);
-      }
-    }, 1000 * 60 * 60 * 24 * 7);
-
-    // Prices. Hourly tick, and NOT forced — shouldSweepPrices decides whether
-    // each provider is actually due, from the admin's price_refresh_days.
-    //
-    // This used to tick daily and pass `force: true`, on the reasoning that the
-    // timer was itself the right cadence. Two things came of that. The interval
-    // could not be configured, which is a problem now that one selectable
-    // provider charges credits per card refreshed. And because the forced path
-    // never called shouldSweepPrices, a provider missing from its SWEEP_COLUMN
-    // map still looked like it was working: Lorcana has been in that state since
-    // it was added, and nobody could have noticed from the outside.
-    //
-    // Hourly rather than daily because a daily tick against a daily interval
-    // skips on any clock drift at all — "23h 59m elapsed" is not due, so the
-    // refresh silently becomes every other day. An hourly tick that refuses in
-    // one indexed read costs nothing and has no such edge.
-    setInterval(() => {
-      tcgApi.updateCollectionPrices();
-      scryfallApi.updateCollectionPrices();
-      lorcastApi.updateCollectionPrices();
-      // Non-English Pokémon cards: their ids 404 on pokemontcg.io, so tcgApi's
-      // sweep skips them and this is their only price refresh. No-op until the
-      // user actually owns one.
-      require('./tcgdexApi').updateCollectionPrices();
-      require('./pokemontcgapi').updateCollectionPrices();
-      // TCGCSV runs LAST of the Pokémon sweeps on purpose. It writes the same
-      // columns as the other two and is the better source — TCGplayer market
-      // prices in USD, and 97% coverage against TCGdex's 8% — so it should have
-      // the final say on any card it can place.
-      require('./tcgcsvApi').updateCollectionPrices();
-    }, 1000 * 60 * 60);
-
-    // Shortly after startup, catch up if the last sweep was over a day ago.
-    // NOT forced: without that gate this re-ran on every restart, which under
-    // nodemon meant a full sweep on every code edit — for data that cannot have
-    // changed since the last one.
-    setTimeout(() => {
-      tcgApi.updateCollectionPrices();
-      scryfallApi.updateCollectionPrices();
-      lorcastApi.updateCollectionPrices();
-      require('./tcgdexApi').updateCollectionPrices();
-      require('./pokemontcgapi').updateCollectionPrices();
-      require('./tcgcsvApi').updateCollectionPrices();
-    }, 30000);
-
-    // Periodically purge expired sessions so the table doesn't grow unbounded
-    setInterval(() => {
-      db.run(`DELETE FROM sessions WHERE expires_at <= DATETIME('now')`).catch(err => {
-        console.error('Failed to purge expired sessions:', err);
-      });
-    }, 1000 * 60 * 60 * 24);
-
-    // Periodic auto-backup (BACKUP_INTERVAL_HOURS, default 24; 0 disables)
-    require('./backup').startAutoBackup();
-  })
-  .catch(err => {
-    console.error('Failed to initialize database:', err);
-  });
+  try {
+    await startupTasks();
+  } catch (err) {
+    console.error('Startup tasks failed:', err);
+  }
+  // Started regardless: the jobs retry on their own clocks.
+  backup.logPolicy();
+  scheduler.start();
+}, (err) => {
+  // Fatal, and said so. This used to log and carry on listening: /api/health
+  // answered 503 forever, an orchestrator saw a live process, and nothing
+  // restarted it. Without its schema the server has nothing to serve, so it
+  // exits non-zero and leaves the restart to whatever supervises it (Docker's
+  // restart policy, systemd) — which is also what makes the operator look.
+  // Explicit rather than an exit on unhandled rejection: that one is a
+  // log-and-continue on purpose (top of this file).
+  console.error('Failed to initialize database:', err);
+  console.error(`STARTUP: cannot serve without the database at ${db.dbPath}; exiting.`);
+  shutdown('Database initialisation failed', 1);
+});
 
 // Readiness/liveness probe for orchestrators (Docker HEALTHCHECK, etc.).
 // Unauthenticated; pings the DB so a wedged database reads as unhealthy.
@@ -482,22 +560,12 @@ app.get('/models/cornelius.onnx', (req, res) => {
   });
 });
 
+// The built SPA, and index.html for every client-side route. Vite's hashed
+// /assets/ are cached for a year, immutable; everything with a fixed name —
+// /ort/'s wasm, the manifest, index.html — is revalidated, so an upgrade is
+// picked up on the next load. utils/staticCache.js has the reasons.
 const frontendBuildPath = path.join(__dirname, '../../frontend/dist');
-// A year, immutable. Vite content-hashes every asset filename, so a changed file
-// is a changed URL and a stale cache cannot happen. Without this the browser
-// revalidated the entire bundle on every reload — the megabyte-scale wasm
-// included — which on a phone is the difference between an instant open and a
-// wait. index.html is served by the catch-all below and stays uncached, so a
-// deploy is still picked up immediately.
-app.use(express.static(frontendBuildPath, { maxAge: '1y', immutable: true, index: false }));
-
-// Catch-all route to serve Index.html in production
-app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/api')) {
-    return next();
-  }
-  res.sendFile(path.join(frontendBuildPath, 'index.html'));
-});
+app.use(serveFrontend(frontendBuildPath));
 
 // Generic error handler (e.g. rejected CORS origins) — never leak stack traces to clients
 app.use((err, req, res, next) => {
@@ -512,12 +580,12 @@ app.use((err, req, res, next) => {
 });
 
 // Start Express Server
-app.listen(PORT, '0.0.0.0', () => {
+httpServer = app.listen(PORT, '0.0.0.0', async () => {
   console.log(`=========================================`);
   console.log(`Bindarr Server running on port ${PORT}`);
   console.log(`Access local: http://localhost:${PORT}`);
   console.log(`=========================================`);
   // Camera scanning needs a secure context, so a LAN/Docker install serves TLS
   // too when HTTPS_PORT is set. Certificates live beside the database.
-  startHttps(app, path.join(path.dirname(db.dbPath), 'ssl'));
+  httpsServer = await startHttps(app, path.join(path.dirname(db.dbPath), 'ssl'));
 });

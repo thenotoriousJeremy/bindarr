@@ -26,4 +26,7 @@ if [ -n "$(find /app/database ! -user node -print -quit)" ]; then
   find /app/database ! -user node -exec chown node:node {} +
 fi
 
+# exec, and gosu execs in turn, so node replaces this shell as PID 1 and is the
+# process `docker stop` signals. A shell left in between would swallow SIGTERM
+# and the server's graceful shutdown (utils/shutdown.js) would never run.
 exec gosu node "$@"
