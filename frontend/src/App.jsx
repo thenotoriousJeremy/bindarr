@@ -11,23 +11,26 @@ import { isSessionExpired } from './utils/sessionExpiry';
 import { loadStoredUser, saveStoredUser } from './utils/storedUser';
 import { readOidcCode } from './utils/webOidc';
 import { clearOfflineData, isOffline, isWriteMethod, noteApiResponse, noteApiUnreachable, offlineWriteResponse, setWriteBlockedText, subscribeOffline } from './utils/offline';
+import { reloadingImport, reloadForStaleBuild } from './utils/chunkReload';
 
 // View components are code-split so heavy deps (recharts in the chart views)
-// load on demand instead of in the initial bundle.
-const Dashboard = lazy(() => import('./components/Dashboard'));
-const AddCards = lazy(() => import('./components/AddCards'));
-const CollectionList = lazy(() => import('./components/CollectionList'));
-const LocationManager = lazy(() => import('./components/LocationManager'));
-const Settings = lazy(() => import('./components/Settings'));
-const AdminPanel = lazy(() => import('./components/AdminPanel'));
-const SetupWizard = lazy(() => import('./components/SetupWizard'));
-const SharedCollection = lazy(() => import('./components/SharedCollection'));
-const SharedContainer = lazy(() => import('./components/SharedContainer'));
-const DeckBuilder = lazy(() => import('./components/DeckBuilder'));
-const Lists = lazy(() => import('./components/Lists'));
-const Notes = lazy(() => import('./components/Notes'));
-const SealedList = lazy(() => import('./components/SealedList'));
-const SetCompletion = lazy(() => import('./components/SetCompletion'));
+// load on demand instead of in the initial bundle. A view whose chunk an upgrade
+// removed reloads the page once rather than crashing (see utils/chunkReload).
+const view = (factory) => lazy(reloadingImport(factory, reloadForStaleBuild));
+const Dashboard = view(() => import('./components/Dashboard'));
+const AddCards = view(() => import('./components/AddCards'));
+const CollectionList = view(() => import('./components/CollectionList'));
+const LocationManager = view(() => import('./components/LocationManager'));
+const Settings = view(() => import('./components/Settings'));
+const AdminPanel = view(() => import('./components/AdminPanel'));
+const SetupWizard = view(() => import('./components/SetupWizard'));
+const SharedCollection = view(() => import('./components/SharedCollection'));
+const SharedContainer = view(() => import('./components/SharedContainer'));
+const DeckBuilder = view(() => import('./components/DeckBuilder'));
+const Lists = view(() => import('./components/Lists'));
+const Notes = view(() => import('./components/Notes'));
+const SealedList = view(() => import('./components/SealedList'));
+const SetCompletion = view(() => import('./components/SetCompletion'));
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
