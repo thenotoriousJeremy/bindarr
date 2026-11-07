@@ -82,7 +82,9 @@ window.fetch = function (input, options = {}) {
   const url = typeof input === 'string' ? input : (input && input.url) || '';
   const isPublicOrAuthRoute = url.includes('/api/shared/') || url.includes('/api/auth/login') || url.includes('/api/auth/register') || url.includes('/api/auth/bootstrap') || url.includes('/api/auth/oidc/exchange');
 
-  const isApi = url.startsWith('/api/');
+  // Device mode answers /api on the phone itself, so being offline changes
+  // nothing there: no banner, no refused writes.
+  const isApi = url.startsWith('/api/') && !isDeviceMode();
   const write = isApi && isWriteMethod(options.method || (input && input.method));
   // Read-only while offline (utils/offline.js): refuse the write up front with a
   // message the view can show, rather than a network error it can only guess at.
@@ -738,7 +740,7 @@ function App() {
         </div>
       </header>
 
-      {offline && (
+      {offline && !isDeviceMode() && (
         <div className="offline-banner" role="status">{t('offline.banner')}</div>
       )}
 
