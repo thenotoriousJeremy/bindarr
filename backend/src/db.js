@@ -1055,9 +1055,9 @@ async function initDb() {
   if (!cardCacheCols.some(c => c.name === 'price_1st_edition')) {
     await run(`ALTER TABLE card_cache ADD COLUMN price_1st_edition REAL`);
   }
-  // Magic's rules text — full type line, oracle text, mana cost, power, toughness,
-  // loyalty and keyword abilities — which filtering a collection in Scryfall syntax
-  // reads (o:, t:, m:, pow>=, kw:; see shared/scryfallQuery.mjs). Written by
+  // Magic's rules text — full type line, mana cost, power, toughness, loyalty
+  // and keyword abilities — which filtering a collection in Scryfall syntax reads
+  // (t:, m:, pow>=, kw:; see shared/scryfallQuery.mjs; oracle_text is #131's). Written by
   // utils/mtgRulesText.js through cardCache.js; NULL for every other game.
   //
   // Existing rows gain it when they are next re-cached, and the MTG price sweep
@@ -1065,7 +1065,7 @@ async function initDb() {
   // columns are added makes the catch-up sweep shortly after this boot do it, so a
   // collection can be filtered by rules text straight after the upgrade instead of
   // up to a day later.
-  const rulesTextCols = ['type_line', 'oracle_text', 'mana_cost', 'power', 'toughness', 'loyalty', 'keywords'];
+  const rulesTextCols = ['type_line', 'mana_cost', 'power', 'toughness', 'loyalty', 'keywords'];
   const missingRulesText = rulesTextCols.filter(col => !cardCacheCols.some(c => c.name === col));
   for (const col of missingRulesText) {
     await run(`ALTER TABLE card_cache ADD COLUMN ${col} TEXT`);

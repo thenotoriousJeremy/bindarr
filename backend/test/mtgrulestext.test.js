@@ -102,7 +102,7 @@ async function main() {
   assert.strictEqual(fireIce.mana_cost, '{1}{R} // {1}{U}', 'a split card keeps Scryfall\'s joined cost');
   assert.strictEqual(fireIce.oracle_text, 'Fire deals 2 damage divided as you choose among one or two targets.\n//\nTap target permanent.\nDraw a card.');
   const bare = scryfall.normalizeCard({ id: '00000000-0000-4000-8000-00000000a0ff', name: 'Mystery', set: 'tst', collector_number: '1' });
-  assert.deepStrictEqual(RULES.map(k => bare[k]), [null, null, null, null, null, null, null], 'nothing known is NULL, not empty');
+  assert.deepStrictEqual(RULES.filter(k => k !== 'oracle_text').map(k => bare[k]), [null, null, null, null, null, null], 'nothing known is NULL, not empty');
   console.log('PASS: normalizeCard carries the rules text');
 
   // ---- 3. cacheCards stores them; a re-cache refreshes them; other games store NULL.

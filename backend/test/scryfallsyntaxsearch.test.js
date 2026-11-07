@@ -148,7 +148,7 @@ async function main() {
   // The scanner's identify lookups pass a recognised name, which stays a name
   // even when it holds a quote.
   r = await search({ game: 'mtg', scope: 'internet', prints: '1', name: 'Kongming, "Sleeping Dragon"' });
-  assert.strictEqual(r.qs[0].get('q'), '!"Kongming, "Sleeping Dragon"" unique:prints');
+  assert.strictEqual(r.qs[0].get('q'), '!"Kongming, "Sleeping Dragon"" unique:prints -is:digital');
   console.log('PASS: plain names and scanner lookups are unchanged');
 
   // ---- 3. Unreadable syntax is a 400 that names the problem; nothing is sent.

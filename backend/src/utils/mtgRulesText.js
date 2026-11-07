@@ -1,6 +1,6 @@
 // The parts of a Magic card that Scryfall syntax searches but card_cache did not
-// keep: the full type line, oracle text, mana cost, power/toughness/loyalty and
-// keyword abilities. Stored so the collection filter and the deck builder can
+// keep: the full type line, mana cost, power/toughness/loyalty and keyword
+// abilities. (Oracle text is stored by normalizeCard itself, for deck rules.) Stored so the collection filter and the deck builder can
 // answer t:, o:, m:, pow>=, kw: and friends from what you own
 // (shared/scryfallQuery.mjs), without a Scryfall round trip per search.
 //
@@ -27,7 +27,6 @@ function rulesTextFields(raw) {
   };
   return {
     type_line: joined('type_line'),
-    oracle_text: joined('oracle_text', '\n//\n'),
     mana_cost: joined('mana_cost'),
     power: stat('power'),
     toughness: stat('toughness'),
@@ -37,14 +36,14 @@ function rulesTextFields(raw) {
 }
 
 // card_cache columns, in the order cardCache.js writes them.
-const RULES_TEXT_COLUMNS = ['type_line', 'oracle_text', 'mana_cost', 'power', 'toughness', 'loyalty', 'keywords'];
+const RULES_TEXT_COLUMNS = ['type_line', 'mana_cost', 'power', 'toughness', 'loyalty', 'keywords'];
 
 // Bound values for those columns. Every game writes through the same upsert, so a
 // Pokémon or Lorcana row simply stores NULLs here.
 function rulesTextParams(card) {
   const text = (v) => (v == null ? null : String(v));
   return [
-    text(card.type_line), text(card.oracle_text), text(card.mana_cost),
+    text(card.type_line), text(card.mana_cost),
     text(card.power), text(card.toughness), text(card.loyalty),
     Array.isArray(card.keywords) ? JSON.stringify(card.keywords) : null,
   ];
