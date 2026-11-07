@@ -189,6 +189,9 @@ router.post('/users', async (req, res) => {
     return res.status(400).json({ error: 'Username and password are required' });
   }
 
+  if (typeof username !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Username and password must be text' });
+  }
   const cleanUsername = username.trim().toLowerCase();
   if (cleanUsername.length < 3) {
     return res.status(400).json({ error: 'Username must be at least 3 characters' });

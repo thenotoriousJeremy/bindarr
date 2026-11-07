@@ -218,6 +218,9 @@ router.put('/', requireAdmin, async (req, res) => {
   }
 
   if (public_base_url !== undefined) {
+    if (typeof public_base_url !== 'string') {
+      return res.status(400).json({ error: 'Public base URL must be text' });
+    }
     const trimmed = public_base_url.trim();
     if (trimmed && !/^https?:\/\//i.test(trimmed)) {
       return res.status(400).json({ error: 'Public base URL must start with http:// or https://' });

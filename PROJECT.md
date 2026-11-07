@@ -76,7 +76,8 @@ frontend/
     device/                Device mode runtime; generated/ holds the bundled backend (build-device-backend.mjs)
     components/            One component per screen/widget (see Frontend section)
     utils/                 Pure helpers: sorting, pricing, printing/rarity styling, language, shuffle
-Dockerfile, docker-compose.yml, .github/workflows/docker-build.yml   Container build + CI publish to GHCR
+Dockerfile, docker-compose.yml, .github/workflows/docker-build.yml   Container build + smoke test + CI publish to GHCR
+.github/workflows/test.yml, audit.yml, .github/dependabot.yml        Test gate on every PR, dependency audit, weekly update PRs
 ```
 
 Regenerable/large artifacts live in `backend/data/models` (the two ONNX files and
@@ -184,8 +185,14 @@ Authentication is DB-backed session tokens, not JWTs:
 - A bearer token that matches no session is then checked against `users.api_key` — a long-lived read-only credential for external scripts (issue #33). It sets `req.user.via_api_key`, which makes `authenticateToken` refuse any non-GET (403) and `requireAdmin` refuse it outright. No user object the server returns (`/auth/me`, login, settings) carries a key: they report `has_*` flags, provider keys are write-only, and the API key is read on demand from `GET /auth/api-key` (login session only). The gate's 401s carry `code: 'session_expired'`; a password change revokes the user's other sessions, an admin reset all of them. Read-only is the whole reason a non-expiring credential is acceptable here; anything that weakens it has to replace it with something scoped.
 - Rate limiters (`authLimiter`, `searchLimiter`, `importLimiter`) protect login and expensive endpoints.
 
-`collection.js` applies `router.use(authenticateToken)` up front, so every
-collection/location/deck-adjacent route requires a valid session.
+`server.js` mounts ONE `app.use('/api', authenticateToken)` gate, and every
+router below it requires a valid session. Only the deliberate public mounts sit
+above it — `/api/health`, `/api/auth` (whose non-public routes carry
+`authenticateToken` themselves), `/api/shared` (GET-only), `/api/admin` (opens with
+`authenticateToken` + `requireAdmin`) and `/api/card-art` (public reads, admin-gated
+writes). `backend/test/invariants.test.js` inspects the composed app and fails if
+anything else appears above the gate, if an exported rate limiter is not mounted, or
+if `card_cache` gains a writer other than `cacheNormalizedCards`.
 
 ### Route map
 
@@ -844,7 +851,8 @@ only `decks.checked_out` changes.
 
 Setup and Docker deployment: see [README.md](README.md). Quick reference:
 
+- Runtime: Node 24 in the image (`node:24-slim`, Debian/glibc) and in every workflow; Node 22.12+ works locally. Bump the Dockerfile, the workflows and these docs together.
 - Backend: `cd backend && npm run dev` (nodemon) or `npm start`; port `3001`.
 - Frontend: `cd frontend && npm run dev` (Vite, port `5173`, proxies `/api` → `3001`).
-- Tests: `npm test` from the root (or `cd backend && npm test`) runs every unit suite in `backend/test/` plus the e2e suites under `backend/test/e2e/`. `npm run test:e2e` runs only the latter. No framework — each file is a plain `node` script.
+- Tests: `npm test` from the root runs every suite — the unit suites in `backend/test/`, the e2e suites under `backend/test/e2e/`, the frontend utility tests, the locale check and the TCGCSV mirror test — each whether or not an earlier one failed, then prints one summary (`scripts/test-all.mjs`). `cd backend && npm test` runs both backend runners the same way; `npm run test:unit` / `npm run test:e2e` run one. No framework — each file is a plain `node` script, and each e2e server takes a free port (`backend/test/freePort.js`), so two runs can overlap.
 - Lint (matches CI): `cd frontend && npm run lint`.

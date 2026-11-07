@@ -511,7 +511,7 @@ This prints a new random password, or uses one you pass with `-e NEW_PASSWORD=..
 
 ## Development
 
-Node 18+ and npm 9+.
+Node 22.12+ and npm 10+. Node 24 is what the Docker image and CI run, so it is the one to use if you can.
 
 ```bash
 npm run install:all

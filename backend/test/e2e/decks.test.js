@@ -15,8 +15,9 @@ const { spawn } = require('child_process');
 // checkouts fired at once for the same copies must not both get them.
 const tmpDb = path.join(os.tmpdir(), `bindarr-decks-test-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;
-const port = '3017';
-const base = `http://localhost:${port}`;
+const { freePort } = require('../freePort');
+let port;
+let base;
 
 const projectRoot = path.join(__dirname, '../../../');
 const db = require('../../src/db');
@@ -59,6 +60,8 @@ async function runCase(id, fn) {
 }
 
 async function runTests() {
+  port = String(await freePort());
+  base = `http://localhost:${port}`;
   // The mock keeps any Scryfall call this server makes (a startup price sweep)
   // off the network.
   const server = spawn('node', ['-r', path.join(__dirname, 'scryfall-mock.js'), path.join(projectRoot, 'backend/src/server.js')], {

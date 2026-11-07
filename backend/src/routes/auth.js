@@ -501,6 +501,12 @@ router.put('/settings', authenticateToken, async (req, res) => {
     keyUpdates.push([sql, (value || '').trim()]);
   }
 
+  for (const [field, value] of Object.entries({ current_password, password })) {
+    if (value !== undefined && typeof value !== 'string') {
+      return res.status(400).json({ error: `${field} must be text` });
+    }
+  }
+
   try {
     if (password !== undefined) {
       if (typeof password !== 'string' || password.length < 8) {

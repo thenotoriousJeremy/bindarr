@@ -47,6 +47,10 @@ class AddCardError extends Error {
 // Mirrors the collection.grader CHECK constraint in db.js. 'Raw' is the default
 // and means an ungraded card, not a missing value.
 const GRADERS = ['Raw', 'PSA', 'BGS', 'CGC', 'SGC', 'TAG'];
+// Mirror the collection.condition / collection.printing CHECK constraints in db.js:
+// a value outside them fails at the INSERT/UPDATE, which surfaced as a 500.
+const CONDITIONS = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged'];
+const PRINTINGS = ['Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition', 'Promo'];
 
 // A sealed unit id is only ever linked to a card when the unit belongs to the
 // same user. Shared by every write path (single add, bulk add, edit), so none of
@@ -77,6 +81,8 @@ module.exports = {
   attachOwnedQty,
   AddCardError,
   GRADERS,
+  CONDITIONS,
+  PRINTINGS,
   ownsSealedUnit,
   cardIdForLanguage,
 };

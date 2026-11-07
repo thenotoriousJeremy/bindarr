@@ -8,6 +8,7 @@ const os = require('os');
 const fs = require('fs');
 const assert = require('assert');
 const { spawn } = require('child_process');
+const { freePort } = require('../freePort');
 
 // Card art end to end: admin-only writes (authz.test.js covers the 403s too; this
 // adds the full upload → public read → delete round trip), and an unreadable
@@ -43,7 +44,7 @@ function insertCard() {
 }
 
 async function runTests() {
-  const port = '3011';
+  const port = String(await freePort());
   const base = `http://localhost:${port}`;
   const server = spawn('node', [path.join(projectRoot, 'backend/src/server.js')], {
     env: { ...process.env, PORT: port, DB_PATH: tmpDb, HTTPS_PORT: '', ALLOW_REGISTRATION: 'true' },

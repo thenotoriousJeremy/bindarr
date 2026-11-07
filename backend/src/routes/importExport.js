@@ -192,12 +192,20 @@ router.post('/import', importLimiter, async (req, res) => {
     return res.status(400).json({ error: 'No data provided', code: 'import_empty' });
   }
 
+  if (typeof format !== 'string') {
+    return res.status(400).json({ error: 'format must be text' });
+  }
+
   try {
     let rawItems = [];
     let unmatchedCount = 0;
     const formatKey = format.toLowerCase();
     if (formatKey === 'json') {
-      rawItems = typeof data === 'string' ? JSON.parse(data) : data;
+      try {
+        rawItems = typeof data === 'string' ? JSON.parse(data) : data;
+      } catch {
+        return res.status(400).json({ error: 'data is not valid JSON' });
+      }
     } else if (formatKey === 'manabox') {
       rawItems = parseManaboxText(data);
       if (rawItems.length === 0) {
@@ -267,7 +275,7 @@ router.post('/import', importLimiter, async (req, res) => {
       rawItems = parseThirdPartyCSV(parsedRows, format);
     }
 
-    if (!Array.isArray(rawItems)) {
+    if (!Array.isArray(rawItems) || !rawItems.every(item => item && typeof item === 'object' && !Array.isArray(item))) {
       return res.status(400).json({ error: 'Invalid data payload', code: 'import_invalid' });
     }
     if (rawItems.length > MAX_IMPORT_ROWS) return tooManyRows(res, rawItems.length);

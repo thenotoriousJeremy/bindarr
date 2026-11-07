@@ -18,8 +18,9 @@ const { spawn } = require('child_process');
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `bindarr-crossuser-test-${process.pid}-`));
 const tmpDb = path.join(tmpDir, 'bindarr.db');
 process.env.DB_PATH = tmpDb;
-const port = '3016';
-const base = `http://localhost:${port}`;
+const { freePort } = require('../freePort');
+let port;
+let base;
 
 const projectRoot = path.join(__dirname, '../../../');
 const db = require('../../src/db');
@@ -79,6 +80,8 @@ async function step(name, fn) {
 }
 
 async function runTests() {
+  port = String(await freePort());
+  base = `http://localhost:${port}`;
   const serverScript = path.join(projectRoot, 'backend/src/server.js');
   const server = spawn('node', [serverScript], {
     env: { ...process.env, PORT: port, DB_PATH: tmpDb }

@@ -19,6 +19,9 @@ router.get('/notes', async (req, res) => {
 // Create note.
 router.post('/notes', async (req, res) => {
   const { title = '', body = '' } = req.body;
+  if (typeof title !== 'string' || typeof body !== 'string') {
+    return res.status(400).json({ error: 'title and body must be text' });
+  }
   if (!title.trim() && !body.trim()) {
     return res.status(400).json({ error: 'Note is empty' });
   }

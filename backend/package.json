@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "node test/run.js && node test/e2e/run.js",
+    "test": "node test/all.js",
+    "test:unit": "node test/run.js",
     "test:e2e": "node test/e2e/run.js"
   },
   "dependencies": {
@@ -19,7 +20,7 @@
     "helmet": "^8.2.0",
     "onnxruntime-node": "^1.27.0",
     "selfsigned": "^5.5.0",
-    "sharp": "^0.33.5",
+    "sharp": "^0.35.5",
     "sqlite3": "^6.0.1"
   },
   "devDependencies": {

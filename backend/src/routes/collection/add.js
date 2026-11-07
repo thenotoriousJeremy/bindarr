@@ -9,7 +9,7 @@ const { recordPrice } = require('../../utils/priceHelpers');
 const { rebalanceCompartmentByScheme } = require('../../utils/compartmentSort');
 const { resolveCompartmentAndPosition, describePlacement } = require('../../utils/collectionHelpers');
 const { readQuantity } = require('../../utils/requestBounds');
-const { AddCardError, GRADERS, ownsSealedUnit } = require('./shared');
+const { AddCardError, GRADERS, CONDITIONS, PRINTINGS, ownsSealedUnit } = require('./shared');
 
 // The provider-facing half of an add: hydrate a thin cached row, fetch an
 // uncached card, swap to the printing in `language`, learn its English name.
@@ -73,6 +73,15 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
 
   if (!card_id) {
     throw new AddCardError(400, 'card_id is required');
+  }
+  if (typeof card_id !== 'string') {
+    throw new AddCardError(400, 'card_id must be a string');
+  }
+  if (!CONDITIONS.includes(condition)) {
+    throw new AddCardError(400, `Invalid condition. One of: ${CONDITIONS.join(', ')}`);
+  }
+  if (!PRINTINGS.includes(printing)) {
+    throw new AddCardError(400, `Invalid printing. One of: ${PRINTINGS.join(', ')}`);
   }
   const qty = readQuantity(quantity);
   if (qty.error) throw new AddCardError(400, qty.error);
@@ -236,6 +245,9 @@ async function bulkAdd(req, res) {
   if (!Array.isArray(card_ids) || card_ids.length === 0) {
     return res.status(400).json({ error: 'card_ids is required' });
   }
+  if (!card_ids.every(id => typeof id === 'string' && id)) {
+    return res.status(400).json({ error: 'card_ids must be a list of card id strings' });
+  }
   if (card_ids.length > BULK_ADD_MAX) {
     return res.status(400).json({ error: `Cannot add more than ${BULK_ADD_MAX} cards at once.` });
   }
@@ -262,10 +274,13 @@ async function bulkAdd(req, res) {
       added.push({ card_id, id: result.id });
     } catch (error) {
       if (!(error instanceof AddCardError)) console.error(error);
-      failed.push({ card_id, error: error instanceof AddCardError ? error.message : 'Failed to add card' });
+      failed.push({ card_id, error: error instanceof AddCardError ? error.message : 'Failed to add card', status: error instanceof AddCardError ? error.status : 500 });
     }
   }
-  res.status(failed.length && !added.length ? 500 : 200).json({
+  // Nothing added: answer with the failures' own status when they all agree it
+  // was the request (a 400 for a bad condition), not a blanket 500.
+  const allClient = failed.every(f => f.status < 500);
+  res.status(failed.length && !added.length ? (allClient ? failed[0].status : 500) : 200).json({
     message: failed.length
       ? `Added ${added.length} of ${card_ids.length} cards; ${failed.length} failed.`
       : `Added ${added.length} card${added.length === 1 ? '' : 's'}${qty.value > 1 ? ` (x${qty.value} each)` : ''} to collection.`,

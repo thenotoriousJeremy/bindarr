@@ -11,7 +11,8 @@
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "check:locales": "node scripts/check-locales.mjs",
     "preview": "vite preview",
-    "test": "node --test \"src/utils/*.test.js\" && npm run check:locales"
+    "test": "node --test \"src/utils/*.test.js\" && npm run check:locales",
+    "test:utils": "node --test \"src/utils/*.test.js\""
   },
   "dependencies": {
     "@capacitor-community/sqlite": "^8.1.1",
