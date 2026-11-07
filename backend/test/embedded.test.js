@@ -86,11 +86,19 @@ async function testBootAndSession() {
   const anon = await call('GET', '/api/notes', { auth: false });
   assert.strictEqual(anon.status, 401, 'the auth gate is the server one, unchanged');
 
-  // A second launch finds the owner and the session already there.
+  // A second launch finds the owner and the session already there. The session
+  // is stored as the token's hash, never the token.
   const owners = await db.all(`SELECT id FROM users`);
   assert.strictEqual(owners.length, 1);
   const sessions = await db.all(`SELECT token FROM sessions`);
-  assert.deepStrictEqual(sessions.map(s => s.token), [token]);
+  assert.deepStrictEqual(sessions.map(s => s.token), [require('../src/utils/authHelpers').hashSessionToken(token)]);
+  // The gate hashes every bearer token, so the device's SHA-256 (the crypto shim;
+  // WebCrypto's digest is async) must be the same function as Node's.
+  const shim = require('../src/embedded/shims/crypto');
+  for (const input of ['', 'abc', 'x'.repeat(55), 'x'.repeat(56), 'x'.repeat(64), 'y'.repeat(1000), token]) {
+    assert.strictEqual(shim.createHash('sha256').update(input).digest('hex'),
+      require('crypto').createHash('sha256').update(input).digest('hex'), `sha256 of ${input.length} chars`);
+  }
 }
 
 async function testStarterStorage() {

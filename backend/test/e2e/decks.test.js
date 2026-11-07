@@ -19,6 +19,7 @@ const base = `http://localhost:${port}`;
 
 const projectRoot = path.join(__dirname, '../../../');
 const db = require('../../src/db');
+const { hashSessionToken } = require('../../src/utils/authHelpers');
 
 async function waitForServer() {
   for (let i = 0; i < 150; i++) {
@@ -68,7 +69,7 @@ async function runTests() {
     const adminId = await waitForAdmin();
     const token = crypto.randomBytes(24).toString('hex');
     await db.run(`INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`,
-      [token, adminId, new Date(Date.now() + 86400000).toISOString()]);
+      [hashSessionToken(token), adminId, new Date(Date.now() + 86400000).toISOString()]);
     const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
     const api = async (method, url, body) => {
       const res = await fetch(`${base}/api${url}`, { method, headers, body: body ? JSON.stringify(body) : undefined });

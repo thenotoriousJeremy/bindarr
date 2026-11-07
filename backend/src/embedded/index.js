@@ -36,6 +36,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const scryfallApi = require('../scryfallApi');
 const { authenticateToken } = require('../middleware/auth');
+const { hashSessionToken } = require('../utils/authHelpers');
 const { syncSets, sweepPrices } = require('../utils/syncJobs');
 const { dispatch } = require('./dispatch');
 const cvScan = require('../cvScan');
@@ -102,11 +103,16 @@ async function ensureOwner() {
   return result.lastID;
 }
 
+// Sessions are stored as a hash of the token (authHelpers.hashSessionToken), so
+// the one saved on an earlier launch cannot be read back as a bearer token. Each
+// launch replaces it instead: the token only ever lives in this process's memory,
+// and the table still holds exactly one session for the device.
 async function ensureSession(userId) {
-  const existing = await db.get(`SELECT token FROM sessions WHERE user_id = ? AND expires_at = ?`, [userId, NEVER]);
-  if (existing) return existing.token;
   const token = crypto.randomBytes(32).toString('hex');
-  await db.run(`INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`, [token, userId, NEVER]);
+  await db.withTransaction(async () => {
+    await db.run(`DELETE FROM sessions WHERE user_id = ? AND expires_at = ?`, [userId, NEVER]);
+    await db.run(`INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`, [hashSessionToken(token), userId, NEVER]);
+  });
   return token;
 }
 
