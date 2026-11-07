@@ -72,7 +72,7 @@ router.get('/', async (req, res) => {
     );
     // Failing that, the prefix the sets table gives Magic and Lorcana ids.
     if (!game) game = mine.length ? mine[0].game : ((/^(mtg|lorcana)-/i.exec(setId) || [])[1] || '').toLowerCase() || null;
-    if (!game || !setListing.supports(game)) return res.status(400).json({ error: 'Which game is this set from? Pass game=pokemon, mtg or lorcana.' });
+    if (!game || !setListing.supports(game)) return res.status(400).json({ error: 'Which game is this set from? Pass game=pokemon, mtg, lorcana or riftbound.' });
     const lang = req.query.lang
       ? languages.toCode(req.query.lang)
       : (game === 'pokemon' ? languages.toCode(dominantLanguage(mine.filter(r => r.game === game))) : 'en');

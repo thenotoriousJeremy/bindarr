@@ -10,6 +10,17 @@ test('product lines are the names TCGplayer matches on', () => {
   assert.equal(productLine('pokemon', 'Japanese'), 'Pokemon Japan');
   assert.equal(productLine('lorcana'), 'Lorcana TCG');
   assert.equal(massEntryPage('lorcana'), `${MASS_ENTRY_URL}?productline=Lorcana%20TCG`);
+  assert.equal(productLine('riftbound'), 'Riftbound League of Legends Trading Card Game');
+});
+
+test('a Riftbound buylist goes by product id, which every listed card has', () => {
+  const { url, count } = buildMassEntry(
+    [{ quantity: 2, name: 'Vi - Peacekeeper', productId: 685595 }, { quantity: 1, name: 'Star Spring', productId: 685601 }],
+    { game: 'riftbound' }
+  );
+  assert.equal(count, 2);
+  assert.ok(url.startsWith(`${MASS_ENTRY_URL}?productline=Riftbound%20League%20of%20Legends%20Trading%20Card%20Game`), url);
+  assert.ok(url.includes('2-685595') && url.includes('1-685601'), url);
 });
 
 test('a line is qty name, with [SET] number only when the set code is known', () => {

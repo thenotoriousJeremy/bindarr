@@ -234,6 +234,20 @@ const ID = {
   assert.ok(/1039x744\.png$/.test(embed.pathname), 'the landscape original, unrotated');
   assert.strictEqual(catalog.embedUrl({ id: 'tcgdex-en-x-1', image_url: 'https://assets.tcgdex.net/en/x/1/low.png' }),
     'https://assets.tcgdex.net/en/x/1/high.png', 'the other providers keep their own swaps');
+  // --- 7b. Set completion lists a Riftbound set from the cached catalogue --------
+  const setListing = require('../src/setListing');
+  assert.ok(setListing.supports('riftbound'));
+  served.length = 0;
+  const listing = await setListing.getListing('riftbound', 'UNL', 'en');
+  assert.strictEqual(listing.ids.length, 8, 'the whole set, from the cache');
+  assert.ok(listing.ids.includes(ID.viSignature) && listing.ids.includes(ID.battlefield));
+  assert.strictEqual(listing.set.id, 'riftbound-unl');
+  assert.strictEqual(listing.set.tcgplayer_set_code, 'UNL', "TCGplayer's group code is the set code");
+  assert.strictEqual(listing.source, 'riftcodex');
+  assert.deepStrictEqual(served, [], 'listing a set asks RiftCodex nothing once the catalogue is cached');
+  assert.deepStrictEqual(setListing.listingKey('riftbound', 'riftbound-UNL', 'ja'), { setId: 'riftbound-unl', lang: 'en' });
+  assert.strictEqual(await setListing.getListing('riftbound', 'NOPE', 'en'), null, 'an unknown set lists nothing');
+
   // No catalog built: the scanner says so rather than guessing.
   assert.strictEqual(require('../src/cvScan').isBuilt('riftbound', 'English'), false);
 

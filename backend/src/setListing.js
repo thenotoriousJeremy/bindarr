@@ -231,12 +231,40 @@ async function listLorcana(setId) {
   return { ids: cards.map(c => c.id), set: { id, name: cards[0].set_name || id }, source: 'lorcast' };
 }
 
+// --- Riftbound: RiftCodex -----------------------------------------------------------
+
+const riftboundId = (setId) => `riftbound-${String(setId || '').trim().toLowerCase().replace(/^riftbound-/, '')}`;
+
+// The whole RiftCodex catalogue is cached at once (riftcodexApi), so a set's
+// listing is a read of that cache — fetching the catalogue first if nothing is
+// cached. English only: RiftCodex has no other language. TCGplayer's group
+// abbreviations ARE Riftbound's set codes (UNL, OGN), so Mass Entry gets the code.
+async function listRiftbound(setId) {
+  const riftcodexApi = require('./riftcodexApi');
+  const id = riftboundId(setId);
+  const cards = await riftcodexApi.getCardsBySet(id);
+  if (!cards.length) return null;
+  const row = await db.get(`SELECT name, release_date, ptcgo_code, total FROM sets WHERE id = ?`, [id]);
+  return {
+    ids: cards.map(c => c.id),
+    set: {
+      id,
+      name: (row && row.name) || cards[0].set_name || id,
+      release_date: (row && row.release_date) || '',
+      total: (row && row.total) || cards.length,
+      tcgplayer_set_code: (row && row.ptcgo_code) || id.slice('riftbound-'.length).toUpperCase(),
+    },
+    source: 'riftcodex',
+  };
+}
+
 // --- Registry ---------------------------------------------------------------------
 
 const LISTERS = {
   mtg: listMtg,
   pokemon: listPokemon,
   lorcana: listLorcana,
+  riftbound: listRiftbound,
 };
 
 // The key a listing is stored under: the set id as card_cache spells it for that
@@ -245,6 +273,7 @@ const LISTERS = {
 function listingKey(game, setId, lang) {
   if (game === 'mtg') return { setId: mtgCode(setId), lang: 'en' };
   if (game === 'lorcana') return { setId: lorcanaId(setId), lang: 'en' };
+  if (game === 'riftbound') return { setId: riftboundId(setId), lang: 'en' };
   return { setId: String(setId || '').trim(), lang: languages.toCode(lang) };
 }
 
@@ -254,6 +283,7 @@ function listingKey(game, setId, lang) {
 async function currentSource(game, lang) {
   if (game === 'mtg') return 'scryfall';
   if (game === 'lorcana') return 'lorcast';
+  if (game === 'riftbound') return 'riftcodex';
   if (game === 'pokemon') return pokemonProvider.providerFor(lang);
   return game;
 }
