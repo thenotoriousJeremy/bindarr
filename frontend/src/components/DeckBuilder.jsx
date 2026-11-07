@@ -20,6 +20,7 @@ import {
 import { deckCardUndo, undoToast } from '../utils/undo';
 import RiotNotice from './RiotNotice';
 import { RIFTBOUND_GROUPS, riftboundGroup } from '../utils/riftbound';
+import { apiErrorText } from '../utils/apiError';
 import { lazyNamed } from '../utils/lazyWithReload';
 import ChartFallback from './charts/ChartFallback';
 
@@ -264,7 +265,7 @@ function DeckBuilder({ showToast }) {
         body: JSON.stringify({ ...deckDraft, target_size: parseInt(deckDraft.target_size, 10) || 60 })
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || t('deck.errCreateGeneric'));
+      if (!response.ok) throw new Error(apiErrorText(t, data, 'deck.errCreateGeneric'));
       setActiveDeck(deck => ({ ...deck, ...deckDraft, name: deckDraft.name.trim(), target_size: parseInt(deckDraft.target_size, 10) || 60 }));
       setDeckDraft(null);
       fetchDecks();
@@ -324,7 +325,7 @@ function DeckBuilder({ showToast }) {
         await loadDeckDetails(activeDeck.id);
       } else {
         const data = await response.json().catch(() => ({}));
-        showToast(data.error || 'Failed to add card.');
+        showToast(apiErrorText(t, data, 'inspector.errAddDeck'));
       }
     } catch (err) {
       console.error(err);
@@ -533,7 +534,7 @@ function DeckBuilder({ showToast }) {
         if (errData && errData.details && errData.details.length > 0) {
           showToast(t('deck.errCheckout', { detail: errData.details[0], extra: errData.details.length > 1 ? t('deck.andMore', { count: errData.details.length - 1 }) : '' }));
         } else {
-          showToast(errData?.error || 'Failed to check out deck.');
+          showToast(apiErrorText(t, errData, 'deck.errCheckoutGeneric'));
         }
       }
     } catch (err) {

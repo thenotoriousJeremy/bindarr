@@ -4,6 +4,7 @@ import { GAMES, enabledGames, setGameEnabled, gameOptions, defaultGame, isGameEn
 import RiotNotice from './RiotNotice';
 import { CURRENCIES, getCurrency, setCurrency } from '../utils/formatPrice';
 import { LOCALES, localeName, useT } from '../utils/i18n';
+import { apiErrorText } from '../utils/apiError';
 import { REPO_URL } from '../utils/repo';
 import { saveFile } from '../utils/saveFile';
 import NotificationSettings from './NotificationSettings';
@@ -286,7 +287,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
         if (response.ok) {
           showToast(result.message || t('settings.importOk'));
         } else {
-          showToast(t('settings.importFailed', { error: result.error || t('settings.unknownError') }));
+          showToast(t('settings.importFailed', { error: apiErrorText(t, result, 'settings.unknownError') }));
         }
       } catch (err) {
         console.error(err);
@@ -348,7 +349,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
         setConfirmPassword('');
       } else {
         const data = await response.json();
-        showToast(data.error || t('settings.errPasswordUpdate'));
+        showToast(apiErrorText(t, data, 'settings.errPasswordUpdate'));
       }
     } catch (err) {
       console.error(err);

@@ -19,10 +19,11 @@ const { loadRules } = require('./deckRules');
 const { compartmentLabel } = require('./compartmentSort');
 
 class DeckAllocationError extends Error {
-  constructor(status, message, details) {
+  constructor(status, message, details, code) {
     super(message);
     this.status = status;
     this.details = details || null;
+    this.code = code; // for the UI to translate (frontend utils/apiError.js)
   }
 }
 
@@ -205,7 +206,7 @@ function checkoutDeck(deckId, userId) {
     const plan = planDeck({ ...state, deckId: deck.id, keepHeld: false, topUp: true });
     const missing = shortfall(plan);
     if (missing.length) {
-      throw new DeckAllocationError(400, 'Not enough cards available to check out this deck.', missing);
+      throw new DeckAllocationError(400, 'Not enough cards available to check out this deck.', missing, 'deck_not_enough_cards');
     }
 
     // Anything this deck still has on record is left from an earlier checkout.

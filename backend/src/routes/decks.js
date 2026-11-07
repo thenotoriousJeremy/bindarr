@@ -25,7 +25,7 @@ function deckQuantity(raw) {
 // cards missing); anything else is a genuine 500.
 function sendAllocationError(res, error, fallback) {
   if (error instanceof DeckAllocationError) {
-    return res.status(error.status).json(error.details ? { error: error.message, details: error.details } : { error: error.message });
+    return res.status(error.status).json({ error: error.message, code: error.code, ...(error.details ? { details: error.details } : {}) });
   }
   console.error(error);
   return res.status(500).json({ error: fallback });
@@ -80,7 +80,7 @@ router.post('/', async (req, res) => {
   } = req.body;
 
   if (!name) {
-    return res.status(400).json({ error: 'Deck name is required' });
+    return res.status(400).json({ error: 'Deck name is required', code: 'deck_name_required' });
   }
   // A game the registry does not know is refused; it used to become a Pokémon deck.
   const deckGame = games.parseGame(game);
@@ -238,7 +238,7 @@ router.put('/:id', async (req, res) => {
   const { name, description = '', format, category, accent_color, target_size, any_printing } = req.body;
 
   if (!name || !String(name).trim()) {
-    return res.status(400).json({ error: 'Deck name is required' });
+    return res.status(400).json({ error: 'Deck name is required', code: 'deck_name_required' });
   }
   const targetSize = target_size === undefined ? null : parseInt(target_size, 10);
   if (target_size !== undefined && (!Number.isInteger(targetSize) || targetSize < 1 || targetSize > 300)) {

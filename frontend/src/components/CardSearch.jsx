@@ -16,6 +16,7 @@ import CardImage from './CardImage';
 import AddToListSelect from './AddToListSelect';
 import { useT } from '../utils/i18n';
 import RiotNotice from './RiotNotice';
+import { apiErrorText } from '../utils/apiError';
 
 // Search failures worth explaining in-page rather than only as a toast. `keyHint`
 // marks the ones a user API key actually fixes; an upstream 5xx does not. Title
@@ -208,7 +209,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         } else if (response.status === 503) {
           setSearchError('upstream');
         }
-        showToast(errData.error || t('search.errRequest'));
+        showToast(apiErrorText(t, errData, 'search.errRequest'));
       }
     } catch (err) {
       console.error(err);
@@ -339,7 +340,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         exitSelectMode();
         onAddSuccess();
       } else {
-        showToast(data.error || t('search.errBulkAdd'));
+        showToast(apiErrorText(t, data, 'search.errBulkAdd'));
       }
     } catch (err) {
       console.error(err);
@@ -368,7 +369,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       })
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || t('search.errAddCard'));
+    if (!response.ok) throw new Error(apiErrorText(t, data, 'search.errAddCard'));
     return data;
   };
 
@@ -387,7 +388,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       const res = await fetch(`/api/search?${params.toString()}`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        showToast(err.error || t('search.errLookup'));
+        showToast(apiErrorText(t, err, 'search.errLookup'));
         return;
       }
       const matches = await res.json();
@@ -547,7 +548,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         // A rejected cert number (already in the collection) explains itself; the
         // generic message would send the user back to re-type a correct number.
         const body = await response.json().catch(() => null);
-        showToast(body?.error || t('search.errAddDb'));
+        showToast(apiErrorText(t, body, 'search.errAddDb'));
       }
     } catch (err) {
       console.error(err);

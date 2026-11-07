@@ -10,6 +10,7 @@ import { sortCardsByOrder } from '../utils/cardSort';
 import { displayName } from '../utils/languages';
 import CardImage from './CardImage';
 import { useT } from '../utils/i18n';
+import { apiErrorText } from '../utils/apiError';
 import { lazyNamed } from '../utils/lazyWithReload';
 import ChartFallback from './charts/ChartFallback';
 
@@ -94,7 +95,7 @@ function SharedCollection({ shareToken }) {
         const response = await fetch(`/api/shared/${shareToken}?list=${listType}`);
         if (!response.ok) {
           const errData = await response.json();
-          throw new Error(errData.error || t('shared.errLoad'));
+          throw new Error(apiErrorText(t, errData, 'shared.errLoad'));
         }
         setData(await response.json());
       } catch (err) {

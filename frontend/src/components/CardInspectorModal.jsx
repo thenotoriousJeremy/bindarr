@@ -20,6 +20,7 @@ import { useT } from '../utils/i18n';
 import { undoToast } from '../utils/undo';
 import RiotNotice from './RiotNotice';
 import { isLandscape } from '../utils/riftbound';
+import { apiErrorText } from '../utils/apiError';
 
 // MTG color identity pip colors (WUBRG), approximating the printed mana colors.
 const MTG_COLOR_BG = {
@@ -237,7 +238,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         // card already holding it, which a generic failure toast would throw away
         // and leave the user re-typing a number that was never the problem.
         const body = await res.json().catch(() => null);
-        showToast && showToast(body?.error || t('inspector.errUpdate'));
+        showToast && showToast(apiErrorText(t, body, 'inspector.errUpdate'));
       }
     } catch (err) {
       console.error(err);
@@ -325,7 +326,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         body: JSON.stringify({ entry_ids: [targetEntryId], action: 'add_to_deck', value: deckId })
       });
       const data = await res.json().catch(() => ({}));
-      showToast && showToast(res.ok ? (data.message || t('inspector.addedToDeck')) : (data.error || t('inspector.errAddDeck')));
+      showToast && showToast(res.ok ? (data.message || t('inspector.addedToDeck')) : apiErrorText(t, data, 'inspector.errAddDeck'));
     } catch (err) {
       console.error(err);
       showToast && showToast(t('inspector.errAddDeckGeneric'));
@@ -382,7 +383,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         onClose();
       } else {
         const body = await res.json().catch(() => null);
-        showToast && showToast(body?.error || t('inspector.errUpdate'));
+        showToast && showToast(apiErrorText(t, body, 'inspector.errUpdate'));
       }
     } catch (err) {
       console.error(err);

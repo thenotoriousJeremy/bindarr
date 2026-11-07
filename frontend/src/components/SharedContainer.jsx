@@ -6,6 +6,7 @@ import { isBinderType, binderSpread } from '../utils/cardOptions';
 import CompartmentView from './CompartmentView';
 import { artPocketsByPage } from '../utils/binderArtGeometry';
 import { useT } from '../utils/i18n';
+import { apiErrorText } from '../utils/apiError';
 
 // A single shared container, drawn with the same CompartmentView the owner sees:
 // a binder gets its pocket spread, a box its coverflow. Read-only — no callbacks
@@ -30,7 +31,7 @@ function SharedContainer({ shareToken, containerId }) {
         const res = await fetch(`/api/shared/${shareToken}/containers/${containerId}`);
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || t('shared.errLoadContainer'));
+          throw new Error(apiErrorText(t, errData, 'shared.errLoadContainer'));
         }
         setData(await res.json());
       } catch (err) {

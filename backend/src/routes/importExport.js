@@ -18,7 +18,9 @@ const { MAX_QUANTITY, clampImportQuantity } = require('../utils/requestBounds');
 // transaction, so a file has to be bounded. Bigger collections import in parts.
 const MAX_IMPORT_ROWS = 5000;
 const tooManyRows = (res, count) => res.status(413).json({
-  error: `Too many rows (${count}). Import at most ${MAX_IMPORT_ROWS} at a time.`
+  error: `Too many rows (${count}). Import at most ${MAX_IMPORT_ROWS} at a time.`,
+  code: 'import_too_many_rows',
+  params: { count, max: MAX_IMPORT_ROWS },
 });
 // And so do the copies: a copy is a row (#64), so five thousand rows of 9,999
 // is fifty million INSERTs, all made while the import's transaction holds the
@@ -187,7 +189,7 @@ router.post('/export', (req, res) => {
 router.post('/import', importLimiter, async (req, res) => {
   const { format = 'internal', data } = req.body;
   if (!data) {
-    return res.status(400).json({ error: 'No data provided' });
+    return res.status(400).json({ error: 'No data provided', code: 'import_empty' });
   }
 
   try {
@@ -199,7 +201,7 @@ router.post('/import', importLimiter, async (req, res) => {
     } else if (formatKey === 'manabox') {
       rawItems = parseManaboxText(data);
       if (rawItems.length === 0) {
-        return res.status(400).json({ error: 'No ManaBox cards found' });
+        return res.status(400).json({ error: 'No ManaBox cards found', code: 'manabox_empty' });
       }
       if (rawItems.length > MAX_IMPORT_ROWS) return tooManyRows(res, rawItems.length);
 
@@ -213,7 +215,7 @@ router.post('/import', importLimiter, async (req, res) => {
       unmatchedCount = rawItems.length - pairs.length;
       rawItems = pairs.map(({ row, card }) => ({ ...row, card_id: card.id }));
       if (rawItems.length === 0) {
-        return res.status(400).json({ error: 'No ManaBox cards matched Scryfall' });
+        return res.status(400).json({ error: 'No ManaBox cards matched Scryfall', code: 'manabox_no_match' });
       }
     } else {
       let lines = [];
@@ -226,7 +228,7 @@ router.post('/import', importLimiter, async (req, res) => {
       if (sep) lines.shift();
       const delimiter = sep ? sep[1] : ',';
       if (lines.length <= 1) {
-        return res.status(400).json({ error: 'CSV file is empty or missing headers' });
+        return res.status(400).json({ error: 'CSV file is empty or missing headers', code: 'csv_no_headers' });
       }
 
       const parseCSVLine = (line) => {
@@ -266,7 +268,7 @@ router.post('/import', importLimiter, async (req, res) => {
     }
 
     if (!Array.isArray(rawItems)) {
-      return res.status(400).json({ error: 'Invalid data payload' });
+      return res.status(400).json({ error: 'Invalid data payload', code: 'import_invalid' });
     }
     if (rawItems.length > MAX_IMPORT_ROWS) return tooManyRows(res, rawItems.length);
 
@@ -359,6 +361,7 @@ router.post('/import', importLimiter, async (req, res) => {
     if (toImport.length === 0) {
       return res.status(400).json({
         error: 'None of the rows could be matched to a card. Each row needs a set and a card number (or a Bindarr card ID).',
+        code: 'import_no_match',
         unresolved,
       });
     }
@@ -419,7 +422,7 @@ router.post('/import', importLimiter, async (req, res) => {
       : '';
     return res.json({ success: true, count: importedCount, clamped: clampedRows, unresolved, message: `Successfully imported ${importedCount} items.${unmatched}${empty}${adjusted}${skipped}` });
   } catch (error) {
-    return res.status(500).json({ error: 'Import failed', message: error.message });
+    return res.status(500).json({ error: 'Import failed', code: 'import_failed', message: error.message });
   }
 });
 
@@ -433,17 +436,17 @@ router.post('/import-container', importLimiter, async (req, res) => {
 
   try {
     const items = parseManaboxText(data);
-    if (items.length === 0) return res.status(400).json({ error: 'No ManaBox cards found' });
+    if (items.length === 0) return res.status(400).json({ error: 'No ManaBox cards found', code: 'manabox_empty' });
     if (items.length > MAX_IMPORT_ROWS) return tooManyRows(res, items.length);
     const duplicate = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [containerName, req.user.id]);
-    if (duplicate) return res.status(400).json({ error: 'A location with this name already exists' });
+    if (duplicate) return res.status(400).json({ error: 'A location with this name already exists', code: 'location_name_taken' });
 
     const { pairs } = await scryfallApi.bulkFetchByIdentifier(items.map(item => ({
       ...item,
       set_id: item.set_code,
       number: item.collector_number
     })));
-    if (pairs.length === 0) return res.status(400).json({ error: 'No ManaBox cards matched Scryfall' });
+    if (pairs.length === 0) return res.status(400).json({ error: 'No ManaBox cards matched Scryfall', code: 'manabox_no_match' });
 
     const requested = pairs.reduce((total, { row }) => total + row.quantity, 0);
     let locationId;
@@ -489,7 +492,7 @@ router.post('/import-container', importLimiter, async (req, res) => {
     res.status(201).json({ id: locationId, count, missing, message: `Created ${containerName} with ${count} cards.${skipped}` });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Failed to import container' });
+    res.status(500).json({ error: 'Failed to import container', code: 'import_failed' });
   }
 });
 

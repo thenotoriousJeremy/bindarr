@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { User, Lock, ArrowRight, Eye, EyeOff, Server, Shield, Smartphone } from 'lucide-react';
 import { isNative, canRunOnDevice, getServerUrl, setServerUrl, setDeviceMode } from '../apiBase';
 import { useT } from '../utils/i18n';
+import { apiErrorText } from '../utils/apiError';
 import { getOrCreateVerifier, challengeFor } from '../utils/nativeOidc';
 import Logo from './Logo';
 
@@ -154,7 +155,7 @@ function Login({ onLoginSuccess }) {
 
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || t('login.errFailed'));
+        throw new Error(apiErrorText(t, data, 'login.errFailed'));
       }
 
       onLoginSuccess(data.token, data.user);

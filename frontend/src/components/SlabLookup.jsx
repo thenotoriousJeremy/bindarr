@@ -3,6 +3,7 @@ import { Award, Search, Plus } from 'lucide-react';
 import CardImage from './CardImage';
 import { useT } from '../utils/i18n';
 import { useFx } from '../utils/useFx';
+import { apiErrorText } from '../utils/apiError';
 import { displayName } from '../utils/languages';
 
 // Add a graded slab by the cert number printed on its label.
@@ -77,7 +78,7 @@ export default function SlabLookup({ onAddSuccess, showToast }) {
       });
       const body = await res.json().catch(() => null);
       if (!res.ok) {
-        showToast && showToast(body?.error || t('slab.errAdd'));
+        showToast && showToast(apiErrorText(t, body, 'slab.errAdd'));
         return;
       }
       showToast && showToast(t('slab.added', {
