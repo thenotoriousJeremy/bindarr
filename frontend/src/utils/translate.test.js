@@ -2,7 +2,7 @@
 // and locale-driven plural selection.
 // Run: `node src/utils/translate.test.js`
 import assert from 'node:assert';
-import { pickLocale, translate } from './translate.js';
+import { pickLocale, translate, fillParts, getActiveLocale, setActiveLocale } from './translate.js';
 
 const en = {
   'nav.collection': 'Collection',
@@ -59,5 +59,27 @@ assert.strictEqual(pickLocale(['en', 'pt'], ['pt-BR', 'en']), 'pt');
 assert.strictEqual(pickLocale(['en', 'de'], ['fr-CA', 'de-AT']), 'de');
 assert.strictEqual(pickLocale(['en', 'de'], ['fr']), 'en');
 assert.strictEqual(pickLocale(['en', 'DE'], ['de']), 'DE');
+
+// Rich sentences: the translator places the {placeholders}, the component supplies
+// what goes there. The text around them survives in every language, which cutting
+// the translation on English words (the old catalog hint) did not.
+const bold = (s) => ({ bold: s });
+assert.deepStrictEqual(
+  fillParts('{magic} stores ids. {pokemon} stores product ids.', { magic: bold('Magic'), pokemon: bold('Pokémon') }),
+  [bold('Magic'), ' stores ids. ', bold('Pokémon'), ' stores product ids.']
+);
+assert.deepStrictEqual(
+  fillParts('{magic} 存储 Scryfall ID。{pokemon} 存储产品 ID。', { magic: 1, pokemon: 2 }),
+  [1, ' 存储 Scryfall ID。', 2, ' 存储产品 ID。']
+);
+assert.deepStrictEqual(fillParts('no parts here', {}), ['no parts here']);
+assert.deepStrictEqual(fillParts('keep {unknown} literal', {}), ['keep ', '{unknown}', ' literal']);
+
+// The interface locale mirrored for code outside React (formatPrice).
+assert.strictEqual(getActiveLocale(), 'en');
+setActiveLocale('de');
+assert.strictEqual(getActiveLocale(), 'de');
+setActiveLocale(null);
+assert.strictEqual(getActiveLocale(), 'en', 'nothing set means English');
 
 console.log('translate.test.js OK');

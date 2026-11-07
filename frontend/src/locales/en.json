@@ -1777,7 +1777,7 @@
   "catalog.fastestWay": "Fastest way to scan",
   "catalog.nInstalled": "{count} installed",
   "catalog.readyMadeDesc": "Precomputed by the model's author. Each is a snapshot: cards printed after its date are missing, it can never be updated, and it cannot be counted per set. A catalog you build in step 3 always takes precedence over it.",
-  "catalog.magicVsPokemon": "Magic stores Scryfall ids, so a scan fetches whatever card it matched — nothing else needed. Pokémon stores TCGplayer product ids, which name a card only through the product map below. Getting the catalog builds that map automatically; without it a Pokémon scan matches and then names nothing.",
+  "catalog.magicVsPokemon": "{magic} stores Scryfall ids, so a scan fetches whatever card it matched — nothing else needed. {pokemon} stores TCGplayer product ids, which name a card only through the product map below. Getting the catalog builds that map automatically; without it a Pokémon scan matches and then names nothing.",
   "catalog.thGame": "Game",
   "catalog.thSize": "Size",
   "catalog.thSnapshot": "Snapshot",

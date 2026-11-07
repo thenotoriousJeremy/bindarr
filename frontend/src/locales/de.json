@@ -220,7 +220,7 @@
   "catalog.listingSets": "Sets auflisten",
   "catalog.loadingCatalogs": "Kataloge werden geladen…",
   "catalog.loadingSets": "Sets werden geladen…",
-  "catalog.magicVsPokemon": "Magic speichert Scryfall-IDs, sodass ein Scan Treffer direkt abruft – keine weiteren Schritte nötig. Pokémon speichert TCGplayer-Produkt-IDs, die Karten nur über die unten stehende Produktzuordnung benennen. Das Herunterladen des Katalogs erstellt diese Zuordnung automatisch; ohne sie liefert ein Pokémon-Scan keinen Namen.",
+  "catalog.magicVsPokemon": "{magic} speichert Scryfall-IDs, sodass ein Scan Treffer direkt abruft – keine weiteren Schritte nötig. {pokemon} speichert TCGplayer-Produkt-IDs, die Karten nur über die unten stehende Produktzuordnung benennen. Das Herunterladen des Katalogs erstellt diese Zuordnung automatisch; ohne sie liefert ein Pokémon-Scan keinen Namen.",
   "catalog.nDownloaded": "{cached} Karten heruntergeladen",
   "catalog.nIndexed": "{count} indexiert",
   "catalog.nInstalled": "{count} installiert",

@@ -29,6 +29,20 @@ export const translate = (dict, fallback, locale, key, vars) => {
   });
 };
 
+// A sentence with pieces that are not plain text — a name in bold — is
+// translated with {placeholders} like any other, so the translator decides where
+// they go, and is split here into its text runs and the values given for those
+// placeholders, for a component to render as children. Unknown placeholders stay
+// literal, as in translate(). Never cut a translation on English words instead:
+// they are not in the other languages.
+export const fillParts = (template, parts) => String(template)
+  .split(/(\{\w+\})/)
+  .filter(Boolean)
+  .map((piece) => {
+    const m = /^\{(\w+)\}$/.exec(piece);
+    return m && parts[m[1]] != null ? parts[m[1]] : piece;
+  });
+
 // The interface language, for formatting done outside React. Components get it
 // from useT(), but a helper called from all over the app (formatPrice) has no
 // hook to call, so i18n.jsx mirrors the provider's locale here as it changes.

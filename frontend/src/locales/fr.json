@@ -225,7 +225,7 @@
   "catalog.listingSets": "Listage des extensions",
   "catalog.loadingCatalogs": "Chargement des catalogues…",
   "catalog.loadingSets": "Chargement des extensions…",
-  "catalog.magicVsPokemon": "Magic stocke les identifiants Scryfall, donc un scan récupère directement la carte correspondante. Pokémon stocke les identifiants de produit TCGplayer, qui ne nomment une carte que via la table de correspondance ci-dessous. Télécharger le catalogue génère cette table automatiquement.",
+  "catalog.magicVsPokemon": "{magic} stocke les identifiants Scryfall, donc un scan récupère directement la carte correspondante. {pokemon} stocke les identifiants de produit TCGplayer, qui ne nomment une carte que via la table de correspondance ci-dessous. Télécharger le catalogue génère cette table automatiquement.",
   "catalog.nDownloaded": "{cached} cartes téléchargées",
   "catalog.nIndexed": "{count} indexées",
   "catalog.nInstalled": "{count} installés",

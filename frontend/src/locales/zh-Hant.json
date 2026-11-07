@@ -215,7 +215,7 @@
   "catalog.listingSets": "正在列出系列",
   "catalog.loadingCatalogs": "正在載入目錄…",
   "catalog.loadingSets": "正在載入系列…",
-  "catalog.magicVsPokemon": "魔法風雲會儲存 Scryfall ID，掃描比對後可直接取得卡牌。寶可夢儲存 TCGplayer 產品 ID，需透過下方的產品對照表定位卡牌。下載目錄會自動建置該對照表。",
+  "catalog.magicVsPokemon": "{magic} 儲存 Scryfall ID，掃描比對後可直接取得卡牌。{pokemon} 儲存 TCGplayer 產品 ID，需透過下方的產品對照表定位卡牌。下載目錄會自動建置該對照表。",
   "catalog.nDownloaded": "已下載 {cached} 張卡牌",
   "catalog.nIndexed": "已索引 {count} 張",
   "catalog.nInstalled": "已安裝 {count} 個",

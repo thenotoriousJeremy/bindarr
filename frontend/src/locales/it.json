@@ -225,7 +225,7 @@
   "catalog.listingSets": "Elenco dei set",
   "catalog.loadingCatalogs": "Caricamento dei cataloghi…",
   "catalog.loadingSets": "Caricamento dei set…",
-  "catalog.magicVsPokemon": "Magic utilizza ID Scryfall, quindi una scansione recupera istantaneamente la carta corrispondente. Pokémon memorizza ID prodotto TCGplayer, che nominano una carta solo tramite la mappa sottostante. Il download del catalogo genera automaticamente tale mappa.",
+  "catalog.magicVsPokemon": "{magic} utilizza ID Scryfall, quindi una scansione recupera istantaneamente la carta corrispondente. {pokemon} memorizza ID prodotto TCGplayer, che nominano una carta solo tramite la mappa sottostante. Il download del catalogo genera automaticamente tale mappa.",
   "catalog.nDownloaded": "{cached} carte scaricate",
   "catalog.nIndexed": "{count} indicizzate",
   "catalog.nInstalled": "{count} installati",

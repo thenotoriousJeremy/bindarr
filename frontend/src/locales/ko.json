@@ -215,7 +215,7 @@
   "catalog.listingSets": "세트 목록 조회 중",
   "catalog.loadingCatalogs": "카탈로그 불러오는 중…",
   "catalog.loadingSets": "세트 불러오는 중…",
-  "catalog.magicVsPokemon": "Magic은 Scryfall ID를 저장하여 일치하는 카드를 즉시 가져옵니다. Pokémon은 TCGplayer 제품 ID를 저장하며 아래 제품 맵을 통해서만 카드를 식별합니다. 카탈로그 다운로드 시 맵이 자동 생성됩니다.",
+  "catalog.magicVsPokemon": "{magic}은 Scryfall ID를 저장하여 일치하는 카드를 즉시 가져옵니다. {pokemon}은 TCGplayer 제품 ID를 저장하며 아래 제품 맵을 통해서만 카드를 식별합니다. 카탈로그 다운로드 시 맵이 자동 생성됩니다.",
   "catalog.nDownloaded": "{cached}장의 카드 다운로드됨",
   "catalog.nIndexed": "{count}개 색인됨",
   "catalog.nInstalled": "{count}개 설치됨",

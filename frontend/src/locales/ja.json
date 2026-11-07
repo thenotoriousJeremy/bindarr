@@ -215,7 +215,7 @@
   "catalog.listingSets": "セットを一覧表示中",
   "catalog.loadingCatalogs": "カタログを読み込み中…",
   "catalog.loadingSets": "セットを読み込み中…",
-  "catalog.magicVsPokemon": "MagicはScryfall IDを保存するため、一致したカードを即座に取得できます。PokémonはTCGplayer製品IDを保存し、下の製品マップを介してカードを識別します。カタログをダウンロードするとこのマップが自動生成されます。",
+  "catalog.magicVsPokemon": "{magic}はScryfall IDを保存するため、一致したカードを即座に取得できます。{pokemon}はTCGplayer製品IDを保存し、下の製品マップを介してカードを識別します。カタログをダウンロードするとこのマップが自動生成されます。",
   "catalog.nDownloaded": "{cached} 枚のカードをダウンロード済み",
   "catalog.nIndexed": "{count} 件インデックス済み",
   "catalog.nInstalled": "{count} 件インストール済み",

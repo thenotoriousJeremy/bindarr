@@ -215,7 +215,7 @@
   "catalog.listingSets": "正在列出系列",
   "catalog.loadingCatalogs": "正在加载目录…",
   "catalog.loadingSets": "正在加载系列…",
-  "catalog.magicVsPokemon": "万智牌存储 Scryfall ID，扫描匹配后可直接获取卡牌。宝可梦存储 TCGplayer 产品 ID，需通过下方的产品映射表定位卡牌。下载目录会自动构建该映射表。",
+  "catalog.magicVsPokemon": "{magic} 存储 Scryfall ID，扫描匹配后可直接获取卡牌。{pokemon} 存储 TCGplayer 产品 ID，需通过下方的产品映射表定位卡牌。下载目录会自动构建该映射表。",
   "catalog.nDownloaded": "已下载 {cached} 张卡牌",
   "catalog.nIndexed": "已索引 {count} 张",
   "catalog.nInstalled": "已安装 {count} 个",
