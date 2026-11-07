@@ -30,7 +30,7 @@ async function loadEntries(entryIds, userId) {
   const holes = entryIds.map(() => '?').join(',');
   const rows = await db.all(`
     SELECT c.id, c.id AS entry_id, c.card_id, c.printing, c.language, c.favorite, c.is_trade, c.list_type,
-           cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.supertype, cc.rarity, cc.image_url,
+           cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.supertype, cc.rarity, cc.image_url, cc.orientation,
            cc.game, cc.cmc, cc.color_identity,
            cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
     FROM collection c
@@ -825,7 +825,7 @@ router.post('/locations/:id/resort', async (req, res) => {
 
       const cards = await db.all(`
         SELECT c.id as entry_id, c.card_id, c.printing, c.language, c.quantity, c.favorite, c.is_trade, c.list_type,
-               cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.image_url, cc.game,
+               cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.image_url, cc.orientation, cc.game,
                cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id

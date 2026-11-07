@@ -18,6 +18,9 @@ async function syncSets(force = false) {
   await pokemon.fetchAndCacheSets(force);
   await scryfallApi.fetchAndCacheSets(force);
   await lorcastApi.fetchAndCacheSets(force);
+  // Riftbound refreshes only when forced (the weekly sets-refresh job) and only on an
+  // install that has used it; first use fetches the catalogue itself (riftcodexApi).
+  await require('../riftcodexApi').fetchAndCacheSets(force);
 }
 
 // Every provider's price refresh, through utils/priceSweeps: its one ordered list,

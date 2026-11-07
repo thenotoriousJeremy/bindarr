@@ -51,5 +51,24 @@ export default [
     "tcgplayerCategories": [71],
     "scan": { "publishedIds": "productId" },
     "psaBrand": "LORCANA"
+  },
+  {
+    "value": "riftbound",
+    "label": "Riftbound",
+    "short": "Riftbound",
+    "idPrefixes": ["riftbound-"],
+    "setIdPrefix": "riftbound-",
+    "provider": "riftcodex",
+    "languages": ["en"],
+    "printings": "foil",
+    "features": { "prices": true, "scan": true, "grading": true, "gradedPrices": false, "decks": true },
+    "deck": { "defaultFormat": "Constructed", "defaultSize": 56 },
+    "cardBack": "riftbound",
+    "marketplaces": { "tcgplayer": true, "cardmarket": false, "tcgplayerSearchLine": null },
+    "tcgplayerCategories": [89],
+    "scan": { "publishedIds": null },
+    "psaBrand": "RIFTBOUND",
+    "nativeApp": false,
+    "notice": "riot"
   }
 ];

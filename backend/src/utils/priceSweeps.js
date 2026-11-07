@@ -39,6 +39,8 @@ const PRICE_SWEEPS = [
   // cache up to date before pricing from it, through syncIfUpdatedSafely, which
   // never throws: a failed or paused sync prices from the last complete cache.
   { key: 'tcgcsv', run: () => require('../tcgcsvApi').updateCollectionPrices() },
+  // Riftbound: TCGplayer prices from TCGCSV category 89, by product id.
+  { key: 'riftbound', run: () => require('../riftboundPrices').updateCollectionPrices() },
 ];
 
 let running = null;       // the run in progress, or null

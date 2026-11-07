@@ -394,6 +394,25 @@ function keptFromPrev(prev, embeddedIds) {
   return out;
 }
 
+// The image the SCANNER should match against, which is not always the one the UI
+// displays. TCGdex's cached url is `/low.png` — 245x337, chosen so card grids do
+// not pull 312 KB per thumbnail — and this resizes to 448, so every TCGdex row was
+// embedded from an upscaled blur while the camera hands over a sharp 448 crop.
+// The same asset at `/high.png` is 600x825.
+//
+// Swapped here rather than in tcgdexApi.imageUrl on purpose: card_cache's url is
+// what the frontend renders, and making every grid thumbnail high-res would cost
+// the whole app bandwidth to fix one pipeline.
+function embedUrl(row) {
+  let url = row.image_url.replace(/\/low\.png$/, '/high.png');
+  if (url.includes('cards.lorcast.io/card/digital/')) {
+    url = url.replace(/\/card\/digital\/(?:small|normal)\//, '/card/digital/large/');
+  }
+  // Riftbound rows store a 480px rendition of Riot's art; embed the full width.
+  if (String(row.id).startsWith('riftbound-')) url = require('./riftcodexApi').embedImageUrl(url);
+  return url;
+}
+
 // --- phase 2 -----------------------------------------------------------------
 async function embedPhase(job) {
   // A scoped build embeds only the chosen sets' cards. The catalog it writes is
@@ -442,22 +461,6 @@ async function embedPhase(job) {
   const inflight = new Map();
   const CONCURRENCY = 8;
 
-  // The image the SCANNER should match against, which is not always the one the UI
-  // displays. TCGdex's cached url is `/low.png` — 245x337, chosen so card grids do
-  // not pull 312 KB per thumbnail — and this resizes to 448, so every TCGdex row was
-  // embedded from an upscaled blur while the camera hands over a sharp 448 crop.
-  // The same asset at `/high.png` is 600x825.
-  //
-  // Swapped here rather than in tcgdexApi.imageUrl on purpose: card_cache's url is
-  // what the frontend renders, and making every grid thumbnail high-res would cost
-  // the whole app bandwidth to fix one pipeline.
-  const embedUrl = (row) => {
-    let url = row.image_url.replace(/\/low\.png$/, '/high.png');
-    if (url.includes('cards.lorcast.io/card/digital/')) {
-      url = url.replace(/\/card\/digital\/(?:small|normal)\//, '/card/digital/large/');
-    }
-    return url;
-  };
 
   // Scryfall's image CDN rejects a request with no User-Agent — 400, not 403, which
   // reads like a bad URL. Version comes from package.json rather than a literal: the
@@ -581,4 +584,4 @@ function start(game, lang = 'English', opts = {}) {
 let last = null;
 const lastResult = () => last;
 
-module.exports = { list, listLanguages, setCounts, newSetCount, keptFromPrev, start, stop, state, lastResult, binPath, metaPath, GAMES };
+module.exports = { list, listLanguages, setCounts, newSetCount, keptFromPrev, embedUrl, start, stop, state, lastResult, binPath, metaPath, GAMES };

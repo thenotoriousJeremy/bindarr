@@ -1290,6 +1290,23 @@ async function initDb() {
     await run(`ALTER TABLE sealed_units ADD COLUMN components_applied_at DATETIME`);
   }
 
+  // Riftbound (riftcodexApi.js). Four card fields no provider stored before —
+  // which way the card is printed (Riftbound battlefields are landscape), its
+  // artist, its rules text, and its numeric stats as JSON ({"energy":2,"might":3})
+  // — generic rather than Riftbound-only so another provider can fill them, and
+  // null everywhere else. Plus the Riftbound price sweep's own clock
+  // (utils/priceHelpers SWEEP_COLUMN: an unknown key means the sweep never runs).
+  {
+    const have = new Set((await all(`PRAGMA table_info(card_cache)`)).map(c => c.name));
+    for (const col of ['orientation', 'artist', 'card_text', 'attributes']) {
+      if (!have.has(col)) await run(`ALTER TABLE card_cache ADD COLUMN ${col} TEXT`);
+    }
+    const settings = new Set((await all(`PRAGMA table_info(app_settings)`)).map(c => c.name));
+    if (!settings.has('riftbound_prices_swept_at')) {
+      await run(`ALTER TABLE app_settings ADD COLUMN riftbound_prices_swept_at DATETIME`);
+    }
+  }
+
   const collectionCols = await all(`PRAGMA table_info(collection)`);
   if (!collectionCols.some(c => c.name === 'user_id')) {
     await run(`ALTER TABLE collection ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`);

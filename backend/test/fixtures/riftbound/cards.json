@@ -1,0 +1,692 @@
+[
+  {
+    "id": "69c4407c9288b1e85d94de8a",
+    "name": "Vi - Piltover Enforcer (Signature)",
+    "riftbound_id": "unl-229*-219",
+    "tcgplayer_id": "685522",
+    "collector_number": 229,
+    "attributes": {
+      "energy": null,
+      "might": null,
+      "power": null
+    },
+    "classification": {
+      "type": "Legend",
+      "supertype": null,
+      "rarity": "Rare",
+      "domain": [
+        "Fury",
+        "Order"
+      ]
+    },
+    "text": {
+      "rich": "<p>When you conquer, if you assigned 3 or more excess damage, you may exhaust me to ready a unit.</p>",
+      "plain": "When you conquer, if you assigned 3 or more excess damage, you may exhaust me to ready a unit.",
+      "flavour": null
+    },
+    "set": {
+      "set_id": "UNL",
+      "label": "Unleashed"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0febae9c611339d9ed65c7ebe43237b5ec42c9a3-744x1039.png?accountingTag=RB",
+      "artist": "Jonathan Santoro",
+      "accessibility_text": "Riftbound Legend: Piltover Enforcer. When you conquer, if you assigned 3 or more excess damage, you may exhaust me to ready a unit."
+    },
+    "tags": [
+      "Vi"
+    ],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": "Vi Piltover Enforcer Signature",
+      "updated_on": "2026-07-10T22:45:08.861364+00:00",
+      "alternate_art": false,
+      "overnumbered": false,
+      "signature": true
+    },
+    "new": false
+  },
+  {
+    "id": "69c4407c9288b1e85d94de89",
+    "name": "Vi - Piltover Enforcer (Overnumbered)",
+    "riftbound_id": "unl-229-219",
+    "tcgplayer_id": "685521",
+    "collector_number": 229,
+    "attributes": {
+      "energy": null,
+      "might": null,
+      "power": null
+    },
+    "classification": {
+      "type": "Legend",
+      "supertype": null,
+      "rarity": "Rare",
+      "domain": [
+        "Fury",
+        "Order"
+      ]
+    },
+    "text": {
+      "rich": "<p>When you conquer, if you assigned 3 or more excess damage, you may exhaust me to ready a unit.</p>",
+      "plain": "When you conquer, if you assigned 3 or more excess damage, you may exhaust me to ready a unit.",
+      "flavour": null
+    },
+    "set": {
+      "set_id": "UNL",
+      "label": "Unleashed"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/08c48ad82381bb5830a0b413d7a2f25dd2b20d76-744x1039.png?accountingTag=RB",
+      "artist": "Jonathan Santoro",
+      "accessibility_text": "Riftbound Legend: Piltover Enforcer. When you conquer, if you assigned 3 or more excess damage, you may exhaust me to ready a unit."
+    },
+    "tags": [
+      "Vi"
+    ],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": "Vi Piltover Enforcer Overnumbered",
+      "updated_on": "2026-07-10T22:45:08.792663+00:00",
+      "alternate_art": false,
+      "overnumbered": true,
+      "signature": false
+    },
+    "new": false
+  },
+  {
+    "id": "69c4407d9288b1e85d94de99",
+    "name": "Vi - Peacekeeper (Alternate Art)",
+    "riftbound_id": "unl-176a-219",
+    "tcgplayer_id": "685596",
+    "collector_number": 176,
+    "attributes": {
+      "energy": 5,
+      "might": 5,
+      "power": 1
+    },
+    "classification": {
+      "type": "Unit",
+      "supertype": "Champion",
+      "rarity": "Rare",
+      "domain": [
+        "Order"
+      ]
+    },
+    "text": {
+      "rich": "<p>[Ambush]<br />When I attack, [Stun] an enemy unit here.</p>",
+      "plain": "[Ambush]When I attack, [Stun] an enemy unit here.",
+      "flavour": "I'm my own backup."
+    },
+    "set": {
+      "set_id": "UNL",
+      "label": "Unleashed"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/6bde3fc4f76015d36d70e86c8fbcc3b6b7aa43dd-744x1039.png?accountingTag=RB",
+      "artist": "League Splash Team",
+      "accessibility_text": "Riftbound Unit: Vi, Peacekeeper. [Ambush]\nWhen I attack, [Stun] an enemy unit here."
+    },
+    "tags": [
+      "Vi",
+      "Piltover"
+    ],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": "Vi Peacekeeper Alternate Art",
+      "updated_on": "2026-07-10T22:45:10.915796+00:00",
+      "alternate_art": true,
+      "overnumbered": false,
+      "signature": false
+    },
+    "new": false
+  },
+  {
+    "id": "69c4407d9288b1e85d94de98",
+    "name": "Vi - Peacekeeper",
+    "riftbound_id": "unl-176-219",
+    "tcgplayer_id": "685595",
+    "collector_number": 176,
+    "attributes": {
+      "energy": 5,
+      "might": 5,
+      "power": 1
+    },
+    "classification": {
+      "type": "Unit",
+      "supertype": "Champion",
+      "rarity": "Rare",
+      "domain": [
+        "Order"
+      ]
+    },
+    "text": {
+      "rich": "<p>[Ambush] (You may play me as a [Reaction] to a battlefield where you have units.)<br />When I attack, [Stun] an enemy unit here. (It doesn't deal combat damage this turn.)</p>",
+      "plain": "[Ambush] (You may play me as a [Reaction] to a battlefield where you have units.)When I attack, [Stun] an enemy unit here. (It doesn't deal combat damage this turn.)",
+      "flavour": "I'm my own backup."
+    },
+    "set": {
+      "set_id": "UNL",
+      "label": "Unleashed"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/51610bbdecd77b15f58b9a968611e536ebdf445e-744x1039.png?accountingTag=RB",
+      "artist": "Envar Studio",
+      "accessibility_text": "Riftbound Unit: Vi, Peacekeeper. [Ambush] (You may play me as a [Reaction] to a battlefield where you have units.)\nWhen I attack, [Stun] an enemy unit here. (It doesn't deal combat damage this turn.)"
+    },
+    "tags": [
+      "Vi",
+      "Piltover"
+    ],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": "Vi Peacekeeper",
+      "updated_on": "2026-07-10T22:45:10.845896+00:00",
+      "alternate_art": false,
+      "overnumbered": false,
+      "signature": false
+    },
+    "new": false
+  },
+  {
+    "id": "69bd162140ff39fe1396df8f",
+    "name": "Hextech Gauntlets",
+    "riftbound_id": "unl-188-219",
+    "tcgplayer_id": "684657",
+    "collector_number": 188,
+    "attributes": {
+      "energy": 3,
+      "might": null,
+      "power": null
+    },
+    "classification": {
+      "type": "Gear",
+      "supertype": "Signature",
+      "rarity": "Epic",
+      "domain": [
+        "Fury",
+        "Order"
+      ]
+    },
+    "text": {
+      "rich": "<p>[Equip] :rb_energy_3::rb_rune_rainbow:. This ability's Energy cost is reduced by the Might of the unit you choose. (Pay the cost: Attach this to a unit you control.)</p>",
+      "plain": "[Equip] :rb_energy_3::rb_rune_rainbow:. This ability's Energy cost is reduced by the Might of the unit you choose. (Pay the cost: Attach this to a unit you control.)",
+      "flavour": null
+    },
+    "set": {
+      "set_id": "UNL",
+      "label": "Unleashed"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/22755fc744a79fbdcce0ceadfe20d6d0a2b8624a-744x1039.png?accountingTag=RB",
+      "artist": "Grafit Studio",
+      "accessibility_text": "Riftbound Gear: Hextech Gauntlets. [Equip] [3][A]. This ability's Energy cost is reduced by the Might of the unit you choose. (Pay the cost: Attach this to a unit you control.)"
+    },
+    "tags": [
+      "Vi",
+      "Equipment"
+    ],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": "Hextech Gauntlets",
+      "updated_on": "2026-07-10T22:45:06.484117+00:00",
+      "alternate_art": false,
+      "overnumbered": false,
+      "signature": false
+    },
+    "new": false
+  },
+  {
+    "id": "69c43cd3c2f7428c5d24b4f0",
+    "name": "Prepared Neophyte",
+    "riftbound_id": "unl-004-219",
+    "tcgplayer_id": "685537",
+    "collector_number": 4,
+    "attributes": {
+      "energy": 3,
+      "might": 1,
+      "power": null
+    },
+    "classification": {
+      "type": "Unit",
+      "supertype": null,
+      "rarity": "Common",
+      "domain": [
+        "Fury"
+      ]
+    },
+    "text": {
+      "rich": "<p>If you've spent :rb_energy_4: or more to play a spell this turn, I have +4 :rb_might:.</p>",
+      "plain": "If you've spent :rb_energy_4: or more to play a spell this turn, I have +4 :rb_might:.",
+      "flavour": "Power begets power."
+    },
+    "set": {
+      "set_id": "UNL",
+      "label": "Unleashed"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/ad993e451437950e56935a7ecff44fea09e522b2-744x1039.png?accountingTag=RB",
+      "artist": "Kudos Productions",
+      "accessibility_text": "Riftbound Unit: Prepared Neophyte. If you've spent [4] or more to play a spell this turn, I have +4 [S]."
+    },
+    "tags": [
+      "Shadow Isles"
+    ],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": "Prepared Neophyte",
+      "updated_on": "2026-07-10T22:45:09.599868+00:00",
+      "alternate_art": false,
+      "overnumbered": false,
+      "signature": false
+    },
+    "new": false
+  },
+  {
+    "id": "69c43cd3c2f7428c5d24b4ee",
+    "name": "Bone Skewer",
+    "riftbound_id": "unl-139-219",
+    "tcgplayer_id": "685535",
+    "collector_number": 139,
+    "attributes": {
+      "energy": 2,
+      "might": null,
+      "power": 1
+    },
+    "classification": {
+      "type": "Spell",
+      "supertype": null,
+      "rarity": "Rare",
+      "domain": [
+        "Chaos"
+      ]
+    },
+    "text": {
+      "rich": "<p>[Hidden] (Hide now for :rb_rune_rainbow: to react with later for :rb_energy_0:.)<br />Choose a battlefield. An opponent reveals their hand. You may choose a unit from it. They play that unit to that battlefield, ignoring any and all costs. When they do, [Stun] it. (It doesn't deal combat damage this turn.)</p>",
+      "plain": "[Hidden] (Hide now for :rb_rune_rainbow: to react with later for :rb_energy_0:.)Choose a battlefield. An opponent reveals their hand. You may choose a unit from it. They play that unit to that battlefield, ignoring any and all costs. When they do, [Stun] it. (It doesn't deal combat damage this turn.)",
+      "flavour": null
+    },
+    "set": {
+      "set_id": "UNL",
+      "label": "Unleashed"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/e06e3e3033640bc8a5bc98acd4e3a0925c6e2c9a-744x1039.png?accountingTag=RB",
+      "artist": "Kudos Productions",
+      "accessibility_text": "Riftbound Spell: Bone Skewer. [Hidden] (Hide now for [A] to react with later for [0].)\nChoose a battlefield. An opponent reveals their hand. You may choose a unit from it. They play that unit to that battlefield, ignoring any and all costs. When they do, [Stun] it. (It doesn't deal combat damage this turn.)"
+    },
+    "tags": [],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": "Bone Skewer",
+      "updated_on": "2026-07-10T22:45:09.477216+00:00",
+      "alternate_art": false,
+      "overnumbered": false,
+      "signature": false
+    },
+    "new": false
+  },
+  {
+    "id": "69c4407d9288b1e85d94de9e",
+    "name": "Star Spring",
+    "riftbound_id": "unl-215-219",
+    "tcgplayer_id": "685601",
+    "collector_number": 215,
+    "attributes": {
+      "energy": null,
+      "might": null,
+      "power": null
+    },
+    "classification": {
+      "type": "Battlefield",
+      "supertype": null,
+      "rarity": "Uncommon",
+      "domain": [
+        "Colorless"
+      ]
+    },
+    "text": {
+      "rich": "<p>The first time a player plays a non-token unit here each turn, they may move another unit they control here to its base.</p>",
+      "plain": "The first time a player plays a non-token unit here each turn, they may move another unit they control here to its base.",
+      "flavour": null
+    },
+    "set": {
+      "set_id": "UNL",
+      "label": "Unleashed"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0c4fe88ffb5c1b02b58b2c6b4f02de441ac451d6-1039x744.png?accountingTag=RB",
+      "artist": "Six More Vodka",
+      "accessibility_text": "Riftbound Battlefield: Star Spring. The first time a player plays a non-token unit here each turn, they may move another unit they control here to its base."
+    },
+    "tags": [],
+    "orientation": "landscape",
+    "metadata": {
+      "clean_name": "Star Spring",
+      "updated_on": "2026-07-10T22:45:11.202193+00:00",
+      "alternate_art": false,
+      "overnumbered": false,
+      "signature": false
+    },
+    "new": false
+  },
+  {
+    "id": "6a56ab98ff602fd324f4764a",
+    "name": "Order Rune",
+    "riftbound_id": "ven-r06",
+    "tcgplayer_id": "706078",
+    "collector_number": 6,
+    "attributes": {
+      "energy": null,
+      "might": null,
+      "power": null
+    },
+    "classification": {
+      "type": "Rune",
+      "supertype": "Basic",
+      "rarity": "Common",
+      "domain": [
+        "Order"
+      ]
+    },
+    "text": {
+      "rich": "<p>[NO TEXT]</p>",
+      "plain": "[NO TEXT]",
+      "flavour": null
+    },
+    "set": {
+      "set_id": "VEN",
+      "label": "Vendetta"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/71e7d71ebadb81ccad7ca4cb8b3fb85d2f5fd4bf-744x1039.png?accountingTag=RB",
+      "artist": "Greg Ghielmetti & Leah Chen",
+      "accessibility_text": "Riftbound Rune: Order Rune. [NO TEXT]"
+    },
+    "tags": [],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": "Order Rune",
+      "updated_on": "2026-07-14T21:35:20.934686+00:00",
+      "alternate_art": false,
+      "overnumbered": false,
+      "signature": false
+    },
+    "new": false
+  },
+  {
+    "id": "6a517607ad64d2d80a4f03b4",
+    "name": "Order Rune",
+    "riftbound_id": "ven-r06",
+    "tcgplayer_id": null,
+    "collector_number": 6,
+    "attributes": {
+      "energy": null,
+      "might": null,
+      "power": null
+    },
+    "classification": {
+      "type": "Rune",
+      "supertype": "Basic",
+      "rarity": "Common",
+      "domain": [
+        "Order"
+      ]
+    },
+    "text": {
+      "rich": "<p>[NO TEXT]</p>",
+      "plain": "[NO TEXT]",
+      "flavour": null
+    },
+    "set": {
+      "set_id": "VEN",
+      "label": "Vendetta"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/71e7d71ebadb81ccad7ca4cb8b3fb85d2f5fd4bf-744x1039.png?accountingTag=RB",
+      "artist": "Greg Ghielmetti & Leah Chen",
+      "accessibility_text": "Riftbound Rune: Order Rune. [NO TEXT]"
+    },
+    "tags": [],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": null,
+      "updated_on": "2026-07-10T22:45:27.213049+00:00",
+      "alternate_art": false,
+      "overnumbered": false,
+      "signature": false
+    },
+    "new": true
+  },
+  {
+    "id": "69c700533fb41419ee7cebb2",
+    "name": "Gold // Buff",
+    "riftbound_id": "sfd-t03",
+    "tcgplayer_id": "678188",
+    "collector_number": 3,
+    "attributes": {
+      "energy": null,
+      "might": null,
+      "power": null
+    },
+    "classification": {
+      "type": "Gear",
+      "supertype": "Token",
+      "rarity": "Common",
+      "domain": [
+        "Colorless"
+      ]
+    },
+    "text": {
+      "rich": "<p>Kill this, :rb_exhaust:: [Reaction] — [Add] :rb_rune_rainbow:. (Abilities that add resources can't be reacted to.)</p>",
+      "plain": "Kill this, :rb_exhaust:: [Reaction] — [Add] :rb_rune_rainbow:. (Abilities that add resources can't be reacted to.)",
+      "flavour": null
+    },
+    "set": {
+      "set_id": "SFD",
+      "label": "Spiritforged"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/e878c39b562a4e870e93b819c6d85cdf3fdc5238-744x1039.png?accountingTag=RB",
+      "artist": "Kudos Productions",
+      "accessibility_text": "Riftbound Gear: Gold. Kill this, [T]: [Reaction] — [Add] [A]. (Abilities that add resources can't be reacted to.)"
+    },
+    "tags": [],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": "Gold Buff",
+      "updated_on": "2026-07-10T22:44:59.606681+00:00",
+      "alternate_art": false,
+      "overnumbered": false,
+      "signature": false
+    },
+    "new": false
+  },
+  {
+    "id": "69bc5befd308c64675ca89cf",
+    "name": "Yasuo - Unforgiven",
+    "riftbound_id": "opp-259-298",
+    "tcgplayer_id": "662890",
+    "collector_number": 259,
+    "attributes": {
+      "energy": null,
+      "might": null,
+      "power": null
+    },
+    "classification": {
+      "type": "Legend",
+      "supertype": "Champion",
+      "rarity": "Promo",
+      "domain": [
+        "Calm",
+        "Chaos"
+      ]
+    },
+    "text": {
+      "rich": "<p>:rb_energy_2:, :rb_exhaust:: Move a friendly unit to or from its base.</p>",
+      "plain": ":rb_energy_2:, :rb_exhaust:: Move a friendly unit to or from its base.",
+      "flavour": null
+    },
+    "set": {
+      "set_id": "OPP",
+      "label": "Riftbound Organized Play Promotional Cards"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/68e4d3230b785738ae9d86f780f7f5607ef11807-744x1040.png?accountingTag=RB",
+      "artist": "TSWCK逍",
+      "accessibility_text": "Riftbound Legend: Unforgiven. [2], [T]: Move a friendly unit to or from its base."
+    },
+    "tags": [
+      "Yasuo"
+    ],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": "Yasuo Unforgiven",
+      "updated_on": "2026-07-10T22:45:17.166884+00:00",
+      "alternate_art": false,
+      "overnumbered": false,
+      "signature": false
+    },
+    "new": false
+  },
+  {
+    "id": "69bc5bf1d308c64675ca89f7",
+    "name": "Yasuo - Unforgiven (Metal)",
+    "riftbound_id": "opp-259-298",
+    "tcgplayer_id": "669257",
+    "collector_number": 259,
+    "attributes": {
+      "energy": null,
+      "might": null,
+      "power": null
+    },
+    "classification": {
+      "type": "Legend",
+      "supertype": "Champion",
+      "rarity": "Promo",
+      "domain": [
+        "Calm",
+        "Chaos"
+      ]
+    },
+    "text": {
+      "rich": "<p>:rb_energy_2:, :rb_exhaust:: Move a friendly unit to or from its base.</p>",
+      "plain": ":rb_energy_2:, :rb_exhaust:: Move a friendly unit to or from its base.",
+      "flavour": null
+    },
+    "set": {
+      "set_id": "OPP",
+      "label": "Riftbound Organized Play Promotional Cards"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/68e4d3230b785738ae9d86f780f7f5607ef11807-744x1040.png?accountingTag=RB",
+      "artist": "TSWCK逍",
+      "accessibility_text": "Riftbound Legend: Unforgiven. [2], [T]: Move a friendly unit to or from its base."
+    },
+    "tags": [
+      "Yasuo"
+    ],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": "Yasuo Unforgiven Metal",
+      "updated_on": "2026-07-10T22:45:19.090191+00:00",
+      "alternate_art": false,
+      "overnumbered": false,
+      "signature": false
+    },
+    "new": false
+  },
+  {
+    "id": "6a56ab99ff602fd324f4765b",
+    "name": "Akali - Rogue Assassin (Overnumbered)",
+    "riftbound_id": "ven-189-166",
+    "tcgplayer_id": "706095",
+    "collector_number": 189,
+    "attributes": {
+      "energy": null,
+      "might": null,
+      "power": null
+    },
+    "classification": {
+      "type": "Legend",
+      "supertype": null,
+      "rarity": "Rare",
+      "domain": [
+        "Fury",
+        "Calm"
+      ]
+    },
+    "text": {
+      "rich": "<p>[Empower] :rb_energy_3::rb_rune_rainbow:<br />[Action][&gt;] :rb_exhaust:: If it's your turn, move a friendly unit in a showdown to base and if I'm [Empowered], ready it.</p>",
+      "plain": "[Empower] :rb_energy_3::rb_rune_rainbow:[Action][&gt;] :rb_exhaust:: If it's your turn, move a friendly unit in a showdown to base and if I'm [Empowered], ready it.",
+      "flavour": null
+    },
+    "set": {
+      "set_id": "VEN",
+      "label": "Vendetta"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/7b0ec31df147b40bbb83c40644252b48a7619593-744x1039.png?accountingTag=RB",
+      "artist": "Jessica Oyhenart",
+      "accessibility_text": "Riftbound Legend: Rogue Assassin. [Empower] [3][A]\n[Action][>] [T]: If it's your turn, move a friendly unit in a showdown to base and if I'm [Empowered], ready it."
+    },
+    "tags": [
+      "Akali"
+    ],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": "Akali Rogue Assassin Overnumbered",
+      "updated_on": "2026-07-17T20:38:05.896171+00:00",
+      "alternate_art": false,
+      "overnumbered": true,
+      "signature": false
+    },
+    "new": false
+  },
+  {
+    "id": "6a518b2837f518eaadf8bb0f",
+    "name": "Rogue Assassin",
+    "riftbound_id": "ven-189-166",
+    "tcgplayer_id": null,
+    "collector_number": 189,
+    "attributes": {
+      "energy": null,
+      "might": null,
+      "power": null
+    },
+    "classification": {
+      "type": "Legend",
+      "supertype": null,
+      "rarity": "Rare",
+      "domain": [
+        "Fury",
+        "Calm"
+      ]
+    },
+    "text": {
+      "rich": "<p>[Empower] :rb_energy_3::rb_rune_rainbow:<br />[Action][&gt;] :rb_exhaust:: If it's your turn, move a friendly unit in a showdown to base and if I'm [Empowered], ready it.</p>",
+      "plain": "[Empower] :rb_energy_3::rb_rune_rainbow:[Action][&gt;] :rb_exhaust:: If it's your turn, move a friendly unit in a showdown to base and if I'm [Empowered], ready it.",
+      "flavour": null
+    },
+    "set": {
+      "set_id": "VEN",
+      "label": "Vendetta"
+    },
+    "media": {
+      "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/7b0ec31df147b40bbb83c40644252b48a7619593-744x1039.png?accountingTag=RB",
+      "artist": "Jessica Oyhenart",
+      "accessibility_text": "Riftbound Legend: Rogue Assassin. [Empower] [3][A]\n[Action][>] [T]: If it's your turn, move a friendly unit in a showdown to base and if I'm [Empowered], ready it."
+    },
+    "tags": [
+      "Akali"
+    ],
+    "orientation": "portrait",
+    "metadata": {
+      "clean_name": null,
+      "updated_on": "2026-07-11T00:15:36.361822+00:00",
+      "alternate_art": false,
+      "overnumbered": false,
+      "signature": false
+    },
+    "new": true
+  }
+]

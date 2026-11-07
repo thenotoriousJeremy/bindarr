@@ -183,7 +183,8 @@ router.get('/:id', async (req, res) => {
         cc.color_identity,
         cc.oracle_id,
         cc.oracle_text,
-        cc.game
+        cc.game,
+        cc.orientation
       FROM deck_cards dc
       JOIN card_cache cc ON dc.card_id = cc.id
       WHERE dc.deck_id = ?

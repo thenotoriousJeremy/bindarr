@@ -101,6 +101,120 @@ const sameOracleCard = (a, b) => (a.oracle_id && b.oracle_id
 // counted by.
 const sameFullName = (a, b) => foldName(a.name) === foldName(b.name);
 
+// --- Riftbound -----------------------------------------------------------------
+//
+// From Riot's own material (the Deckbuilding Primer and the Core Rules patch notes
+// on riftbound.leagueoflegends.com; the Core Rules document itself could not be
+// fetched to read): one Champion Legend, which sets the deck's domains; a Main Deck
+// of at least 40 units, spells and gear including the Chosen Champion (a Champion
+// unit of the Legend's champion); at most 3 copies of a card; Signature cards only
+// of the Legend's champion, at most 3 in all; a Rune Deck of exactly 12; 3
+// Battlefields, all different; every card inside the Legend's domains (Colorless
+// fits any). Bindarr keeps a deck as one list, so a card's zone is its type, and
+// tokens are made in play, never decked.
+
+// RiftCodex's own supertypes; the rest of `subtypes` is tags (riftcodexApi).
+const RB_SUPERTYPES = new Set(['Champion', 'Signature', 'Token', 'Basic']);
+const RB = { mainMin: 40, copies: 3, runes: 12, battlefields: 3, signatures: 3 };
+
+export function riftboundZone(card) {
+  if (typeWords(card).includes('Token')) return 'token';
+  const type = card && card.supertype;
+  if (type === 'Legend') return 'legend';
+  if (type === 'Rune') return 'rune';
+  if (type === 'Battlefield') return 'battlefield';
+  return 'main';
+}
+
+// One card for the copy rule, whatever the printing: RiftCodex names printings
+// 'Vi - Piltover Enforcer (Signature)' / '(Overnumbered)', and writes the same card
+// 'Rengar - Trophy Hunter' in one set and 'Rengar, Trophy Hunter' in another.
+export function riftboundName(name) {
+  return foldName(String(name || '')
+    .replace(/(\s*\([^()]*\))+\s*$/, '')
+    .replace(/\s*(?:,|\s-\s|\s–\s)\s*/g, ' - ')
+    .replace(/\s+/g, ' '));
+}
+const rbKey = (card) => `${riftboundZone(card)}:${riftboundName(card && card.name)}`;
+
+// The champion a Legend or champion unit belongs to: the name before its title,
+// else its first tag.
+function rbChampion(card) {
+  const name = String((card && card.name) || '');
+  const head = name.split(/\s-\s|,\s/)[0].replace(/\s*\([^()]*\)\s*$/, '').trim();
+  if (head && head !== name) return head.toLowerCase();
+  const tags = typeWords(card).filter(t => !RB_SUPERTYPES.has(t));
+  return tags.length ? String(tags[0]).toLowerCase() : null;
+}
+const rbTags = (card) => typeWords(card).filter(t => !RB_SUPERTYPES.has(t)).map(t => String(t).toLowerCase());
+const rbDomains = (card) => parseList(card && (card.types || card.color_identity)).filter(d => d && d !== 'Colorless');
+
+function riftboundCopyLimit(card) {
+  const zone = riftboundZone(card);
+  if (zone === 'token') return 0;
+  if (zone === 'legend' || zone === 'battlefield') return 1;
+  if (zone === 'rune') return RB.runes;
+  return RB.copies;
+}
+
+// Everything a Riftbound deck still breaks, each { code: 'rb_*', ...details }.
+function riftboundWarnings(list) {
+  const warnings = [];
+  const add = (code, details = {}) => warnings.push({ code: `rb_${code}`, ...details });
+  const by = { legend: [], main: [], rune: [], battlefield: [], token: [] };
+  for (const c of list) by[riftboundZone(c)].push(c);
+  const count = (cards) => cards.reduce((n, c) => n + Number(c.quantity), 0);
+
+  const legends = count(by.legend);
+  if (legends !== 1) add('legendCount', { count: legends });
+  const legend = by.legend[0] || null;
+  const champion = legend ? rbChampion(legend) : null;
+  const championLabel = legend ? String(legend.name).split(/\s-\s|,\s/)[0] : '';
+  const allowed = legend ? new Set(rbDomains(legend)) : null;
+
+  const main = count(by.main);
+  if (main < RB.mainMin) add('mainDeckSize', { count: main, min: RB.mainMin });
+  if (champion && !by.main.some(c => c.supertype === 'Unit' && typeWords(c).includes('Champion')
+    && (rbChampion(c) === champion || rbTags(c).includes(champion)))) {
+    add('noChosenChampion', { champion: championLabel });
+  }
+  const copies = new Map();
+  for (const c of by.main) {
+    const e = copies.get(rbKey(c)) || { name: c.name, n: 0 };
+    e.n += Number(c.quantity);
+    copies.set(rbKey(c), e);
+  }
+  for (const { name, n } of copies.values()) if (n > RB.copies) add('tooManyCopies', { name, count: n, max: RB.copies });
+
+  const signatures = by.main.filter(c => typeWords(c).includes('Signature'));
+  const signatureCount = count(signatures);
+  if (signatureCount > RB.signatures) add('tooManySignatures', { count: signatureCount, max: RB.signatures });
+  if (champion) {
+    for (const c of signatures) if (!rbTags(c).includes(champion)) add('signatureMismatch', { name: c.name, champion: championLabel });
+  }
+
+  const runes = count(by.rune);
+  if (runes !== RB.runes) add('runeCount', { count: runes, required: RB.runes });
+  const battlefields = count(by.battlefield);
+  if (battlefields !== RB.battlefields) add('battlefieldCount', { count: battlefields, required: RB.battlefields });
+  const fields = new Map();
+  for (const c of by.battlefield) {
+    const e = fields.get(rbKey(c)) || { name: c.name, n: 0 };
+    e.n += Number(c.quantity);
+    fields.set(rbKey(c), e);
+  }
+  for (const { name, n } of fields.values()) if (n > 1) add('duplicateBattlefield', { name });
+
+  if (allowed) {
+    for (const c of [...by.main, ...by.rune]) {
+      const outside = rbDomains(c).filter(d => !allowed.has(d));
+      if (outside.length) add('offDomain', { name: c.name, domains: outside.join(', ') });
+    }
+  }
+  for (const c of by.token) add('tokenInDeck', { name: c.name });
+  return warnings;
+}
+
 // The table. One entry per game, one row per format: adding either is one entry.
 //
 //   rules        what every format of the game uses unless its row says otherwise —
@@ -116,6 +230,10 @@ const sameFullName = (a, b) => foldName(a.name) === foldName(b.name);
 //                always matched by exact printing: Pokémon reprints differ in
 //                legality, and its players expect exact.
 //   anyPrinting  whether a new deck accepts any printing by default.
+//   cardLimit    a per-card copy limit, replacing `copies` (Riftbound, by zone).
+//   copyKey      what counts as one card for the copy limit (default: its name).
+//   warnings     the game's own construction rules, replacing the generic size
+//                and copy checks.
 export const DECK_GAMES = {
   pokemon: {
     rules: { size: { exact: 60 }, copies: 4 },
@@ -153,6 +271,19 @@ export const DECK_GAMES = {
       { name: 'Core (Constructed)' },
       { name: 'Casual' },
       { name: 'Draft / Sealed' },
+    ],
+  },
+  riftbound: {
+    rules: { size: {}, copies: RB.copies },
+    cardLimit: riftboundCopyLimit,
+    copyKey: rbKey,
+    // Exact printing by default; a deck that opts in accepts any printing of the card.
+    sameCard: (a, b) => rbKey(a) === rbKey(b),
+    warnings: riftboundWarnings,
+    // 56 = Legend + 40 Main Deck + 12 runes + 3 battlefields, in one list.
+    formats: [
+      { name: 'Constructed', size: { min: 56 } },
+      { name: 'Casual' },
     ],
   },
 };
@@ -205,9 +336,16 @@ export function isBasicEnergyOrLand(card, game) {
 export function copyLimit(card, rules) {
   const entry = gameEntry(rules.game);
   if (isBasicEnergyOrLand(card, rules.game)) return Infinity;
+  if (entry.cardLimit) return entry.cardLimit(card);
   const printed = entry.printedLimit ? entry.printedLimit(card) : null;
   return printed != null ? printed : rules.copies;
 }
+
+// What counts as one card for the copy limit: by default its name, folded.
+export const copyKey = (card, game) => {
+  const entry = gameEntry(game || (card && card.game));
+  return entry.copyKey ? entry.copyKey(card) : foldName(card && card.name);
+};
 
 // Does `copy` fill a deck slot listing `card`? The same printing always does; another
 // printing only for a deck that accepts any, in a game that defines what that means.
@@ -305,6 +443,8 @@ export function canBeCommander(card, rules) {
 export function deckWarnings({ game, format, cards }) {
   const rules = rulesFor(game, format);
   const list = (cards || []).filter(c => c && Number(c.quantity) > 0);
+  const own = gameEntry(game).warnings;
+  if (own) return own(list);
   const warnings = [];
 
   const total = list.reduce((sum, c) => sum + Number(c.quantity), 0);

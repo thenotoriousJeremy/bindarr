@@ -7,6 +7,7 @@
 //   tcgdex-<lang>-<id>  TCGdex
 //   pokemontcgapi-<id>  pokemontcgapi.com
 //   lorcana-<id>        Lorcast
+//   riftbound-<code>    RiftCodex (riftcodexApi has the encoding)
 //   <set>-<number>      pokemontcg.io, and only in that shape (utils/games)
 //   <anything else>     nobody: null, and the caller answers 404
 //
@@ -63,6 +64,7 @@ function gameOf(id, requestedGame) {
 const PROVIDERS = {
   scryfall: () => scryfallApi,
   lorcast: () => lorcastApi,
+  riftcodex: () => require('../riftcodexApi'),
 };
 const providerOf = (game) => {
   const entry = games.get(game);

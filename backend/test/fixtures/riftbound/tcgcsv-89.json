@@ -1,0 +1,22 @@
+{
+  "groups": [
+    { "groupId": 24344, "name": "Origins", "abbreviation": "OGN", "isSupplemental": false, "publishedOn": "2025-10-31T00:00:00", "modifiedOn": "2026-10-01T00:00:00", "categoryId": 89 },
+    { "groupId": 24560, "name": "Unleashed", "abbreviation": "UNL", "isSupplemental": false, "publishedOn": "2026-05-08T00:00:00", "modifiedOn": "2026-10-01T00:00:00", "categoryId": 89 },
+    { "groupId": 24528, "name": "Riftbound Organized Play Promotional Cards", "abbreviation": "OPP", "isSupplemental": true, "publishedOn": "2025-10-31T00:00:00", "modifiedOn": "2026-10-01T00:00:00", "categoryId": 89 }
+  ],
+  "prices": {
+    "24344": [],
+    "24560": [
+      { "productId": 678149, "lowPrice": 6.99, "midPrice": 7.93, "highPrice": 9.98, "marketPrice": 7.94, "directLowPrice": null, "subTypeName": "Normal" },
+      { "productId": 685521, "lowPrice": 80.0, "midPrice": 92.27, "highPrice": 350.0, "marketPrice": 90.88, "directLowPrice": null, "subTypeName": "Foil" },
+      { "productId": 685522, "lowPrice": 760.01, "midPrice": 837.5, "highPrice": 1249.98, "marketPrice": 641.0, "directLowPrice": null, "subTypeName": "Foil" },
+      { "productId": 685595, "lowPrice": 0.1, "midPrice": 0.25, "highPrice": 2.0, "marketPrice": 0.18, "directLowPrice": null, "subTypeName": "Normal" },
+      { "productId": 685595, "lowPrice": 0.75, "midPrice": 1.1, "highPrice": 4.0, "marketPrice": 0.96, "directLowPrice": null, "subTypeName": "Foil" },
+      { "productId": 685596, "lowPrice": 20.0, "midPrice": 24.5, "highPrice": 60.0, "marketPrice": null, "directLowPrice": null, "subTypeName": "Foil" }
+    ],
+    "24528": [
+      { "productId": 662890, "lowPrice": 12.01, "midPrice": 17.79, "highPrice": 99.0, "marketPrice": 12.89, "directLowPrice": null, "subTypeName": "Foil" },
+      { "productId": 669257, "lowPrice": 999.99, "midPrice": 1450.0, "highPrice": 2999.99, "marketPrice": 1286.93, "directLowPrice": null, "subTypeName": "Normal" }
+    ]
+  }
+}

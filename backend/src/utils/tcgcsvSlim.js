@@ -11,7 +11,8 @@
 //   products  tcgcsvApi.priceSet (numberOf, productId), tcgplayerCatalog.start
 //             (numberOf, productId, name, imageUrl) -> productId, name, number,
 //             plus imageUrl and groupId on sealed product
-//   prices    tcgcsvApi.pricesByProduct, routes/sealed.js refresh-value
+//   prices    tcgcsvApi.pricesByProduct, routes/sealed.js refresh-value,
+//             riftboundPrices.quotesByProduct
 //             -> productId, subTypeName, marketPrice, midPrice
 //
 // Cards and sealed product are told apart by the collector number: a product with
@@ -34,6 +35,9 @@
 const SUBTYPES_PRICED = new Set([
   'Normal', 'Unlimited', 'Holofoil', 'Unlimited Holofoil', 'Reverse Holofoil',
   '1st Edition', '1st Edition Normal', '1st Edition Holofoil',
+  // Riftbound's foil finish (category 89). Pokémon's map has no column for it,
+  // so pricesByProduct still drops it there.
+  'Foil',
 ]);
 
 // TCGplayer categories synced for their sealed product only (tcgcsvApi adds these

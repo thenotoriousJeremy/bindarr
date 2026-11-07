@@ -135,6 +135,17 @@ function normalizeSearchParams({ name = '', number = '', set = '', q = '' }) {
   return { name: cleanName, number: cleanNumber, set: cleanSet };
 }
 
+// Search filters a provider can apply itself. Only Riftbound's does today
+// (domain, card type, rarity, supertype); the others ignore the option.
+const pickFilters = (query) => {
+  const out = {};
+  for (const key of ['domain', 'type', 'rarity', 'supertype']) {
+    const v = query[key];
+    if (typeof v === 'string' && v.trim()) out[key] = v.trim().slice(0, 40);
+  }
+  return out;
+};
+
 router.all('/search', searchLimiter, async (req, res) => {
   const query = req.method === 'POST' ? { ...req.query, ...req.body } : req.query;
   const { name: rawName, number: rawNumber, set: rawSet, scope = 'database', game = 'pokemon', lang, prints, q, image, cropped, embedding } = query;
@@ -157,6 +168,7 @@ router.all('/search', searchLimiter, async (req, res) => {
     let { cards, total } = await api.searchCards({
       ...fields, scope, userId: req.user.id, lang,
       apiKey: req.user.tcg_api_key, allPrints: prints === '1', page, limit,
+      filters: pickFilters(query),
     });
 
     // When an image from a camera scan is attached, score each candidate card
@@ -665,7 +677,7 @@ router.get('/collection', async (req, res) => {
         cc.set_id,
         cc.set_name,
         cc.number,
-        cc.image_url,
+        cc.image_url, cc.orientation, cc.attributes, cc.card_text, cc.artist,
         cc.image_url_back,
         -- Magic rules text, for filtering the collection in Scryfall syntax.
         cc.type_line,
