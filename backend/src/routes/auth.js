@@ -222,8 +222,11 @@ router.post('/oidc/exchange', authLimiter, async (req, res) => {
   }
 });
 
-// The user object a fresh sign-in hands the client -- shared by password login
-// and the native SSO exchange so the two can never drift apart.
+// The user object the client is handed -- by every sign-in path, GET /me and a
+// settings save, so they can never drift apart. The SPA keeps it in localStorage,
+// so it carries no secret: the provider keys and the API key are reported as set
+// or not, never their values. The keys are write-only from the client's side, and
+// the API key has its own on-demand read (GET /api-key).
 function sessionUser(user) {
   return {
     username: user.username,
@@ -231,10 +234,10 @@ function sessionUser(user) {
     share_token: user.share_token,
     share_enabled: user.share_enabled,
     share_locations: user.share_locations,
-    tcg_api_key: user.tcg_api_key || '',
-    psa_api_token: user.psa_api_token || '',
-    graded_price_api_key: user.graded_price_api_key || '',
-    api_key: user.api_key || ''
+    has_tcg_api_key: !!user.tcg_api_key,
+    has_psa_api_token: !!user.psa_api_token,
+    has_graded_price_api_key: !!user.graded_price_api_key,
+    has_api_key: !!user.api_key
   };
 }
 
@@ -279,17 +282,7 @@ router.post('/bootstrap', authLimiter, async (req, res) => {
     res.status(201).json({
       message: 'Setup complete',
       token,
-      user: {
-        username: OWNER_USERNAME,
-        role: 'admin',
-        share_token: shareToken,
-        share_enabled: 0,
-        share_locations: 0,
-        tcg_api_key: '',
-        psa_api_token: '',
-        graded_price_api_key: '',
-        api_key: ''
-      }
+      user: sessionUser({ username: OWNER_USERNAME, role: 'admin', share_token: shareToken, share_enabled: 0, share_locations: 0 })
     });
   } catch (error) {
     console.error(error);
@@ -341,13 +334,7 @@ router.post('/register', authLimiter, async (req, res) => {
     res.status(201).json({
       message: 'Registration successful',
       token,
-      user: {
-        username: cleanUsername,
-        role: 'member',
-        share_token: shareToken,
-        share_enabled: 0,
-        share_locations: 0
-      }
+      user: sessionUser({ username: cleanUsername, role: 'member', share_token: shareToken, share_enabled: 0, share_locations: 0 })
     });
   } catch (error) {
     console.error(error);
@@ -397,23 +384,31 @@ router.post('/logout', authenticateToken, async (req, res) => {
   }
 });
 
-// Get current user profile
+// Get current user profile. The same secret-free shape as a sign-in (sessionUser):
+// this used to return req.user whole, provider keys and API key included, and the
+// SPA saved it to localStorage. id and oidc_sub ride along; neither is a secret.
 router.get('/me', authenticateToken, (req, res) => {
-  // An API key is a read-only credential for scripts. Handing it the account's
-  // OTHER provider keys would make it a credential-theft tool: it can be pasted
-  // into a dashboard config, and what leaks with it must stay read-only data.
+  res.json({ user: { id: req.user.id, ...sessionUser(req.user), oidc_sub: req.user.oidc_sub } });
+});
+
+// The read-only API key itself, for Settings to show on request. Viewable again
+// after it is made on purpose (see POST below), but only when asked for, so it
+// never sits in the user object the SPA stores. A login session only, like the
+// rest of account management. Stored as-is rather than hashed for the same
+// reason: a hash could not be shown again.
+router.get('/api-key', authenticateToken, (req, res) => {
   if (req.user.via_api_key) {
-    const { tcg_api_key, psa_api_token, graded_price_api_key, ...safe } = req.user; // eslint-disable-line no-unused-vars
-    return res.json({ user: safe });
+    return res.status(403).json({ error: 'Use a login session to view the API key.' });
   }
-  res.json({ user: req.user });
+  res.set('Cache-Control', 'no-store');
+  res.json({ api_key: req.user.api_key || null });
 });
 
 // Issue (or rotate) this account's read-only API key — issue #33: a finance
 // tracker needs a credential that outlives a login session. POST returns the key
-// in full; it is also readable later from /me, deliberately, because a key that
-// can only be seen once is a key people rotate until they catch it, and read-only
-// is what keeps that acceptable.
+// in full; it is also readable later from GET /api-key, deliberately, because a
+// key that can only be seen once is a key people rotate until they catch it, and
+// read-only is what keeps that acceptable.
 router.post('/api-key', authenticateToken, async (req, res) => {
   try {
     const key = `bnd_${crypto.randomBytes(24).toString('hex')}`;
@@ -435,9 +430,30 @@ router.delete('/api-key', authenticateToken, async (req, res) => {
   }
 });
 
+// The per-user provider keys PUT /settings writes, each with its own statement.
+const PROVIDER_KEY_UPDATES = {
+  tcg_api_key: `UPDATE users SET tcg_api_key = ? WHERE id = ?`,
+  psa_api_token: `UPDATE users SET psa_api_token = ? WHERE id = ?`,
+  graded_price_api_key: `UPDATE users SET graded_price_api_key = ? WHERE id = ?`
+};
+
 // Update settings (password, sharing)
 router.put('/settings', authenticateToken, async (req, res) => {
-  const { current_password, password, share_enabled, share_locations, regenerate_share_token, tcg_api_key, psa_api_token, graded_price_api_key } = req.body;
+  const { current_password, password, share_enabled, share_locations, regenerate_share_token } = req.body;
+
+  // Provider keys are write-only: a string sets one, '' (or null) clears it, and
+  // leaving the field out leaves the key alone -- the client never has the current
+  // value to send back. Checked before anything is written, so a bad field cannot
+  // leave half a save behind.
+  const keyUpdates = [];
+  for (const [field, sql] of Object.entries(PROVIDER_KEY_UPDATES)) {
+    const value = req.body[field];
+    if (value === undefined) continue;
+    if (value !== null && typeof value !== 'string') {
+      return res.status(400).json({ error: 'API keys must be text.' });
+    }
+    keyUpdates.push([sql, (value || '').trim()]);
+  }
 
   try {
     if (password !== undefined) {
@@ -466,16 +482,8 @@ router.put('/settings', authenticateToken, async (req, res) => {
       await db.run(`UPDATE users SET share_locations = ? WHERE id = ?`, [share_locations ? 1 : 0, req.user.id]);
     }
 
-    if (tcg_api_key !== undefined) {
-      await db.run(`UPDATE users SET tcg_api_key = ? WHERE id = ?`, [tcg_api_key.trim(), req.user.id]);
-    }
-
-    if (psa_api_token !== undefined) {
-      await db.run(`UPDATE users SET psa_api_token = ? WHERE id = ?`, [psa_api_token.trim(), req.user.id]);
-    }
-
-    if (graded_price_api_key !== undefined) {
-      await db.run(`UPDATE users SET graded_price_api_key = ? WHERE id = ?`, [graded_price_api_key.trim(), req.user.id]);
+    for (const [sql, value] of keyUpdates) {
+      await db.run(sql, [value, req.user.id]);
     }
 
     let newShareToken = req.user.share_token;
@@ -488,17 +496,7 @@ router.put('/settings', authenticateToken, async (req, res) => {
     const updatedUser = await db.get(`SELECT username, role, share_token, share_enabled, share_locations, tcg_api_key, psa_api_token, graded_price_api_key, api_key FROM users WHERE id = ?`, [req.user.id]);
     res.json({
       message: 'Settings updated successfully',
-      user: {
-        username: updatedUser.username,
-        role: updatedUser.role,
-        share_token: updatedUser.share_token,
-        share_enabled: updatedUser.share_enabled,
-        share_locations: updatedUser.share_locations,
-        tcg_api_key: updatedUser.tcg_api_key || '',
-        psa_api_token: updatedUser.psa_api_token || '',
-        graded_price_api_key: updatedUser.graded_price_api_key || '',
-        api_key: updatedUser.api_key || ''
-      }
+      user: sessionUser(updatedUser)
     });
   } catch (error) {
     console.error(error);

@@ -8,6 +8,7 @@ import { useT } from './utils/i18n';
 import { isNative, isDeviceMode, setDeviceMode } from './apiBase';
 import { parseOidcReturn, takeVerifier } from './utils/nativeOidc';
 import { isSessionExpired } from './utils/sessionExpiry';
+import { loadStoredUser, saveStoredUser } from './utils/storedUser';
 
 // View components are code-split so heavy deps (recharts in the chart views)
 // load on demand instead of in the initial bundle.
@@ -108,14 +109,9 @@ const handledOidcReturns = new Set();
 function App() {
   const { t } = useT();
   const [token, setToken] = useState(localStorage.getItem('bindarr_token'));
-  const [user, setUser] = useState(() => {
-    try {
-      const u = localStorage.getItem('bindarr_user');
-      return u ? JSON.parse(u) : null;
-    } catch {
-      return null;
-    }
-  });
+  // Through utils/storedUser, which also strips the API keys older builds kept in
+  // this copy.
+  const [user, setUser] = useState(() => loadStoredUser());
 
   const [activeTab, setActiveTab] = useState('dashboard');
   // First-run scanning setup. Asked once per session, only for an admin, and only
@@ -218,7 +214,7 @@ function App() {
               setToken(oidcToken);
               setUser(data.user);
               localStorage.setItem('bindarr_token', oidcToken);
-              localStorage.setItem('bindarr_user', JSON.stringify(data.user));
+              saveStoredUser(data.user);
               showToast(t('toast.welcomeBack', { name: data.user.username }));
               setActiveTab('dashboard');
             }
@@ -271,7 +267,7 @@ function App() {
           setToken(data.token);
           setUser(data.user);
           localStorage.setItem('bindarr_token', data.token);
-          localStorage.setItem('bindarr_user', JSON.stringify(data.user));
+          saveStoredUser(data.user);
           showToast(t('toast.welcomeBack', { name: data.user.username }));
           setActiveTab('dashboard');
         })
@@ -386,6 +382,24 @@ function App() {
     return () => window.removeEventListener('bindarr_logout', handleAutoLogout);
   }, [t]);
 
+  // The stored user is a copy, and one saved by an older build has no has_* key
+  // flags (it had the keys themselves, which loadStoredUser drops), so Settings
+  // would call every saved key "not set". Re-read it once per session start. An
+  // unchanged answer keeps the same object, so nothing keyed on `user` re-runs.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    fetch('/api/auth/me')
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (cancelled || !data || !data.user) return;
+        setUser(prev => (JSON.stringify(prev) === JSON.stringify(data.user) ? prev : data.user));
+        saveStoredUser(data.user);
+      })
+      .catch(() => { /* offline or server down: the stored copy stands */ });
+    return () => { cancelled = true; };
+  }, [token]);
+
   // Pointer-reactive foil: one delegated listener drives --px/--py (0-100%) on
   // whichever card the pointer is over, so the holo/reverse-holo rainbow tracks
   // the cursor (MTG-style). CSS custom props inherit down to the overlay div.
@@ -414,7 +428,7 @@ function App() {
     setToken(newToken);
     setUser(newUser);
     localStorage.setItem('bindarr_token', newToken);
-    localStorage.setItem('bindarr_user', JSON.stringify(newUser));
+    saveStoredUser(newUser);
     showToast(isDeviceMode() ? t('toast.deviceReady') : t('toast.welcomeBack', { name: newUser.username }));
     setActiveTab('dashboard');
   };
@@ -444,7 +458,7 @@ function App() {
 
   const handleUpdateUser = (updatedUser) => {
     setUser(updatedUser);
-    localStorage.setItem('bindarr_user', JSON.stringify(updatedUser));
+    saveStoredUser(updatedUser);
   };
 
   const triggerRefresh = () => {

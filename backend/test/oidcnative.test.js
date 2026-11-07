@@ -206,7 +206,8 @@ async function testFlowThroughRouter() {
   const body = await ok.json();
   assert(body.token, 'exchange must return a session token');
   assert.strictEqual(typeof body.user.username, 'string');
-  assert('share_token' in body.user && 'api_key' in body.user, 'user payload must match POST /login');
+  assert('share_token' in body.user && 'has_api_key' in body.user, 'user payload must match POST /login');
+  assert(!('api_key' in body.user) && !('tcg_api_key' in body.user), 'and carry no key the app would store');
   const session = await db.get(`SELECT user_id FROM sessions WHERE token = ?`, [hashSessionToken(body.token)]);
   const owner = await db.get(`SELECT id, username FROM users WHERE oidc_sub = ?`, ['native-user-1']);
   assert(session && owner && session.user_id === owner.id, 'the session must belong to the SSO user');
