@@ -19,6 +19,7 @@ const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, 
 const { validateDeckAddition } = require('../utils/deckRules');
 const { splitPrice } = require('../utils/splitPrice');
 const { allocateSealedUnitCost } = require('../utils/sealedCostAllocation');
+const { readQuantity } = require('../utils/requestBounds');
 
 const router = express.Router();
 
@@ -764,6 +765,8 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
   if (!card_id) {
     throw new AddCardError(400, 'card_id is required');
   }
+  const qty = readQuantity(quantity);
+  if (qty.error) throw new AddCardError(400, qty.error);
 
   // Grading, validated here rather than at the two call sites, so the single add
   // and the bulk add cannot disagree about what a slab is.
@@ -836,7 +839,7 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
     // (grader, cert_number) would reject on the second insert anyway, after the
     // first had already been written. Collapse it here so the request succeeds with
     // the row the user actually meant.
-    const count = certValue ? 1 : Math.max(1, parseInt(quantity, 10) || 1);
+    const count = certValue ? 1 : qty.value;
     // Stacking is quantity-on-one-row, which is meaningful only for interchangeable
     // copies. Two slabs are never interchangeable: they have different certs, and
     // usually different grades.
@@ -946,6 +949,7 @@ router.post('/collection', async (req, res) => {
 // 3b. Bulk add: one shared condition/printing/quantity across many cards, so a
 // set browse can be added in one action instead of one drawer per card.
 const BULK_ADD_MAX = 250;
+const BULK_ADD_MAX_COPIES = 10 * BULK_ADD_MAX;
 router.post('/collection/bulk-add', async (req, res) => {
   const { card_ids = [], ...shared } = req.body;
   if (!Array.isArray(card_ids) || card_ids.length === 0) {
@@ -960,6 +964,13 @@ router.post('/collection/bulk-add', async (req, res) => {
   if (shared.cert_number) {
     return res.status(400).json({ error: 'A certification number applies to a single card. Add graded cards one at a time.' });
   }
+  // Checked once here rather than failing every card the same way, and with the
+  // product bounded too: 250 cards at 9,999 each is 2.5 million rows.
+  const qty = readQuantity(shared.quantity, { fallback: 1 });
+  if (qty.error) return res.status(400).json({ error: qty.error });
+  if (card_ids.length * qty.value > BULK_ADD_MAX_COPIES) {
+    return res.status(400).json({ error: `That is ${card_ids.length * qty.value} copies. Add at most ${BULK_ADD_MAX_COPIES} at once.` });
+  }
   // Sequential on purpose: placement resolves against the rows already inserted,
   // so adds must not race each other for the same compartment slot.
   const added = [];
@@ -973,11 +984,10 @@ router.post('/collection/bulk-add', async (req, res) => {
       failed.push({ card_id, error: error instanceof AddCardError ? error.message : 'Failed to add card' });
     }
   }
-  const qty = Math.max(1, parseInt(shared.quantity, 10) || 1);
   res.status(failed.length && !added.length ? 500 : 200).json({
     message: failed.length
       ? `Added ${added.length} of ${card_ids.length} cards; ${failed.length} failed.`
-      : `Added ${added.length} card${added.length === 1 ? '' : 's'}${qty > 1 ? ` (x${qty} each)` : ''} to collection.`,
+      : `Added ${added.length} card${added.length === 1 ? '' : 's'}${qty.value > 1 ? ` (x${qty.value} each)` : ''} to collection.`,
     added: added.length,
     failed
   });
@@ -1048,8 +1058,11 @@ router.put('/collection/:id', async (req, res) => {
 
     // Absolute, not additive: see the reconcile below. Deliberately NOT part of
     // the UPDATE — setStackQuantity owns the quantity column so the two can
-    // never disagree about how many copies the row stands for.
-    const requestedQty = quantity !== undefined ? Math.max(1, parseInt(quantity, 10) || 1) : null;
+    // never disagree about how many copies the row stands for. Checked before
+    // anything below writes: a bad number is refused, not rounded into range.
+    const qty = readQuantity(quantity, { fallback: null });
+    if (qty.error) return res.status(400).json({ error: qty.error });
+    const requestedQty = qty.value;
     if (condition !== undefined) { updates.push('condition = ?'); params.push(condition); }
     if (printing !== undefined) { updates.push('printing = ?'); params.push(printing); }
     if (language !== undefined) {
