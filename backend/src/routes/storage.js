@@ -565,6 +565,11 @@ router.delete('/locations/:id/compartments/:comp_id', async (req, res) => {
   try {
     const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) return res.status(404).json({ error: 'Location not found' });
+    // Same pairing as the PUT above: the deletes below are scoped to this
+    // location, so a compartment id from anywhere else deleted nothing — and was
+    // answered "deleted successfully" all the same.
+    const comp = await db.get(`SELECT id FROM compartments WHERE id = ? AND location_id = ?`, [comp_id, id]);
+    if (!comp) return res.status(404).json({ error: 'Compartment not found' });
 
     const totalComps = await db.get(`SELECT COUNT(*) as count FROM compartments WHERE location_id = ?`, [id]);
     if (totalComps.count <= 1) {
