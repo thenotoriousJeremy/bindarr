@@ -36,6 +36,8 @@ const KEYS = {
   registration_disabled: 'apiError.registrationDisabled',
   username_taken: 'apiError.usernameTaken',
   wrong_password: 'apiError.wrongPassword',
+  // The PWA answers a write made offline itself (utils/offline.js).
+  offline: 'offline.writeBlocked',
 };
 
 // The translation key for a body's code, or null.

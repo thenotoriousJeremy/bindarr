@@ -36,7 +36,7 @@ test('every code maps to a key that exists in en.json', () => {
     'location_name_taken', 'last_compartment', 'import_too_many_rows', 'import_empty', 'import_invalid', 'import_no_match',
     'import_failed', 'csv_no_headers', 'manabox_empty', 'manabox_no_match', 'share_not_found', 'share_no_locations',
     'container_not_found', 'deck_name_required', 'deck_not_enough_cards', 'invalid_credentials', 'registration_disabled',
-    'username_taken', 'wrong_password'];
+    'username_taken', 'wrong_password', 'offline'];
   for (const code of codes) {
     const key = apiErrorKey({ code, params: { name: 'x' } });
     assert.ok(key && key in en, `${code} -> ${key}`);
