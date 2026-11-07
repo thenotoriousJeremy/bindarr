@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, Suspense } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, Suspense } from 'react';
 import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords, StickyNote, Package, ListChecks, Smartphone, Library } from 'lucide-react';
 import Login from './components/Login';
 import Logo from './components/Logo';
 import { App as CapacitorApp } from '@capacitor/app';
 import { pushBackGuard } from './utils/useBackGuard';
 import { useT } from './utils/i18n';
+import { useStableCallback } from './utils/useStableCallback';
+import { clearApiCache } from './utils/useApi';
 import { isNative, isDeviceMode, setDeviceMode } from './apiBase';
 import { parseOidcReturn, takeVerifier } from './utils/nativeOidc';
 import { isSessionExpired } from './utils/sessionExpiry';
@@ -188,6 +190,7 @@ function App() {
   // previous account's views lingers. Used by both logout paths; it touches only
   // state setters and a ref, so the 401 listener can call it without re-binding.
   const resetTabs = () => {
+    clearApiCache();
     setActiveTab('dashboard');
     setMountedTabs(['dashboard']);
     setFocusSet(null);
@@ -200,7 +203,10 @@ function App() {
   // switch pushes a fresh entry so the back button walks through tab history.
   // Disposing with history.back() would race during rapid switches and navigate
   // the browser past the app origin into about:blank.
-  const goTab = (tab) => {
+  // Stable identity (as are showToast and triggerRefresh): the tabs are
+  // memoized, and a toast appearing re-renders App, which must not re-render
+  // a 20,000-card grid through a handler prop that merely looks new.
+  const goTab = useStableCallback((tab) => {
     if (tab === activeTab) return;
     const prev = activeTab;
     tabGuardRef.current = pushBackGuard(() => {
@@ -208,8 +214,8 @@ function App() {
       showTab(prev);
     });
     showTab(tab);
-  };
-  const openSet = (target) => { setFocusSet({ ...target }); goTab('sets'); };
+  });
+  const openSet = useCallback((target) => { setFocusSet({ ...target }); goTab('sets'); }, [goTab]);
 
   // Detect public share route on load
   const [shareToken] = useState(() => {
@@ -224,9 +230,10 @@ function App() {
 
   // showToast(message) for a note; showToast(message, { onAction, actionLabel })
   // adds a button (Undo by default) and keeps the toast up long enough to use it.
-  const showToast = (message, options) => {
+  // Stable identity: the tabs are memoized and receive it as a prop.
+  const showToast = useCallback((message, options) => {
     setToast({ message, ...(options || {}), id: Date.now() + Math.random() });
-  };
+  }, []);
 
   // Web SSO return. The callback sends the browser back with ?oidc_code=..., a
   // one-time code that redeems only together with the HttpOnly cookie set when
@@ -260,7 +267,7 @@ function App() {
         console.error('OIDC exchange failed:', err);
         showToast(t('login.errOidcFailed'));
       });
-  }, [t]);
+  }, [t, showToast]);
 
   // Native SSO return (issue #94). The login ran in the system browser; the
   // server sends it back as bindarr://oidc?code=... (or ?oidc_error=...), either
@@ -323,7 +330,7 @@ function App() {
       cancelled = true;
       if (listener) listener.remove();
     };
-  }, [t]);
+  }, [t, showToast]);
 
   useEffect(() => {
     if (toast) {
@@ -425,7 +432,7 @@ function App() {
     };
     window.addEventListener('bindarr_logout', handleAutoLogout);
     return () => window.removeEventListener('bindarr_logout', handleAutoLogout);
-  }, [t]);
+  }, [t, showToast]);
 
   // The stored user is a copy, and one saved by an older build has no has_* key
   // flags (it had the keys themselves, which loadStoredUser drops), so Settings
@@ -508,9 +515,9 @@ function App() {
     saveStoredUser(updatedUser);
   };
 
-  const triggerRefresh = () => {
+  const triggerRefresh = useCallback(() => {
     setStatsTrigger(prev => prev + 1);
-  };
+  }, []);
 
   // Render shared collection view if URL matches /share/:token. ?container=<id>
   // narrows it to one binder or box, drawn as that container rather than a list.

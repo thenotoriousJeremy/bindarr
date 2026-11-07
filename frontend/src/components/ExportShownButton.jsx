@@ -6,7 +6,9 @@ import { saveFile } from '../utils/saveFile';
 // Download exactly the collection rows a filtered view is showing, as the same
 // CSV the full export in Settings writes (POST /api/export). `entryIds` may be
 // a function so the ids are read at click time, not on every render.
-export default function ExportShownButton({ entryIds, showToast, style }) {
+// `disabled` covers a list that is still loading: exporting "what is shown"
+// then would export only the part that has arrived.
+export default function ExportShownButton({ entryIds, showToast, style, disabled = false }) {
   const { t } = useT();
   const [busy, setBusy] = useState(false);
 
@@ -31,7 +33,7 @@ export default function ExportShownButton({ entryIds, showToast, style }) {
   };
 
   return (
-    <button type="button" className="btn btn-secondary" onClick={run} disabled={busy} title={t('lists.exportShownHint')}
+    <button type="button" className="btn btn-secondary" onClick={run} disabled={busy || disabled} title={t('lists.exportShownHint')}
       style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', ...style }}>
       <Download size={13} /> {t('lists.exportShown')}
     </button>

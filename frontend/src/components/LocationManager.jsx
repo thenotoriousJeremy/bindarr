@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { memo, useState, useEffect, useMemo, useRef } from 'react';
 import { DndContext, DragOverlay, MouseSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
 import { Plus, Minus, Trash2, X, MoreVertical, Settings, RefreshCw, Lock, LayoutGrid, List, MousePointerClick, ChevronDown, ChevronUp, Edit3, Upload, BookOpen, GalleryHorizontal, Image as ImageIcon } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
@@ -20,6 +20,7 @@ import BinderArtworkEditor from './BinderArtworkEditor';
 import { useBinderArt } from '../utils/useBinderArt';
 import { isDeviceMode } from '../apiBase';
 import { artPocketsByPage } from '../utils/binderArtGeometry';
+import VirtualGrid from './VirtualGrid';
 import { useBackGuard } from '../utils/useBackGuard';
 import { useT } from '../utils/i18n';
 import { apiErrorText } from '../utils/apiError';
@@ -444,6 +445,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
         } else if (attempts < 15) {
           attempts++;
+          // The Unsorted queue mounts only the rows in view, so the card may have
+          // no element yet: scroll its row in, and the next attempt finds it.
+          const idx = unsortedCardsRef.current.findIndex(c => c.entry_id === focusEntryId);
+          if (idx !== -1 && unsortedGridRef.current) unsortedGridRef.current.scrollToIndex(idx);
           setTimeout(tryScroll, 100);
         }
       };
@@ -466,6 +471,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     ));
     return sortCardsByOrder([...cards], unsortedSort, selectedLoc?.foil_sorting, setsList);
   }, [allCards, unsortedSearch, unsortedSort, selectedLoc, setsList]);
+  // For locating a card the windowed queue has not mounted (see the focus effect).
+  const unsortedGridRef = useRef(null);
+  const unsortedCardsRef = useRef(unsortedCards);
+  unsortedCardsRef.current = unsortedCards;
 
   // Distinct values per filterable field from the cards actually owned, so the
   // FilterBuilder value box suggests real options (e.g. subtypes like "Basic")
@@ -2192,8 +2201,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             {/* Drop a filed card here to take it back out of the container. */}
             <UnsortedDropZone enabled={dndEnabled}>
             {unsortedViewMode === 'grid' ? (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '0.6rem', marginTop: '0.25rem' }}>
-                {unsortedCards.map(card => {
+              /* Only the rows in view are mounted: an Unsorted queue of thousands
+                 (a big import, a first scan session) otherwise built every tile. */
+              <VirtualGrid
+                ref={unsortedGridRef}
+                items={unsortedCards}
+                style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '0.6rem', marginTop: '0.25rem' }}
+                renderItem={(card) => {
                   const picked = moveMode && pickedEntryId === card.entry_id;
                   const isSelected = unsortedSelectMode && unsortedSelectedIds.has(card.entry_id);
                   const isHighlighted = picked || isSelected;
@@ -2303,11 +2317,14 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       </div>
                     </DraggableCard>
                   );
-                })}
-              </div>
+                }}
+              />
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.25rem' }}>
-                {unsortedCards.map(card => {
+              <VirtualGrid
+                ref={unsortedGridRef}
+                items={unsortedCards}
+                style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.25rem' }}
+                renderItem={(card) => {
                   const picked = moveMode && pickedEntryId === card.entry_id;
                   const isSelected = unsortedSelectMode && unsortedSelectedIds.has(card.entry_id);
                   const isHighlighted = picked || isSelected;
@@ -2377,8 +2394,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       )}
                     </DraggableCard>
                   );
-                })}
-              </div>
+                }}
+              />
             )}
 
             {unsortedCards.length === 0 && <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic', marginTop: '0.5rem' }}>{t('loc.nothingUnsorted')}</p>}
@@ -2503,4 +2520,5 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   );
 }
 
-export default LocationManager;
+// Memoized: App re-renders on every toast, and its props here are stable.
+export default memo(LocationManager);
