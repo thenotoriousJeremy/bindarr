@@ -41,7 +41,7 @@ const TYPE_COLORS = {
   'Steel': '#94a3b8'
 };
 
-function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEntryId, onUpdate, showToast }) {
+function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId, setFocusEntryId, onUpdate, showToast }) {
   const { t, locale } = useT();
   // Money and dates follow the interface language, not the browser's: a user who
   // picked German sees 1.234,56 and 3.8.2026 even on an en-US browser.
@@ -534,7 +534,18 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
               <h3 className="chart-title">{t('dash.setProgress')}</h3>
               <div className="set-progress-grid" style={{ marginTop: '1rem' }}>
                 {setProgress.map((set, idx) => (
-                  <div key={idx} className="set-progress-item">
+                  // Opens the set's full card list, missing cards included. The game
+                  // goes along when one is picked; the Sets tab works it out otherwise.
+                  <div
+                    key={idx}
+                    className="set-progress-item dashboard-card-clickable"
+                    role="button"
+                    tabIndex={0}
+                    title={t('dash.openSet')}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => onOpenSet && onOpenSet({ setId: set.setId, game: gameFilter || null })}
+                    onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onOpenSet) { e.preventDefault(); onOpenSet({ setId: set.setId, game: gameFilter || null }); } }}
+                  >
                     <div className="set-progress-header">
                       <span style={{ color: 'var(--text-strong)' }}>{set.setName}</span>
                       <span style={{ color: 'var(--text-secondary)' }}>{set.ownedUnique} / {set.totalCards} ({set.percent}%)</span>

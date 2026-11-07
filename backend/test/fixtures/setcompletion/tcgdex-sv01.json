@@ -1,0 +1,59 @@
+{
+  "cardCount": {
+    "firstEd": 0,
+    "holo": 93,
+    "normal": 165,
+    "official": 198,
+    "reverse": 186,
+    "total": 258
+  },
+  "cards": [
+    {
+      "id": "sv01-001",
+      "image": "https://assets.tcgdex.net/en/sv/sv01/001",
+      "localId": "001",
+      "name": "Pineco"
+    },
+    {
+      "id": "sv01-002",
+      "image": "https://assets.tcgdex.net/en/sv/sv01/002",
+      "localId": "002",
+      "name": "Heracross"
+    },
+    {
+      "id": "sv01-003",
+      "image": "https://assets.tcgdex.net/en/sv/sv01/003",
+      "localId": "003",
+      "name": "Shroomish"
+    },
+    {
+      "id": "sv01-004",
+      "localId": "004",
+      "name": "Breloom"
+    },
+    {
+      "id": "sv01-198",
+      "image": "https://assets.tcgdex.net/en/sv/sv01/198",
+      "localId": "198",
+      "name": "Youngster"
+    },
+    {
+      "id": "sv01-245",
+      "image": "https://assets.tcgdex.net/en/sv/sv01/245",
+      "localId": "245",
+      "name": "Gardevoir ex"
+    }
+  ],
+  "id": "sv01",
+  "logo": "https://assets.tcgdex.net/en/sv/sv01/logo",
+  "name": "Scarlet & Violet",
+  "releaseDate": "2023-03-31",
+  "serie": {
+    "id": "sv",
+    "name": "Scarlet & Violet"
+  },
+  "symbol": "https://assets.tcgdex.net/univ/sv/sv01/symbol",
+  "abbreviation": {
+    "official": "SVI"
+  }
+}

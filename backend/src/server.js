@@ -567,6 +567,7 @@ app.use('/api/decks', decksRoutes);
 // Full paths inside (/lists, /decks/:id/missing-list, /cards/:id/decks), like collectionRoutes.
 app.use('/api', listsRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/set-completion', require('./routes/setCompletion'));
 
 // The live overlay runs the SAME corner model the scan does, in the browser, so
 // what the user aims with and what the server matches cannot disagree. That

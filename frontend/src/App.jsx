@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, lazy, Suspense } from 'react';
-import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords, StickyNote, Package, ListChecks, Smartphone } from 'lucide-react';
+import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords, StickyNote, Package, ListChecks, Smartphone, Library } from 'lucide-react';
 import Login from './components/Login';
 import Logo from './components/Logo';
 import { App as CapacitorApp } from '@capacitor/app';
@@ -26,6 +26,7 @@ const DeckBuilder = lazy(() => import('./components/DeckBuilder'));
 const Lists = lazy(() => import('./components/Lists'));
 const Notes = lazy(() => import('./components/Notes'));
 const SealedList = lazy(() => import('./components/SealedList'));
+const SetCompletion = lazy(() => import('./components/SetCompletion'));
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -124,6 +125,9 @@ function App() {
   const [selectedCardFilter, setSelectedCardFilter] = useState('');
   const [toast, setToast] = useState(null);
   const [statsTrigger, setStatsTrigger] = useState(0);
+  // The set the Sets tab should open, from the dashboard's set-progress list. A
+  // new object per click, so reopening the same set still reaches the tab.
+  const [focusSet, setFocusSet] = useState(null);
 
   const tabGuardRef = useRef(null);
 
@@ -159,6 +163,7 @@ function App() {
   const resetTabs = () => {
     setActiveTab('dashboard');
     setMountedTabs(['dashboard']);
+    setFocusSet(null);
     scrollByTabRef.current = {};
   };
 
@@ -177,6 +182,7 @@ function App() {
     });
     showTab(tab);
   };
+  const openSet = (target) => { setFocusSet({ ...target }); goTab('sets'); };
 
   // Detect public share route on load
   const [shareToken] = useState(() => {
@@ -500,7 +506,7 @@ function App() {
   const renderTab = (tab) => {
     switch (tab === 'admin' && !showAdmin ? 'dashboard' : tab) {
       case 'dashboard':
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
       case 'add-cards':
         return <AddCards active={activeTab === 'add-cards'} onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab} />;
       case 'collection':
@@ -529,6 +535,8 @@ function App() {
             setFocusEntryId={setFocusEntryId}
           />
         );
+      case 'sets':
+        return <SetCompletion focusSet={focusSet} statsTrigger={statsTrigger} showToast={showToast} />;
       case 'deckbuilder':
         return <DeckBuilder showToast={showToast} />;
       case 'lists':
@@ -542,7 +550,7 @@ function App() {
       case 'admin':
         return <AdminPanel user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
       default:
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
     }
   };
 
@@ -593,6 +601,15 @@ function App() {
           >
             <Database size={18} />
             <span className="nav-tab-label">{t('nav.collection')}</span>
+          </button>
+          <button
+            className={`nav-tab ${activeTab === 'sets' ? 'active' : ''}`}
+            onClick={() => goTab('sets')}
+            aria-label={t('nav.sets')}
+            title={t('nav.sets')}
+          >
+            <Library size={18} />
+            <span className="nav-tab-label">{t('nav.sets')}</span>
           </button>
           <button
             className={`nav-tab ${activeTab === 'storage' ? 'active' : ''}`}
