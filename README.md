@@ -407,6 +407,8 @@ Bindarr snapshots the database itself every 24 hours into a `backups/` folder be
 
 Before a new release migrates the schema of a database that holds data, it first writes `pre-migration-bindarr-<old>-to-<new>-<time>.bak` there. The newest three are kept, separately from the regular rotation. If that snapshot cannot be written (an unwritable `BACKUP_DIR`, a full disk), the log says so loudly and startup continues with the regular backups untouched. To roll an upgrade back, restore the pre-migration file with the release named first in its name.
 
+`docker stop` (or Ctrl+C) shuts Bindarr down cleanly: it stops taking requests, gives a running backup, price sweep or catalog build a few seconds to reach a safe point, then closes the database, which folds the WAL back into `bindarr.db`. A second signal stops it at once. Background work — the backup, the weekly set refresh, the hourly price check and TCGCSV sync — runs on schedules kept in the database, so a restart neither delays nor repeats it, and anything that fell due while the server was down runs shortly after it starts.
+
 For an off-box copy, stop the container first so the WAL is checkpointed:
 
 ```bash
