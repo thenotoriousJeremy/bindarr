@@ -31,6 +31,8 @@
   --type-dragon: #a855f7;
   --type-fairy: #f472b6;
   --type-colorless: #cbd5e1;
+  /* The rare tier on the box map's rarity lane: the rare badge's silver. */
+  --strip-rare: #e2e8f0;
 
   /* Semantic surface/foreground tokens. These back the values components used
      to hardcode (#fff text, white overlay fills, dark input bg) so themes can
@@ -80,6 +82,8 @@
   --text-muted: #64748b;
   --text-strong: #0f172a;
   --text-on-accent: #ffffff;
+  /* The rare badge's silver all but vanishes on white. */
+  --strip-rare: #64748b;
 
   --logo-cover: #ef4444;
   --logo-spine: #dc2626;
@@ -3209,6 +3213,270 @@ button, input, select, textarea {
 
 .box-coverflow-nav.right {
   right: 15px;
+}
+
+/* Box map (BoxMap.jsx): every row of a box as a strip under the coverflow. */
+.box-map {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.5rem 0.65rem 0.65rem;
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+}
+
+.box-map-head {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+}
+
+.box-map-head.active {
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+.box-map-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.box-map-count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tabs sit in the strip's top padding, ticks drop from them to the lane. */
+.box-map-strip {
+  position: relative;
+  padding-top: 17px;
+}
+
+.box-map-tab {
+  position: absolute;
+  top: 0;
+  height: 15px;
+  max-width: 120px;
+  padding: 0 5px;
+  border: none;
+  border-radius: 4px 4px 0 0;
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 15px;
+  color: var(--text-on-accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.box-map-tick {
+  position: absolute;
+  top: 11px;
+  width: 1px;
+  height: 6px;
+  background: var(--text-secondary);
+  pointer-events: none;
+}
+
+.box-map-tick.minor {
+  top: 14px;
+  height: 3px;
+  background: var(--text-muted);
+}
+
+.box-map-slider {
+  position: relative;
+  cursor: pointer;
+  touch-action: pan-y;
+  outline: none;
+  border-radius: 3px;
+}
+
+.box-map-slider:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent-blue);
+}
+
+.box-map-lane {
+  height: 14px;
+  border: 1px solid var(--border-glass-hover);
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+
+.box-map-rarity {
+  height: 4px;
+  margin-top: 2px;
+  border-radius: 2px;
+}
+
+/* What the coverflow is showing. */
+.box-map-window {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  border: 2px solid var(--text-strong);
+  border-radius: 3px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+/* Where the filing walkthrough wants the current card. */
+.box-map-rec {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 3px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: var(--type-grass);
+  pointer-events: none;
+}
+
+/* All cards (ContainerOverview.jsx): a container's every card, row by row or
+   page by page. */
+.container-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.container-overview.pages {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.container-overview-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.container-overview-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border-glass);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.container-overview-head strong {
+  font-size: 0.8rem;
+  color: var(--text-strong);
+}
+
+.container-overview-free {
+  color: var(--text-muted);
+}
+
+.container-overview-open {
+  margin-left: auto;
+  font-size: 0.6rem;
+  padding: 0.15rem 0.45rem;
+}
+
+.container-overview-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.container-overview-group-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  font-size: 0.62rem;
+  color: var(--text-muted);
+}
+
+.container-overview-chip {
+  max-width: 100%;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--text-on-accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.container-overview-grid {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.container-overview-tile {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  padding: 0.25rem;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  cursor: pointer;
+}
+
+.container-overview-tile.selected {
+  border: 2px solid var(--accent-red);
+  background: rgba(255, 71, 71, 0.12);
+}
+
+.container-overview-qty {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border-glass-hover);
+  background: rgba(0, 0, 0, 0.75);
+  font-size: 0.6rem;
+  font-weight: 900;
+  color: #fff;
+}
+
+.container-overview-pocket-chips {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  right: 3px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.container-overview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 0.718;
+  border: 1px dashed var(--border-glass-hover);
+  border-radius: var(--radius-sm);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+}
+
+.container-overview-none {
+  margin: 0;
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--text-muted);
 }
 
 .focused-card-info-panel {
