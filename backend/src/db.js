@@ -203,6 +203,26 @@ function all(sql, params = []) {
   return schedule('all', sql, params);
 }
 
+// One statement with the connection to itself, outside any transaction: VACUUM
+// INTO. SQLite refuses it with "cannot VACUUM - SQL statements in progress"
+// while any other statement on the connection is still running, and an ordinary
+// run() only waits for the open transaction, not for reads and writes already in
+// flight. So it queues like a transaction (waits for the connection to go quiet,
+// then owns it) and issues no BEGIN; everything that arrives meanwhile waits.
+async function runExclusive(sql, params = []) {
+  const scope = txScope.getStore();
+  if (owner && scope && scope.tx === owner) {
+    throw new Error(`${sql}: cannot run exclusively from inside a transaction`);
+  }
+  const tx = { exclusive: true };
+  await acquire(tx);
+  try {
+    return await dispatch('run', sql, params);
+  } finally {
+    release();
+  }
+}
+
 // Run fn inside BEGIN IMMEDIATE / COMMIT, rolling back if it throws. fn has the
 // connection to itself until it settles (see the connection lock above).
 //
@@ -1654,6 +1674,7 @@ module.exports = {
   get,
   all,
   withTransaction,
+  runExclusive,
   initDb,
   splitStackedRows,
   createCompartments,
