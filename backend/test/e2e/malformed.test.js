@@ -1,3 +1,7 @@
+// Each server this suite starts gets a fresh database, which would otherwise run a
+// full TCGCSV sync (~800 requests) at boot.
+process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
+
 // Wrong-typed and malformed bodies against every authenticated POST/PUT/PATCH
 // route. The property: a client can send anything and the answer is never a 5xx,
 // never a request left hanging, and the server is still up afterwards.
