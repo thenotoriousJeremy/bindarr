@@ -76,5 +76,8 @@ asckey.b64
 # CollectorVision models and onnxruntime-web wasm (fetched, not authored)
 frontend/public/ort/
 
+# Device-mode backend bundle (frontend/scripts/build-device-backend.mjs regenerates it)
+frontend/src/device/generated/
+
 # Local wiki clone
 wiki/

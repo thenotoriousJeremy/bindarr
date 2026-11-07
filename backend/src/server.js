@@ -13,15 +13,8 @@ const helmet = require('helmet');
 const compression = require('compression');
 const path = require('path');
 const db = require('./db');
-const tcgApi = require('./tcgApi');
 const scryfallApi = require('./scryfallApi');
-const lorcastApi = require('./lorcastApi');
-
-// Which module owns the Pokémon `sets` table. Asked per call rather than resolved
-// once: the provider is a setting an admin can change while the server is up, and
-// the weekly refresh has to follow it without a restart.
-const pokemonSetSource = async () =>
-  require('./utils/pokemonProvider').apiFor('English');
+const { syncSets, sweepPrices } = require('./utils/syncJobs');
 
 // Say the provider deprecation out loud at boot, to the installs it applies to.
 //
@@ -52,6 +45,7 @@ const decksRoutes = require('./routes/decks');
 const settingsRoutes = require('./routes/settings');
 const notesRoutes = require('./routes/notes');
 const cardArtRoutes = require('./routes/cardArt');
+const backupRoutes = require('./routes/backup');
 const { authenticateToken } = require('./middleware/auth');
 const { startHttps, selfSignedTls } = require('./utils/tls');
 
@@ -205,6 +199,10 @@ const bigJson = express.json({ limit: '15mb' });
 app.use('/api/import', bigJson);
 app.use('/api/scan-match', bigJson);
 app.use('/api/search', bigJson);
+// A full-account restore is the one body bigger still: it carries every copy plus
+// the card data behind them. Authenticated BEFORE the body is read, so the large
+// limit is only ever extended to a signed-in owner, never to an anonymous POST.
+app.use('/api/backup', authenticateToken, express.json({ limit: '200mb' }));
 app.use(express.json({ limit: '1mb' }));
 
 // Rebuild any catalog that has fallen behind, right after the weekly set refresh
@@ -256,13 +254,11 @@ db.initDb()
     const splitCount = await splitStackedEntries(db);
     if (splitCount > 0) console.log(`Split ${splitCount} stacked collection copies into individual rows.`);
 
-    // Sync sets on startup (both games). WHICH Pokémon provider fills the `sets`
-    // table follows the same setting the cards do — this used to be pokemontcg.io
-    // unconditionally, so a TCGdex install browsed a set list numbered by a
-    // provider none of its cards came from.
-    await (await pokemonSetSource()).fetchAndCacheSets();
-    await scryfallApi.fetchAndCacheSets();
-    await lorcastApi.fetchAndCacheSets();
+    // Sync sets on startup (all three games). WHICH Pokémon provider fills the
+    // `sets` table follows the same setting the cards do — this used to be
+    // pokemontcg.io unconditionally, so a TCGdex install browsed a set list
+    // numbered by a provider none of its cards came from.
+    await syncSets();
 
     // pokemontcg.io has an end date, and static documentation does not reach
     // someone who set this up two years ago and has not opened Settings since.
@@ -306,9 +302,7 @@ db.initDb()
     // weekly is plenty — prices are on their own schedule below.
     setInterval(async () => {
       try {
-        await (await pokemonSetSource()).fetchAndCacheSets(true);
-        await scryfallApi.fetchAndCacheSets(true);
-        await lorcastApi.fetchAndCacheSets(true);
+        await syncSets(true);
         await loadSetsCache(db);
         await autoUpdateCatalogs();
       } catch (err) {
@@ -331,34 +325,13 @@ db.initDb()
     // skips on any clock drift at all — "23h 59m elapsed" is not due, so the
     // refresh silently becomes every other day. An hourly tick that refuses in
     // one indexed read costs nothing and has no such edge.
-    setInterval(() => {
-      tcgApi.updateCollectionPrices();
-      scryfallApi.updateCollectionPrices();
-      lorcastApi.updateCollectionPrices();
-      // Non-English Pokémon cards: their ids 404 on pokemontcg.io, so tcgApi's
-      // sweep skips them and this is their only price refresh. No-op until the
-      // user actually owns one.
-      require('./tcgdexApi').updateCollectionPrices();
-      require('./pokemontcgapi').updateCollectionPrices();
-      // TCGCSV runs LAST of the Pokémon sweeps on purpose. It writes the same
-      // columns as the other two and is the better source — TCGplayer market
-      // prices in USD, and 97% coverage against TCGdex's 8% — so it should have
-      // the final say on any card it can place.
-      require('./tcgcsvApi').updateCollectionPrices();
-    }, 1000 * 60 * 60);
+    setInterval(sweepPrices, 1000 * 60 * 60);
 
     // Shortly after startup, catch up if the last sweep was over a day ago.
     // NOT forced: without that gate this re-ran on every restart, which under
     // nodemon meant a full sweep on every code edit — for data that cannot have
     // changed since the last one.
-    setTimeout(() => {
-      tcgApi.updateCollectionPrices();
-      scryfallApi.updateCollectionPrices();
-      lorcastApi.updateCollectionPrices();
-      require('./tcgdexApi').updateCollectionPrices();
-      require('./pokemontcgapi').updateCollectionPrices();
-      require('./tcgcsvApi').updateCollectionPrices();
-    }, 30000);
+    setTimeout(sweepPrices, 30000);
 
     // Periodically purge expired sessions so the table doesn't grow unbounded
     setInterval(() => {
@@ -435,6 +408,7 @@ app.use('/api', storageRoutes);
 app.use('/api', statsRoutes);
 app.use('/api', importExportRoutes);
 app.use('/api', notesRoutes);
+app.use('/api', backupRoutes);
 app.use('/api/sets', setsRoutes);
 app.use('/api/decks', decksRoutes);
 app.use('/api/settings', settingsRoutes);

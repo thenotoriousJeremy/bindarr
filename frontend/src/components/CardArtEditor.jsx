@@ -3,6 +3,7 @@ import { ImagePlus, Upload, Trash2, Share2 } from 'lucide-react';
 import { artUrl, noteArtChanged, useCardArtIndex } from '../utils/cardArt';
 import { issueUrl } from '../utils/repo';
 import { useT } from '../utils/i18n';
+import { isDeviceMode } from '../apiBase';
 
 // INCOMPLETE — not mounted anywhere, and not ready to be.
 //
@@ -44,7 +45,9 @@ export default function CardArtEditor({ card, hasProviderArt, showToast, onChang
   const [busy, setBusy] = useState(false);
 
   const cardId = card?.card_id || card?.id;
-  if (!cardId) return null;
+  // Uploaded art is decoded and stored by the server (sharp + disk), neither of
+  // which device mode has.
+  if (!cardId || isDeviceMode()) return null;
 
   const hasCustom = index.has(cardId);
 

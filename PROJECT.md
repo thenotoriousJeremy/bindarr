@@ -58,6 +58,9 @@ backend/
       npz.js               Minimal .npz reader, for the published (not locally built) catalogs
       pokemonProvider.js   The single Pokémon provider decision for this language
       languages.js         Language code/name resolution
+      syncJobs.js          The recurring set-sync and price-sweep lists, shared by server.js and embedded/
+    embedded/              Device mode: the composition root the phone app runs instead of server.js,
+                           plus stand-ins for the Node modules a phone lacks (see "Device mode" below)
     backup.js              DB backup helpers
   scripts/                 fetch-models.mjs, catalog builders, the scan-gate measurement harness
   data/models/             cornelius.onnx, milo.onnx and the built catalogs (CV_MODEL_DIR)
@@ -65,6 +68,8 @@ backend/
 frontend/
   src/
     main.jsx, App.jsx      Entry + root: auth state, fetch wrapper (injects Bearer), tab routing, code-split views
+    apiBase.js             Where /api goes in the native app: the user's server, or the device backend
+    device/                Device mode runtime; generated/ holds the bundled backend (build-device-backend.mjs)
     components/            One component per screen/widget (see Frontend section)
     utils/                 Pure helpers: sorting, pricing, printing/rarity styling, language, shuffle
 Dockerfile, docker-compose.yml, .github/workflows/docker-build.yml   Container build + CI publish to GHCR
@@ -131,7 +136,57 @@ collection/location/deck-adjacent route requires a valid session.
 | `/api/sets` | sets.js | Set catalog for dividers and scan scoping; non-English Pokémon set lists come from TCGdex, whose ids differ per language |
 | `/api/settings` | settings.js | App-wide settings (read any; write requires admin) |
 | `/api/shared` | shared.js | Public, read-only collection view by `share_token` (no auth) |
+| `/api` | backup.js | `GET /backup` (the whole account as one JSON file), `POST /backup/restore` (replace the account's contents from one; ids renumbered, card data only ever added) |
 | `/api/admin` | admin.js | User management, card cache seeding, `catalogs` (list / `build` / `stop` / `progress`), DB backups (admin) |
+
+### Device mode (the app without a server)
+
+The Android/iOS app can run with no server ([MOBILE.md](MOBILE.md#device-mode-no-server)).
+It does that by running these same route modules inside its WebView, rather than
+by reimplementing them:
+
+- `embedded/index.js` is the composition root, the device's `server.js`. It mounts
+  the routers in the same order behind the same `authenticateToken` gate, and
+  answers `501 { deviceMode: true }` for `/api/shared`, `/api/admin` and
+  `/api/card-art`. It also answers `/api/scan-match` with the route's own
+  `503 notBuilt` shape before the route reaches for Node's `Buffer`.
+- `frontend/scripts/build-device-backend.mjs` bundles it with Vite (Rolldown, CJS
+  in, one ESM file out) before every dev/build run. `embedded/aliases.js` is the
+  single table of swapped modules: `express` becomes `embedded/router.js` (the
+  slice of Express 4's Router the routes use), `sqlite3` becomes an adapter over
+  an injected async driver, `fs` reports no files (so scanning stays `notBuilt`),
+  `crypto` keeps only `randomBytes`, and native modules (`sharp`,
+  `onnxruntime-node`, ...) become a stub that throws if called. Bare imports
+  resolve against the frontend's `node_modules`, so the backend's native
+  dependencies are never needed to build the app.
+- `embedded/dispatch.js` turns `{ method, url, headers, body }` into the req/res
+  surface the routes use and back. `frontend/src/device/runtime.js` wraps that
+  in `fetch()`: `apiBase.js` sends every `/api` call there in device mode, with
+  the device's own session token.
+- On first launch `start()` runs `initDb()` (schema and migrations unchanged), then
+  creates the `admin` owner with no password and a never-expiring session. It then
+  runs the server's startup jobs from `utils/syncJobs.js`. Set lists get a forced
+  refresh whenever a launch finds the last one a week old, tracked in a
+  device-only `device_state` table, because a weekly timer never fires in an app
+  that is opened and closed all day.
+- The SQLite driver (`frontend/src/utils/deviceSqlite.js`) maps db.js's statements
+  onto `@capacitor-community/sqlite`. It sends BEGIN/COMMIT/ROLLBACK through the
+  plugin's transaction calls, passes `transaction: false` on every run (so
+  `withTransaction` owns the transaction), routes PRAGMAs through `query` (Android
+  rejects row-returning statements on its update path), and strips iOS's
+  `ios_columns` header row. The sqlite3 adapter runs statements one at a time in
+  issue order, which is what node-sqlite3's single connection guarantees db.js.
+
+- Scanning: `/api/scan-match` and `/api/search` take `embedding` (milo's 128 numbers)
+  in place of `image`. In device mode the app computes it (`frontend/src/device/
+  scanEngine.js`, onnxruntime-web) and swaps it into the body, and
+  `cvScan.setSource()` supplies the published catalogs the phone downloaded
+  (`device/scanAssets.js`), so `cvScan.match` skips only the decode and the
+  forward pass. Lorcana has no published catalog and answers `503 notBuilt`.
+
+`backend/test/embedded.test.js` loads the real routes through the same alias table
+and drives them through `handle()`, against node-sqlite3 as the driver; it also
+covers a backup round trip and a scan through `setScanSource`.
 
 ### Card data sources
 

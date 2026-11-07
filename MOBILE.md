@@ -3,16 +3,102 @@
 The native apps are the existing React frontend wrapped with [Capacitor](https://capacitorjs.com).
 No separate codebase: every web change flows into both apps on the next build.
 
-Because each user self-hosts Bindarr, the app asks for a **Server URL** on the
-login screen (shown only in the native app) and stores it locally. All `/api`
-calls are routed to that server through Capacitor's native HTTP layer, which
-also sidesteps WebView CORS — no backend CORS changes needed.
+The sign-in screen (native app only) offers two ways to run:
+
+- **My server** — the app asks for a **Server URL** and stores it locally. All
+  `/api` calls are routed to that server through Capacitor's native HTTP layer,
+  which also sidesteps WebView CORS — no backend CORS changes needed.
+- **This device** — no server at all. The app runs Bindarr's own backend inside
+  itself, against a SQLite database on the phone. See [Device mode](#device-mode-no-server).
 
 ## Layout
 
-- `frontend/capacitor.config.json` — app id (`com.bindarr.app`), name, `CapacitorHttp` on.
-- `frontend/src/apiBase.js` — native fetch shim that prepends the user's server URL.
+- `frontend/capacitor.config.json` — app id (`com.bindarr.app`), name, `CapacitorHttp` on, SQLite plugin config.
+- `frontend/src/apiBase.js` — native fetch shim: prepends the server URL, or hands `/api` to the device backend.
+- `frontend/src/device/` — device mode's runtime (the bundled backend lands in `generated/`).
+- `backend/src/embedded/` — the backend's composition root for device mode, and its stand-ins for Node modules.
 - `frontend/android/`, `frontend/ios/` — native projects (committed; build output is git-ignored).
+
+## Device mode (no server)
+
+Picking **This device** runs the same Express route modules a server runs, inside
+the app's WebView. There is no port and no second codebase: every `/api` request
+the UI makes is answered in-process.
+
+- `backend/src/embedded/index.js` mounts the routers the way `server.js` does.
+  `frontend/scripts/build-device-backend.mjs` bundles it into the app before
+  every `vite dev` / `vite build`, swapping the Node modules a phone lacks for
+  the stand-ins listed in `backend/src/embedded/aliases.js` (a small Express-style
+  router, `fs`/`path`/`crypto` shims, and a `sqlite3` adapter).
+- The database is native SQLite through `@capacitor-community/sqlite`
+  (`frontend/src/utils/deviceSqlite.js` adapts it to what `db.js` expects), so
+  `db.js` and its migrations run unchanged. The file lives in the app's private
+  storage (iOS: `Library/CapacitorDatabase`), which the OS includes in device
+  backups.
+- Card search, set lists and prices go straight from the phone to the providers,
+  through the same native HTTP layer server mode uses. Prices refresh on the
+  server's schedule while the app is open; set lists refresh weekly.
+- There is one account and no login. The phone's owner is the `admin` user, with a
+  session that never expires.
+
+What needs a server, and is hidden or explained in device mode: **share links**,
+**other accounts and SSO**, **server backups**, **custom card art**, and **scanning
+Lorcana cards**. Instance settings (Pokémon data provider, Magic price source,
+refresh interval) move from Admin into Settings.
+
+### Scanning on the phone
+
+Magic and Pokémon cards can be scanned after a one-time download (Add Cards → Scan,
+or Settings → This Device): the two models (~8 MB, AGPL-3.0, fetched only when the
+owner presses the button) and that game's published catalog (Magic ~56 MB, Pokémon
+~13 MB), from the same Hugging Face files `backend/scripts/fetch-models.mjs` uses.
+Lorcana has no published catalog; servers build theirs with native image code.
+
+- `frontend/src/device/scanAssets.js` downloads with `@capacitor/file-transfer`
+  into the app's private storage, checks each file's exact size, and reads files
+  back through the WebView's local server rather than across the bridge.
+- `frontend/src/device/scanEngine.js` does the server's half of a scan in the
+  WebView: resize the scanner's crop to 448 (or find the corners with cornelius
+  and dewarp a whole frame), then run milo with onnxruntime-web.
+- `runtime.js` swaps the photo in `/api/scan-match` and `/api/search` bodies for
+  that embedding. The route accepts `embedding` in place of `image`, and
+  `cvScan.setSource()` hands it the downloaded catalogs, so the sweep, the
+  not-in-catalog gate and naming the card are the server's own code.
+- The Pokémon catalog names cards by TCGplayer product id, so the product map is
+  built from TCGCSV in the background after that download, as on a server.
+
+Catalogs are dated snapshots: a card printed after one cannot be scanned, and is
+reported as not in the catalog rather than matched to something else.
+
+### Backups and moving to a server
+
+Settings → Collection Backup → **Export full backup** saves the whole account
+(storage and each copy's place in it, decks, notes, and the card data and price
+history behind them) through the share sheet. **Import Backup** recognises the file
+and restores it, replacing what the account has. The same file restores on a
+server, which is how a collection moves off the phone (`routes/backup.js`). The
+CSV/JSON exports remain for spreadsheets and other apps.
+
+Switching back: Settings → This Device → **Connect to a server instead**. The
+on-device collection stays where it is; choosing **This device** again reopens it.
+
+### Trying device mode in a browser
+
+```bash
+cd frontend
+VITE_DEVICE_WEB=1 npm run dev
+```
+
+The sign-in screen then offers **This device** on the web too. A desktop browser
+has no native SQLite, so `src/device/webStore.js` stands in for the plugin over
+sql.js (kept in IndexedDB). Two things only work on a phone: requests to providers
+that send no CORS headers (TCGCSV prices, and so the Pokémon product map), and the
+share sheet. With the flag set the dev server needs no backend: it serves `/ort`
+itself and proxies nothing.
+
+`backend/test/embedded.test.js` covers the device backend itself and
+`frontend/src/utils/deviceSqlite.test.js` the plugin adapter; both run in the
+normal test suites.
 
 ## Local build
 

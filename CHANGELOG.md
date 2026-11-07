@@ -6,6 +6,13 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+### Added
+- **Full backup and restore.** Settings → Collection Backup → "Export full backup" saves everything an account owns — storage and each copy's place in it, decks, notes, and the card data and price history behind them — and "Import Backup" restores it, replacing the account's current contents. It works on any Bindarr, so it is also how a collection moves between servers, or from a phone running on its own to a server.
+- **Run Bindarr on a phone with no server.** The Android and iOS apps' sign-in screen now offers **This device** next to **My server**. Bindarr then runs inside the app with your collection in a SQLite database on the phone, and there is no account to create. Search, collection, storage, decks, notes, stats and price updates all work. The internet is used only to reach the card databases. Magic and Pokémon cards can be scanned on the phone after a one-time download of the scan models and that game's published catalog, which the app offers on the Scan tab; the phone embeds the photo itself and the matching is the server's own code. Share links, other accounts, server backups and scanning Lorcana cards still need a server, and the app says so where they would appear. The data-source settings (Pokémon provider, Magic price source, refresh interval) move into Settings. Exports from the phone import into a server if you set one up later. See [MOBILE.md](MOBILE.md#device-mode-no-server).
+
+### Fixed
+- **Exports work in the mobile apps.** Export CSV/JSON and admin backup downloads did nothing in the app, because its WebView has nowhere to put a browser download. They now open the system share sheet, where the file can be saved to Files or Drive, mailed, or sent to a computer.
+
 ## [1.8.8] - 2026-10-26
 
 ### Added
