@@ -7,7 +7,10 @@
   --bg-glass: rgba(20, 28, 47, 0.65);
   --border-glass: rgba(255, 255, 255, 0.07);
   --border-glass-hover: rgba(255, 255, 255, 0.15);
-  
+  /* Several views (the sealed-product ones among them) ask for this name; it is
+     the same quiet divider, so it follows each theme's --border-glass. */
+  --border-subtle: var(--border-glass);
+
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
   --text-muted: #64748b;
