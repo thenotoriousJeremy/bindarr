@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { DndContext, DragOverlay, MouseSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
-import { Plus, Minus, Trash2, X, MoreVertical, Settings, RefreshCw, Lock, LayoutGrid, List, MousePointerClick, ChevronDown, ChevronUp, Edit3, Upload } from 'lucide-react';
+import { Plus, Minus, Trash2, X, MoreVertical, Settings, RefreshCw, Lock, LayoutGrid, List, MousePointerClick, ChevronDown, ChevronUp, Edit3, Upload, BookOpen, GalleryHorizontal } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
@@ -9,6 +9,8 @@ import { useMultiSelect } from '../utils/useMultiSelect';
 import { isBinderType as computeIsBinder, binderSpread } from '../utils/cardOptions';
 import { displayName } from '../utils/languages';
 import CompartmentView, { FocusedCardInfo } from './CompartmentView';
+import BoxMap from './BoxMap';
+import ContainerOverview from './ContainerOverview';
 import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
 import CreateContainerModal from './CreateContainerModal';
 import PageColumnsSelect from './PageColumnsSelect';
@@ -121,7 +123,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [unsortedSearch, setUnsortedSearch] = useState('');
   const [unsortedSort, setUnsortedSort] = useState('scanned-desc');
   const [unsortedViewMode, setUnsortedViewMode] = useState('grid'); // 'grid' | 'detail'
-  const [containerViewMode, setContainerViewMode] = useState('layout'); // 'layout' | 'list'
+  // Per kind of container: 'layout' is a box's coverflow or a binder's page
+  // spread, 'overview' every card at once. Remembered, so someone who reads their
+  // boxes as a grid gets the grid without asking each time.
+  const [containerViewModes, setContainerViewModes] = useState(() => ({
+    box: localStorage.getItem('bindarr_container_view_box') === 'overview' ? 'overview' : 'layout',
+    binder: localStorage.getItem('bindarr_container_view_binder') === 'overview' ? 'overview' : 'layout',
+  }));
   const [containerCardScale, setContainerCardScale] = useState(1);
   const [unsortedBulkLocation, setUnsortedBulkLocation] = useState('');
 
@@ -205,6 +213,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const isBinderType = computeIsBinder(selectedLoc?.type);
   const isCustom = selectedLoc?.sort_order === 'custom';
 
+  const containerKind = isBinderType ? 'binder' : 'box';
+  const containerViewMode = containerViewModes[containerKind];
+  const setContainerViewMode = (mode) => {
+    localStorage.setItem(`bindarr_container_view_${containerKind}`, mode);
+    setContainerViewModes(modes => ({ ...modes, [containerKind]: mode }));
+  };
+  // Filing and Arrange both work on the layout (the ghost slot, tap-to-place)
+  // and hide the view switch while they run, so they always get the layout.
+  const viewMode = (filingMode || moveMode) ? 'layout' : containerViewMode;
+
   useEffect(() => {
     if (filingMode && filingQueue[filingIndex]?.recommended) {
       const rec = filingQueue[filingIndex].recommended;
@@ -248,6 +266,17 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [activeCompartmentId, setActiveCompartmentId] = useState(null);
   const [, setCoverflowActiveIndex] = useState(0); // value unused; setter drives filing-snap resets
 
+  // Box map and coverflow, kept in step: boxSeek asks the open row to centre a
+  // slot (CompartmentView's seekTo), boxCursor is the slot it reports back.
+  const [boxSeek, setBoxSeek] = useState(null);
+  const [boxCursor, setBoxCursor] = useState(null);
+  const seekNonce = useRef(0);
+  const seekBox = (compartmentId, slot, { divider = false } = {}) => {
+    seekNonce.current += 1;
+    setActiveCompartmentId(compartmentId);
+    setBoxSeek({ compartmentId, slot, divider, nonce: seekNonce.current });
+  };
+
   const handleTouchStart = (e) => {
     if (!e.changedTouches || !e.changedTouches[0]) return;
     touchStartRef.current = {
@@ -283,6 +312,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     setBinderActiveEntryId(null);
     if (!filingReadOnly) setFilingQueue([]);
     setCoverflowActiveIndex(0);
+    setBoxSeek(null);
+    setBoxCursor(null);
     storage.exitSelectMode();
     setMoveMode(false);
     setPickedEntryId(null);
@@ -847,13 +878,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     [allCards, activeLocationId]
   );
 
-  const containerListCards = useMemo(() => {
-    const compartmentIndex = new Map(compartments.map((compartment, index) => [compartment.id, index]));
-    return [...cardsInActiveLocation].sort((a, b) =>
-      (compartmentIndex.get(a.compartment_id) ?? Infinity) - (compartmentIndex.get(b.compartment_id) ?? Infinity)
-      || (a.position || 0) - (b.position || 0)
-    );
-  }, [cardsInActiveLocation, compartments]);
+  // From the All cards overview back to the layout, at that row or page.
+  const openCompartmentInLayout = (compartmentId) => {
+    setContainerViewMode('layout');
+    if (isBinderType) {
+      const idx = compartments.findIndex(c => c.id === compartmentId);
+      if (idx !== -1) setActivePageIndex(idx);
+    } else {
+      setActiveCompartmentId(compartmentId);
+    }
+  };
 
   const openCompartmentRules = (comp) => {
     let draft = [];
@@ -1368,23 +1402,27 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   type="button"
                   className={`btn btn-icon-only ${containerViewMode === 'layout' ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => setContainerViewMode('layout')}
+                  aria-pressed={containerViewMode === 'layout'}
                   style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-                  title={t('loc.gridView')}
+                  title={t(isBinderType ? 'loc.viewPages' : 'loc.viewRows')}
+                  aria-label={t(isBinderType ? 'loc.viewPages' : 'loc.viewRows')}
                 >
-                  <LayoutGrid size={13} />
+                  {isBinderType ? <BookOpen size={13} /> : <GalleryHorizontal size={13} />}
                 </button>
                 <button
                   type="button"
-                  className={`btn btn-icon-only ${containerViewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setContainerViewMode('list')}
+                  className={`btn btn-icon-only ${containerViewMode === 'overview' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setContainerViewMode('overview')}
+                  aria-pressed={containerViewMode === 'overview'}
                   style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-                  title={t('loc.detailView')}
+                  title={t('loc.viewAllCards')}
+                  aria-label={t('loc.viewAllCards')}
                 >
-                  <List size={13} />
+                  <LayoutGrid size={13} />
                 </button>
               </div>
             )}
-            {containerViewMode === 'list' && !filingMode && !moveMode && (
+            {viewMode === 'overview' && (
               <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
                 <button
                   type="button"
@@ -1569,7 +1607,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </div>
             )}
 
-            {containerViewMode === 'layout' && isBinderType && compartments.length > 0 && (
+            {viewMode === 'layout' && isBinderType && compartments.length > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem', margin: '0.2rem 0', background: 'rgba(0,0,0,0.1)', padding: '0.4rem', borderRadius: 'var(--radius-sm)' }}>
                 <button
                   type="button"
@@ -1622,26 +1660,19 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </div>
             )}
 
-            {containerViewMode === 'list' && (
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${84 * containerCardScale}px, 1fr))`, gap: '0.45rem' }}>
-                {containerListCards.map(card => {
-                  const selected = storage.selectedIds.has(card.entry_id);
-                  return (
-                    <button
-                      key={card.entry_id}
-                      type="button"
-                      onClick={() => storage.selectMode ? storage.toggleSelect(card.entry_id) : setInspectorCard(card)}
-                      aria-label={displayName(card)}
-                      title={displayName(card)}
-                      style={{ display: 'flex', justifyContent: 'center', width: '100%', padding: '0.25rem', border: selected ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', background: selected ? 'rgba(255,71,71,0.12)' : 'rgba(255,255,255,0.03)', cursor: 'pointer' }}
-                    >
-                      <CardImage card={card} style={{ width: '100%', borderRadius: '3px' }} />
-                    </button>
-                  );
-                })}
-              </div>
+            {viewMode === 'overview' && (
+              <ContainerOverview
+                location={selectedLoc}
+                compartments={compartments}
+                cardsByCompartment={cardsByCompartment}
+                setsList={setsList}
+                cardScale={containerCardScale}
+                selectedIds={storage.selectMode ? storage.selectedIds : null}
+                onCardClick={(card) => (storage.selectMode ? storage.toggleSelect(card.entry_id) : setInspectorCard(card))}
+                onOpenCompartment={openCompartmentInLayout}
+              />
             )}
-            <div style={{ display: containerViewMode === 'layout' ? 'flex' : 'none', flexDirection: 'column', gap: isBinderType ? '1rem' : '0.6rem' }}>
+            <div style={{ display: viewMode === 'layout' ? 'flex' : 'none', flexDirection: 'column', gap: isBinderType ? '1rem' : '0.6rem' }}>
               {isBinderType ? (() => {
                 if (compartments.length === 0) return null;
                 const pageProps = (c, i) => ({
@@ -1863,6 +1894,19 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       pickedEntryId={pickedEntryId}
                       onPickCard={handlePickCard}
                       onPlaceSlot={handlePlaceSlot}
+                      seekTo={boxSeek}
+                      onActiveSlotChange={(compartmentId, slot) => setBoxCursor({ compartmentId, slot })}
+                    />
+
+                    <BoxMap
+                      compartments={compartments}
+                      cardsByCompartment={cardsByCompartment}
+                      sortOrder={selectedLoc.sort_order}
+                      setsList={setsList}
+                      activeCompartmentId={activeComp.id}
+                      activeSlot={boxCursor && boxCursor.compartmentId === activeComp.id ? boxCursor.slot : null}
+                      recommended={currentRecSpot ? { compartmentId: currentRecSpot.compartment_id, index: Math.floor(currentRecSpot.position / 1000) - 1 } : null}
+                      onSeek={seekBox}
                     />
                   </div>
                 );

@@ -48,3 +48,58 @@ export function pageGrid(capacity, override) {
   const columns = pageColumns(cap, override);
   return { columns, rows: Math.ceil(cap / columns) };
 }
+
+// Collapse copies of the same card into one pocket, keyed the way the server
+// counts occupancy on a stacking container (card, printing and language; not
+// condition). The first copy holds the slot and the rest ride along in its
+// quantity, so the page lays out from stacks rather than from rows.
+export function stackPocketCards(cards) {
+  const stacks = new Map();
+  for (const card of cards) {
+    const key = `${card.card_id}|${card.printing || 'Normal'}|${card.language || 'English'}`;
+    const held = stacks.get(key);
+    if (!held) {
+      stacks.set(key, { ...card, quantity: card.quantity || 1 });
+      continue;
+    }
+    held.quantity += card.quantity || 1;
+    // Whichever copy is actually filed decides where the stack sits; an unplaced
+    // one joining it must not drag the pocket back to "no position".
+    if (!(held.position > 0) && card.position > 0) held.position = card.position;
+  }
+  return Array.from(stacks.values());
+}
+
+// One page's cards in pocket order, null for an empty pocket. A card sits in the
+// pocket its position names (position = slot * 1000); one without a usable
+// position, or whose pocket is already taken, goes in the first free pocket. A
+// page holding more than its capacity grows past it rather than hiding cards.
+export function layoutPockets(cards, capacity, allowStacking = false) {
+  const pocketCards = allowStacking ? stackPocketCards(cards) : cards;
+  let maxSlotFromCards = capacity || 1;
+  pocketCards.forEach(c => {
+    if (c && c.position > 0) {
+      const s = Math.floor(c.position / 1000);
+      if (s > maxSlotFromCards) maxSlotFromCards = s;
+    }
+  });
+  const slotCount = Math.max(capacity || 1, maxSlotFromCards);
+  const pockets = new Array(slotCount).fill(null);
+  const unplaced = [];
+
+  pocketCards.forEach(c => {
+    const slot = (c && c.position > 0) ? Math.floor(c.position / 1000) : null;
+    if (slot && slot >= 1 && slot <= slotCount && !pockets[slot - 1]) {
+      pockets[slot - 1] = c;
+    } else {
+      unplaced.push(c);
+    }
+  });
+
+  unplaced.forEach(c => {
+    const freeIdx = pockets.findIndex(p => p === null);
+    if (freeIdx !== -1) pockets[freeIdx] = c;
+    else pockets.push(c);
+  });
+  return pockets;
+}

@@ -6,6 +6,14 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+### Added
+- **Box map in Storage.** Under a box's coverflow, every row of the box is drawn as a strip of card colors, with rarities underneath and a tab wherever the box's dividers fall, so where the reds end or the rares sit shows at a glance. Tap or drag a strip to jump straight there; the open row's strip marks what the coverflow is showing, and the arrow keys move along it (Shift+arrow jumps tab to tab). Empty slots are hatched.
+- **"All cards" view for containers.** The second view button in Storage shows every card in the container in its real order: a box row by row, broken at each divider and labelled with the slots each section covers, a binder page by page with its empty pockets. "Open row" / "Open page" goes back to that spot, and boxes and binders each remember the view you last used.
+
+### Fixed
+- **Mythic and top Lorcana rarities are no longer shown as common.** Magic's Mythic and Lorcana's Legendary, Enchanted, Epic and Iconic cards had a grey "COM" badge and no glow, because the rarity tiers only knew Pokémon's rarity names. They now get the gold top-tier badge and border, labelled MYTHIC, LEG, ENCH, EPIC and ICONIC.
+- **Filing and Arrange always show the container's layout.** Starting either while the image grid was open left the grid on screen, hiding the recommended slot, with the view switch hidden as well.
+
 ## [1.8.8] - 2026-10-26
 
 ### Added

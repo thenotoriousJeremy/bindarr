@@ -524,6 +524,8 @@ code-split view components. `/share/:token` renders the public view without auth
 | `CollectionList` | Browse/filter/sort the collection; bulk actions |
 | `LocationManager` | Manage containers; binder/box views; filing mode; storage select |
 | `CompartmentView` | Renders one compartment (binder pocket grid or box coverflow); highlights cards by `entry_id`; greys checked-out cards |
+| `BoxMap` | Every row of a box as a strip of card colors and rarities with divider tabs; seeks the row's coverflow (`seekTo`) and follows it (`onActiveSlotChange`) |
+| `ContainerOverview` | "All cards": a container's cards in physical order, box rows split at dividers, binder pages with their pockets |
 | `CreateContainerModal` | New-container wizard |
 | `DeckBuilder` | Deck CRUD, composition charts, draw simulator, checkout/return |
 | `CheckoutWizardModal` | Checkout **and** check-in locator (mode prop): grouped by container→page, grid highlight, select-all per page/container/all |
@@ -532,6 +534,9 @@ code-split view components. `/share/:token` renders the public view without auth
 | `Settings`, `AdminPanel`, `SharedCollection`, `PriceHistoryChart` | Preferences, user admin, public view, price charts |
 
 Client utils (`utils/`): `cardSort` (shared sort comparators + `sortCardsByOrder`),
+`sortCategories` (divider categories and where they change, shared by every
+storage view), `binderLayout` (page widths, pocket placement), `boxStrip` +
+`cardColors` (the box map's runs, gradient and tabs),
 `resolveCardPrice`/`formatPrice` (pricing display), `cardPrinting`/`cardRarity`
 (badge styling), `langHelper` (Japanese name handling), `cardOptions`
 (condition/printing/language enums), `shuffle` (draw sim), `i18n`/`translate` (UI
