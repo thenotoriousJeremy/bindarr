@@ -1,7 +1,7 @@
 import assert from 'node:assert';
 import {
-  shouldCapture, shouldRearm, autoStatusKey, worstCornerDrift,
-  REARM_EMPTY_FRAMES, REARM_DRIFT, MIN_RECAPTURE_MS,
+  shouldCapture, shouldRearm, nextChangedFrames, autoStatusKey, worstCornerDrift,
+  REARM_EMPTY_FRAMES, REARM_EMPTY_MS, REARM_DRIFT, MIN_RECAPTURE_MS, REARM_CHANGED_FRAMES,
 } from './autoCapture.js';
 
 const GATE = { minSteady: 3, minFill: 0.55 };
@@ -43,6 +43,15 @@ assert.strictEqual(
   shouldRearm({ armed: false, emptyFrames: 1, quad: null, capturedQuad: held }), false,
   'one empty frame is not enough (a hand passing over)');
 assert.strictEqual(
+  shouldRearm({ armed: false, emptyFrames: 1, emptyMs: 120, quad: null, capturedQuad: held }), false,
+  'one short empty reading on a fast detector is still a hand passing over');
+assert.strictEqual(
+  shouldRearm({ armed: false, emptyFrames: 1, emptyMs: REARM_EMPTY_MS, quad: null, capturedQuad: held }), true,
+  'a slow detector re-arms on one empty reading that spans enough time');
+assert.strictEqual(
+  shouldRearm({ armed: false, emptyFrames: 0, emptyMs: 5000, quad: held, capturedQuad: held }), false,
+  'elapsed time alone never re-arms while the card is still seen');
+assert.strictEqual(
   shouldRearm({ armed: false, emptyFrames: 0, quad: quad(0.2, 0.1 + REARM_DRIFT + 0.02), capturedQuad: held }), true,
   'card swapped without the frame emptying re-arms');
 assert.strictEqual(
@@ -57,6 +66,39 @@ for (let i = 0; i < 20; i++) {
   if (worstCornerDrift(held, creeping) > REARM_DRIFT) break;
 }
 assert.ok(worstCornerDrift(held, quad(0.2, 0.1 + 0.002)) < REARM_DRIFT, 'one creep step is below the threshold');
+
+// --- re-arming on appearance: the next card laid on top of the last one -------
+// Unit vectors stand in for signatures: distance is 1 - correlation, so a and b
+// are unrelated pictures and each is identical to itself.
+const N = 8;
+const sigA = Float32Array.from({ length: N }, (_, i) => (i % 2 ? 1 : -1));
+const sigB = Float32Array.from({ length: N }, (_, i) => (i < N / 2 ? 1 : -1));
+let changed = 0;
+for (let i = 0; i < REARM_CHANGED_FRAMES; i++) {
+  changed = nextChangedFrames(changed, { sig: sigB, prevSig: i ? sigB : sigA, capturedSig: sigA });
+}
+// The first frame of B differs from the frame before it (still A), so it only
+// counts once the picture has settled.
+assert.strictEqual(changed, REARM_CHANGED_FRAMES - 1, 'the swap frame itself is not settled yet');
+changed = nextChangedFrames(changed, { sig: sigB, prevSig: sigB, capturedSig: sigA });
+assert.strictEqual(
+  shouldRearm({ armed: false, emptyFrames: 0, quad: held, capturedQuad: held, changedFrames: changed }), true,
+  'a different card in the same quad re-arms once it has settled');
+assert.strictEqual(
+  shouldRearm({ armed: false, emptyFrames: 0, quad: held, capturedQuad: held, changedFrames: REARM_CHANGED_FRAMES - 1 }), false,
+  'not before it has settled');
+assert.strictEqual(
+  nextChangedFrames(2, { sig: sigA, prevSig: sigB, capturedSig: sigA }), 0,
+  'a transient (hand, shadow) that returns to the captured picture resets the count');
+assert.strictEqual(
+  nextChangedFrames(2, { sig: sigB, prevSig: null, capturedSig: sigA }), 0,
+  'no previous picture to call it settled against resets');
+assert.strictEqual(
+  nextChangedFrames(2, { sig: null, prevSig: sigB, capturedSig: sigA }), 0,
+  'no signature is "cannot tell", never "changed"');
+assert.strictEqual(
+  nextChangedFrames(2, { sig: sigB, prevSig: sigB, capturedSig: null }), 0,
+  'nothing captured to compare against');
 
 // --- status never disagrees with the trigger --------------------------------
 assert.strictEqual(autoStatusKey({ ...base }), 'ready');

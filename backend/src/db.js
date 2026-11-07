@@ -251,6 +251,7 @@ async function initDb() {
       set_name TEXT,
       number TEXT,
       image_url TEXT,
+      image_url_back TEXT,
       price_trend REAL,
       price_normal REAL,
       price_holofoil REAL,
@@ -668,6 +669,14 @@ async function initDb() {
         [needle, skip, needle, needle, skip]
       );
     }
+  }
+  // The back face of a double-faced Magic card (transform, modal DFC, reversible),
+  // which has no single image — `image_url` only ever held the front, so the back
+  // was unviewable (#103). Null for every single-faced card and every other game.
+  // Not backfilled: existing rows gain it the next time they are re-cached (the
+  // daily MTG price sweep re-fetches every owned and decked card).
+  if (!cardCacheCols.some(c => c.name === 'image_url_back')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN image_url_back TEXT`);
   }
 
   const collectionCols = await all(`PRAGMA table_info(collection)`);

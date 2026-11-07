@@ -235,6 +235,11 @@ function normalizeCard(raw, lang) {
   // Scryfall returns when a card was never printed in the language asked for.
   const language = languages.toName(raw.lang || lang);
   const imgSrc = raw.image_uris || face.image_uris || {};
+  // The second face's own art, for flipping the card in the inspector (#103). Only
+  // when there is no top-level image: split, flip and adventure cards also carry
+  // card_faces, but they are one printed side and their faces share that image
+  // (same rule cardSets.mtgCardImages applies to scanning).
+  const backSrc = (!raw.image_uris && raw.card_faces?.[1]?.image_uris) || null;
   const typeLine = raw.type_line || face.type_line || '';
   const colors = raw.colors || face.colors || [];
   // The preferred currency first, then the other — and never a mix of the two in
@@ -288,6 +293,7 @@ function normalizeCard(raw, lang) {
     set_name: raw.set_name || '',
     number: raw.collector_number || '',
     image_url: imgSrc.normal || imgSrc.large || imgSrc.small || '',
+    image_url_back: backSrc ? (backSrc.normal || backSrc.large || backSrc.small || null) : null,
     price_trend: normal != null ? normal : (foil != null ? foil : 0),
     price_normal: normal,
     price_holofoil: foil,
