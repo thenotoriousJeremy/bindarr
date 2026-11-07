@@ -9,6 +9,7 @@ const fs = require('fs');
 const http = require('http');
 const assert = require('assert');
 const { spawn } = require('child_process');
+const { freePort } = require('../freePort');
 
 const tmpDb = path.join(os.tmpdir(), `bindarr-oidc-test-${process.pid}.db`);
 const linkDb = path.join(os.tmpdir(), `bindarr-oidc-link-${process.pid}.db`);
@@ -128,7 +129,7 @@ async function runTests() {
   const idpIssuer = `http://127.0.0.1:${idpPort}`;
 
   // 2. Start Bindarr backend server with OIDC configuration
-  const bindarrPort = '3019';
+  const bindarrPort = String(await freePort());
   const base = `http://localhost:${bindarrPort}`;
 
   const server = spawn('node', [path.join(projectRoot, 'backend/src/server.js')], {
@@ -362,7 +363,7 @@ async function runUsernameLinkTests() {
   await new Promise(resolve => idpServer.listen(0, '127.0.0.1', resolve));
   const idpIssuer = `http://127.0.0.1:${idpServer.address().port}`;
 
-  const port = '3020';
+  const port = String(await freePort());
   const base = `http://localhost:${port}`;
   const server = spawn('node', [path.join(projectRoot, 'backend/src/server.js')], {
     env: {

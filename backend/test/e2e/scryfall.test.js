@@ -15,9 +15,9 @@ const net = require('net');
 const tmpDb = path.join(os.tmpdir(), `bindarr-scryfall-test-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;
 
-let currentPort = 3030;
-function getNextPort() {
-  return (currentPort++).toString();
+const { freePort } = require('../freePort');
+async function getNextPort() {
+  return String(await freePort());
 }
 
 function isPortFree(port) {
@@ -93,7 +93,7 @@ async function runTests() {
   // Start server preloading scryfall-mock.js
   const mockScript = path.join(__dirname, 'scryfall-mock.js');
   const serverScript = path.join(projectRoot, 'backend/src/server.js');
-  let port = getNextPort();
+  let port = await getNextPort();
   const server = spawn('node', ['-r', mockScript, serverScript], {
     env: {
       ...process.env,
@@ -147,7 +147,7 @@ async function runTests() {
       // Re-create server process with mock error
       await stopServer(server, port);
       
-      port = getNextPort();
+      port = await getNextPort();
       const serverErr = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -175,7 +175,7 @@ async function runTests() {
 
     // F3-TC4: Verify proxy rate limiting returns 429
     try {
-      port = getNextPort();
+      port = await getNextPort();
       const serverRate = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -205,7 +205,7 @@ async function runTests() {
 
     // F3-TC5: Verify mapped fields contract
     try {
-      port = getNextPort();
+      port = await getNextPort();
       const serverField = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -236,7 +236,7 @@ async function runTests() {
 
     // F3-TC6: Verify empty search results return 200 with empty array
     try {
-      port = getNextPort();
+      port = await getNextPort();
       const serverEmpty = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -259,7 +259,7 @@ async function runTests() {
 
     // F3-TC7: Verify API timeout returns 504 Gateway Timeout or fallback cached data
     try {
-      port = getNextPort();
+      port = await getNextPort();
       const serverTime = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -281,7 +281,7 @@ async function runTests() {
 
     // F3-TC8: Verify cache expiration (3 days) triggers background refresh
     try {
-      port = getNextPort();
+      port = await getNextPort();
       const serverExp = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -323,7 +323,7 @@ async function runTests() {
     // when the request uses the real syntax — `lang:ja` in q plus
     // include_multilingual — so this also guards the query construction.
     try {
-      port = getNextPort();
+      port = await getNextPort();
       const serverLang = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -357,7 +357,7 @@ async function runTests() {
 
     // F3-TC10: Verify double-faced transform cards resolve using front face
     try {
-      port = getNextPort();
+      port = await getNextPort();
       const serverDF = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -384,7 +384,7 @@ async function runTests() {
     // the three things a set browse relies on to add many cards without
     // re-adding what is already in the binder.
     try {
-      port = getNextPort();
+      port = await getNextPort();
       const serverBulk = spawn('node', ['-r', mockScript, serverScript], {
         env: { ...process.env, PORT: port, DB_PATH: tmpDb }
       });

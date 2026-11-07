@@ -8,6 +8,7 @@ const os = require('os');
 const fs = require('fs');
 const assert = require('assert');
 const { spawn } = require('child_process');
+const { freePort } = require('../freePort');
 
 // Boots the real Express app against a throwaway DB and exercises it over HTTP.
 // This is the only test that starts server.js end to end, so it catches route
@@ -24,7 +25,7 @@ async function waitForServer(url) {
 }
 
 async function runTests() {
-  const port = '3009';
+  const port = String(await freePort());
   const base = `http://localhost:${port}`;
   const server = spawn('node', [path.join(projectRoot, 'backend/src/server.js')], {
     // HTTPS_PORT blanked for the same reason as in scryfall-mock.js, which this

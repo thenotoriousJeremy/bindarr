@@ -12,7 +12,8 @@ const { spawn } = require('child_process');
 // Isolated temp DB and unique port
 const tmpDb = path.join(os.tmpdir(), `bindarr-scenarios-test-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;
-const port = '3012';
+const { freePort } = require('../freePort');
+let port;
 
 const projectRoot = path.join(__dirname, '../../../');
 const db = require('../../src/db');
@@ -46,6 +47,7 @@ async function waitForDatabase() {
 }
 
 async function runTests() {
+  port = String(await freePort());
   // Start server preloading scryfall-mock.js
   const mockScript = path.join(__dirname, 'scryfall-mock.js');
   const serverScript = path.join(projectRoot, 'backend/src/server.js');
