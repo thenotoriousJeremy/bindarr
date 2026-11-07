@@ -17,6 +17,7 @@ import AddToListSelect from './AddToListSelect';
 import { useT } from '../utils/i18n';
 import RiotNotice from './RiotNotice';
 import { apiErrorText } from '../utils/apiError';
+import { LatestRequest, isAbortError } from '../utils/request';
 
 // Search failures worth explaining in-page rather than only as a toast. `keyHint`
 // marks the ones a user API key actually fixes; an upstream 5xx does not. Title
@@ -141,8 +142,17 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
     }
   };
 
+  // Only the newest search may write results. Without this a slow "pika"
+  // answered after a quick "pikachu" and replaced its results; now starting a
+  // search aborts the one before it, and a response that lands late anyway is
+  // dropped. Leaving the screen aborts whatever is still running.
+  const searchReq = useRef(null);
+  if (!searchReq.current) searchReq.current = new LatestRequest();
+  useEffect(() => () => searchReq.current.cancel(), []);
+
   // pageNum > 1 appends to the existing results instead of replacing them.
   const runSearch = async (pageNum, size = pageSize) => {
+    const req = searchReq.current.begin();
     const append = pageNum > 1;
     if (append) setLoadingMore(true); else setLoading(true);
     setSearchError(null);
@@ -180,9 +190,11 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       params.append('page', pageNum);
       params.append('limit', size);
 
-      const response = await fetch(`/api/search?${params.toString()}`);
+      const response = await fetch(`/api/search?${params.toString()}`, { signal: req.signal });
+      if (!req.isLatest()) return;
       if (response.ok) {
         const data = await response.json();
+        if (!req.isLatest()) return;
         const reported = parseInt(response.headers.get('X-Total-Count'), 10);
         if (Number.isFinite(reported)) setTotal(reported);
         setHasMore(data.length >= size);
@@ -199,6 +211,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         if (!append && data.length === 1 && !selectMode) openQuickAdd(data[0]);
       } else {
         const errData = await response.json().catch(() => ({}));
+        if (!req.isLatest()) return;
         // The server read the query and refused it (or Scryfall did): that belongs
         // under the box, like the check in handleSearch.
         if (response.status === 400 && errData.code) { setSyntaxError(errData); return; }
@@ -212,11 +225,14 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         showToast(apiErrorText(t, errData, 'search.errRequest'));
       }
     } catch (err) {
+      if (isAbortError(err) || !req.isLatest()) return;
       console.error(err);
       showToast(t('search.errApi'));
     } finally {
-      setLoading(false);
-      setLoadingMore(false);
+      if (req.isLatest()) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   };
 
@@ -779,10 +795,12 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       {game === 'riftbound' && <RiotNotice style={{ margin: '0 0 1rem' }} />}
 
       {/* Loading state */}
-      {loading && <div className="spinner"></div>}
+      {/* Only when there is nothing to show: a new search over existing results
+          keeps them on screen, dimmed, until its answer replaces them. */}
+      {loading && cards.length === 0 && <div className="spinner"></div>}
 
       {/* Filters and Sorting Panel */}
-      {!loading && cards.length > 0 && (
+      {cards.length > 0 && (
         <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem', alignItems: 'end' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
@@ -886,8 +904,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       )}
 
       {/* Search Results Grid */}
-      {!loading && cards.length > 0 && filteredAndSortedCards.length > 0 && (
-        <div className="card-grid">
+      {cards.length > 0 && filteredAndSortedCards.length > 0 && (
+        <div className="card-grid" aria-busy={loading} style={loading ? { opacity: 0.55, transition: 'opacity 0.15s' } : undefined}>
           {filteredAndSortedCards.map((card) => {
             const glowClass = (card.types && card.types[0]) ? `type-glow-${card.types[0].toLowerCase()}` : 'type-glow-normal';
             const isSelected = selectedIds.has(card.id);
