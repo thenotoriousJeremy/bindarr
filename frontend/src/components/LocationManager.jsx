@@ -367,7 +367,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   }, [selectedLocationId]);
 
   useEffect(() => {
-    if (!focusEntryId || allCards.length === 0) return;
+    // App clears the request when you leave this tab (the tab stays mounted), so
+    // forget it here too: locating the same card again must navigate again.
+    if (!focusEntryId) { focusNavRef.current = null; return; }
+    if (allCards.length === 0) return;
     const targetCard = allCards.find(c => (c.entry_id || c.id) === focusEntryId);
     if (!targetCard) return;
 
