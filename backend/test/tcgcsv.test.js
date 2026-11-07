@@ -264,7 +264,13 @@ const dbMod = require('../src/db');
     return { data, status: 200, statusText: 'OK', headers: {}, config };
   };
   await tcgcsv.syncIfUpdated();
-  assert.strictEqual(remoteRequests.length, 13, 'the initial targeted sync should fetch the timestamp, groups, products, and prices');
+  // 1 (last-updated) + 2 (a groups list per category) + 2 x 2 groups.
+  assert.strictEqual(remoteRequests.length, 7, 'the initial targeted sync should fetch the timestamp, groups, products, and prices');
+  assert.deepStrictEqual(tcgcsv.SYNC_CATEGORIES, [3, 85], 'only the Pokémon categories anything reads are synced');
+  assert.ok(
+    remoteRequests.every(r => r.path === '/last-updated.txt' || /^\/tcgplayer\/(3|85)\//.test(r.path)),
+    `only categories 3 and 85 may be requested (saw ${remoteRequests.map(r => r.path).join(', ')})`
+  );
   assert.ok(remoteRequests.every(request => request.baseURL === tcgcsv.client.defaults.baseURL),
     'every TCGCSV request must use the configured base URL');
   assert.ok(remoteRequests.every(request => request.userAgent === tcgcsv.USER_AGENT),
@@ -291,7 +297,7 @@ const dbMod = require('../src/db');
   remoteVersion = '2026-10-26T20:05:50+0000';
   await dbMod.run(`UPDATE app_settings SET tcgcsv_last_checked_at = datetime('now', '-25 hours') WHERE id = 1`);
   await tcgcsv.syncIfUpdated();
-  assert.strictEqual(remoteRequests.length, fetchedRequestCount + 14,
+  assert.strictEqual(remoteRequests.length, fetchedRequestCount + 8,
     'a newer timestamp should trigger a complete sync');
   assert.strictEqual(
     (await dbMod.get(`SELECT tcgcsv_data_version FROM app_settings WHERE id = 1`)).tcgcsv_data_version,
@@ -299,10 +305,136 @@ const dbMod = require('../src/db');
     'the active cache version should advance only after the sync completes'
   );
 
+  // --- Per-group failure isolation, transient resume, slim storage ----------
+  // Real-shaped responses with everything TCGCSV sends, and three kinds of broken
+  // group: a 404, a success:false envelope, and an HTML 200 / bare array.
+  const quietWarn = console.warn;
+  const warnings = [];
+  console.warn = message => { warnings.push(String(message)); };
+  const httpError = (config, status) => {
+    const error = new Error(`Request failed with status code ${status}`);
+    error.config = config;
+    error.response = { status, statusText: String(status), headers: {}, data: 'nope' };
+    return error;
+  };
+  const RICH = {
+    '/tcgplayer/3/groups': { success: true, errors: [], results: [
+      { groupId: 30, name: 'Fixture Group', abbreviation: 'FG', isSupplemental: false,
+        publishedOn: '2026-01-01T00:00:00', modifiedOn: '2026-10-01T00:00:00', categoryId: 3 },
+      { groupId: 31, name: 'Gone Group', abbreviation: 'GG', categoryId: 3 },
+      { groupId: 32, name: 'Html Group', abbreviation: 'HG', categoryId: 3 },
+    ] },
+    '/tcgplayer/85/groups': { success: true, results: [{ groupId: 850, name: 'JP Fixture', abbreviation: 'JPF', categoryId: 85 }] },
+    '/tcgplayer/3/30/products': { success: true, results: [
+      { productId: 1001, name: 'Charizard', cleanName: 'Charizard', imageUrl: 'https://img.example.test/1001.jpg',
+        categoryId: 3, groupId: 30, url: 'https://www.tcgplayer.com/product/1001', modifiedOn: '2026-10-01',
+        imageCount: 1, presaleInfo: { isPresale: false },
+        extendedData: [
+          { name: 'Number', displayName: 'Card Number', value: '004/102' },
+          { name: 'Rarity', displayName: 'Rarity', value: 'Holo Rare' },
+          { name: 'CardText', displayName: 'Card Text', value: 'x'.repeat(500) },
+        ] },
+      { productId: 1002, name: 'Fixture Booster Box', groupId: 30, extendedData: [] },
+    ] },
+    '/tcgplayer/3/30/prices': { success: true, results: [
+      { productId: 1001, lowPrice: 300, midPrice: 450, highPrice: 900, marketPrice: 420.5, directLowPrice: null, subTypeName: 'Holofoil' },
+      { productId: 1001, lowPrice: 1, midPrice: 2, highPrice: 3, marketPrice: 2, directLowPrice: null, subTypeName: 'Some New Finish' },
+      { productId: 1002, lowPrice: null, midPrice: null, highPrice: null, marketPrice: null, directLowPrice: null, subTypeName: 'Normal' },
+    ] },
+    '/tcgplayer/3/31/products': 404,
+    '/tcgplayer/3/31/prices': { success: false, errors: ['group not found'], results: [] },
+    '/tcgplayer/3/32/products': '<!doctype html><html><body>Just a moment...</body></html>',
+    '/tcgplayer/3/32/prices': [],
+    '/tcgplayer/85/850/products': { success: true, results: [] },
+    '/tcgplayer/85/850/prices': { success: true, results: [] },
+  };
+  let richFail500 = '/tcgplayer/3/30/prices';
+  const richRequests = [];
+  tcgcsv.client.defaults.adapter = async config => {
+    richRequests.push(config.url);
+    if (config.url === '/last-updated.txt') return { data: remoteVersion, status: 200, headers: {}, config };
+    if (config.url === richFail500) { richFail500 = null; throw httpError(config, 503); }
+    const body = RICH[config.url];
+    if (body === undefined) throw new Error(`unexpected request ${config.url}`);
+    if (body === 404) throw httpError(config, 404);
+    return { data: body, status: 200, headers: {}, config };
+  };
+  try {
+    remoteVersion = '2026-10-27T20:05:50+0000';
+    await dbMod.run(`UPDATE app_settings SET tcgcsv_last_checked_at = datetime('now', '-25 hours') WHERE id = 1`);
+
+    // A transient 503 aborts the run and leaves the version pending...
+    await assert.rejects(tcgcsv.syncIfUpdated(), /503/);
+    let settings = await dbMod.get(`SELECT tcgcsv_data_version, tcgcsv_pending_version FROM app_settings WHERE id = 1`);
+    assert.strictEqual(settings.tcgcsv_pending_version, remoteVersion, 'a transient failure keeps the version pending');
+    assert.strictEqual(settings.tcgcsv_data_version, '2026-10-26T20:05:50+0000', 'and the active version untouched');
+    assert.strictEqual(richRequests.length, 5);
+
+    // ...and the next tick resumes where it stopped, without re-checking
+    // last-updated.txt or refetching what is stored.
+    richRequests.length = 0;
+    const resumed = await tcgcsv.syncIfUpdated();
+    assert.deepStrictEqual(richRequests, [
+      '/tcgplayer/3/30/prices',
+      '/tcgplayer/3/31/products', '/tcgplayer/3/31/prices',
+      '/tcgplayer/3/32/products', '/tcgplayer/3/32/prices',
+      '/tcgplayer/85/850/products', '/tcgplayer/85/850/prices',
+    ]);
+    assert.strictEqual(resumed.updated, true);
+    assert.strictEqual(resumed.requests, 7, 'the sync reports how many requests it sent');
+    assert.strictEqual(resumed.expectedRequests, 1 + 2 + 2 * 4, 'a full sync costs 1 + categories + 2 x groups');
+    settings = await dbMod.get(`SELECT tcgcsv_data_version, tcgcsv_pending_version FROM app_settings WHERE id = 1`);
+    assert.strictEqual(settings.tcgcsv_data_version, remoteVersion,
+      'a 404 / success:false / HTML group must not wedge the sync: the version completes');
+    assert.strictEqual(settings.tcgcsv_pending_version, null);
+    assert.ok(warnings.some(w => w.includes('/tcgplayer/3/31/products') && w.includes('empty')));
+  } finally {
+    tcgcsv.client.defaults.adapter = originalAdapter;
+    console.warn = quietWarn;
+  }
+  for (const broken of ['/tcgplayer/3/31/products', '/tcgplayer/3/31/prices', '/tcgplayer/3/32/products', '/tcgplayer/3/32/prices']) {
+    const [, cat, group, kind] = broken.match(/^\/tcgplayer\/(\d+)\/(\d+)\/(\w+)$/);
+    const rows = kind === 'products' ? await tcgcsv.getProducts(cat, group) : await tcgcsv.getPrices(cat, group);
+    assert.deepStrictEqual(rows, [], `${broken} is cached as empty`);
+  }
+
+  // Only the fields something reads are stored.
+  const rawRow = async (p) => JSON.parse((await dbMod.get(
+    `SELECT results_json FROM tcgcsv_cache WHERE path = ? AND data_version = ?`, [p, remoteVersion]
+  )).results_json);
+  assert.deepStrictEqual(await rawRow('/tcgplayer/3/groups'), [
+    { groupId: 30, name: 'Fixture Group', abbreviation: 'FG' },
+    { groupId: 31, name: 'Gone Group', abbreviation: 'GG' },
+    { groupId: 32, name: 'Html Group', abbreviation: 'HG' },
+  ]);
+  assert.deepStrictEqual(await rawRow('/tcgplayer/3/30/products'),
+    [{ productId: 1001, name: 'Charizard', number: '004/102' }],
+    'products keep id, name and collector number; sealed product (no number) is dropped');
+  assert.deepStrictEqual(await rawRow('/tcgplayer/3/30/prices'),
+    [{ productId: 1001, subTypeName: 'Holofoil', marketPrice: 420.5, midPrice: 450 }],
+    'prices keep only priceable finishes and the two prices that are read');
+  assert.strictEqual(tcgcsv.numberOf((await tcgcsv.getProducts(3, 30))[0]), '004/102');
+  assert.deepStrictEqual(
+    [...require('../src/utils/tcgcsvSlim').SUBTYPES_PRICED].sort(),
+    Object.keys(tcgcsv.SUBTYPE_TO_COLUMN).sort(),
+    'the slim cache must keep exactly the finishes the sweep can price'
+  );
+  assert.strictEqual(
+    (await dbMod.get(`SELECT COUNT(*) n FROM tcgcsv_cache WHERE data_version != ?`, [remoteVersion])).n, 0,
+    'older versions are deleted once a sync completes'
+  );
+
+  // Malformed envelopes are rejected, never cached as an empty success.
+  for (const bad of ['<html>blocked</html>', [], [{ productId: 1 }], {}, { success: true }, { success: true, results: {} }, { success: false, results: [] }, null]) {
+    assert.throws(() => tcgcsv.parseResults('/tcgplayer/3/1/products', bad), /TCGCSV/,
+      `parseResults must reject ${JSON.stringify(bad)}`);
+  }
+  assert.deepStrictEqual(tcgcsv.parseResults('/x/products', { success: true, results: [] }), []);
+
   const originalDbGet = dbMod.get;
   let responseCacheReads = 0;
   dbMod.get = (query, params) => {
-    if (query.includes('FROM tcgcsv_response_cache')) responseCacheReads++;
+    if (query.includes('FROM tcgcsv_cache')) responseCacheReads++;
     return originalDbGet(query, params);
   };
   const groupDataCache = new Map();
@@ -363,6 +495,120 @@ const dbMod = require('../src/db');
     console.warn = cooldownWarn;
   }
   assert.strictEqual(blockedRequestCount, 0, 'the cooldown must suppress outgoing requests');
+
+  // --- A failed sync must not stop pricing --------------------------------
+  // The cooldown is still active, so syncIfUpdated throws. The sweep must log it
+  // and price from the last complete version anyway.
+  await dbMod.run(
+    `INSERT OR REPLACE INTO card_cache (id, name, set_id, set_name, number, game, language, price_trend)
+     VALUES ('fg-4', 'Charizard', 'fg', 'Fixture Group', '4', 'pokemon', 'English', 0)`
+  );
+  await dbMod.run(`UPDATE app_settings SET tcgcsv_last_checked_at = datetime('now', '-25 hours') WHERE id = 1`);
+  let cooldownRequests = 0;
+  const sweepLogs = [];
+  const sweepWarn = console.warn;
+  const sweepLog = console.log;
+  tcgcsv.client.defaults.adapter = async () => { cooldownRequests++; throw new Error('must not be sent'); };
+  console.warn = message => { sweepLogs.push(String(message)); };
+  console.log = message => { sweepLogs.push(String(message)); };
+  try {
+    await assert.rejects(tcgcsv.syncIfUpdated(), tcgcsv.isCooldownError, 'precondition: the sync itself throws');
+    await tcgcsv.updateCollectionPrices(true, 'all');
+  } finally {
+    tcgcsv.client.defaults.adapter = originalAdapter;
+    console.warn = sweepWarn;
+    console.log = sweepLog;
+  }
+  assert.strictEqual(cooldownRequests, 0);
+  const pricedCard = await dbMod.get(`SELECT price_trend, price_holofoil, tcgplayer_product_id, price_source FROM card_cache WHERE id = 'fg-4'`);
+  assert.deepStrictEqual(
+    { ...pricedCard },
+    { price_trend: 420.5, price_holofoil: 420.5, tcgplayer_product_id: 1001, price_source: 'tcgcsv' },
+    `pricing must run from the cache when the sync throws (logs: ${sweepLogs.join(' | ')})`
+  );
+  assert.ok(sweepLogs.some(m => /cooldown/.test(m) && /cached data/.test(m)), 'the sync failure is logged');
+
+  // A true cache miss (no version ever completed) is the one case that stops.
+  const savedVersion = remoteVersion;
+  await dbMod.run(`UPDATE app_settings SET tcgcsv_data_version = NULL WHERE id = 1`);
+  await dbMod.run(`UPDATE card_cache SET price_trend = 0 WHERE id = 'fg-4'`);
+  console.warn = () => {};
+  console.log = () => {};
+  try {
+    await tcgcsv.updateCollectionPrices(true, 'all');
+  } finally {
+    console.warn = sweepWarn;
+    console.log = sweepLog;
+  }
+  assert.strictEqual((await dbMod.get(`SELECT price_trend FROM card_cache WHERE id = 'fg-4'`)).price_trend, 0,
+    'with nothing cached the sweep stops without pricing');
+  await dbMod.run(`UPDATE app_settings SET tcgcsv_data_version = ? WHERE id = 1`, [savedVersion]);
+
+  // --- A pending version older than 24h is abandoned ----------------------
+  await dbMod.run(`UPDATE app_settings SET tcgcsv_403_cooldown_until = NULL WHERE id = 1`);
+  const stalePending = '2026-10-28T20:05:50+0000';
+  await dbMod.run(
+    `UPDATE app_settings SET tcgcsv_pending_version = ?, tcgcsv_last_checked_at = datetime('now', '-25 hours') WHERE id = 1`,
+    [stalePending]
+  );
+  await dbMod.run(
+    `INSERT INTO tcgcsv_cache (path, data_version, results_json) VALUES ('/tcgplayer/3/groups', ?, '[]')`,
+    [stalePending]
+  );
+  // TCGCSV has since published the version we already hold.
+  const abandonRequests = [];
+  tcgcsv.client.defaults.adapter = async config => {
+    abandonRequests.push(config.url);
+    if (config.url === '/last-updated.txt') return { data: savedVersion, status: 200, headers: {}, config };
+    throw new Error(`unexpected request ${config.url}`);
+  };
+  console.warn = () => {};
+  console.log = () => {};
+  try {
+    await tcgcsv.syncIfUpdated();
+  } finally {
+    tcgcsv.client.defaults.adapter = originalAdapter;
+    console.warn = sweepWarn;
+    console.log = sweepLog;
+  }
+  assert.deepStrictEqual(abandonRequests, ['/last-updated.txt'],
+    'a stale pending version must be abandoned and last-updated.txt checked again');
+  const afterAbandon = await dbMod.get(
+    `SELECT tcgcsv_data_version, tcgcsv_pending_version, tcgcsv_last_checked_at >= datetime('now', '-1 hour') AS fresh
+       FROM app_settings WHERE id = 1`
+  );
+  assert.strictEqual(afterAbandon.tcgcsv_pending_version, null);
+  assert.strictEqual(afterAbandon.tcgcsv_data_version, savedVersion);
+  assert.strictEqual(afterAbandon.fresh, 1);
+  assert.strictEqual(
+    (await dbMod.get(`SELECT COUNT(*) n FROM tcgcsv_cache WHERE data_version = ?`, [stalePending])).n, 0,
+    'the abandoned version\'s rows are removed'
+  );
+
+  // --- Migration from the earlier whole-response table ---------------------
+  await dbMod.run(`CREATE TABLE tcgcsv_response_cache (
+    path TEXT NOT NULL, data_version TEXT NOT NULL, results_json TEXT NOT NULL, PRIMARY KEY (path, data_version))`);
+  await dbMod.run(
+    `INSERT INTO tcgcsv_response_cache (path, data_version, results_json) VALUES (?, ?, ?)`,
+    ['/tcgplayer/3/30/products', 'legacy-version', JSON.stringify(RICH['/tcgplayer/3/30/products'].results)]
+  );
+  console.log = () => {};
+  try {
+    await dbMod.initDb();
+  } finally {
+    console.log = sweepLog;
+  }
+  assert.strictEqual(
+    (await dbMod.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tcgcsv_response_cache'`)), undefined,
+    'the legacy table is dropped'
+  );
+  assert.deepStrictEqual(
+    JSON.parse((await dbMod.get(
+      `SELECT results_json FROM tcgcsv_cache WHERE path = '/tcgplayer/3/30/products' AND data_version = 'legacy-version'`
+    )).results_json),
+    [{ productId: 1001, name: 'Charizard', number: '004/102' }],
+    'legacy rows are slimmed into the new table, not refetched'
+  );
 
   for (const column of ['tcgcsv_data_version', 'tcgcsv_pending_version', 'tcgcsv_last_checked_at']) {
     assert.ok(cols.includes(column), `app_settings needs ${column}`);
