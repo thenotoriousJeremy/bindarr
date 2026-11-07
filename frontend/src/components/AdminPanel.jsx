@@ -80,7 +80,8 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
         showToast(data.message);
         fetchUsers(); // Refresh stats
       } else {
-        showToast(t('admin.errSeed'));
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || t('admin.errSeed'));
       }
     } catch (err) {
       console.error(err);
