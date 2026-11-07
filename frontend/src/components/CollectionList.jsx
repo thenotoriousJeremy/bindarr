@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Search, Trash2, Edit2, LayoutGrid, List, SlidersHorizontal, X, MousePointerClick } from 'lucide-react';
+import { Search, Trash2, Edit2, LayoutGrid, List, SlidersHorizontal, X, MousePointerClick, Library } from 'lucide-react';
 import { getCardDisplayName, translateJapaneseName } from '../utils/langHelper';
 import { priceText } from '../utils/formatPrice';
 import { CONDITIONS, PRINTINGS, GRADERS, getLanguageNamesForGame } from '../utils/cardOptions';
@@ -405,6 +405,18 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
             <Trash2 size={14} />
             {t('trash.open')}
           </button>
+          {/* Every card of a set, the missing ones greyed out (the Sets tab). */}
+          {onNavigate && (
+            <button
+              className="btn btn-secondary"
+              onClick={() => onNavigate('sets')}
+              style={{ fontSize: '0.8rem', padding: '0.4rem 0.9rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+              title={t('collection.openSetsHint')}
+            >
+              <Library size={14} />
+              {t('collection.openSets')}
+            </button>
+          )}
           {/* Multi-select toggle (long-press cards is the primary path) */}
           <button
             className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}

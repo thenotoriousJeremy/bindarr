@@ -628,6 +628,24 @@ async function initDb() {
     )
   `);
 
+  // Which cards a set holds, as its provider listed them (setListing.js). The
+  // cards themselves are in card_cache; this records that the list is COMPLETE,
+  // which card_cache cannot say — a set's rows arrive there one search at a time.
+  // `source` is the provider that listed it, so a Pokémon provider switch (a
+  // different numbering of the same set) reads as stale rather than as current.
+  await run(`
+    CREATE TABLE IF NOT EXISTS set_listings (
+      game TEXT NOT NULL,
+      language TEXT NOT NULL,
+      set_id TEXT NOT NULL,
+      source TEXT,
+      card_ids TEXT NOT NULL,
+      meta TEXT,
+      fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (game, language, set_id)
+    )
+  `);
+
   // Cached PSA cert lookups. Cached forever, with no staleness check anywhere —
   // deliberate, and the only table in this schema like that: a cert describes a
   // slab that was sealed once and graded once. The grade cannot change, so a

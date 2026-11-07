@@ -1,0 +1,35 @@
+{
+  "_note": "A Lorcast /cards/search?q=set:1 response, cut down to the fields lorcastApi.normalizeCard reads.",
+  "results": [
+    {
+      "id": "crd_3a299da6bf864690a188f07aeb55ffdf",
+      "name": "A Whole New World",
+      "collector_number": "195",
+      "rarity": "Super_rare",
+      "cost": 5,
+      "ink": "Steel",
+      "inks": ["Steel"],
+      "type": ["Action", "Song"],
+      "prices": { "usd": 2.32, "usd_foil": 10.34 },
+      "tcgplayer_id": 506088,
+      "image_uris": { "digital": { "normal": "https://cards.lorcast.io/card/digital/normal/crd_3a299da6bf864690a188f07aeb55ffdf.avif" } },
+      "set": { "id": "set_7ecb0e0c71af496a9e0110e23824e0a5", "code": "1", "name": "The First Chapter" }
+    },
+    {
+      "id": "crd_mickey_1",
+      "name": "Mickey Mouse",
+      "version": "Brave Little Tailor",
+      "collector_number": "115",
+      "rarity": "Legendary",
+      "cost": 8,
+      "ink": "Ruby",
+      "inks": ["Ruby"],
+      "type": ["Character"],
+      "classifications": ["Dreamborn", "Hero"],
+      "prices": { "usd": 4.5, "usd_foil": 18.0 },
+      "tcgplayer_id": 506100,
+      "image_uris": { "digital": { "normal": "https://cards.lorcast.io/card/digital/normal/crd_mickey_1.avif" } },
+      "set": { "id": "set_7ecb0e0c71af496a9e0110e23824e0a5", "code": "1", "name": "The First Chapter" }
+    }
+  ]
+}

@@ -1,12 +1,13 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
-import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload, Eye, EyeOff, SlidersHorizontal, Info, Bug, Lightbulb, MessagesSquare, ScrollText, Github, Layers, Languages, Smartphone, Server } from 'lucide-react';
-import { GAMES, enabledGames, setGameEnabled, gameOptions, defaultGame } from '../utils/games';
+import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload, Eye, EyeOff, SlidersHorizontal, Info, Bug, Lightbulb, MessagesSquare, ScrollText, Github, Layers, Languages, Smartphone, Server, PackageOpen } from 'lucide-react';
+import { GAMES, enabledGames, setGameEnabled, gameOptions, defaultGame, isGameEnabled } from '../utils/games';
 import { CURRENCIES, getCurrency, setCurrency } from '../utils/formatPrice';
 import { LOCALES, localeName, useT } from '../utils/i18n';
 import { REPO_URL } from '../utils/repo';
 import { saveFile } from '../utils/saveFile';
 import { isDeviceMode } from '../apiBase';
 import InstanceSettings from './InstanceSettings';
+import PreconImportModal from './PreconImportModal';
 
 // Device mode only; a server-mode build never loads the download manager.
 const DeviceScanSetup = lazy(() => import('./DeviceScanSetup'));
@@ -114,6 +115,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
   const [shownGames, setShownGames] = useState(() => enabledGames());
 
   const [versionInfo, setVersionInfo] = useState(null);
+  const [showPrecons, setShowPrecons] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [backendReachable, setBackendReachable] = useState(true);
 
@@ -566,6 +568,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+      {showPrecons && <PreconImportModal onClose={() => setShowPrecons(false)} showToast={showToast} />}
       {/* Title Panel */}
       <div className="glass-panel">
         <h2 style={{ fontSize: '1.25rem', color: 'var(--text-strong)' }}>{t('settings.title')}</h2>
@@ -1041,6 +1044,19 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
                 style={{ display: 'none' }}
               />
             </label>
+            {/* A boxed Magic product, by name: MTGJSON's precon and Secret Lair lists. */}
+            {isGameEnabled('mtg') && (
+              <button
+                type="button"
+                onClick={() => setShowPrecons(true)}
+                className="btn btn-secondary"
+                title={t('precon.hint')}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
+              >
+                <PackageOpen size={14} />
+                <span>{t('precon.open')}</span>
+              </button>
+            )}
           </div>
         </div>
 

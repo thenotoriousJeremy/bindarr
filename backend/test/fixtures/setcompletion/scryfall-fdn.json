@@ -1,0 +1,69 @@
+{
+  "_note": "Two /cards/search pages for a set, cut down to the fields scryfallApi.normalizeCard reads.",
+  "page1": {
+    "object": "list",
+    "total_cards": 3,
+    "has_more": true,
+    "next_page": "https://api.scryfall.com/cards/search?format=json&include_extras=true&order=set&page=2&q=set%3Afdn+unique%3Aprints+include%3Aextras+-is%3Adigital&unique=prints",
+    "data": [
+      {
+        "object": "card",
+        "id": "0000aaaa-0000-4000-8000-000000000001",
+        "lang": "en",
+        "name": "Sire of Seven Deaths",
+        "set": "fdn",
+        "set_name": "Foundations",
+        "collector_number": "1",
+        "rarity": "mythic",
+        "type_line": "Creature — Eldrazi",
+        "colors": [],
+        "color_identity": [],
+        "cmc": 7,
+        "prices": { "usd": "4.50", "usd_foil": "6.00", "eur": "4.00", "eur_foil": null },
+        "image_uris": { "normal": "https://cards.scryfall.io/normal/front/0/0/0000aaaa-0000-4000-8000-000000000001.jpg" },
+        "tcgplayer_id": 567801
+      },
+      {
+        "object": "card",
+        "id": "0000aaaa-0000-4000-8000-000000000002",
+        "lang": "en",
+        "name": "Arahbo, the First Fang",
+        "set": "fdn",
+        "set_name": "Foundations",
+        "collector_number": "2",
+        "rarity": "rare",
+        "type_line": "Legendary Creature — Cat Avatar",
+        "colors": ["W"],
+        "color_identity": ["W"],
+        "cmc": 3,
+        "prices": { "usd": null, "usd_foil": null, "eur": null, "eur_foil": null },
+        "image_uris": { "normal": "https://cards.scryfall.io/normal/front/0/0/0000aaaa-0000-4000-8000-000000000002.jpg" },
+        "tcgplayer_id": 567802
+      }
+    ]
+  },
+  "page2": {
+    "object": "list",
+    "total_cards": 3,
+    "has_more": false,
+    "data": [
+      {
+        "object": "card",
+        "id": "0000aaaa-0000-4000-8000-000000000272",
+        "lang": "en",
+        "name": "Plains",
+        "set": "fdn",
+        "set_name": "Foundations",
+        "collector_number": "272",
+        "rarity": "common",
+        "type_line": "Basic Land — Plains",
+        "colors": [],
+        "color_identity": ["W"],
+        "cmc": 0,
+        "prices": { "usd": "0.10", "usd_foil": "0.50", "eur": null, "eur_foil": null },
+        "image_uris": { "normal": "https://cards.scryfall.io/normal/front/0/0/0000aaaa-0000-4000-8000-000000000272.jpg" },
+        "tcgplayer_id": 567803
+      }
+    ]
+  }
+}

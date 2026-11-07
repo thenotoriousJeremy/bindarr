@@ -9,6 +9,7 @@ import ScryfallSyntaxHelp from './ScryfallSyntaxHelp';
 import { syntaxErrorText } from '../utils/scryfallSyntax';
 import { useBackGuard } from '../utils/useBackGuard';
 import { buildDeckExport, parseDeckLine, pickDeckLineCard } from '../utils/deckText';
+import { buildMassEntry, massEntryPage } from '../utils/tcgMassEntryUrl';
 import { defaultGame, gameOptions, showGamePicker, isGameEnabled } from '../utils/games';
 import CardImage from './CardImage';
 import DeckListActions from './DeckListActions';
@@ -639,16 +640,18 @@ function DeckBuilder({ showToast }) {
       .catch(() => showToast(t('deck.errCopy')));
   };
 
-  // Copy the buylist and open TCGplayer Mass Entry — user pastes (their mass
-  // entry page has no documented prefill URL param, so clipboard + open is the
-  // reliable path).
+  // Open TCGplayer Mass Entry with the buylist already filled in (its `c` link
+  // parameter, see utils/tcgMassEntryUrl). Names only: a deck wants the card, not
+  // one printing of it. Still copied, for a list too long to fit in a link.
   const handleOpenMassEntry = () => {
     const text = buildDeckExport(activeDeck?.cards, 'buylist');
     if (!text) { showToast(t('deck.nothingToBuy')); return; }
-    const line = (activeDeck?.game === 'mtg') ? 'Magic' : 'Pokemon';
+    const game = activeDeck?.game || 'pokemon';
+    const need = (activeDeck?.cards || []).map(c => ({ quantity: (c.quantity || 0) - (c.owned_qty || 0), name: c.name }));
+    const { url } = buildMassEntry(need.filter(i => i.quantity > 0), { game });
     navigator.clipboard.writeText(text).catch(() => {});
-    window.open(`https://www.tcgplayer.com/massentry?productline=${line}`, '_blank', 'noopener');
-    showToast(t('deck.buylistCopied'));
+    window.open(url || massEntryPage(game), '_blank', 'noopener');
+    showToast(t(url ? 'deck.buylistOpened' : 'deck.buylistCopied'));
   };
 
   const handleCompareImport = async () => {

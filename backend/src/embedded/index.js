@@ -78,6 +78,8 @@ app.use('/api', require('../routes/backup'));
 app.use('/api/sets', require('../routes/sets'));
 app.use('/api/decks', require('../routes/decks'));
 app.use('/api/settings', require('../routes/settings'));
+app.use('/api/set-completion', require('../routes/setCompletion'));
+app.use('/api/precons', require('../routes/precons'));
 // Full paths inside (/lists, /decks/:id/missing-list, /cards/:id/decks), as on a server.
 app.use('/api', require('../routes/lists'));
 
