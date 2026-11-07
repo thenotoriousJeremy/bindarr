@@ -245,7 +245,7 @@ export function FocusedCardInfo({ card, slotNumber, moveSelect = null }) {
             {card.quantity > 1 && <span style={{ ...infoChipStyle, color: 'var(--text-strong)' }}>x{card.quantity}</span>}
             {card.price_trend > 0 && (
               <span style={{ ...infoChipStyle, color: 'var(--accent-yellow)', marginLeft: 'auto' }}>
-                {t('compartment.value', { price: priceText(card.price_trend) })}
+                {t('compartment.value', { price: priceText(card.price_trend, card.price_currency) })}
               </span>
             )}
             {card.purchase_price > 0 && <span style={infoChipStyle}>{t('compartment.paid', { price: priceText(card.purchase_price) })}</span>}
