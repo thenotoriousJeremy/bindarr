@@ -49,22 +49,36 @@ if (!fs.existsSync(dbDir)) {
 const dbPath = resolveDbPath(requestedDbPath);
 
 console.log(`Connecting to SQLite database at: ${dbPath}`);
-// Settles when the open does. A connection that failed to open does not fail the
-// queries queued on it — sqlite3 drops them, so initDb's promise never settled
-// and the server sat listening, answering 503 forever. initDb awaits this first.
+// Settles once the connection is open AND configured. initDb awaits it first.
+//
+// A connection that failed to open does not fail the queries queued on it —
+// sqlite3 drops them, so initDb's promise never settled and the server sat
+// listening, answering 503 forever. And the PRAGMAs are run one after another,
+// each waited for, before initDb's first statement: sqlite3 runs statements in
+// parallel, and a read still mid-step when the switch to WAL lands fails it with
+// "cannot change into wal mode from within a transaction" — fired without a
+// callback, that was an uncaught error event, which ends the process. The busy
+// timeout goes first so the switch waits out another connection's lock rather
+// than failing on it.
 let settleOpen;
 const opened = new Promise((resolve, reject) => { settleOpen = (err) => (err ? reject(err) : resolve()); });
 opened.catch(() => {});   // initDb reports it; never an unhandled rejection on its own
 const dbConnection = new sqlite3.Database(dbPath, (err) => {
   if (err) {
     console.error('Error opening database:', err.message);
-  } else {
-    console.log('Database connection established successfully.');
-    dbConnection.run('PRAGMA foreign_keys = ON');
-    dbConnection.run('PRAGMA journal_mode = WAL');
-    dbConnection.run('PRAGMA busy_timeout = 5000');
+    return settleOpen(err);
   }
-  settleOpen(err);
+  console.log('Database connection established successfully.');
+  const pragmas = ['PRAGMA busy_timeout = 5000', 'PRAGMA foreign_keys = ON', 'PRAGMA journal_mode = WAL'];
+  const next = (i) => {
+    if (i === pragmas.length) return settleOpen();
+    dbConnection.run(pragmas[i], (pragmaErr) => {
+      if (!pragmaErr) return next(i + 1);
+      console.error(`Error configuring database (${pragmas[i]}):`, pragmaErr.message);
+      settleOpen(pragmaErr);
+    });
+  };
+  next(0);
 });
 
 // --- Connection lock --------------------------------------------------------
