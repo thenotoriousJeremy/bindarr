@@ -46,6 +46,14 @@ Architecture, the scan pipeline, and the data model are in [PROJECT.md](PROJECT.
 
 ### ManaBox imports
 
+**Collections:** **Settings → Import Backup** takes a ManaBox `.txt` export, or
+a `.csv` export from ManaBox, Dragon Shield, TCGplayer, Moxfield or Archidekt.
+Columns are matched by name in any spelling. A Scryfall ID picks the exact
+printing, foil and etched copies import as Foil, and rows with a quantity of 0
+are skipped. A file with Magic-only columns (Scryfall ID, Trade Quantity,
+Tradelist Count) is read as Magic; a TCGplayer export names no game, so it is
+read as Pokémon unless it has a Game or Product Line column.
+
 **Decks:** Open **Deck Builder → Create Deck → + Quick Import Decklist**, choose
 **ManaBox text export**, then select the `.txt` export. Bindarr reads the
 filename as the deck name, uses MTG Commander defaults, and resolves each
