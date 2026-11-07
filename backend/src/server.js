@@ -4,8 +4,11 @@
 // deployments — this only rescues the case where the server was launched by
 // absolute path from some other directory, which silently ignored the file and
 // left settings like HTTPS_PORT looking as though they had no effect.
-require('dotenv').config();
-require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
+// dotenv 17+ reads DOTENV_OVERRIDE from the environment and logs each load, so
+// both are pinned here: never override, and no startup line per file.
+const DOTENV = { override: false, quiet: true };
+require('dotenv').config(DOTENV);
+require('dotenv').config({ ...DOTENV, path: require('path').join(__dirname, '..', '.env') });
 
 const express = require('express');
 const cors = require('cors');
