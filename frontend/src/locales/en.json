@@ -1194,6 +1194,7 @@
   "scan.autoScanning": "Scanning",
   "scan.autoWaiting": "Waiting",
   "scan.autoLiftCard": "Next card",
+  "scan.autoRearm": "Tap to scan the card in frame",
   "scan.autoTuning": "Auto-capture tuning",
   "scan.autoFillGate": "Card fills frame",
   "scan.autoSteadyGate": "Steady frames",
