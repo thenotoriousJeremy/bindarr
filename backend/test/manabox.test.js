@@ -48,6 +48,7 @@ assert.deepStrictEqual(line('4 Pikachu ex SVI 63'),
   { quantity: 4, name: 'Pikachu ex', set_code: 'SVI', collector_number: '63', foil: false });
 assert.strictEqual(line('1 Mewtwo GX').name, 'Mewtwo GX', 'a trailing uppercase word is part of the name');
 assert.strictEqual(line('// COMMANDER'), null);
+assert.strictEqual(line(`1 ${' '.repeat(100000)}(`), null, 'a wall of text is not a card line (and is not backtracked over)');
 
 // A printing whose lines add up to no copies is not a printing to import.
 assert.deepStrictEqual(parseManaboxText('0 Sol Ring (C21) 263\n1 Blaze (POR) 118†').map(c => c.collector_number), ['118†']);

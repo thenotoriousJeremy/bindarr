@@ -79,6 +79,9 @@ const PTCGL = /^(.+?)\s+([A-Z]{2,4})\s+(\d+[a-zA-Z]?)$/;
 // Transmuter CON-31"), and that matched no card. Same grammar as the backend's
 // parseDecklistLine (backend/src/utils/csvMappers.js).
 export function parseDeckLine(line) {
+  // The longest card name is under 150 characters. Bounding the line bounds the
+  // backtracking of the patterns above on a pasted wall of text.
+  if (String(line).length > 500) return null;
   const m = String(line).trim().match(/^(\d+)x?\s+(.+)$/i);
   if (!m) return null;
   const qty = parseInt(m[1], 10);

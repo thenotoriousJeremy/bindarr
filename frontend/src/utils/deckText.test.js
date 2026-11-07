@@ -46,6 +46,7 @@ assert.deepStrictEqual(parseDeckLine('1x Sol Ring (c21) 263 [Ramp] ^Have,#37d67a
 assert.deepStrictEqual(parseDeckLine('1 Foil (PCY) 34'), { qty: 1, name: 'Foil', set: 'PCY', number: '34' }, 'Foil is a card');
 assert.strictEqual(parseDeckLine('1 Sol Ring (C21) 263 foil').foil, true, 'a finish word after a printing');
 assert.strictEqual(parseDeckLine('1 B.F.M. (Big Furry Monster) (UGL) 28').name, 'B.F.M. (Big Furry Monster)');
+assert.strictEqual(parseDeckLine(`1 ${' '.repeat(100000)}(`), null, 'a wall of text is not a card line');
 for (const line of ['1 Steel Hellkite (FDN) 681', '10 Island (ORI) 259', '1 Master Transmuter (PLST) CON-31',
   "1 An Offer You Can't Refuse (FIC) 267", '1 Rescue, Pepper Potts (MSC) 755 *F*']) {
   assert.doesNotMatch(parseDeckLine(line).name, /\d|\*/, `a token stayed on the name: ${line}`);

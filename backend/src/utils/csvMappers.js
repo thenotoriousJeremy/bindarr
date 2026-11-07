@@ -194,6 +194,9 @@ const PAREN = new RegExp(String.raw`^(.*?)\s*\(([A-Za-z0-9]{2,6})\)(?:\s+#?(${NU
 const PTCGL = /^(.+?)\s+([A-Z]{2,4})\s+(\d+[a-zA-Z]?)$/;
 
 function parseDecklistLine(line) {
+  // The longest card name is under 150 characters. Bounding the line bounds the
+  // backtracking of the patterns above on a pasted wall of text.
+  if (String(line ?? '').length > 500) return null;
   const match = String(line ?? '').match(/^\s*(\d+)x?\s+(.+?)\s*$/i);
   if (!match) return null;
   let rest = match[2];
