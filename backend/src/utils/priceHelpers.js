@@ -47,6 +47,8 @@ function parseCardRow(row) {
     subtypes: JSON.parse(row.subtypes || '[]'),
     types: JSON.parse(row.types || '[]'),
     color_identity: JSON.parse(row.color_identity || '[]'),
+    // Magic keyword abilities ('["Flying","Ward"]'), on the rows that have them.
+    ...(typeof row.keywords === 'string' ? { keywords: JSON.parse(row.keywords) } : {}),
   };
 }
 

@@ -2,6 +2,7 @@ const axios = require('axios');
 const db = require('./db');
 const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
 const { parseSetList } = require('./utils/setQuery');
+const { rulesTextFields } = require('./utils/mtgRulesText');
 const cardSearchSql = require('./utils/cardSearchSql');
 const languages = require('./utils/languages');
 const { cacheNormalizedCards } = require('./utils/cardCache');
@@ -287,6 +288,9 @@ function normalizeCard(raw, lang) {
     : faces.map(f => f.oracle_text || '').filter(Boolean).join('\n//\n');
 
   return {
+    // Type line, oracle text, cost, stats and keywords: what Scryfall syntax
+    // filters your own cards by (utils/mtgRulesText).
+    ...rulesTextFields(raw),
     id: `mtg-${raw.id}`,
     name: face.name || raw.name || '',
     // The card game itself lives in the dedicated `game` column; `supertype`
