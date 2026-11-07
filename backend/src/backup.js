@@ -113,7 +113,8 @@ async function writeSnapshot(fileName, { verify = verifySnapshot } = {}) {
   const tmp = `${dest}.tmp`;
   try {
     const { n: tables } = await db.get(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table'`);
-    await db.run(`VACUUM INTO ?`, [tmp]);
+    // Exclusive: VACUUM fails outright while any other statement is in flight.
+    await db.runExclusive(`VACUUM INTO ?`, [tmp]);
     await verify(tmp, { tables });
     fs.renameSync(tmp, dest);
   } catch (err) {
