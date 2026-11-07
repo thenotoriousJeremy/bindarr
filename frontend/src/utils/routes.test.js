@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TAB_PATHS, parseRoute, routePath, stripBase, withBase, rememberIntended, takeIntended, clearIntended } from './routes.js';
+import { TAB_PATHS, parseRoute, routePath, stripBase, withBase, rememberIntended, takeIntended, clearIntended, setParam, parseSetParam } from './routes.js';
 
 function memoryStorage() {
   const store = new Map();
@@ -31,6 +31,24 @@ test('sub-views round-trip with their id', () => {
   assert.equal(routePath('notes', 5), '/notes');
 });
 
+test('a set is game/set with an optional language', () => {
+  assert.equal(routePath('sets', setParam({ game: 'pokemon', set: 'sv3pt5', lang: 'en' })), '/sets/pokemon/sv3pt5');
+  assert.equal(routePath('sets', setParam({ game: 'pokemon', set: 'SV1a', lang: 'ja' })), '/sets/pokemon/SV1a/ja');
+  assert.equal(routePath('sets', ['mtg', 'mh3']), '/sets/mtg/mh3');
+  assert.deepEqual(parseRoute('/sets/pokemon/sv3pt5'), { tab: 'sets', param: 'pokemon/sv3pt5' });
+  assert.deepEqual(parseRoute('/sets/pokemon/SV1a/ja'), { tab: 'sets', param: 'pokemon/SV1a/ja' });
+  assert.deepEqual(parseRoute('/sets/lorcana/1'), { tab: 'sets', param: 'lorcana/1' });
+  assert.deepEqual(parseRoute('/sets'), { tab: 'sets', param: null });
+  assert.deepEqual(parseSetParam('pokemon/SV1a/ja'), { game: 'pokemon', set: 'SV1a', lang: 'ja' });
+  assert.deepEqual(parseSetParam('mtg/mh3'), { game: 'mtg', set: 'mh3', lang: 'en' });
+  assert.equal(parseSetParam(null), null);
+  assert.equal(setParam({ set: 'sv1' }), null, 'no game, no path yet');
+  // A set id with a space or other odd character survives the round trip.
+  const odd = routePath('sets', setParam({ game: 'mtg', set: 'p 23' }));
+  assert.equal(odd, '/sets/mtg/p%2023');
+  assert.deepEqual(parseRoute(odd), { tab: 'sets', param: 'mtg/p 23' });
+});
+
 test('trailing slashes, query and hash do not change the route', () => {
   assert.deepEqual(parseRoute('/collection/'), { tab: 'collection', param: null });
   assert.deepEqual(parseRoute('/?oidc_token=abc'), { tab: 'dashboard', param: null });
@@ -38,7 +56,7 @@ test('trailing slashes, query and hash do not change the route', () => {
 });
 
 test('non-routes parse to null', () => {
-  for (const p of ['/share/abc123', '/nope', '/decks/abc', '/decks/1/2', '/notes/3', '/dashboard', '//evil.example/decks', 'decks', '', null, undefined, '/%E0%A4%A']) {
+  for (const p of ['/sets/pokemon', '/sets/Pokemon/sv1', '/sets/pokemon/sv1/ja/x', '/share/abc123', '/nope', '/decks/abc', '/decks/1/2', '/notes/3', '/dashboard', '//evil.example/decks', 'decks', '', null, undefined, '/%E0%A4%A']) {
     assert.equal(parseRoute(p), null, String(p));
   }
 });

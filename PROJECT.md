@@ -757,8 +757,9 @@ code-split view components. `/share/:token` renders the public view without auth
 ### URL routing
 
 Each tab has a path, and the deck, list and storage tabs carry what is open in
-them: `/`, `/add`, `/collection`, `/storage/:locationId`, `/decks/:id`,
-`/lists/:id`, `/notes`, `/sealed`, `/settings`, `/admin` (`utils/routes.js`).
+them: `/`, `/add`, `/collection`, `/sets/:game/:set[/:lang]`,
+`/storage/:locationId`, `/decks/:id`, `/lists/:id`, `/notes`, `/sealed`,
+`/settings`, `/admin` (`utils/routes.js`). The trash stays a modal.
 The URL is the source of truth: `utils/router.js` is a small store over the
 History API (no react-router), `useRouteSync` in `App.jsx` shows the tab the URL
 names, and the components read their sub-view with `useTabParam`. A reload or a

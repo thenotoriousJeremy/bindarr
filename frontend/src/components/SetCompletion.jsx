@@ -12,6 +12,8 @@ import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrint
 import { printingLabel } from '../utils/cardOptions';
 import { filterCards, isComplete, purchaseList, valueParts } from '../utils/setCompletion';
 import { buildMassEntry, massEntryPage } from '../utils/tcgMassEntryUrl';
+import { useTabParam, setTabParam } from '../utils/router';
+import { setParam, parseSetParam } from '../utils/routes';
 
 // Every card in one set, owned or not (GET /api/set-completion).
 //
@@ -45,6 +47,42 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
       setTarget({ set: focusSet.setId, game: focusSet.game || null, lang: focusSet.lang || null });
     }
   }, [focusSet]);
+
+  // The open set is in the URL (/sets/:game/:set[/:lang]), so a reload or a link
+  // reopens it and Back returns to the set before. A dashboard link may not name
+  // the game; the URL is written once the answer does.
+  const routeParam = useTabParam('sets');
+  const shownGame = (target && target.game) || (data && data.game) || null;
+  const shownLang = (target && target.lang) || (data && data.lang) || null;
+  const shownParam = target ? setParam({ game: shownGame, set: target.set, lang: shownLang }) : null;
+  const prevTargetRef = useRef(null);
+  useEffect(() => {
+    const route = parseSetParam(routeParam);
+    if (route) {
+      if (routeParam === shownParam || (target && target.set === route.set && !shownGame)) return;
+      setGame(route.game);
+      setLang(route.lang);
+      setTarget({ set: route.set, game: route.game, lang: route.lang });
+      setShow('all');
+    } else if (target) {
+      setTarget(null);
+      setData(null);
+      setError(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- follows the URL only
+  }, [routeParam]);
+  useEffect(() => {
+    const prev = prevTargetRef.current;
+    prevTargetRef.current = target;
+    if (target) {
+      // Opening the first set from the bare tab replaces it; a set after a set is
+      // a new step for Back.
+      if (shownParam && shownParam !== routeParam) setTabParam('sets', shownParam, { replace: routeParam == null });
+    } else if (prev && routeParam != null) {
+      setTabParam('sets', null, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- writes the URL when the view changes
+  }, [target, shownParam]);
 
   // The game's whole set list, for the picker. Per language for Pokémon: Japan
   // has sets the West never sees.
