@@ -38,14 +38,18 @@ const SEALED_CATEGORIES = {
   lorcana: [71],
 };
 
+// Games whose carded (numbered) products are kept in the map, not just sealed.
+const CARD_ROW_GAMES = new Set(['pokemon']);
+
 // A rough shelf category for a sealed product, from its TCGplayer name. Order
 // matters: more specific phrases are checked before the generic ones they'd
 // otherwise be swallowed by ('Elite Trainer Box' before 'Box').
 const SEALED_TYPE_RULES = [
   [/elite trainer box|\betb\b/i, 'Elite Trainer Box'],
   [/booster box/i, 'Booster Box'],
-  [/booster pack|\bbooster\b/i, 'Booster Pack'],
+  // Before the bare-'booster' rule below, or 'Booster Bundle' reads as one pack.
   [/bundle/i, 'Bundle'],
+  [/booster pack|\bbooster\b/i, 'Booster Pack'],
   [/collector'?s?\s*box|collection box/i, 'Collection Box'],
   [/commander deck/i, 'Commander Deck'],
   [/starter deck/i, 'Starter Deck'],
@@ -213,8 +217,12 @@ function start(game = 'pokemon') {
             for (const p of products) {
               const number = displayNumber(tcgcsv.numberOf(p));
               // A product with no collector number is sealed product (a box, pack,
-              // ETB, ...) rather than a card. Both get a row now: `number IS NULL`
-              // is how a reader tells the two apart.
+              // ETB, ...) rather than a card: `number IS NULL` is how a reader
+              // tells the two apart. Pokémon keeps its carded rows, because the
+              // scan catalog names its matches through them. For every other game
+              // nothing reads a carded row (MTG alone is ~100k of them), so only
+              // the sealed product is stored.
+              if (number && !CARD_ROW_GAMES.has(game)) continue;
               const sealedType = number ? null : classifySealedType(p.name);
               await db.run(
                 `INSERT OR REPLACE INTO tcgplayer_catalog

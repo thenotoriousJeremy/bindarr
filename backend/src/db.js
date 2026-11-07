@@ -742,6 +742,13 @@ async function initDb() {
   if (!tcgplayerCatalogCols.some(c => c.name === 'sealed_type')) {
     await run(`ALTER TABLE tcgplayer_catalog ADD COLUMN sealed_type TEXT`);
   }
+  // Rows written before `game` existed were all Pokémon (categories 3 and 85 are
+  // the only ones the old build walked), and summary() counts by game, so an
+  // upgraded install reported a 0-row product map until it was rebuilt.
+  // Idempotent: only NULLs are touched.
+  await run(
+    `UPDATE tcgplayer_catalog SET game = 'pokemon' WHERE game IS NULL AND category_id IN (3, 85)`
+  );
 
   // What's actually inside a sealed unit (a Build & Battle Box is 4 boosters plus
   // a 40-card preconstructed deck), so opening one can show "how many of the

@@ -52,11 +52,18 @@ async function main() {
   assert.strictEqual(productMap.classifySealedType('Foundations Booster Box'), 'Booster Box');
   assert.strictEqual(productMap.classifySealedType('Foundations Booster Pack'), 'Booster Pack');
   assert.strictEqual(productMap.classifySealedType('The First Chapter Bundle'), 'Bundle');
+  assert.strictEqual(productMap.classifySealedType('Surging Sparks Booster Bundle'), 'Bundle',
+    "'Booster Bundle' is a bundle of packs, not one booster pack");
+  assert.strictEqual(productMap.classifySealedType('Surging Sparks Booster'), 'Booster Pack');
   assert.strictEqual(productMap.classifySealedType('A Completely Unknown Thing'), 'Other');
   console.log('PASS: sealed_type classification recognises common product names');
 
   const realGetGroups = tcgcsv.getGroups;
   const realGetProducts = tcgcsv.getProducts;
+  // The Pokémon build asks TCGdex for its Japanese set list; offline, it is empty.
+  const tcgdexApi = require('../src/tcgdexApi');
+  const realListSets = tcgdexApi.listSets;
+  tcgdexApi.listSets = async () => [];
   try {
     // MTG: single category, a card and a sealed Bundle.
     ({ getGroups: tcgcsv.getGroups, getProducts: tcgcsv.getProducts } = fixtureFor('Fixture Card', 'Fixture Bundle'));
@@ -64,16 +71,25 @@ async function main() {
     await waitUntilIdle();
 
     const mtgCard = await db.get(`SELECT * FROM tcgplayer_catalog WHERE product_id = 101`);
-    assert.strictEqual(mtgCard.game, 'mtg');
-    assert.strictEqual(mtgCard.number, '4');
-    assert.strictEqual(mtgCard.sealed_type, null, 'a carded row must not get a sealed_type');
+    assert.strictEqual(mtgCard, undefined,
+      'a non-Pokémon build must not store carded rows: nothing reads them, and MTG alone is ~100k');
 
     const mtgSealed = await db.get(`SELECT * FROM tcgplayer_catalog WHERE product_id = 102`);
     assert.strictEqual(mtgSealed.game, 'mtg');
     assert.strictEqual(mtgSealed.number, null, 'a product with no collector number is sealed product');
     assert.strictEqual(mtgSealed.sealed_type, 'Bundle');
     assert.strictEqual(mtgSealed.image_url, 'https://example.com/box.png');
-    console.log('PASS: MTG build writes both a carded row and a sealed row, correctly typed');
+    console.log('PASS: MTG build writes only the sealed row, correctly typed');
+
+    // Pokémon keeps its carded rows: the scan catalog names matches through them.
+    ({ getGroups: tcgcsv.getGroups, getProducts: tcgcsv.getProducts } = fixtureFor('Fixture Pikachu', 'Fixture Booster Bundle'));
+    productMap.start('pokemon');
+    await waitUntilIdle();
+    const pokeCard = await db.get(`SELECT * FROM tcgplayer_catalog WHERE product_id = 101 AND game = 'pokemon'`);
+    assert.ok(pokeCard, 'a Pokémon build must still store carded rows');
+    assert.strictEqual(pokeCard.number, '4');
+    assert.strictEqual(pokeCard.sealed_type, null, 'a carded row must not get a sealed_type');
+    console.log('PASS: Pokémon build still writes carded rows alongside sealed ones');
 
     // Lorcana: same fixture shape, different game/category.
     ({ getGroups: tcgcsv.getGroups, getProducts: tcgcsv.getProducts } = fixtureFor('Fixture Card 2', 'Fixture Elite Trainer Box'));
@@ -90,7 +106,22 @@ async function main() {
   } finally {
     tcgcsv.getGroups = realGetGroups;
     tcgcsv.getProducts = realGetProducts;
+    tcgdexApi.listSets = realListSets;
   }
+
+  // An install upgraded from before `game` existed has Pokémon rows with game
+  // NULL; summary() counts by game, so it reported an empty map until a rebuild.
+  await db.run(
+    `INSERT OR REPLACE INTO tcgplayer_catalog (product_id, category_id, group_id, group_name, name, number, game)
+     VALUES (9001, 3, 7, 'Old Set', 'Old Card', '1', NULL), (9002, 85, 8, 'Old JP Set', 'Old JP Card', '2', NULL),
+            (9003, 1, 9, 'Old MTG', 'Not Pokemon', NULL, NULL)`
+  );
+  await db.initDb();
+  await db.initDb();
+  const upgraded = await db.all(`SELECT product_id, game FROM tcgplayer_catalog WHERE product_id IN (9001, 9002, 9003) ORDER BY product_id`);
+  assert.deepStrictEqual(upgraded.map(r => r.game), ['pokemon', 'pokemon', null],
+    'legacy NULL-game rows in the Pokémon categories must be backfilled, and only those');
+  console.log('PASS: upgrade migration backfills game for legacy Pokémon product-map rows, idempotently');
 }
 
 main()
