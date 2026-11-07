@@ -14,7 +14,7 @@ process.env.DEFAULT_ADMIN_PASSWORD = 'test-admin-password';
 
 const db = require('../src/db');
 const importRouter = require('../src/routes/importExport');
-const importHandler = importRouter.stack.find(layer => layer.route?.path === '/import').route.stack[0].handle;
+const importHandler = importRouter.stack.find(layer => layer.route?.path === '/import').route.stack.at(-1).handle;
 
 async function cleanup() {
   await new Promise(resolve => { try { db.dbConnection.close(() => resolve()); } catch { resolve(); } });

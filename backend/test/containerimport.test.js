@@ -14,7 +14,7 @@ process.env.DEFAULT_ADMIN_PASSWORD = 'test-admin-password';
 const db = require('../src/db');
 const scryfallApi = require('../src/scryfallApi');
 const importRouter = require('../src/routes/importExport');
-const importContainer = importRouter.stack.find(layer => layer.route?.path === '/import-container').route.stack[0].handle;
+const importContainer = importRouter.stack.find(layer => layer.route?.path === '/import-container').route.stack.at(-1).handle;
 
 async function testContainerImport() {
   const originalBulkFetch = scryfallApi.bulkFetchByIdentifier;

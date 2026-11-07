@@ -38,7 +38,9 @@ function fatal(err) {
 }
 
 process.on('uncaughtException', fatal);
-process.on('unhandledRejection', fatal);
+// No unhandledRejection here: server.js logs those and keeps serving, and a
+// second listener that exits would undo that. Startup failures are caught in
+// server.js itself, or are thrown synchronously and land in the catch below.
 
 try {
   const appBackend = path.join(path.dirname(process.execPath), 'app', 'backend');

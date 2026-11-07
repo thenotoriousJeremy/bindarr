@@ -33,7 +33,7 @@ async function testImportRoute() {
   const importRouter = require('../src/routes/importExport');
   const originalBulkFetch = scryfallApi.bulkFetchByIdentifier;
   const originalCacheCards = scryfallApi.cacheCards;
-  const handler = importRouter.stack.find(layer => layer.route?.path === '/import').route.stack[0].handle;
+  const handler = importRouter.stack.find(layer => layer.route?.path === '/import').route.stack.at(-1).handle;
 
   try {
     await db.initDb();
