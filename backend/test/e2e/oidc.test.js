@@ -24,6 +24,47 @@ async function waitForServer(url) {
   throw new Error(`Server at ${url} did not start in time`);
 }
 
+// The web sign-in as a browser performs it. /oidc/login sets the binding cookie;
+// the IdP sends the browser back to the callback, cookie and all; the callback
+// lands on /?oidc_code=... and the page redeems that one-time code by POST, with
+// the same cookie, for the session. (It used to land on /?oidc_token=<session>.)
+// `onLogin` sees the authorization URL, so a suite can echo its nonce.
+function webFlow(base, onLogin) {
+  const startLogin = async () => {
+    const res = await fetch(`${base}/api/auth/oidc/login`, { redirect: 'manual' });
+    const authUrl = new URL(res.headers.get('location'));
+    onLogin(authUrl);
+    const setCookie = res.headers.get('set-cookie') || '';
+    return { res, authUrl, state: authUrl.searchParams.get('state'), setCookie, cookie: setCookie.split(';')[0] };
+  };
+  const finishLogin = async (login, idpCode, cookie = login.cookie) => {
+    const res = await fetch(`${base}/api/auth/oidc/callback?code=${idpCode}&state=${encodeURIComponent(login.state)}`, {
+      redirect: 'manual',
+      headers: cookie ? { Cookie: cookie } : {}
+    });
+    assert.strictEqual(res.status, 302, 'callback must redirect to frontend');
+    const location = res.headers.get('location');
+    return { location, params: new URL(location, base).searchParams };
+  };
+  const redeem = async (oidcCode, cookie) => {
+    const res = await fetch(`${base}/api/auth/oidc/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+      body: JSON.stringify({ code: oidcCode })
+    });
+    return { status: res.status, body: await res.json() };
+  };
+  // Start to finish; token is null when the callback refused.
+  const signIn = async (idpCode) => {
+    const login = await startLogin();
+    const { params } = await finishLogin(login, idpCode);
+    if (!params.get('oidc_code')) return { params, token: null };
+    const { body } = await redeem(params.get('oidc_code'), login.cookie);
+    return { params, token: body.token || null };
+  };
+  return { startLogin, finishLogin, redeem, signIn };
+}
+
 async function runTests() {
   // 1. Start mock OIDC IdP
   let mockUserClaims = {
@@ -105,6 +146,10 @@ async function runTests() {
     }
   });
 
+  const { startLogin, finishLogin, redeem, signIn } = webFlow(base, (authUrl) => {
+    currentNonce = authUrl.searchParams.get('nonce');
+  });
+
   try {
     await waitForServer(`${base}/api/health`);
 
@@ -116,32 +161,33 @@ async function runTests() {
     assert.strictEqual(config.oidcProviderName, 'TestIdP', 'provider name must match');
     console.log('PASS: F7-TC1');
 
-    // F7-TC2: GET /api/auth/oidc/login returns 302 redirect to IdP
-    const loginRes = await fetch(`${base}/api/auth/oidc/login`, { redirect: 'manual' });
-    assert.strictEqual(loginRes.status, 302, 'login route must redirect to IdP');
-    const redirectLocation = loginRes.headers.get('location');
-    assert(redirectLocation, 'Location header must exist');
-
-    const authUrl = new URL(redirectLocation);
-    assert.strictEqual(authUrl.pathname, '/authorize');
-    assert.strictEqual(authUrl.searchParams.get('client_id'), 'bindarr-test-id');
-    const state = authUrl.searchParams.get('state');
-    currentNonce = authUrl.searchParams.get('nonce');
+    // F7-TC2: GET /api/auth/oidc/login returns 302 redirect to IdP, and ties the
+    // login to this browser with an HttpOnly cookie
+    const login = await startLogin();
+    assert.strictEqual(login.res.status, 302, 'login route must redirect to IdP');
+    assert.strictEqual(login.authUrl.pathname, '/authorize');
+    assert.strictEqual(login.authUrl.searchParams.get('client_id'), 'bindarr-test-id');
     assert(currentNonce, 'the authorization request must carry a nonce');
-    assert(state, 'state parameter must be present');
+    assert(login.state, 'state parameter must be present');
+    assert(/^bindarr_oidc=/.test(login.setCookie) && /HttpOnly/i.test(login.setCookie),
+      'a web login must set the HttpOnly binding cookie');
     console.log('PASS: F7-TC2');
 
-    // F7-TC3: GET /api/auth/oidc/callback handles code exchange and returns token
-    const callbackRes = await fetch(`${base}/api/auth/oidc/callback?code=valid-auth-code&state=${encodeURIComponent(state)}`, {
-      redirect: 'manual'
-    });
-    assert.strictEqual(callbackRes.status, 302, 'callback must redirect to frontend');
-    const callbackRedirect = callbackRes.headers.get('location');
-    assert(callbackRedirect.includes('oidc_token='), 'redirect must include oidc_token');
-
-    const callbackUrl = new URL(callbackRedirect, base);
-    const issuedToken = callbackUrl.searchParams.get('oidc_token');
+    // F7-TC3: the callback hands the page a one-time code -- never the session
+    // token -- and only in the browser that started the login; the page trades the
+    // code for the session, once.
+    const elsewhere = await finishLogin(login, 'valid-auth-code', null);
+    assert(elsewhere.params.get('oidc_error') && !elsewhere.params.get('oidc_code'),
+      'a callback opened in a browser that did not start the login must be refused');
+    const callback = await finishLogin(login, 'valid-auth-code');
+    assert(!/oidc_token|[?&]token=/.test(callback.location), 'the session token must never be in the redirect');
+    const oidcCode = callback.params.get('oidc_code');
+    assert(oidcCode, `redirect must carry a one-time code, got ${callback.location}`);
+    const redeemed = await redeem(oidcCode, login.cookie);
+    assert.strictEqual(redeemed.status, 200, 'the code redeems with the cookie that started the login');
+    const issuedToken = redeemed.body.token;
     assert(issuedToken, 'issued token must be non-empty');
+    assert.strictEqual((await redeem(oidcCode, login.cookie)).status, 400, 'a code must not redeem twice');
     console.log('PASS: F7-TC3');
 
     // F7-TC4: First OIDC user on fresh instance is bootstrapped as instance owner admin
@@ -161,14 +207,7 @@ async function runTests() {
       preferred_username: 'PalletTownTrainer',
       email: 'trainer@pallet.org'
     };
-    const loginRes2 = await fetch(`${base}/api/auth/oidc/login`, { redirect: 'manual' });
-    const authUrl2 = new URL(loginRes2.headers.get('location'));
-    const state2 = authUrl2.searchParams.get('state');
-    currentNonce = authUrl2.searchParams.get('nonce');
-    const callbackRes2 = await fetch(`${base}/api/auth/oidc/callback?code=valid-auth-code-2&state=${encodeURIComponent(state2)}`, {
-      redirect: 'manual'
-    });
-    const token2 = new URL(callbackRes2.headers.get('location'), base).searchParams.get('oidc_token');
+    const { token: token2 } = await signIn('valid-auth-code-2');
     const meRes2 = await fetch(`${base}/api/auth/me`, {
       headers: { 'Authorization': `Bearer ${token2}` }
     });
@@ -180,14 +219,7 @@ async function runTests() {
     console.log('PASS: F7-TC5');
 
     // F7-TC6: Repeated login with same sub logs into existing member without duplicating rows
-    const loginRes3 = await fetch(`${base}/api/auth/oidc/login`, { redirect: 'manual' });
-    const authUrl3 = new URL(loginRes3.headers.get('location'));
-    const state3 = authUrl3.searchParams.get('state');
-    currentNonce = authUrl3.searchParams.get('nonce');
-    const callbackRes3 = await fetch(`${base}/api/auth/oidc/callback?code=valid-auth-code-3&state=${encodeURIComponent(state3)}`, {
-      redirect: 'manual'
-    });
-    const token3 = new URL(callbackRes3.headers.get('location'), base).searchParams.get('oidc_token');
+    const { token: token3 } = await signIn('valid-auth-code-3');
     const meRes3 = await fetch(`${base}/api/auth/me`, {
       headers: { 'Authorization': `Bearer ${token3}` }
     });
@@ -217,17 +249,10 @@ async function runTests() {
       preferred_username: 'admin',
       email: 'attacker@example.invalid'
     };
-    const loginRes4 = await fetch(`${base}/api/auth/oidc/login`, { redirect: 'manual' });
-    const authUrl4 = new URL(loginRes4.headers.get('location'));
-    const state4 = authUrl4.searchParams.get('state');
-    currentNonce = authUrl4.searchParams.get('nonce');
-    const callbackRes4 = await fetch(`${base}/api/auth/oidc/callback?code=valid-auth-code-4&state=${encodeURIComponent(state4)}`, {
-      redirect: 'manual'
-    });
-    const takeoverRedirect = new URL(callbackRes4.headers.get('location'), base);
-    assert.strictEqual(takeoverRedirect.searchParams.get('oidc_token'), null,
+    const takeover = await signIn('valid-auth-code-4');
+    assert.strictEqual(takeover.params.get('oidc_code'), null,
       'a username collision must not issue a session for the existing account');
-    assert(takeoverRedirect.searchParams.get('oidc_error'),
+    assert(takeover.params.get('oidc_error'),
       'a username collision must come back as an error');
 
     // And the owner is untouched: its oidc_sub is still the identity that
@@ -237,14 +262,7 @@ async function runTests() {
       preferred_username: 'admin',
       email: 'owner@pallet.org'
     };
-    const loginRes5 = await fetch(`${base}/api/auth/oidc/login`, { redirect: 'manual' });
-    const authUrl5 = new URL(loginRes5.headers.get('location'));
-    const state5 = authUrl5.searchParams.get('state');
-    currentNonce = authUrl5.searchParams.get('nonce');
-    const callbackRes5 = await fetch(`${base}/api/auth/oidc/callback?code=valid-auth-code-5&state=${encodeURIComponent(state5)}`, {
-      redirect: 'manual'
-    });
-    const ownerToken = new URL(callbackRes5.headers.get('location'), base).searchParams.get('oidc_token');
+    const { token: ownerToken } = await signIn('valid-auth-code-5');
     assert(ownerToken, 'the identity that bootstrapped the owner must still log in');
     const ownerMe = await (await fetch(`${base}/api/auth/me`, {
       headers: { 'Authorization': `Bearer ${ownerToken}` }
@@ -266,16 +284,11 @@ async function runTests() {
       preferred_username: 'admin',
       email: 'owner@pallet.org'
     };
-    const loginRes6 = await fetch(`${base}/api/auth/oidc/login`, { redirect: 'manual' });
-    const authUrl6 = new URL(loginRes6.headers.get('location'));
-    const state6 = authUrl6.searchParams.get('state');
+    const login6 = await startLogin();
     // The IdP answers with the nonce from some other login, not this one.
     currentNonce = 'a-nonce-from-a-different-login';
-    const callbackRes6 = await fetch(`${base}/api/auth/oidc/callback?code=valid-auth-code-6&state=${encodeURIComponent(state6)}`, {
-      redirect: 'manual'
-    });
-    const replay = new URL(callbackRes6.headers.get('location'), base).searchParams;
-    assert.strictEqual(replay.get('oidc_token'), null, 'a mismatched nonce must not issue a session');
+    const { params: replay } = await finishLogin(login6, 'valid-auth-code-6');
+    assert.strictEqual(replay.get('oidc_code'), null, 'a mismatched nonce must not issue a session');
     assert(/nonce/i.test(replay.get('oidc_error') || ''), 'the refusal must name the nonce');
     console.log('PASS: F7-TC11');
 
@@ -368,24 +381,16 @@ async function runUsernameLinkTests() {
     }
   });
 
-  const callback = async (code) => {
-    const loginRes = await fetch(`${base}/api/auth/oidc/login`, { redirect: 'manual' });
-    const authUrl = new URL(loginRes.headers.get('location'));
-    const state = authUrl.searchParams.get('state');
+  const { signIn } = webFlow(base, (authUrl) => {
     currentNonce = authUrl.searchParams.get('nonce');
-    const res = await fetch(`${base}/api/auth/oidc/callback?code=${code}&state=${encodeURIComponent(state)}`, {
-      redirect: 'manual'
-    });
-    return new URL(res.headers.get('location'), base).searchParams;
-  };
+  });
 
   try {
     await waitForServer(`${base}/api/health`);
 
     // F7-TC9: with the flag on, the IdP identity attaches to the existing local
     // account rather than creating a second, empty one beside it.
-    const linked = await callback('link-code-1');
-    const linkToken = linked.get('oidc_token');
+    const { token: linkToken } = await signIn('link-code-1');
     assert(linkToken, 'OIDC_ALLOW_USERNAME_LINK=true must let the identity link and log in');
     const linkedMe = await (await fetch(`${base}/api/auth/me`, {
       headers: { 'Authorization': `Bearer ${linkToken}` }
@@ -402,10 +407,10 @@ async function runUsernameLinkTests() {
       preferred_username: 'admin',
       email: 'someone@example.invalid'
     };
-    const second = await callback('link-code-2');
-    assert.strictEqual(second.get('oidc_token'), null,
+    const second = await signIn('link-code-2');
+    assert.strictEqual(second.params.get('oidc_code'), null,
       'an account already bound to another identity must not be re-bound');
-    assert(second.get('oidc_error'), 'the refusal must come back as an error');
+    assert(second.params.get('oidc_error'), 'the refusal must come back as an error');
 
     // The first identity still owns it.
     mockUserClaims = {
@@ -413,9 +418,9 @@ async function runUsernameLinkTests() {
       preferred_username: 'admin',
       email: 'owner@pallet.org'
     };
-    const again = await callback('link-code-3');
+    const again = await signIn('link-code-3');
     const againMe = await (await fetch(`${base}/api/auth/me`, {
-      headers: { 'Authorization': `Bearer ${again.get('oidc_token')}` }
+      headers: { 'Authorization': `Bearer ${again.token}` }
     })).json();
     assert.strictEqual(againMe.user.oidc_sub, 'idp-sub-link');
     console.log('PASS: F7-TC10');

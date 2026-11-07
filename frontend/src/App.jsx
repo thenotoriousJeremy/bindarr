@@ -9,6 +9,7 @@ import { isNative, isDeviceMode, setDeviceMode } from './apiBase';
 import { parseOidcReturn, takeVerifier } from './utils/nativeOidc';
 import { isSessionExpired } from './utils/sessionExpiry';
 import { loadStoredUser, saveStoredUser } from './utils/storedUser';
+import { readOidcCode } from './utils/webOidc';
 
 // View components are code-split so heavy deps (recharts in the chart views)
 // load on demand instead of in the initial bundle.
@@ -194,38 +195,39 @@ function App() {
     setToast({ message, ...(options || {}), id: Date.now() + Math.random() });
   };
 
-  // Handle OIDC / SSO token in URL redirect
+  // Web SSO return. The callback sends the browser back with ?oidc_code=..., a
+  // one-time code that redeems only together with the HttpOnly cookie set when
+  // THIS browser started the login (utils/webOidc) -- never the session itself,
+  // which the old ?oidc_token= / ?token= sign-in took from any link. Off the URL
+  // before it is used, so a reload or the history cannot present it again; and,
+  // as with the native hand-off below, the answer is not dropped on a re-run (the
+  // code is spent by then, and a second pass finds nothing left to read).
   useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const oidcToken = params.get('oidc_token') || params.get('token');
-      if (oidcToken && !token) {
-        // Clean URL parameters immediately
-        const newUrl = window.location.pathname + (window.location.hash || '');
-        window.history.replaceState({}, document.title, newUrl);
-
-        // Fetch user profile with the token to complete login
-        fetch('/api/auth/me', {
-          headers: { 'Authorization': `Bearer ${oidcToken}` }
-        })
-          .then(res => res.ok ? res.json() : Promise.reject(new Error('Failed to fetch profile')))
-          .then(data => {
-            if (data.user) {
-              setToken(oidcToken);
-              setUser(data.user);
-              localStorage.setItem('bindarr_token', oidcToken);
-              saveStoredUser(data.user);
-              showToast(t('toast.welcomeBack', { name: data.user.username }));
-              setActiveTab('dashboard');
-            }
-          })
-          .catch(err => {
-            console.error('OIDC token verification failed:', err);
-            showToast(t('login.errOidcFailed'));
-          });
-      }
-    } catch { /* ignore URL parse error */ }
-  }, [t, token]);
+    if (isNative) return;
+    const ret = readOidcCode(window.location.href);
+    if (!ret) return;
+    window.history.replaceState(window.history.state, document.title, ret.cleanUrl);
+    fetch('/api/auth/oidc/exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: ret.code })
+    })
+      .then(res => res.json().then(data => (res.ok ? data : Promise.reject(new Error(data.error || 'exchange failed')))))
+      .then(data => {
+        if (!data.token || !data.user) return;
+        // Same completion as handleLoginSuccess, as in the native hand-off.
+        setToken(data.token);
+        setUser(data.user);
+        localStorage.setItem('bindarr_token', data.token);
+        saveStoredUser(data.user);
+        showToast(t('toast.welcomeBack', { name: data.user.username }));
+        setActiveTab('dashboard');
+      })
+      .catch(err => {
+        console.error('OIDC exchange failed:', err);
+        showToast(t('login.errOidcFailed'));
+      });
+  }, [t]);
 
   // Native SSO return (issue #94). The login ran in the system browser; the
   // server sends it back as bindarr://oidc?code=... (or ?oidc_error=...), either

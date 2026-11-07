@@ -31,6 +31,22 @@ router.get('/config', async (req, res) => {
   });
 });
 
+// The web login's browser-binding cookie. HttpOnly, so page script never sees it.
+// SameSite=Lax, because the callback arrives as a top-level GET from the identity
+// provider's site, which Lax still sends with. Scoped to the OIDC routes, and alive
+// exactly as long as the state it pairs with. Secure whenever the request came in
+// over https, a TLS-terminating proxy's X-Forwarded-Proto included.
+function webBindingCookie(req) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: req.secure || forwardedProto === 'https',
+    path: oidc.WEB_BINDING_PATH,
+    maxAge: oidc.STATE_TTL_MS
+  };
+}
+
 // Initiate OIDC / SSO authorization code flow
 router.get('/oidc/login', authLimiter, async (req, res) => {
   if (!oidc.isOidcEnabled()) {
@@ -49,7 +65,14 @@ router.get('/oidc/login', authLimiter, async (req, res) => {
   }
 
   try {
-    const authUrl = await oidc.buildAuthorizationUrl(req, { nativeChallenge });
+    // A web login is tied to this browser by a cookie; the native app has its
+    // verifier instead. See the web hand-off in utils/oidc.js.
+    const webBinding = nativeChallenge ? null : oidc.createWebBinding();
+    const authUrl = await oidc.buildAuthorizationUrl(req, {
+      nativeChallenge,
+      webBindingHash: webBinding ? webBinding.hash : undefined
+    });
+    if (webBinding) res.cookie(oidc.WEB_BINDING_COOKIE, webBinding.secret, webBindingCookie(req));
     res.redirect(302, authUrl);
   } catch (error) {
     const { message, log } = oidc.describeFetchError(error);
@@ -90,6 +113,18 @@ router.get('/oidc/callback', authLimiter, async (req, res) => {
 
   if (!code || !state) {
     return frontendRedirect({ oidc_error: 'Missing authorization code or state from identity provider.' });
+  }
+
+  // A web login has to finish in the browser that started it. Without this, a
+  // callback link from someone else's login -- their IdP code, their state --
+  // opened in your browser would sign you into THEIR account (login CSRF). Checked
+  // before the IdP is called, so a refused link costs nothing. A state that does
+  // not verify at all falls through to exchangeCode, which says so.
+  if (startedState && !native
+    && !oidc.matchesWebBinding(oidc.readCookie(req.headers.cookie, oidc.WEB_BINDING_COOKIE), startedState.wb)) {
+    return frontendRedirect({
+      oidc_error: 'This sign-in could not be completed in this browser. Please start it again from the login page.'
+    });
   }
 
   try {
@@ -184,8 +219,11 @@ router.get('/oidc/callback', authLimiter, async (req, res) => {
       return frontendRedirect({ code: appCode });
     }
 
-    const token = await generateSession(user.id);
-    return frontendRedirect({ oidc_token: token });
+    // The web page gets a one-time code as well, bound to this browser's cookie
+    // rather than a verifier. The session token itself only ever travels in the
+    // body of the POST that redeems it, never in a URL.
+    const webCode = oidc.issueWebCode(user.id, stateData.wb);
+    return frontendRedirect({ oidc_code: webCode });
   } catch (err) {
     const { message, log } = oidc.describeFetchError(err);
     console.error('OIDC callback processing failed:', log);
@@ -193,18 +231,26 @@ router.get('/oidc/callback', authLimiter, async (req, res) => {
   }
 });
 
-// The native app's half of the hand-off: trade the one-time code from
-// bindarr://oidc?code=... (plus the verifier only the app holds) for a session.
-// Public by necessity -- the caller is not signed in yet -- and rate limited like
-// every other credential exchange. Same response shape as POST /login, so the app
-// completes sign-in through the same path either way.
+// The second half of the hand-off: trade a one-time code for a session. From the
+// native app, the code from bindarr://oidc?code=... plus the verifier only the
+// app holds. From the web page, the code from /?oidc_code=... plus the cookie set
+// when this browser started the login. Public by necessity -- the caller is not
+// signed in yet -- and rate limited like every other credential exchange. Same
+// response shape as POST /login, so sign-in completes through the same path.
 router.post('/oidc/exchange', authLimiter, async (req, res) => {
   if (!oidc.isOidcEnabled()) {
     return res.status(404).json({ error: 'OIDC authentication is not enabled.' });
   }
 
   const { code, verifier } = req.body || {};
-  const userId = oidc.consumeNativeCode(code, verifier);
+  let userId;
+  if (verifier !== undefined) {
+    userId = oidc.consumeNativeCode(code, verifier);
+  } else {
+    userId = oidc.consumeWebCode(code, oidc.readCookie(req.headers.cookie, oidc.WEB_BINDING_COOKIE));
+    // One binding per login, spent by the first try at redeeming it.
+    res.clearCookie(oidc.WEB_BINDING_COOKIE, { path: oidc.WEB_BINDING_PATH });
+  }
   if (!userId) {
     return res.status(400).json({ error: 'This sign-in link is invalid or has expired. Please try again.' });
   }
@@ -217,7 +263,7 @@ router.post('/oidc/exchange', authLimiter, async (req, res) => {
     const token = await generateSession(user.id);
     res.json({ message: 'Login successful', token, user: sessionUser(user) });
   } catch (error) {
-    console.error('OIDC native exchange failed:', error);
+    console.error('OIDC code exchange failed:', error);
     res.status(500).json({ error: 'Login failed' });
   }
 });
