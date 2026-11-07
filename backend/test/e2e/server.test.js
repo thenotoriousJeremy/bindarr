@@ -94,6 +94,13 @@ async function runTests() {
     assert.strictEqual(cappedBox.status, 413, `5001-row container import should be 413, got ${cappedBox.status}`);
     assert.ok(capped.headers.get('ratelimit-limit') || capped.headers.get('ratelimit-policy'), 'import is rate limited');
     console.log('PASS: F1-TC5');
+
+    // F1-TC6: a build asset that is not there (a chunk of the build before an
+    // upgrade, asked for by a tab left open) is a 404, not the SPA's index.html.
+    const staleChunk = await fetch(`${base}/assets/Dashboard-0ldBu1ld.js`);
+    assert.strictEqual(staleChunk.status, 404, `missing asset should be 404, got ${staleChunk.status}`);
+    assert.ok(!/text\/html/.test(staleChunk.headers.get('content-type') || ''), 'a missing asset is never answered with a page');
+    console.log('PASS: F1-TC6');
   } finally {
     // SIGKILL immediately to avoid sqlite3 teardown crashes on Windows
     server.kill('SIGKILL');

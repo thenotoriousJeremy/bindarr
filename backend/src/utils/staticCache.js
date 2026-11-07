@@ -32,6 +32,11 @@ function serveFrontend(distPath) {
     index: false,
     setHeaders: (res, filePath) => res.setHeader('Cache-Control', cacheControlFor(distPath, filePath)),
   }));
+  // A hashed asset static did not find — a chunk of the previous build, asked for
+  // by a tab left open across an upgrade — is a 404, never index.html: as HTML with
+  // a 200 the import fails on a MIME error that reads like an app bug, and a cache
+  // in front of us may keep the page under the asset's URL.
+  router.use('/assets', (req, res) => res.status(404).end());
   router.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next();
     // Revalidated like everything unhashed: it names the hashed bundle, so a copy
