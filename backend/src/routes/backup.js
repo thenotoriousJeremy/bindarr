@@ -13,7 +13,12 @@
 // and every way of guessing files cards somewhere their owner did not put them.
 // Card data (card_cache, price history, product ids) is shared across accounts, so
 // it is only ever added to, never overwritten: whatever the install already holds
-// is at least as fresh as the backup's copy.
+// is at least as fresh as the backup's copy. And only an admin's restore adds it
+// from the file. Everyone sees those rows, and a file can say anything: a member
+// could otherwise plant a card with any name and image for every other account to
+// find. A member's restore fetches each card the install lacks from the provider
+// that minted its id instead, as an import does. (In device mode the phone's one
+// account is the admin, so moving a phone to its owner's server keeps everything.)
 //
 // Ids are renumbered on the way in, because the restoring database has its own
 // sequences, and every reference between the rows is remapped to match. Columns
@@ -23,6 +28,8 @@
 
 const express = require('express');
 const db = require('../db');
+const cardApi = require('../utils/cardApi');
+const { importLimiter } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -108,7 +115,34 @@ async function insert(table, cols, row, overrides = {}, verb = 'INSERT') {
 
 const isBackup = (b) => b && b.format === FORMAT && b.data && typeof b.data === 'object';
 
-router.post('/backup/restore', async (req, res) => {
+// Every card id the account's own rows name.
+function referencedCardIds(list) {
+  return [...new Set([
+    ...list('collection').map(r => r && r.card_id),
+    ...list('deck_cards').map(r => r && r.card_id),
+    ...list('card_list_items').map(r => r && r.card_id),
+    ...list('sealed_template_components').map(r => r && r.card_id),
+  ].filter(id => typeof id === 'string' && id))];
+}
+
+// Bring each card the install does not hold into card_cache from its provider.
+// Before the transaction, never inside it: the connection lock is held for a
+// transaction's whole callback, and every other request would wait on the network.
+// One at a time, as an import does, since the providers rate-limit. A card no
+// provider has stays missing, and the rows naming it are skipped.
+async function fetchMissingCards(ids, user) {
+  let fetched = 0;
+  let missing = 0;
+  for (const id of ids) {
+    if (await db.get(`SELECT 1 FROM card_cache WHERE id = ?`, [id])) continue;
+    const card = await cardApi.getCardById(id, { tcgApiKey: user.tcg_api_key }).catch(() => null);
+    if (card && await db.get(`SELECT 1 FROM card_cache WHERE id = ?`, [id])) fetched++;
+    else missing++;
+  }
+  return { fetched, missing };
+}
+
+router.post('/backup/restore', importLimiter, async (req, res) => {
   const backup = req.body && req.body.backup;
   if (!isBackup(backup)) {
     return res.status(400).json({ error: 'Not a Bindarr backup file.' });
@@ -118,8 +152,10 @@ router.post('/backup/restore', async (req, res) => {
   }
   const list = (key) => (Array.isArray(backup.data[key]) ? backup.data[key] : []);
   const uid = req.user.id;
+  const trusted = req.user.role === 'admin';
 
   try {
+    const fetchedCards = trusted ? null : await fetchMissingCards(referencedCardIds(list), req.user);
     const cols = {};
     for (const t of ['locations', 'compartments', 'compartment_assignments', 'collection', 'decks',
       'deck_cards', 'notes', 'card_cache', 'price_history', 'tcgplayer_product', 'sealed_templates',
@@ -127,16 +163,18 @@ router.post('/backup/restore', async (req, res) => {
       cols[t] = (await columnsOf(t)).filter(c => c !== 'id' || ['card_cache'].includes(t));
     }
     const counts = {};
+    const cardKnown = async (id) => !!(await db.get(`SELECT 1 FROM card_cache WHERE id = ?`, [id]));
 
     await db.withTransaction(async () => {
-      // Shared card data first: the collection's card_id references card_cache.
-      for (const row of list('card_cache')) {
+      // Shared card data first, from an admin's file only (top of this file): the
+      // collection's card_id references card_cache.
+      for (const row of trusted ? list('card_cache') : []) {
         if (row && row.id) await insert('card_cache', cols.card_cache, row, {}, 'INSERT OR IGNORE');
       }
-      for (const row of list('price_history')) {
+      for (const row of trusted ? list('price_history') : []) {
         if (row && row.card_id) await insert('price_history', cols.price_history, row, {}, 'INSERT OR IGNORE');
       }
-      for (const row of list('tcgplayer_product')) {
+      for (const row of trusted ? list('tcgplayer_product') : []) {
         if (row && row.card_id) await insert('tcgplayer_product', cols.tcgplayer_product, row, {}, 'INSERT OR IGNORE');
       }
 
@@ -177,7 +215,9 @@ router.post('/backup/restore', async (req, res) => {
       }
       for (const row of list('sealed_template_components')) {
         const templateId = templateMap.get(row.template_id);
-        if (templateId != null) await insert('sealed_template_components', cols.sealed_template_components, row, { template_id: templateId });
+        if (templateId == null) continue;
+        if (row.card_id && !(await cardKnown(row.card_id))) continue;
+        await insert('sealed_template_components', cols.sealed_template_components, row, { template_id: templateId });
       }
       const purchaseMap = new Map();
       for (const row of list('sealed_purchases')) {
@@ -216,7 +256,7 @@ router.post('/backup/restore', async (req, res) => {
       }
       for (const row of list('deck_cards')) {
         const deckId = deckMap.get(row.deck_id);
-        if (deckId == null) continue;
+        if (deckId == null || !(await cardKnown(row.card_id))) continue;
         await insert('deck_cards', cols.deck_cards, row, { deck_id: deckId }, 'INSERT OR IGNORE');
       }
       // Lists after decks: a deck's missing-cards list points at the deck. Items
@@ -246,6 +286,7 @@ router.post('/backup/restore', async (req, res) => {
         lists: listMap.size,
         notes: list('notes').length,
         sealed: purchaseMap.size,
+        ...(fetchedCards ? { fetched_cards: fetchedCards.fetched } : {}),
       });
     });
 
