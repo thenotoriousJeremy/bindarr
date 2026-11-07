@@ -3,6 +3,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
+process.env.BINDARR_DISABLE_FX_SYNC = '1';
 
 const TEST_DIR = __dirname;
 const files = fs.readdirSync(TEST_DIR)

@@ -4,6 +4,8 @@ import CardImage from './CardImage';
 import CardImageZoom from './CardImageZoom';
 import { useT } from '../utils/i18n';
 import { priceText } from '../utils/formatPrice';
+import { useFx } from '../utils/useFx';
+import { totalPrices } from '../utils/convertPrice';
 import { defaultGame, gameOptions, showGamePicker } from '../utils/games';
 import { getLanguagesForGame, displayName } from '../utils/languages';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
@@ -21,6 +23,7 @@ import { buildMassEntry, massEntryPage } from '../utils/tcgMassEntryUrl';
 // opens a set here; a new object each time, so the same set can be reopened.
 export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
   const { t } = useT();
+  const { fx, currency: displayCurrency, show: showPrice } = useFx();
   const [game, setGame] = useState(() => defaultGame());
   const [lang, setLang] = useState('en');
   const [sets, setSets] = useState([]);
@@ -133,6 +136,15 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
   const summary = data ? (variantView ? data.summary.variants : data.summary.cards) : null;
   const shown = data ? filterCards(data.cards, { show, variants: variantView }) : [];
   const parts = summary ? valueParts(summary.missing_value) : [];
+  // One figure in the display currency when every part converts, labelled as
+  // converted; otherwise the per-currency parts side by side, never summed.
+  const missingTotal = totalPrices(parts.map(([currency, amount]) => ({ amount, currency })), displayCurrency, fx);
+  const missingText = missingTotal.total != null
+    ? priceText(missingTotal.total, missingTotal.currency)
+    : parts.map(([cur, v]) => priceText(v, cur)).join(' + ');
+  const missingTitle = missingTotal.converted
+    ? `${t('fx.convertedTotal', { currency: missingTotal.currency, date: missingTotal.date })} · ${t('fx.subtotals', { list: parts.map(([cur, v]) => priceText(v, cur)).join(' · ') })}`
+    : undefined;
 
   const buyMissing = () => {
     if (!data) return;
@@ -309,8 +321,8 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
               <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{t('sets.missingValue')}: </span>
               {summary.missing === 0 ? t('sets.complete') : parts.length ? (
                 <>
-                  <span style={{ color: 'var(--accent-yellow)', fontWeight: 700 }}>
-                    {(summary.unpriced_missing ? t('sets.atLeast', { value: parts.map(([cur, v]) => priceText(v, cur)).join(' + ') }) : parts.map(([cur, v]) => priceText(v, cur)).join(' + '))}
+                  <span style={{ color: 'var(--accent-yellow)', fontWeight: 700 }} title={missingTitle}>
+                    {summary.unpriced_missing ? t('sets.atLeast', { value: missingText }) : missingText}
                   </span>
                   {summary.unpriced_missing > 0 && <span> · {t('sets.unpriced', { count: summary.unpriced_missing })}</span>}
                 </>
@@ -368,7 +380,7 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
                       <div className="tcg-card-name" style={have ? undefined : { color: 'var(--text-secondary)' }}>{displayName(card)}</div>
                       <div className="tcg-card-meta">
                         <span>#{card.number}</span>
-                        {!done && card.price != null && <span className="tcg-card-price">{priceText(card.price, card.price_currency)}</span>}
+                        {!done && card.price != null && <span className="tcg-card-price">{showPrice(card.price, card.price_currency).text}</span>}
                       </div>
                       {variantView && card.variants.length > 0 && (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px', marginTop: '0.2rem' }}>

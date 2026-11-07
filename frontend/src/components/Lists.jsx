@@ -6,6 +6,7 @@ import { gameOptions, showGamePicker, gameLabel, defaultGame } from '../utils/ga
 import { displayName, setReference, langCode } from '../utils/languages';
 import { translateJapaneseName } from '../utils/langHelper';
 import { priceText } from '../utils/formatPrice';
+import { useFx } from '../utils/useFx';
 import { filterItems, listAsText, currencyTotals, progressPercent } from '../utils/listText';
 import { useT } from '../utils/i18n';
 
@@ -56,6 +57,7 @@ async function copyText(text) {
 
 function Lists({ showToast, active = true, statsTrigger }) {
   const { t } = useT();
+  const { show } = useFx();
   const [lists, setLists] = useState([]);
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState(null);
@@ -373,7 +375,7 @@ function Lists({ showToast, active = true, statsTrigger }) {
                   <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(card)}</div>
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{card.set_name} {setReference(card) ? `· ${setReference(card)}` : ''}</div>
                 </div>
-                <span style={{ fontSize: '0.75rem', color: 'var(--accent-yellow)' }}>{card.price_trend > 0 ? priceText(card.price_trend, card.price_currency) : ''}</span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--accent-yellow)' }}>{card.price_trend > 0 ? show(card.price_trend, card.price_currency).text : ''}</span>
                 <button className="btn btn-primary" onClick={() => addCard(card)} disabled={saving} style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}>
                   <Plus size={13} /> {t('lists.add')}
                 </button>
@@ -404,7 +406,7 @@ function Lists({ showToast, active = true, statsTrigger }) {
                 <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(item.card)}</div>
                 <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                   {item.card.set_name}{setReference(item.card) ? ` · ${setReference(item.card)}` : ''}
-                  {item.unit_price != null ? ` · ${priceText(item.unit_price, item.price_currency)}` : ` · ${t('lists.noPrice')}`}
+                  {item.unit_price != null ? ` · ${show(item.unit_price, item.price_currency).text}` : ` · ${t('lists.noPrice')}`}
                 </div>
                 <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.7rem', color: 'var(--text-secondary)', cursor: 'pointer', marginTop: '0.2rem' }} title={t('lists.anyPrintingHint')}>
                   <input type="checkbox" checked={!!item.any_printing} disabled={saving} onChange={(e) => updateItem(item, { any_printing: e.target.checked })} />
@@ -418,7 +420,7 @@ function Lists({ showToast, active = true, statsTrigger }) {
                 {item.missing > 0 && (
                   <div style={{ color: 'var(--accent-red)' }}>
                     {t('lists.missingCount', { count: item.missing })}
-                    {item.missing_value != null && ` · ${priceText(item.missing_value, item.price_currency)}`}
+                    {item.missing_value != null && ` · ${show(item.missing_value, item.price_currency).text}`}
                   </div>
                 )}
               </div>

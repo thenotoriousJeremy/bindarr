@@ -44,6 +44,8 @@ const cvScan = require('../cvScan');
 const app = express.Router();
 
 app.use('/api/auth', require('../routes/auth'));
+// ECB reference rates for the display currency, public as on the server.
+app.use('/api/fx', require('../routes/fx'));
 for (const prefix of ['/api/shared', '/api/admin', '/api/card-art']) {
   app.use(prefix, (req, res) => res.status(501).json({
     error: 'Not available when Bindarr runs on this device.',
@@ -162,6 +164,11 @@ async function warmUp() {
   // stays open. Each provider decides for itself whether it is due.
   setTimeout(sweepPrices, 30000);
   setInterval(sweepPrices, HOUR);
+  // Exchange rates, as the server's fx-rates job: hourly asks, at most one ECB
+  // fetch a day (fxRates.refreshIfDue keeps that clock in the database).
+  const refreshFx = () => require('../fxRates').refreshIfDue().catch(err => console.warn('FX refresh failed:', err.message));
+  refreshFx();
+  setInterval(refreshFx, HOUR);
 }
 
 let booted = null;

@@ -562,6 +562,20 @@ async function initDb() {
     )
   `);
 
+  // The ECB's daily euro reference rates (fxRates.js), one row per currency per
+  // publication date. Prices stay stored in the currency the marketplace quoted;
+  // these only convert them for display, and the date travels with every
+  // conversion so a total can say how old its rate is.
+  await run(`
+    CREATE TABLE IF NOT EXISTS fx_rates (
+      rate_date TEXT NOT NULL,
+      currency TEXT NOT NULL,
+      rate REAL NOT NULL,
+      fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(rate_date, currency)
+    )
+  `);
+
   // card_cache id -> TCGplayer productId, for the Pokémon rows whose providers do
   // not carry one (TCGdex supplies none at all; Scryfall gives MTG its id directly,
   // so MTG never needs a row here).

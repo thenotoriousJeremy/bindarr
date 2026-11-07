@@ -4,6 +4,7 @@
 // Every card is seeded into card_cache, so nothing here reaches a provider.
 // A fresh database would otherwise run a full TCGCSV sync at boot.
 process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
+process.env.BINDARR_DISABLE_FX_SYNC = '1';
 const path = require('path');
 const fs = require('fs');
 const os = require('os');

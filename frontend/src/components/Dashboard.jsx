@@ -3,6 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pi
 import { TrendingUp, Coins, Library, Trophy, Plus, ArrowUpRight } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { priceText, currencySymbol } from '../utils/formatPrice';
+import { useFx } from '../utils/useFx';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { defaultGameFilter, gameOptions, showGamePicker, gameLabel } from '../utils/games';
 import { useT } from '../utils/i18n';
@@ -10,6 +11,7 @@ import CardInspectorModal from './CardInspectorModal';
 import CardImage from './CardImage';
 import { PokemonMigrationNotice } from './PokemonMigrationBanner';
 import RiotNotice from './RiotNotice';
+import Price from './Price';
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
@@ -48,6 +50,9 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
   // picked German sees 1.234,56 and 3.8.2026 even on an en-US browser.
   const money = (n) => (n || 0).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const [stats, setStats] = useState(null);
+  // The server converts the totals into this (review item 9), so it is part of
+  // every stats request and a change in Settings refetches them.
+  const { currency: displayCurrency, show } = useFx();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [timePeriod, setTimePeriod] = useState('30d');
@@ -65,7 +70,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
   useEffect(() => {
     fetchStats();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statsTrigger, gameFilter]);
+  }, [statsTrigger, gameFilter, displayCurrency]);
 
   useEffect(() => {
     if (stats && stats.summary.totalCards > 0) {
@@ -77,7 +82,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
   const fetchStats = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/stats${gameFilter ? `?game=${gameFilter}` : ''}`);
+      const response = await fetch(`/api/stats?currency=${displayCurrency}${gameFilter ? `&game=${gameFilter}` : ''}`);
       if (!response.ok) {
         throw new Error(t('dash.errStats'));
       }
@@ -94,7 +99,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
   const fetchTimelineHistory = async () => {
     try {
       setLoadingHistory(true);
-      const response = await fetch(`/api/stats/history?period=${timePeriod}${gameFilter ? `&game=${gameFilter}` : ''}`);
+      const response = await fetch(`/api/stats/history?period=${timePeriod}&currency=${displayCurrency}${gameFilter ? `&game=${gameFilter}` : ''}`);
       if (response.ok) {
         const data = await response.json();
         setHistoryData(data);
@@ -179,6 +184,17 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
   });
   const rarityChartData = rarities.map((r, i) => ({ ...r, fill: COLORS[i % COLORS.length] }));
 
+  // What the money on this page is in. `valueCurrency` is the display currency
+  // when the server could convert everything, the collection's one currency when
+  // it could not but did not need to, and null for a mix with no rates — then
+  // only the per-currency subtotals are shown, never their sum.
+  const unit = summary.valueCurrency;
+  const unitSymbol = unit ? currencySymbol(unit) : '';
+  const subtotals = Object.entries(summary.valueByCurrency || {});
+  const subtotalText = subtotals.map(([c, v]) => priceText(v, c)).join(' + ');
+  const chartHistory = historyData.filter(p => p.value != null);
+  const chartSets = sets.filter(s => s.value != null);
+
   return (
     <div>
       {renderGameTabs()}
@@ -216,7 +232,22 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
               ))}
             </div>
           </div>
-          <div className="metric-value">{currencySymbol()}{money(summary.totalValue)}</div>
+          <div className="metric-value">
+            {summary.totalValue != null ? `${unitSymbol}${money(summary.totalValue)}` : (subtotalText || priceText(0))}
+          </div>
+          {/* Converted totals say so, with the rate date and the amounts as quoted;
+              a mix with no rates says why there is no single total. */}
+          {summary.converted && (
+            <div className="metric-footer" style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+              <span>{t('fx.convertedTotal', { currency: unit, date: summary.fxDate })}</span>
+              <span>{t('fx.subtotals', { list: subtotals.map(([c, v]) => priceText(v, c)).join(' · ') })}</span>
+            </div>
+          )}
+          {summary.totalValue == null && subtotals.length > 1 && (
+            <div className="metric-footer" style={{ color: 'var(--text-muted)' }}>
+              <span>{t('fx.noRatesTotal')}</span>
+            </div>
+          )}
           {(() => {
             const change = timePeriod === '7d' ? summary.change7d :
                            timePeriod === '30d' ? summary.change30d :
@@ -236,7 +267,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
               <div className={`metric-footer ${isPositive ? 'positive' : 'negative'}`} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <TrendingUp size={12} style={{ transform: isPositive ? 'none' : 'rotate(180deg)' }} />
                 <span>
-                  {isPositive ? '+' : ''}{currencySymbol()}{money(change.abs)} ({isPositive ? '+' : ''}{change.pct}%)
+                  {isPositive ? '+' : ''}{unitSymbol}{money(change.abs)} ({isPositive ? '+' : ''}{change.pct}%)
                 </span>
               </div>
             );
@@ -251,13 +282,16 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
           </div>
           <div className="metric-value">{currencySymbol()}{money(summary.totalSpent)}</div>
           <div className="metric-footer">
-            <span>{t('dash.avgPerCard', { price: priceText(summary.avgCardValue) })}</span>
+            <span>{t('dash.avgPerCard', { price: summary.avgCardValue != null ? priceText(summary.avgCardValue, unit) : '—' })}</span>
           </div>
         </div>
 
         {/* Unrealized Gain / ROI */}
         {(() => {
           const roi = summary.roi || { abs: 0, pct: null };
+          // abs is null when the value could not be put in the display currency,
+          // which is the currency purchase prices were typed in.
+          const noRate = roi.abs == null;
           const isPositive = (roi.abs || 0) >= 0;
           return (
             <div className={`glass-panel metric-card ${isPositive ? 'accent-gain-up' : 'accent-gain-down'}`}>
@@ -266,10 +300,10 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                 <span className="metric-icon"><ArrowUpRight size={18} style={{ transform: isPositive ? 'none' : 'rotate(90deg)' }} /></span>
               </div>
               <div className="metric-value" style={{ color: isPositive ? '#22c55e' : '#ef4444' }}>
-                {isPositive ? '+' : '−'}{currencySymbol()}{money(Math.abs(roi.abs || 0))}
+                {noRate ? '—' : `${isPositive ? '+' : '−'}${currencySymbol()}${money(Math.abs(roi.abs))}`}
               </div>
               <div className="metric-footer">
-                <span>{roi.pct === null ? t('dash.roiUnset') : t('dash.roiVsCost', { pct: `${isPositive ? '+' : ''}${roi.pct}` })}</span>
+                <span>{noRate ? t('fx.gainNeedsRate') : roi.pct === null ? t('dash.roiUnset') : t('dash.roiVsCost', { pct: `${isPositive ? '+' : ''}${roi.pct}` })}</span>
               </div>
             </div>
           );
@@ -299,11 +333,11 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
         <div className="chart-container" style={{ height: '240px', position: 'relative' }}>
           {loadingHistory ? (
             <div className="spinner" style={{ position: 'absolute', top: '45%', left: '45%' }}></div>
-          ) : historyData.length < 2 ? (
+          ) : chartHistory.length < 2 ? (
             <div className="chart-empty">{t('dash.notEnoughHistory')}</div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={historyData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+              <AreaChart data={chartHistory} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="var(--type-grass)" stopOpacity={0.4}/>
@@ -311,11 +345,11 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="date" stroke="var(--text-secondary)" style={{ fontSize: '0.7rem' }} />
-                <YAxis stroke="var(--text-secondary)" style={{ fontSize: '0.7rem' }} tickFormatter={(v) => `${currencySymbol()}${v}`} />
+                <YAxis stroke="var(--text-secondary)" style={{ fontSize: '0.7rem' }} tickFormatter={(v) => `${unitSymbol}${v}`} />
                 <Tooltip 
                   contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }}
                   labelStyle={{ color: 'var(--text-primary)' }}
-                  formatter={(v) => [`${currencySymbol()}${v}`, t('dash.portfolioValue')]}
+                  formatter={(v) => [`${unitSymbol}${v}`, t('dash.portfolioValue')]}
                 />
                 <Area type="monotone" dataKey="value" stroke="var(--type-grass)" strokeWidth={2} fillOpacity={1} fill="url(#colorVal)" />
               </AreaChart>
@@ -333,17 +367,17 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
           <div className="glass-panel">
             <h3 className="chart-title">{t('dash.valueBySet')}</h3>
             <div className="chart-container">
-              {sets.length === 0 ? (
+              {chartSets.length === 0 ? (
                 <div className="chart-empty">{t('dash.noSetData')}</div>
               ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={sets} layout="vertical" margin={{ left: 10, right: 30, top: 10, bottom: 10 }}>
-                  <XAxis type="number" stroke="var(--text-secondary)" tickFormatter={(v) => `${currencySymbol()}${v}`} />
+                <BarChart data={chartSets} layout="vertical" margin={{ left: 10, right: 30, top: 10, bottom: 10 }}>
+                  <XAxis type="number" stroke="var(--text-secondary)" tickFormatter={(v) => `${unitSymbol}${v}`} />
                   <YAxis dataKey="name" type="category" width={120} stroke="var(--text-secondary)" tickLine={false} axisLine={false} style={{ fontSize: '0.8rem' }} />
                   <Tooltip 
                     contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }}
                     labelStyle={{ color: 'var(--text-primary)' }}
-                    formatter={(v) => [`${currencySymbol()}${v}`, t('dash.value')]}
+                    formatter={(v) => [`${unitSymbol}${v}`, t('dash.value')]}
                   />
                   <Bar dataKey="value" fill="var(--accent-red)" radius={[0, 4, 4, 0]} />
                 </BarChart>
@@ -481,9 +515,9 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontWeight: 800, color: 'var(--accent-yellow)', fontSize: '0.95rem' }}>{priceText(card.price_trend, card.price_currency)}<span style={{ fontSize: '0.6rem', fontWeight: 500, color: 'var(--text-muted)' }}> {t('dash.each')}</span></div>
+                    <div style={{ fontWeight: 800, color: 'var(--accent-yellow)', fontSize: '0.95rem' }}><Price value={card.price_trend} currency={card.price_currency} /><span style={{ fontSize: '0.6rem', fontWeight: 500, color: 'var(--text-muted)' }}> {t('dash.each')}</span></div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                      {card.quantity > 1 ? t('dash.qtyTotal', { qty: card.quantity, price: priceText(card.price_trend * card.quantity, card.price_currency) }) : t('dash.qty', { qty: 1 })}
+                      {card.quantity > 1 ? t('dash.qtyTotal', { qty: card.quantity, price: show(card.price_trend * card.quantity, card.price_currency).text }) : t('dash.qty', { qty: 1 })}
                     </div>
                   </div>
                 </div>
@@ -521,7 +555,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                       </div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: 700, color: 'var(--accent-yellow)', fontSize: '0.8rem' }}>{priceText(card.price_trend, card.price_currency)}<span style={{ fontSize: '0.55rem', fontWeight: 500, color: 'var(--text-muted)' }}> {t('dash.each')}</span></div>
+                      <div style={{ fontWeight: 700, color: 'var(--accent-yellow)', fontSize: '0.8rem' }}><Price value={card.price_trend} currency={card.price_currency} /><span style={{ fontSize: '0.55rem', fontWeight: 500, color: 'var(--text-muted)' }}> {t('dash.each')}</span></div>
                       <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{card.quantity > 1 ? t('dash.qty', { qty: card.quantity }) : (card.added_at ? new Date(card.added_at).toLocaleDateString(locale) : '')}</div>
                     </div>
                   </div>

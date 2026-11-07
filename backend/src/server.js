@@ -56,6 +56,7 @@ const trashRoutes = require('./routes/trash');
 const binderArtRoutes = require('./routes/binderArt');
 const notificationRoutes = require('./routes/notifications');
 const notify = require('./notify');
+const fxRoutes = require('./routes/fx');
 const { authenticateToken } = require('./middleware/auth');
 const { startHttps, selfSignedTls } = require('./utils/tls');
 
@@ -361,6 +362,22 @@ const scheduler = createScheduler({
       run: () => runPriceSweeps().then(summary => notify.emit({ type: 'price_sweep_done', summary })),
     },
     {
+      // ECB exchange rates for showing prices in the owner's display currency.
+      // Hourly, like tcgcsv-sync, because fxRates.refreshIfDue decides: it asks
+      // the ECB at most once a day (the last stored fetch), and between those a
+      // run is one indexed read. A daily job against a daily guard would skip on
+      // the few seconds between the two clocks and fetch every other day. A
+      // failed fetch throws, so the scheduler records it and retries.
+      // BINDARR_DISABLE_FX_SYNC=1 switches it off; the e2e suites set it, so no
+      // test talks to the ECB.
+      name: 'fx-rates',
+      every: () => (process.env.BINDARR_DISABLE_FX_SYNC === '1' ? 0 : HOUR),
+      run: async () => {
+        const result = await require('./fxRates').refreshIfDue();
+        if (result.error) throw new Error(result.error);
+      },
+    },
+    {
       // Expired sessions, so the table doesn't grow unbounded. Lookups already
       // ignore them; this is housekeeping.
       name: 'session-purge',
@@ -540,6 +557,8 @@ app.use('/api/admin', adminRoutes);
 // Ahead of the bare '/api' mounts so nothing shadows it. Its reads are
 // deliberately unauthenticated — a public shared collection renders card art too.
 app.use('/api/card-art', cardArtRoutes);
+// ECB reference rates: public data, and a shared collection converts with them.
+app.use('/api/fx', fxRoutes);
 
 // --- AUTHENTICATION GATE ---
 // ONE gate for every remaining /api route, rather than a router.use in each file.

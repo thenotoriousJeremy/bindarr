@@ -22,6 +22,7 @@ const baseEnv = {
   ...process.env,
   HTTPS_PORT: '',
   BINDARR_DISABLE_TCGCSV_SYNC: '1',
+  BINDARR_DISABLE_FX_SYNC: '1',
   DEFAULT_ADMIN_PASSWORD: ADMIN_PASSWORD,
 };
 
@@ -131,6 +132,7 @@ async function backupsAndSchedules() {
     assert.strictEqual(status.backup, 'baseline', 'the backup clock starts instead of backing up a fresh database');
     assert.ok(status['session-purge'], 'the purge has run');
     assert.ok(!('tcgcsv-sync' in status), 'a disabled job records nothing');
+    assert.ok(!('fx-rates' in status), 'no e2e run talks to the ECB');
     await new Promise(resolve => setTimeout(resolve, 500));
     assert.deepStrictEqual(fs.readdirSync(backupDir), [meta.file], 'no automatic backup at boot');
     console.log('PASS: F9-TC4');
