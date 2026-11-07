@@ -11,6 +11,14 @@ const cardApi = require('../utils/cardApi');
 const pokemonProvider = require('../utils/pokemonProvider');
 const languages = require('../utils/languages');
 const { matcher, normName } = require('../utils/setCatalogueMatch');
+const { importLimiter } = require('../middleware/auth');
+
+// Every row can cost a provider lookup and the whole file is written in one
+// transaction, so a file has to be bounded. Bigger collections import in parts.
+const MAX_IMPORT_ROWS = 5000;
+const tooManyRows = (res, count) => res.status(413).json({
+  error: `Too many rows (${count}). Import at most ${MAX_IMPORT_ROWS} at a time.`
+});
 
 // Turn an imported row into a card that is really in card_cache, or null.
 //
@@ -146,7 +154,7 @@ router.get('/export', async (req, res) => {
 });
 
 // Import endpoint
-router.post('/import', async (req, res) => {
+router.post('/import', importLimiter, async (req, res) => {
   const { format = 'internal', data } = req.body;
   if (!data) {
     return res.status(400).json({ error: 'No data provided' });
@@ -163,6 +171,7 @@ router.post('/import', async (req, res) => {
       if (rawItems.length === 0) {
         return res.status(400).json({ error: 'No ManaBox cards found' });
       }
+      if (rawItems.length > MAX_IMPORT_ROWS) return tooManyRows(res, rawItems.length);
 
       const { cards, pairs } = await scryfallApi.bulkFetchByIdentifier(rawItems.map(item => ({
         ...item,
@@ -224,6 +233,7 @@ router.post('/import', async (req, res) => {
     if (!Array.isArray(rawItems)) {
       return res.status(400).json({ error: 'Invalid data payload' });
     }
+    if (rawItems.length > MAX_IMPORT_ROWS) return tooManyRows(res, rawItems.length);
 
     // Resolved before the transaction, not inside it: resolving can mean a
     // provider request per row, and a write transaction must not wait on the
@@ -335,7 +345,7 @@ router.post('/import', async (req, res) => {
 });
 
 // Build a physical box from matching, unfiled cards the user already owns.
-router.post('/import-container', async (req, res) => {
+router.post('/import-container', importLimiter, async (req, res) => {
   const { data, name } = req.body;
   const containerName = String(name || '').trim();
   if (!data || !containerName) {
@@ -345,6 +355,7 @@ router.post('/import-container', async (req, res) => {
   try {
     const items = parseManaboxText(data);
     if (items.length === 0) return res.status(400).json({ error: 'No ManaBox cards found' });
+    if (items.length > MAX_IMPORT_ROWS) return tooManyRows(res, items.length);
     const duplicate = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [containerName, req.user.id]);
     if (duplicate) return res.status(400).json({ error: 'A location with this name already exists' });
 

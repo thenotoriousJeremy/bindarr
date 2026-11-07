@@ -2861,6 +2861,18 @@ button, input, select, textarea {
   .view-transition { animation: none; }
 }
 
+/* Tabs opened earlier stay mounted but hidden (App.jsx). content-visibility
+   skips their rendering and takes them out of focus order and the a11y tree,
+   but unlike display:none it keeps their layout state, so scroll boxes inside
+   a tab (unsorted list, deck panes) are where you left them. Older engines
+   (iOS < 18) fall back to display:none and lose only those inner offsets. */
+.tab-pane-hidden {
+  content-visibility: hidden;
+}
+@supports not (content-visibility: hidden) {
+  .tab-pane-hidden { display: none; }
+}
+
 /* ==========================================================================
    FOIL FINISHES — Holofoil vs Reverse Holofoil are intentionally distinct.
    Holofoil  = full rainbow prism that drifts continuously (screen blend).

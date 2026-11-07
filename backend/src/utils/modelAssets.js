@@ -58,16 +58,18 @@ const LICENSE = {
 };
 
 const assetPath = (a) => path.join(MODEL_DIR, a.name);
-// Present means present AND the right size. A half-written file from a killed
+// Earlier releases' files that still work but have been superseded. The original
+// cornelius (4.41 MB) is a valid corner model, so an install that has it scans —
+// but fastweb-single replaced it in 1.8.3 for a ~4x faster live outline, and
+// accepting the old size as simply "present" meant no install that downloaded
+// before then was ever offered the faster one.
+const LEGACY_BYTES = { 'cornelius.onnx': [4407545] };
+const sizeOf = (a) => { try { return fs.statSync(assetPath(a)).size; } catch { return -1; } };
+// Present means present AND a known size. A half-written file from a killed
 // container reads as installed otherwise, and then fails at inference time.
-// Supports both new fastweb-single (3.19 MB) and previous cornelius (4.41 MB).
-const isPresent = (a) => {
-  try {
-    const sz = fs.statSync(assetPath(a)).size;
-    if (a.name === 'cornelius.onnx') return sz === a.bytes || sz === 4407545;
-    return sz === a.bytes;
-  } catch { return false; }
-};
+const isCurrent = (a) => sizeOf(a) === a.bytes;
+const isOutdated = (a) => (LEGACY_BYTES[a.name] || []).includes(sizeOf(a));
+const isPresent = (a) => isCurrent(a) || isOutdated(a);
 
 // One download at a time, mirroring catalog.js: these are tens of megabytes from
 // someone else's free CDN, and two at once helps nobody.
@@ -80,7 +82,7 @@ function status() {
   return {
     dir: MODEL_DIR,
     license: LICENSE,
-    models: MODELS.map(a => ({ name: a.name, bytes: a.bytes, present: isPresent(a) })),
+    models: MODELS.map(a => ({ name: a.name, bytes: a.bytes, present: isPresent(a), outdated: isOutdated(a) })),
     catalogs: CATALOGS.map(a => ({
       name: a.name, game: a.game, bytes: a.bytes, snapshot: a.snapshot, present: isPresent(a),
     })),
@@ -93,7 +95,9 @@ function status() {
 // half file that the size check above would have to catch later.
 async function fetchAsset(a, onProgress) {
   const dest = assetPath(a);
-  if (isPresent(a)) return 'present';
+  // Current, not merely present: an outdated file is replaced. The rename below
+  // swaps it atomically, so scanning keeps the old model until the new one lands.
+  if (isCurrent(a)) return 'present';
   fs.mkdirSync(MODEL_DIR, { recursive: true });
   const res = await fetch(`${HF}/${a.repo}/resolve/main/${a.file}`, {
     headers: { 'User-Agent': 'Mozilla/5.0' },
@@ -154,6 +158,7 @@ function start(what) {
       try {
         const cvScan = require('../cvScan');
         for (const game of ['mtg', 'pokemon', 'lorcana']) cvScan.reload(game);
+        if (what === 'models' && fetched) cvScan.reloadModels();
       } catch { /* nothing loaded yet is fine — the next scan loads it */ }
       // The published Pokémon catalog is keyed by TCGplayer product id, and a
       // product id names no card without the product map. Downloading one without
@@ -175,4 +180,4 @@ function start(what) {
   return state();
 }
 
-module.exports = { MODELS, CATALOGS, LICENSE, MODEL_DIR, status, start, state, lastResult, isPresent };
+module.exports = { MODELS, CATALOGS, LICENSE, MODEL_DIR, status, start, state, lastResult, isPresent, isOutdated };

@@ -70,6 +70,7 @@ app.use('/api', require('../routes/storage'));
 app.use('/api', require('../routes/stats'));
 app.use('/api', require('../routes/importExport'));
 app.use('/api', require('../routes/notes'));
+app.use('/api', require('../routes/sealed'));
 app.use('/api', require('../routes/backup'));
 app.use('/api/sets', require('../routes/sets'));
 app.use('/api/decks', require('../routes/decks'));
@@ -139,6 +140,9 @@ async function warmUp() {
     const { splitStackedEntries } = require('../utils/collectionHelpers');
     await splitStackedEntries(db);
     await refreshSets();
+    // The TCGCSV cache that sealed-product search and Pokémon prices read, as
+    // server.js refreshes it at startup. Safe: it logs and gives up on failure.
+    await require('../tcgcsvApi').syncIfUpdatedSafely('device startup');
   } catch (err) {
     console.error('Device warm-up failed:', err.message);
   }

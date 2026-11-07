@@ -46,11 +46,18 @@ const settingsRoutes = require('./routes/settings');
 const notesRoutes = require('./routes/notes');
 const cardArtRoutes = require('./routes/cardArt');
 const backupRoutes = require('./routes/backup');
+const sealedRoutes = require('./routes/sealed');
 const { authenticateToken } = require('./middleware/auth');
 const { startHttps, selfSignedTls } = require('./utils/tls');
 
 
 const app = express();
+// A rejected promise nobody awaited is a bug in one request, not a reason to
+// drop every other user's connection: Node's default turns it into an exit.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason && reason.stack ? reason.stack : reason);
+});
+
 const PORT = process.env.PORT || 3001;
 
 // The model directory is created here, at startup, as the app's own user —
@@ -88,6 +95,12 @@ function checkScanModels() {
   if (missing.length) {
     console.warn(`STARTUP: scan models missing from ${dir} (${missing.join(', ')}) — card scanning is disabled.`);
     console.warn('STARTUP: fetch them with  node scripts/fetch-models.mjs   (Docker: docker exec <container> node scripts/fetch-models.mjs)');
+  }
+  const modelAssets = require('./utils/modelAssets');
+  const outdated = modelAssets.MODELS.filter(modelAssets.isOutdated).map(a => a.name);
+  if (outdated.length) {
+    console.warn(`STARTUP: ${outdated.join(', ')} is an older release's model — scanning works, but the live card outline is ~4x slower than it needs to be.`);
+    console.warn('STARTUP: update it from Admin → Catalog (Update), or  node scripts/fetch-models.mjs');
   }
 }
 checkScanModels();
@@ -194,16 +207,17 @@ app.use(cors({
 // Applying 15mb to every route means an UNAUTHENTICATED POST /api/auth/login can
 // hand the process 15 MB, which is a free memory amplifier for anyone who can
 // reach the port. body-parser skips a request whose body is already parsed, so
-// registering these first and the small default after is all the scoping needed.
-const bigJson = express.json({ limit: '15mb' });
-app.use('/api/import', bigJson);
-app.use('/api/scan-match', bigJson);
-app.use('/api/search', bigJson);
-// A full-account restore is the one body bigger still: it carries every copy plus
-// the card data behind them. Authenticated BEFORE the body is read, so the large
-// limit is only ever extended to a signed-in owner, never to an anonymous POST.
-app.use('/api/backup', authenticateToken, express.json({ limit: '200mb' }));
-app.use(express.json({ limit: '1mb' }));
+// registering the big one first and the small default after is all the scoping
+// needed — but the big one is registered below the auth gate, not here, so an
+// unauthenticated request to those paths is refused before its body is read
+// rather than after 15 MB of it is buffered. Here they are only skipped.
+const BIG_BODY_PATHS = ['/api/import', '/api/scan-match', '/api/search'];
+// A full-account restore is bigger still (every copy plus the card data behind
+// it), so /api/backup gets its own, larger limit — also below the gate.
+const BACKUP_BODY_PATH = '/api/backup';
+const isBigBodyPath = (p) => [...BIG_BODY_PATHS, BACKUP_BODY_PATH].some(b => p === b || p.startsWith(`${b}/`));
+const smallJson = express.json({ limit: '1mb' });
+app.use((req, res, next) => (isBigBodyPath(req.path) ? next() : smallJson(req, res, next)));
 
 // Rebuild any catalog that has fallen behind, right after the weekly set refresh
 // discovers new releases.
@@ -271,6 +285,15 @@ db.initDb()
     // Load sets into compartmentSort memory cache
     const { loadSetsCache } = require('./utils/compartmentSort');
     await loadSetsCache(db);
+
+    if (process.env.BINDARR_DISABLE_TCGCSV_SYNC !== '1') {
+      const tcgcsvApi = require('./tcgcsvApi');
+      tcgcsvApi.syncIfUpdated().catch(err => {
+        if (!tcgcsvApi.isCooldownError(err)) {
+          console.error('TCGCSV startup sync failed:', err.message);
+        }
+      });
+    }
 
     // Warm the scan models and catalogs. Two ONNX sessions plus an embedding table
     // take ~400 ms to load; paying that on the first scan instead would make the
@@ -401,6 +424,8 @@ app.use('/api/card-art', cardArtRoutes);
 // on its way to notes, so it ran authenticateToken — and its sessions⋈users
 // SELECT — four times per request.
 app.use('/api', authenticateToken);
+app.use(BIG_BODY_PATHS, express.json({ limit: '15mb' }));
+app.use(BACKUP_BODY_PATH, express.json({ limit: '200mb' }));
 
 // --- AUTHENTICATED API ROUTES ---
 app.use('/api', collectionRoutes);
@@ -408,6 +433,7 @@ app.use('/api', storageRoutes);
 app.use('/api', statsRoutes);
 app.use('/api', importExportRoutes);
 app.use('/api', notesRoutes);
+app.use('/api', sealedRoutes);
 app.use('/api', backupRoutes);
 app.use('/api/sets', setsRoutes);
 app.use('/api/decks', decksRoutes);
@@ -417,12 +443,16 @@ app.use('/api/settings', settingsRoutes);
 // what the user aims with and what the server matches cannot disagree. That
 // means the browser has to be able to fetch the model — unauthenticated, because
 // the outline runs before login is relevant and the file is public weights.
-// Immutable: the filename changes when the model does.
+// Revalidated, NOT immutable. This used to say "immutable: the filename changes
+// when the model does" — and then 1.8.3 swapped cornelius for fastweb-single
+// under the same name, so every browser that had loaded the old one kept it for
+// 30 days. The ETag sendFile sets makes a revalidation a ~200-byte 304, and the
+// native app keys its own cache off that same ETag (cardDetector.fetchModel).
 // Only the corner model. Serving the whole directory would also expose the
 // 56 MB embedding catalog, which the browser never needs and which nobody
 // should be able to pull off an install by guessing a filename.
 app.get('/models/cornelius.onnx', (req, res) => {
-  res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+  res.setHeader('Cache-Control', 'public, no-cache');
   // MODEL_DIR, not a hardcoded backend/data: the container keeps the models on
   // the persisted volume (CV_MODEL_DIR=/app/database/models). Hardcoded, this
   // 404'd in every Docker install, the worker fell back to the pure-JS contour

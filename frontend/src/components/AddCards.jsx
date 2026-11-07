@@ -9,7 +9,10 @@ import { isDeviceMode } from '../apiBase';
 // Device mode only, so a server-mode build never loads the download manager.
 const DeviceScanSetup = lazy(() => import('./DeviceScanSetup'));
 
-function AddCards({ onAddSuccess, showToast, setActiveTab, initialMode = 'scan' }) {
+// `active` is false while another tab is showing: the tab stays mounted so the
+// chosen mode and search survive, but the scanner is unmounted so the camera
+// (and its detection loop) never runs behind a hidden tab.
+function AddCards({ active = true, onAddSuccess, showToast, setActiveTab, initialMode = 'scan' }) {
   const { t } = useT();
   // In device mode a scan needs the models and a catalog downloaded to the phone
   // first, so the tab offers that download until there is something to match
@@ -63,7 +66,7 @@ function AddCards({ onAddSuccess, showToast, setActiveTab, initialMode = 'scan' 
       </div>
 
       <div>
-        {mode === 'scan' && (deviceMode ? (
+        {mode === 'scan' && active && (deviceMode ? (
           <Suspense fallback={null}>
             <DeviceScanSetup gate showToast={showToast}>
               <CameraScanner onAddSuccess={onAddSuccess} showToast={showToast} setActiveTab={setActiveTab} />

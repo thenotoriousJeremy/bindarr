@@ -17,6 +17,15 @@ router.use(authenticateToken, requireAdmin);
 
 router.post('/seed-cards', async (req, res) => {
   try {
+    // Seeding is for an empty account only. It used to clear every collection row in
+    // the seed sets first, which also deleted real cards the admin owned from those
+    // sets; nothing marks a row as seeded, so the only safe rule is not to seed over
+    // existing data at all.
+    const existing = await db.get(`SELECT COUNT(*) AS n FROM collection WHERE user_id = ?`, [req.user.id]);
+    if (existing.n > 0) {
+      return res.status(409).json({ error: `Refusing to seed: this account already has ${existing.n} collection entries. Seed test data into an empty account instead.` });
+    }
+
     let binder = await db.get(`SELECT id FROM locations WHERE user_id = ? AND type = 'Binder' LIMIT 1`, [req.user.id]);
     if (!binder) {
       const result = await db.run(`
@@ -66,15 +75,6 @@ router.post('/seed-cards', async (req, res) => {
         return res.status(502).json({ error: 'Could not fetch seed card data from the card APIs, and local cache is empty. Try again shortly.' });
       }
     }
-
-    const seedSetIds = [...new Set(MOCK_POOL.map(c => c.set_id))];
-    const seedSetPlaceholders = seedSetIds.map(() => '?').join(',');
-    await db.run(
-      `DELETE FROM collection WHERE user_id = ? AND card_id IN (
-         SELECT id FROM card_cache WHERE set_id IN (${seedSetPlaceholders})
-       )`,
-      [req.user.id, ...seedSetIds]
-    );
 
     const conditions = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played'];
     const languages = ['English', 'English', 'English', 'Japanese'];
@@ -346,21 +346,29 @@ router.post('/catalogs/build', (req, res) => {
 router.get('/models', async (req, res) => {
   // The product map ships with the ready-made Pokémon catalog's state because it is
   // that catalog's other half: product ids with nothing to look them up in name no
-  // cards at all.
+  // cards at all. Reported per game now that the map covers sealed product too.
+  const productMap = require('../tcgplayerCatalog');
+  const productMaps = {};
+  for (const game of Object.keys(productMap.SEALED_CATEGORIES)) {
+    productMaps[game] = await productMap.summary(game);
+  }
   res.json({
     ...require('../utils/modelAssets').status(),
-    productMap: await require('../tcgplayerCatalog').summary(),
+    productMap: productMaps.pokemon,
+    productMaps,
   });
 });
 
-// Build (or refresh) the TCGplayer product map. A download of the ready-made
-// Pokémon catalog starts this on its own — this is the button for refreshing it
-// after a set release, or recovering from a run that failed halfway.
+// Build (or refresh) the TCGplayer product map for one game. A download of the
+// ready-made Pokémon catalog starts this on its own — this is the button for
+// refreshing it after a set release, or recovering from a run that failed
+// halfway, or building it for a game that never had one.
 router.post('/models/product-map', (req, res) => {
   const productMap = require('../tcgplayerCatalog');
+  const game = (req.body && req.body.game) || 'pokemon';
   try {
     if (req.body && req.body.stop) return res.json({ stopped: productMap.stop() });
-    res.json({ progress: productMap.start() });
+    res.json({ progress: productMap.start(game) });
   } catch (e) {
     res.status(409).json({ error: e.message, progress: productMap.state() });
   }

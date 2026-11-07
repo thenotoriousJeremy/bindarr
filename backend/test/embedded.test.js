@@ -172,6 +172,10 @@ async function testBackupRoundTrip() {
   const deckId = (await db.get(`SELECT id FROM decks WHERE name = 'Elves'`)).id;
   await db.run(`INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, 'mtg-embedded-1', 4)`, [deckId]);
   await call('POST', '/api/notes', { body: { title: 'Keep', body: 'this note' } });
+  // A sealed box, one unit opened, the copy filed as coming out of it.
+  const purchase = await db.run(`INSERT INTO sealed_purchases (user_id, product_name, quantity) VALUES (1, 'Booster Box', 1)`);
+  const unit = await db.run(`INSERT INTO sealed_units (purchase_id, opened_at) VALUES (?, CURRENT_TIMESTAMP)`, [purchase.lastID]);
+  await db.run(`UPDATE collection SET sealed_unit_id = ? WHERE card_id = 'mtg-embedded-1'`, [unit.lastID]);
 
   const backup = await call('GET', '/api/backup');
   assert.strictEqual(backup.status, 200);
@@ -183,6 +187,7 @@ async function testBackupRoundTrip() {
   await db.run(`DELETE FROM deck_cards`);
   await db.run(`DELETE FROM decks`);
   await db.run(`DELETE FROM collection`);
+  await db.run(`DELETE FROM sealed_purchases`);
   await db.run(`DELETE FROM price_history`);
   await db.run(`DELETE FROM card_cache WHERE id = 'mtg-embedded-1'`);
 
@@ -203,6 +208,11 @@ async function testBackupRoundTrip() {
   assert.strictEqual(rule.filter_value, 'mtg-m19', 'filing rules follow their renumbered pages');
   const dc = await db.get(`SELECT d.name, dc.quantity FROM deck_cards dc JOIN decks d ON d.id = dc.deck_id`);
   assert.deepStrictEqual(dc, { name: 'Elves', quantity: 4 });
+  const opened = await db.get(
+    `SELECT p.product_name FROM collection c JOIN sealed_units u ON u.id = c.sealed_unit_id
+       JOIN sealed_purchases p ON p.id = u.purchase_id WHERE c.card_id = 'mtg-embedded-1'`
+  );
+  assert.strictEqual(opened && opened.product_name, 'Booster Box', 'sealed product and the copy opened from it come back linked');
   const titles = (await db.all(`SELECT title FROM notes ORDER BY title`)).map(n => n.title);
   assert.ok(titles.includes('Keep') && !titles.includes('Throwaway'), 'restore replaces, it does not merge');
 

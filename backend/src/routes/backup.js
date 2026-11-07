@@ -3,11 +3,12 @@
 // device mode, or a server that phone is moving to.
 //
 // The CSV/JSON export in importExport.js is a card list for spreadsheets and other
-// apps. It cannot rebuild an account: it has no decks or notes, no binder pages or
-// their filing rules, and it names each copy's location by text. This file holds
-// the rows themselves.
+// apps. It cannot rebuild an account: it has no decks, notes or sealed product, no
+// binder pages or their filing rules, and it names each copy's location by text.
+// This file holds the rows themselves.
 //
-// Restore REPLACES the account's collection, storage, decks and notes. A merge
+// Restore REPLACES the account's collection, storage, decks, notes and sealed
+// product. A merge
 // would have to decide which of two binders called "Main Binder" a copy belongs in,
 // and every way of guessing files cards somewhere their owner did not put them.
 // Card data (card_cache, price history, product ids) is shared across accounts, so
@@ -54,10 +55,17 @@ router.get('/backup', async (req, res) => {
     const decks = await db.all(`SELECT * FROM decks WHERE user_id = ?`, [uid]);
     const deckCards = await rowsWhereIn('deck_cards', 'deck_id', decks.map(d => d.id));
     const notes = await db.all(`SELECT * FROM notes WHERE user_id = ?`, [uid]);
+    const sealedTemplates = await db.all(`SELECT * FROM sealed_templates WHERE user_id = ?`, [uid]);
+    const sealedComponents = await rowsWhereIn('sealed_template_components', 'template_id', sealedTemplates.map(t => t.id));
+    const sealedPurchases = await db.all(`SELECT * FROM sealed_purchases WHERE user_id = ?`, [uid]);
+    const sealedUnits = await rowsWhereIn('sealed_units', 'purchase_id', sealedPurchases.map(p => p.id));
 
     // The cards those rows name, so the backup restores onto an install that has
     // never cached them — a new phone, or a server that has never seen this game.
-    const cardIds = [...new Set([...collection.map(c => c.card_id), ...deckCards.map(d => d.card_id)])];
+    const cardIds = [...new Set([
+      ...collection.map(c => c.card_id), ...deckCards.map(d => d.card_id),
+      ...sealedComponents.map(c => c.card_id).filter(Boolean),
+    ])];
     const cards = await rowsWhereIn('card_cache', 'id', cardIds);
     const priceHistory = await rowsWhereIn('price_history', 'card_id', cardIds);
     const products = await rowsWhereIn('tcgplayer_product', 'card_id', cardIds);
@@ -72,6 +80,8 @@ router.get('/backup', async (req, res) => {
       data: {
         locations, compartments, compartment_assignments: assignments, collection,
         decks, deck_cards: deckCards, notes,
+        sealed_templates: sealedTemplates, sealed_template_components: sealedComponents,
+        sealed_purchases: sealedPurchases, sealed_units: sealedUnits,
         card_cache: cards, price_history: priceHistory, tcgplayer_product: products,
       },
     });
@@ -108,7 +118,8 @@ router.post('/backup/restore', async (req, res) => {
   try {
     const cols = {};
     for (const t of ['locations', 'compartments', 'compartment_assignments', 'collection', 'decks',
-      'deck_cards', 'notes', 'card_cache', 'price_history', 'tcgplayer_product']) {
+      'deck_cards', 'notes', 'card_cache', 'price_history', 'tcgplayer_product', 'sealed_templates',
+      'sealed_template_components', 'sealed_purchases', 'sealed_units']) {
       cols[t] = (await columnsOf(t)).filter(c => c !== 'id' || ['card_cache'].includes(t));
     }
     const counts = {};
@@ -126,8 +137,11 @@ router.post('/backup/restore', async (req, res) => {
       }
 
       // Then out with this account's own rows. Compartments and their filing rules
-      // go with their locations (ON DELETE CASCADE); deck cards with their decks.
+      // go with their locations (ON DELETE CASCADE); deck cards with their decks;
+      // units with their purchases, components with their templates.
       await db.run(`DELETE FROM collection WHERE user_id = ?`, [uid]);
+      await db.run(`DELETE FROM sealed_purchases WHERE user_id = ?`, [uid]);
+      await db.run(`DELETE FROM sealed_templates WHERE user_id = ?`, [uid]);
       await db.run(`DELETE FROM decks WHERE user_id = ?`, [uid]);
       await db.run(`DELETE FROM notes WHERE user_id = ?`, [uid]);
       await db.run(`DELETE FROM locations WHERE user_id = ?`, [uid]);
@@ -148,6 +162,35 @@ router.post('/backup/restore', async (req, res) => {
         await insert('compartment_assignments', cols.compartment_assignments, row, { compartment_id: compartmentId }, 'INSERT OR IGNORE');
       }
 
+      // Sealed product before the collection, whose copies can name the unit they
+      // were opened from. A purchase that was itself opened out of another unit
+      // points at that unit, which only exists once every purchase's units do.
+      const templateMap = new Map();
+      for (const row of list('sealed_templates')) {
+        templateMap.set(row.id, await insert('sealed_templates', cols.sealed_templates, row, { user_id: uid }));
+      }
+      for (const row of list('sealed_template_components')) {
+        const templateId = templateMap.get(row.template_id);
+        if (templateId != null) await insert('sealed_template_components', cols.sealed_template_components, row, { template_id: templateId });
+      }
+      const purchaseMap = new Map();
+      for (const row of list('sealed_purchases')) {
+        purchaseMap.set(row.id, await insert('sealed_purchases', cols.sealed_purchases, row, {
+          user_id: uid,
+          template_id: row.template_id == null ? null : (templateMap.get(row.template_id) ?? null),
+          source_unit_id: null,
+        }));
+      }
+      const unitMap = new Map();
+      for (const row of list('sealed_units')) {
+        const purchaseId = purchaseMap.get(row.purchase_id);
+        if (purchaseId != null) unitMap.set(row.id, await insert('sealed_units', cols.sealed_units, row, { purchase_id: purchaseId }));
+      }
+      for (const row of list('sealed_purchases')) {
+        const unitId = row.source_unit_id == null ? null : unitMap.get(row.source_unit_id);
+        if (unitId != null) await db.run(`UPDATE sealed_purchases SET source_unit_id = ? WHERE id = ?`, [unitId, purchaseMap.get(row.id)]);
+      }
+
       // A copy whose card the backup could not supply would break the card_cache
       // foreign key; it is skipped and counted rather than failing the restore.
       let skipped = 0;
@@ -158,6 +201,7 @@ router.post('/backup/restore', async (req, res) => {
           user_id: uid,
           location_id: row.location_id == null ? null : (locMap.get(row.location_id) ?? null),
           compartment_id: row.compartment_id == null ? null : (compMap.get(row.compartment_id) ?? null),
+          sealed_unit_id: row.sealed_unit_id == null ? null : (unitMap.get(row.sealed_unit_id) ?? null),
         });
       }
       const deckMap = new Map();
@@ -179,6 +223,7 @@ router.post('/backup/restore', async (req, res) => {
         locations: locMap.size,
         decks: deckMap.size,
         notes: list('notes').length,
+        sealed: purchaseMap.size,
       });
     });
 

@@ -650,5 +650,11 @@ function reload(game, lang) {
   delete catalogs[game];
 }
 
-module.exports = { match, load, loadAll, isBuilt, builtLangs, reload, scoreCards, setSource, STRONG_SIM, STRONG_MARGIN, GAP_FLOOR };
+// Drop the cached ONNX sessions so a replaced model file is read on the next scan.
+// A scan already holding the old sessions finishes on them.
+function reloadModels() {
+  models = null;
+}
+
+module.exports = { match, load, loadAll, isBuilt, builtLangs, reload, reloadModels, scoreCards, setSource, STRONG_SIM, STRONG_MARGIN, GAP_FLOOR };
 

@@ -34,6 +34,7 @@
 //   'onnxruntime-web/wasm'    the CPU backend alone, which is all this can reach.
 import * as ort from 'onnxruntime-web/wasm';
 import { sharpness } from './sharpness.js';
+import { quadSignature } from './cardSignature.js';
 import { createDetector } from '../../../shared/cardDetectPure.mjs';
 
 // Order 4 points into [TL, TR, BR, BL] in perimeter clockwise order.
@@ -144,6 +145,7 @@ function detectWithFallback(rgba, w, h, seq, why) {
     seq, detected: true, quad, engine: 'contour', degraded: why,
     pick: { fill: quadArea(quad) },
     sharp: sharpness(rgba, w, h),
+    sig: quadSignature(rgba, w, h, quad),
   };
 }
 
@@ -245,6 +247,9 @@ self.onmessage = async (e) => {
         // Computed here, where the pixels already are — sending them back for
         // the main thread to score would undo the point of the transfer.
         sharp: sharpness(rgba, w, h),
+        // What the card looks like, so auto-scan can tell a new card laid on the
+        // old one from the old one still sitting there (autoCapture.nextChangedFrames).
+        sig: quadSignature(rgba, w, h, quad),
       };
     } else {
       result = { seq, detected: false, engine, runMs, corners: sharp };

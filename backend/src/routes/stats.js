@@ -134,9 +134,9 @@ router.get('/stats', async (req, res) => {
         (SELECT type FROM locations WHERE id = c.location_id) AS location_type,
         c.quantity, c.condition, c.printing, c.language, c.purchase_price, c.is_trade, c.favorite, c.list_type,
         c.grader, c.grade, c.market_value,
-        cc.id as card_id, cc.name, cc.printed_name, cc.rarity, cc.set_name, cc.set_id, cc.number, cc.image_url,
+        cc.id as card_id, cc.name, cc.printed_name, cc.rarity, cc.set_name, cc.set_id, cc.number, cc.image_url, cc.image_url_back,
         cc.game, cc.supertype, cc.subtypes, cc.types, cc.cmc, cc.color_identity, cc.price_trend,
-        cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition
+        cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition, cc.price_currency
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       WHERE c.user_id = ?${gameFilter}
@@ -215,9 +215,9 @@ router.get('/stats', async (req, res) => {
              (SELECT type FROM locations WHERE id = c.location_id) AS location_type,
              c.quantity, c.condition, c.printing, c.language, c.added_at, c.is_trade, c.favorite, c.list_type,
              c.grader, c.grade, c.market_value,
-             cc.id as card_id, cc.name, cc.printed_name, cc.rarity, cc.set_name, cc.set_id, cc.number, cc.image_url,
+             cc.id as card_id, cc.name, cc.printed_name, cc.rarity, cc.set_name, cc.set_id, cc.number, cc.image_url, cc.image_url_back,
              cc.game, cc.supertype, cc.subtypes, cc.types, cc.cmc, cc.color_identity,
-             cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition
+             cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition, cc.price_currency
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       WHERE c.user_id = ?${gameFilter}

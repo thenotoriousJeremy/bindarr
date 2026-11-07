@@ -34,6 +34,7 @@ Try it without installing anything at **[thenotoriousjeremy.github.io/bindarr](h
 - **Search and bulk add** — search or browse a whole set with multi-select; pin a set and add by collector number one keystroke at a time.
 - **Dashboard** — collection value, 7/30-day trends, rarity and type breakdowns, set completion.
 - **Graded slabs** — record grader, grade and cert number per copy (PSA cert lookup fills them in), and give a slab its own value instead of the raw card's price.
+- **Sealed products** — track purchases and individual opened/unopened units, save reusable contents recipes, link cards to the opened product they came from, and track unopened market value separately from what you paid.
 - **Cards in 11 languages** — search, scan and record Japanese, Korean, Chinese, German, French, Spanish, Italian, Portuguese and Russian printings. A copy references the printing it actually is, so it shows the name and artwork on the card while staying searchable by its English name.
 - **Exports and API** — CSV (TCGplayer-compatible) or JSON, plus a read-only API key for reading net worth from elsewhere.
 - **Multi-user** — session-token auth, admin panel for users and roles, optional public share links.
@@ -344,11 +345,39 @@ Prices are stored in the currency they were quoted in and never converted — an
 
 A price only exists once something fetched it. The Pokémon price sweep covers the sets you own cards from, so browsing a set you own nothing in shows `0.00` until a card from it lands in your collection.
 
+### Sealed products
+
+The **Sealed** page tracks purchases as individual units, so opening one booster box does not mark every identical box as opened. Pick products from the TCGplayer catalog or enter a name manually. For products with guaranteed contents, save a reusable recipe of cards and child products; opening a unit creates those components, and child products can be tracked and opened separately. Link cards to the opened unit they came from, then use the collection's Sealed Product filter to view unlinked cards or cards linked to selected units.
+
+Search purchases by product, set, store, notes, or expansion. Filters narrow the list by game, product type, purchases with sealed or opened units, and expansion. Expansions include the purchase's own set and the sets of cards or products in its recipe.
+
+Purchase cost and market value are separate. Set a per-unit value manually for any product, or refresh a catalog-linked product from TCGCSV. The sealed inventory summary totals market value only for units that are still unopened; values are not automatically refreshed in the background.
+
 ### How often prices refresh
 
 Owned and decked cards have their prices re-fetched automatically, and only where the stored price has aged past three days — a sweep never re-asks about a card it refreshed yesterday. **Admin → Instance Settings → Refresh prices** sets how often that runs: daily (the default), every 3 days, weekly, every 30 days, or never.
 
 Daily is what the free providers publish, so leave it there unless you have a reason. Turn it down if you are on a provider that charges per card refreshed, or if you have a very large collection and only look at its value occasionally. **Never** stops automatic refreshes entirely; prices already stored stay as they are.
+
+### TCGCSV data sync
+
+Bindarr downloads TCGCSV data from the server and stores it in the local SQLite database; app and catalog operations use that cache instead of fetching data for each request. At startup and during scheduled work, Bindarr checks TCGCSV's `last-updated.txt` no more than once every 24 hours and only downloads a new dataset when the timestamp advances. A new dataset is staged until the full sync succeeds, so the last complete cache remains available if a refresh fails, and price refreshes keep using it. Only the Pokémon categories (3 and 85) are synced, about 1 + 2 + 2 × (number of sets) requests per new dataset, and only the fields Bindarr reads are stored. A set that TCGCSV answers with a 404 or an error is recorded as empty rather than blocking the sync; a dataset that still has not completed after 24 hours is abandoned and `last-updated.txt` is checked again.
+
+Outbound requests are serialized and spaced by at least 100 ms. If TCGCSV returns HTTP 403, Bindarr logs the response and pauses further TCGCSV requests for 24 hours.
+
+To route all Bindarr TCGCSV traffic through a reverse-proxy/read-through cache, set the server-side `TCGCSV_BASE_URL` environment variable to its base URL (for example, `http://tcgcsv-cache:8080`). The cache must serve `last-updated.txt` and the `/tcgplayer/...` endpoints. This setting covers sync, catalog, and price-refresh requests; it defaults to `https://tcgcsv.com`. Configure it in the server's environment or Docker Compose, not in the browser app.
+
+### TCGCSV mirror (not live yet)
+
+Pokémon TCGplayer prices come from [TCGCSV](https://tcgcsv.com), a free service run by one person. Every install syncing from it separately adds up, so the project is preparing a single shared copy instead: one scheduled job syncs TCGCSV's Pokémon data (categories 3 and 85) once a day, politely, and publishes it with TCGCSV's own path layout to the `tcgcsv-mirror` branch of this repository.
+
+**It is not switched on yet** — it waits on the TCGCSV maintainer's approval. Once it is live, an install can read from it instead of tcgcsv.com:
+
+```sh
+TCGCSV_BASE_URL=https://raw.githubusercontent.com/thenotoriousJeremy/bindarr/tcgcsv-mirror
+```
+
+Set it in the server's environment or Docker Compose, not in the browser app. Until this section says the mirror is live, leave the variable unset. The sync script and workflow are `scripts/tcgcsv-mirror/sync.mjs` and `.github/workflows/tcgcsv-mirror.yml`.
 
 ## API access
 

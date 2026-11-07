@@ -15,6 +15,7 @@ function InstanceSettings({ showToast, deviceMode = false }) {
   const [pokemonProvider, setPokemonProvider] = useState('pokemontcg');
   const [mtgPriceSource, setMtgPriceSource] = useState('tcgplayer');
   const [priceRefreshDays, setPriceRefreshDays] = useState(1);
+  const [sealedTcgExtra, setSealedTcgExtra] = useState(false);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const mountedRef = useRef(true);
 
@@ -23,6 +24,7 @@ function InstanceSettings({ showToast, deviceMode = false }) {
     setPokemonProvider(data.pokemon_provider || 'pokemontcg');
     setMtgPriceSource(data.mtg_price_source || 'tcgplayer');
     setPriceRefreshDays(data.price_refresh_days ?? 1);
+    setSealedTcgExtra(!!data.sealed_tcg_extra_enabled);
   };
 
   useEffect(() => {
@@ -53,6 +55,7 @@ function InstanceSettings({ showToast, deviceMode = false }) {
           pokemon_provider: pokemonProvider,
           mtg_price_source: mtgPriceSource,
           price_refresh_days: Number(priceRefreshDays),
+          sealed_tcg_extra_enabled: sealedTcgExtra,
         })
       });
 
@@ -171,6 +174,23 @@ function InstanceSettings({ showToast, deviceMode = false }) {
           </select>
           <p style={{ margin: '0.4rem 0 0', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
             {t(deviceMode ? 'settings.devicePriceRefreshHint' : 'admin.priceRefreshHint')}
+          </p>
+        </div>
+        {/* Off by default: pricing Magic/Lorcana sealed product means the daily
+            TCGCSV sync also walks every MTG and Lorcana set, a multiple of the
+            Pokémon requests (see tcgcsvApi.syncCategories). */}
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={sealedTcgExtra}
+              onChange={(e) => setSealedTcgExtra(e.target.checked)}
+              disabled={settingsLoading}
+            />
+            {t('admin.sealedTcgExtra')}
+          </label>
+          <p style={{ margin: '0.4rem 0 0', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+            {t('admin.sealedTcgExtraHint')}
           </p>
         </div>
         <button type="submit" className="btn btn-primary" style={{ padding: '0.6rem', fontWeight: 700, alignSelf: 'flex-start' }} disabled={settingsLoading}>
