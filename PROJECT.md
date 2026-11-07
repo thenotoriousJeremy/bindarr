@@ -754,6 +754,30 @@ across compartments).
 `/api/*` calls and dispatches a logout event only on a `401` marked `session_expired` (`utils/sessionExpiry`), and tab-routes between
 code-split view components. `/share/:token` renders the public view without auth.
 
+### URL routing
+
+Each tab has a path, and the deck, list and storage tabs carry what is open in
+them: `/`, `/add`, `/collection`, `/storage/:locationId`, `/decks/:id`,
+`/lists/:id`, `/notes`, `/sealed`, `/settings`, `/admin` (`utils/routes.js`).
+The URL is the source of truth: `utils/router.js` is a small store over the
+History API (no react-router), `useRouteSync` in `App.jsx` shows the tab the URL
+names, and the components read their sub-view with `useTabParam`. A reload or a
+link reopens the view; a link opened while signed out is kept in
+`sessionStorage` through the login screen (and an SSO round trip) and opened
+after sign-in, and a session lost to a 401 comes back to where it was. Hidden
+tabs stay mounted and remember their last path, so returning to Decks lands on
+the deck that was open. Switching storage containers replaces the entry rather
+than stacking one per container.
+
+Popups close on Back through `useBackGuard`, which pushes a guard entry.
+`utils/navHistory.js` owns both kinds of entry and stamps each with its
+position, so popstate knows the direction: Back closes the guards above where it
+lands, Forward never closes anything and skips the entries of popups already
+closed, and writes made while a silent step back is in flight wait for it. The
+Android back button steps back while there is an entry to go to and exits the
+app otherwise. The server's SPA fallback (`utils/staticCache.js`) serves
+`index.html` for any non-`/api`, non-`/assets/` path, so nested routes reload.
+
 | Component | Role |
 |-----------|------|
 | `Login` | Auth screen (login/register) |

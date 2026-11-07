@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, ChevronLeft, Search, ListChecks, Copy, Pencil, X } from 'lucide-react';
 import CardImage from './CardImage';
-import { useBackGuard } from '../utils/useBackGuard';
+import { useTabParam, setTabParam } from '../utils/router';
 import { gameOptions, showGamePicker, gameLabel, defaultGame } from '../utils/games';
 import { displayName, setReference, langCode } from '../utils/languages';
 import { translateJapaneseName } from '../utils/langHelper';
@@ -60,7 +60,10 @@ function Lists({ showToast, active = true, statsTrigger }) {
   const { show } = useFx();
   const [lists, setLists] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [openId, setOpenId] = useState(null);
+  // The open list is in the URL (/lists/:id): Back closes it, a link opens it.
+  const listParam = useTabParam('lists');
+  const openId = listParam == null ? null : Number(listParam);
+  const setOpenId = (id, opts) => setTabParam('lists', id, opts);
   const [detail, setDetail] = useState(null);
 
   // New list form
@@ -76,8 +79,6 @@ function Lists({ showToast, active = true, statsTrigger }) {
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [saving, setSaving] = useState(false);
-
-  useBackGuard(openId != null, () => setOpenId(null));
 
   const loadLists = async () => {
     try {
@@ -95,7 +96,7 @@ function Lists({ showToast, active = true, statsTrigger }) {
     try {
       const res = await fetch(`/api/lists/${id}`);
       if (res.ok) setDetail(await res.json());
-      else { setOpenId(null); showToast(t('lists.errLoad')); }
+      else { setOpenId(null, { replace: true }); showToast(t('lists.errLoad')); }
     } catch (err) {
       console.error(err);
       showToast(t('lists.errLoad'));
@@ -107,7 +108,12 @@ function Lists({ showToast, active = true, statsTrigger }) {
   useEffect(() => {
     if (!active) return;
     loadLists();
-    if (openId != null) loadDetail(openId);
+    if (openId != null) {
+      // Reached by Back/Forward or a link rather than openList: drop the last
+      // list's contents instead of showing them under this one's name.
+      if (detail && detail.id !== openId) setDetail(null);
+      loadDetail(openId);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- showToast/t change identity every App render; refetch only on these
   }, [active, statsTrigger, openId]);
 
