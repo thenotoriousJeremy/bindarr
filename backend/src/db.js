@@ -251,6 +251,7 @@ async function initDb() {
       set_name TEXT,
       number TEXT,
       image_url TEXT,
+      image_url_back TEXT,
       price_trend REAL,
       price_normal REAL,
       price_holofoil REAL,
@@ -424,6 +425,83 @@ async function initDb() {
     )
   `);
 
+  // One purchase event: N identical sealed units bought together (store, date,
+  // unit price). Product/set/type/image fields are a snapshot at purchase time so
+  // a later catalog rebuild can't rewrite purchase history out from under a user.
+  await run(`
+    CREATE TABLE IF NOT EXISTS sealed_purchases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      product_id INTEGER,
+      product_name TEXT NOT NULL,
+      set_name TEXT,
+      sealed_type TEXT,
+      game TEXT NOT NULL DEFAULT 'pokemon',
+      image_url TEXT,
+      store TEXT,
+      purchase_date TEXT,
+      unit_price REAL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_purchases_user ON sealed_purchases(user_id)`);
+
+  // One row per physical unit in a purchase, so a box of 2 can have one opened and
+  // one still sealed. opened_at NULL means still sealed.
+  await run(`
+    CREATE TABLE IF NOT EXISTS sealed_units (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      purchase_id INTEGER NOT NULL,
+      opened_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(purchase_id) REFERENCES sealed_purchases(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_units_purchase ON sealed_units(purchase_id)`);
+
+  // A reusable "recipe" for what a product actually contains (TCGCSV publishes no
+  // contents data, so this is typed in once by the user and matched to every
+  // future purchase of the same product — by product_id when known, else by an
+  // exact product_name match; see the match query in routes/sealed.js).
+  await run(`
+    CREATE TABLE IF NOT EXISTS sealed_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      product_id INTEGER,
+      product_name TEXT NOT NULL,
+      game TEXT NOT NULL DEFAULT 'pokemon',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_templates_user ON sealed_templates(user_id)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_templates_product ON sealed_templates(user_id, product_id)`);
+
+  // One row per guaranteed thing inside a template. A 'card' component is a
+  // specific guaranteed pull (an alt-art promo, an oversized card) — not a whole
+  // decklist, since quantity multiplies ONE card_id. A 40-card precon deck is
+  // instead a 'product' component (its own sealed sub-item, opened and linked
+  // later like any other box) rather than 40 enumerated cards.
+  await run(`
+    CREATE TABLE IF NOT EXISTS sealed_template_components (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      template_id INTEGER NOT NULL,
+      component_type TEXT CHECK(component_type IN ('card', 'product')) NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      card_id TEXT,
+      product_name TEXT,
+      sealed_type TEXT,
+      product_id INTEGER,
+      game TEXT,
+      expected_cards INTEGER,
+      FOREIGN KEY(template_id) REFERENCES sealed_templates(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_template_components_template ON sealed_template_components(template_id)`);
+
   // --- MIGRATIONS ---
   // When each game's price sweep last ran. Scryfall updates prices once a day,
   // so a sweep more often than that cannot return anything new — and the boot
@@ -450,6 +528,60 @@ async function initDb() {
   // TCGCSV mirrors TCGplayer once a day, so its gate is the same 24h as the rest.
   if (!appSettingsCols.some(c => c.name === 'tcgcsv_prices_swept_at')) {
     await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_prices_swept_at DATETIME`);
+  }
+  if (!appSettingsCols.some(c => c.name === 'tcgcsv_403_cooldown_until')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_403_cooldown_until DATETIME`);
+  }
+  if (!appSettingsCols.some(c => c.name === 'tcgcsv_data_version')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_data_version TEXT`);
+  }
+  if (!appSettingsCols.some(c => c.name === 'tcgcsv_pending_version')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_pending_version TEXT`);
+  }
+  // Magic/Lorcana sealed tracking (TCGCSV categories 1 and 71). Off by default:
+  // syncing them fetches every MTG and Lorcana group daily. See tcgcsvApi.syncCategories.
+  if (!appSettingsCols.some(c => c.name === 'sealed_tcg_extra_enabled')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN sealed_tcg_extra_enabled INTEGER DEFAULT 0`);
+  }
+  if (!appSettingsCols.some(c => c.name === 'tcgcsv_last_checked_at')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_last_checked_at DATETIME`);
+  }
+  // TCGCSV responses, cut down to the fields Bindarr reads (utils/tcgcsvSlim.js).
+  await run(`
+    CREATE TABLE IF NOT EXISTS tcgcsv_cache (
+      path TEXT NOT NULL,
+      data_version TEXT NOT NULL,
+      results_json TEXT NOT NULL,
+      PRIMARY KEY (path, data_version)
+    )
+  `);
+  // An earlier build of the daily sync kept whole responses in
+  // tcgcsv_response_cache. Slim them into the new table rather than discarding
+  // them, so an upgrade does not cost a full re-download from TCGCSV, then drop it.
+  const legacyTcgcsv = await get(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tcgcsv_response_cache'`
+  );
+  if (legacyTcgcsv) {
+    const { slimResults, slimmerFor } = require('./utils/tcgcsvSlim');
+    const keys = await all(`SELECT path, data_version FROM tcgcsv_response_cache`);
+    let kept = 0;
+    for (const { path: cachePath, data_version: version } of keys) {
+      if (!slimmerFor(cachePath)) continue;
+      const row = await get(
+        `SELECT results_json FROM tcgcsv_response_cache WHERE path = ? AND data_version = ?`,
+        [cachePath, version]
+      );
+      let results;
+      try { results = JSON.parse(row.results_json); } catch { continue; }
+      if (!Array.isArray(results)) continue;
+      await run(
+        `INSERT OR REPLACE INTO tcgcsv_cache (path, data_version, results_json) VALUES (?, ?, ?)`,
+        [cachePath, version, JSON.stringify(slimResults(cachePath, results))]
+      );
+      kept++;
+    }
+    await run(`DROP TABLE tcgcsv_response_cache`);
+    console.log(`Migrated ${kept} TCGCSV cache entries to the slim cache table.`);
   }
   // How many days between automatic price refreshes; 0 switches them off.
   // Daily is what every install did before this column existed, so that is the
@@ -649,10 +781,101 @@ async function initDb() {
       );
     }
   }
+  // The back face of a double-faced Magic card (transform, modal DFC, reversible),
+  // which has no single image — `image_url` only ever held the front, so the back
+  // was unviewable (#103). Null for every single-faced card and every other game.
+  // Not backfilled: existing rows gain it the next time they are re-cached (the
+  // daily MTG price sweep re-fetches every owned and decked card).
+  if (!cardCacheCols.some(c => c.name === 'image_url_back')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN image_url_back TEXT`);
+  }
+
+  // tcgplayer_catalog originally held cards only (a product with no collector
+  // number was skipped as sealed product). Sealed rows now get a row too, so the
+  // build needs somewhere to put the game they belong to, their artwork, and a
+  // rough product type (Booster Box, ETB, ...) since none of that was needed
+  // while every row was a card matched to a card_cache row already carrying it.
+  const tcgplayerCatalogCols = await all(`PRAGMA table_info(tcgplayer_catalog)`);
+  if (!tcgplayerCatalogCols.some(c => c.name === 'game')) {
+    await run(`ALTER TABLE tcgplayer_catalog ADD COLUMN game TEXT`);
+  }
+  if (!tcgplayerCatalogCols.some(c => c.name === 'image_url')) {
+    await run(`ALTER TABLE tcgplayer_catalog ADD COLUMN image_url TEXT`);
+  }
+  if (!tcgplayerCatalogCols.some(c => c.name === 'sealed_type')) {
+    await run(`ALTER TABLE tcgplayer_catalog ADD COLUMN sealed_type TEXT`);
+  }
+  // Rows written before `game` existed were all Pokémon (categories 3 and 85 are
+  // the only ones the old build walked), and summary() counts by game, so an
+  // upgraded install reported a 0-row product map until it was rebuilt.
+  // Idempotent: only NULLs are touched.
+  await run(
+    `UPDATE tcgplayer_catalog SET game = 'pokemon' WHERE game IS NULL AND category_id IN (3, 85)`
+  );
+
+  // What's actually inside a sealed unit (a Build & Battle Box is 4 boosters plus
+  // a 40-card preconstructed deck), so opening one can show "how many of the
+  // expected cards have I linked so far" instead of leaving that to memory.
+  // TCGCSV/TCGplayer publishes no contents data, so these are typed in by whoever
+  // adds the purchase; all three are optional, per the manual-entry choice made
+  // for this feature.
+  const sealedPurchaseCols = await all(`PRAGMA table_info(sealed_purchases)`);
+  if (!sealedPurchaseCols.some(c => c.name === 'expected_packs')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN expected_packs INTEGER`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'expected_cards')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN expected_cards INTEGER`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'contents_note')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN contents_note TEXT`);
+  }
+  // Which recipe this purchase follows (auto-attached at create time by matching
+  // product_id/product_name against the user's sealed_templates), and, for a
+  // purchase that was itself auto-created by unboxing a parent unit, which unit
+  // that was — so "this pack came from that box" is traceable.
+  if (!sealedPurchaseCols.some(c => c.name === 'template_id')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN template_id INTEGER REFERENCES sealed_templates(id) ON DELETE SET NULL`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'market_value')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN market_value REAL`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'market_value_source')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN market_value_source TEXT`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'market_value_at')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN market_value_at DATETIME`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'source_unit_id')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN source_unit_id INTEGER REFERENCES sealed_units(id) ON DELETE SET NULL`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'source_unit_price_original')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN source_unit_price_original REAL`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'source_unit_price_saved')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN source_unit_price_saved INTEGER NOT NULL DEFAULT 0`);
+  }
+  const sealedTemplateComponentCols = await all(`PRAGMA table_info(sealed_template_components)`);
+  if (!sealedTemplateComponentCols.some(c => c.name === 'expected_cards')) {
+    await run(`ALTER TABLE sealed_template_components ADD COLUMN expected_cards INTEGER`);
+  }
+
+  // Idempotency guard: a template's components are created once per unit, the
+  // first time it's marked opened. Without this, toggling opened -> closed ->
+  // opened again would create a second copy of every card and sub-pack.
+  const sealedUnitCols = await all(`PRAGMA table_info(sealed_units)`);
+  if (!sealedUnitCols.some(c => c.name === 'components_applied_at')) {
+    await run(`ALTER TABLE sealed_units ADD COLUMN components_applied_at DATETIME`);
+  }
 
   const collectionCols = await all(`PRAGMA table_info(collection)`);
   if (!collectionCols.some(c => c.name === 'user_id')) {
     await run(`ALTER TABLE collection ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`);
+  }
+  // Which sealed unit (if any) this copy was pulled from, for cost-basis and
+  // where-did-this-come-from lookups. SET NULL on delete: removing the purchase
+  // record must not delete cards the user still owns.
+  if (!collectionCols.some(c => c.name === 'sealed_unit_id')) {
+    await run(`ALTER TABLE collection ADD COLUMN sealed_unit_id INTEGER REFERENCES sealed_units(id) ON DELETE SET NULL`);
   }
   if (!collectionCols.some(c => c.name === 'is_trade')) {
     await run(`ALTER TABLE collection ADD COLUMN is_trade INTEGER DEFAULT 0`);
