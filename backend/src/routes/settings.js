@@ -63,7 +63,7 @@ async function getEffectiveSettings() {
   const row = await db.get(`
     SELECT public_base_url, pokemon_provider, mtg_price_source, price_refresh_days,
            scan_exclude_tokens, scan_exclude_art_cards, scan_exclude_jumpstart, scan_exclude_promos,
-           scan_exclude_digital, setup_complete
+           scan_exclude_digital, setup_complete, sealed_tcg_extra_enabled
     FROM app_settings WHERE id = 1
   `);
   const public_base_url = (row && row.public_base_url) || process.env.PUBLIC_BASE_URL || '';
@@ -77,6 +77,8 @@ async function getEffectiveSettings() {
   // read as excluded rather than as included — see the column comment in db.js.
   const scan_exclude_digital = row ? !!row.scan_exclude_digital : true;
   const setup_complete = !!(row && row.setup_complete);
+  // Magic/Lorcana sealed tracking: TCGCSV categories 1 and 71 in the daily sync.
+  const sealed_tcg_extra_enabled = !!(row && row.sealed_tcg_extra_enabled);
   // Daily unless an admin says otherwise, matching what every install did before
   // the column existed. 0 means automatic refreshes are off.
   const n = Number(row && row.price_refresh_days);
@@ -92,6 +94,7 @@ async function getEffectiveSettings() {
     scan_exclude_promos,
     scan_exclude_digital,
     setup_complete,
+    sealed_tcg_extra_enabled,
   };
 }
 
@@ -118,6 +121,7 @@ router.put('/', requireAdmin, async (req, res) => {
     scan_exclude_promos,
     scan_exclude_digital,
     setup_complete,
+    sealed_tcg_extra_enabled,
   } = req.body;
 
   // Validated before anything is written, so a bad value cannot leave the other
@@ -175,6 +179,13 @@ router.put('/', requireAdmin, async (req, res) => {
         }
       })();
     }
+  }
+  if (sealed_tcg_extra_enabled !== undefined) {
+    if (typeof sealed_tcg_extra_enabled !== 'boolean') {
+      return res.status(400).json({ error: 'Magic/Lorcana sealed tracking must be true or false.' });
+    }
+    // Turning it on fetches the newly enabled categories in the background.
+    await require('../tcgcsvApi').setSealedExtraEnabled(sealed_tcg_extra_enabled);
   }
   if (price_refresh_days !== undefined) {
     // Rejected rather than clamped: a typo that silently becomes 365 is a

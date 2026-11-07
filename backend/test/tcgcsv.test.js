@@ -243,6 +243,10 @@ const dbMod = require('../src/db');
 
 (async () => {
   await dbMod.initDb();
+  // Everything below exercises the full four-category sync. Magic/Lorcana are off
+  // by default (tcgcsvgate.test.js pins that), so turn them on directly, without
+  // setSealedExtraEnabled's background resume.
+  await dbMod.run(`UPDATE app_settings SET sealed_tcg_extra_enabled = 1 WHERE id = 1`);
   const cols = (await dbMod.all(`PRAGMA table_info(app_settings)`)).map(c => c.name);
   const originalAdapter = tcgcsv.client.defaults.adapter;
   let remoteVersion = '2026-10-25T20:05:50+0000';

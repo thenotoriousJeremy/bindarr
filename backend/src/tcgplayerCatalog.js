@@ -195,6 +195,12 @@ function start(game = 'pokemon') {
   current = job;
   (async () => {
     try {
+      // Magic/Lorcana are only in the cache while an admin has them turned on
+      // (tcgcsvApi.syncCategories); building from rows left over from before it was
+      // turned off would show a catalog that no longer gets prices.
+      if (game !== 'pokemon' && !(await tcgcsv.sealedExtraEnabled())) {
+        throw new Error('Turn on Magic/Lorcana sealed tracking in Instance Settings first');
+      }
       // A failed sync leaves the last complete version cached, which is enough to
       // build from; getGroups below throws only when nothing has ever synced.
       await tcgcsv.syncIfUpdatedSafely('product map');

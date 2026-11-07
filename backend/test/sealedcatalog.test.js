@@ -75,6 +75,9 @@ async function main() {
   const tcgdexApi = require('../src/tcgdexApi');
   const realListSets = tcgdexApi.listSets;
   tcgdexApi.listSets = async () => [];
+  // Magic/Lorcana product maps build only while an admin has them on
+  // (tcgcsvgate.test.js covers the refusal). Set directly: no background resume.
+  await db.run(`UPDATE app_settings SET sealed_tcg_extra_enabled = 1 WHERE id = 1`);
   try {
     // MTG: single category, a card and a sealed Bundle.
     ({ getGroups: tcgcsv.getGroups, getProducts: tcgcsv.getProducts } = fixtureFor('Fixture Card', 'Fixture Bundle'));

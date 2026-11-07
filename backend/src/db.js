@@ -538,6 +538,11 @@ async function initDb() {
   if (!appSettingsCols.some(c => c.name === 'tcgcsv_pending_version')) {
     await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_pending_version TEXT`);
   }
+  // Magic/Lorcana sealed tracking (TCGCSV categories 1 and 71). Off by default:
+  // syncing them fetches every MTG and Lorcana group daily. See tcgcsvApi.syncCategories.
+  if (!appSettingsCols.some(c => c.name === 'sealed_tcg_extra_enabled')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN sealed_tcg_extra_enabled INTEGER DEFAULT 0`);
+  }
   if (!appSettingsCols.some(c => c.name === 'tcgcsv_last_checked_at')) {
     await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_last_checked_at DATETIME`);
   }

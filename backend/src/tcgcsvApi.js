@@ -51,7 +51,41 @@ const CATEGORY = { english: 3, japanese: 85 };
 //   1, 71  Magic, Lorcana: sealed product only (the sealed inventory's catalog
 //          and market value). utils/tcgcsvSlim.js keeps only their sealed
 //          products and those products' prices, never their cards.
-const SYNC_CATEGORIES = [...Object.values(CATEGORY), ...Object.values(SEALED_ONLY_CATEGORY)];
+//
+// 1 and 71 are OFF unless an admin turns on Magic/Lorcana sealed tracking
+// (app_settings.sealed_tcg_extra_enabled). Fetching them still means every MTG
+// and Lorcana group's product and price lists, a multiple of the Pokémon
+// requests, and per-install volume is what got Bindarr blocked by TCGCSV once.
+// An instance that never tracks Magic sealed product should not pay for it.
+const BASE_SYNC_CATEGORIES = Object.values(CATEGORY);
+const SYNC_CATEGORIES = [...BASE_SYNC_CATEGORIES, ...Object.values(SEALED_ONLY_CATEGORY)];
+
+async function sealedExtraEnabled() {
+  const row = await db.get(`SELECT sealed_tcg_extra_enabled FROM app_settings WHERE id = 1`);
+  return !!(row && row.sealed_tcg_extra_enabled);
+}
+
+async function syncCategories() {
+  return (await sealedExtraEnabled()) ? SYNC_CATEGORIES : BASE_SYNC_CATEGORIES;
+}
+
+// Turning the gate on mid-dataset must not wait for tomorrow's last-updated.txt,
+// and must not re-download Pokémon either. Re-opening the CURRENT version as
+// pending does both: runSync resumes it, syncResults skips every path already
+// stored, so only the newly enabled categories are fetched. Turning it off needs
+// nothing: they drop out of the next version, and readers are gated meanwhile.
+async function setSealedExtraEnabled(enabled) {
+  const before = await sealedExtraEnabled();
+  await db.run(`UPDATE app_settings SET sealed_tcg_extra_enabled = ? WHERE id = 1`, [enabled ? 1 : 0]);
+  if (enabled && !before) {
+    await db.run(`
+      UPDATE app_settings
+         SET tcgcsv_pending_version = tcgcsv_data_version, tcgcsv_last_checked_at = CURRENT_TIMESTAMP
+       WHERE id = 1 AND tcgcsv_data_version IS NOT NULL AND tcgcsv_pending_version IS NULL
+    `);
+    syncIfUpdatedSafely('enabling Magic/Lorcana sealed tracking');
+  }
+}
 
 // TCGCSV rejects a request with no identifying User-Agent — a 401 with a note
 // asking you to say who you are. That is a reasonable ask of a free mirror, so the
@@ -319,9 +353,10 @@ async function runSync() {
     }
   }
 
+  const categories = await syncCategories();
   const groupsByCategory = {};
   let groupCount = 0;
-  for (const categoryId of SYNC_CATEGORIES) {
+  for (const categoryId of categories) {
     const groups = await syncResults(`/tcgplayer/${categoryId}/groups`, dataVersion);
     groupsByCategory[categoryId] = groups;
     groupCount += groups.length;
@@ -330,14 +365,14 @@ async function runSync() {
   // A fresh version costs last-updated.txt, one groups list per category, then
   // products + prices per group. Both per-group lists are needed: products feed the
   // price sweep and the scan product map, prices feed the sweep.
-  const expectedRequests = 1 + SYNC_CATEGORIES.length + (groupCount * 2);
+  const expectedRequests = 1 + categories.length + (groupCount * 2);
   if (expectedRequests > TCGCSV_MAX_SYNC_REQUESTS) {
     throw new Error(
       `TCGCSV sync requires ${expectedRequests} requests, exceeding the ${TCGCSV_MAX_SYNC_REQUESTS} request budget`
     );
   }
 
-  for (const categoryId of SYNC_CATEGORIES) {
+  for (const categoryId of categories) {
     for (const group of groupsByCategory[categoryId]) {
       const products = await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/products`, dataVersion, { perGroup: true });
       // A sealed-only category keeps the prices of the products it kept and no
@@ -773,6 +808,10 @@ module.exports = {
   categoryFor,
   setsToPrice,
   SYNC_CATEGORIES,
+  BASE_SYNC_CATEGORIES,
+  syncCategories,
+  sealedExtraEnabled,
+  setSealedExtraEnabled,
   SEALED_ONLY_CATEGORY,
   syncIfUpdated,
   syncIfUpdatedSafely,

@@ -289,6 +289,11 @@ router.post('/sealed/purchases/:id/refresh-value', async (req, res) => {
       [purchase.product_id]
     );
     if (!product) return res.status(404).json({ error: 'Sealed product is not in the mapped catalog' });
+    // Magic/Lorcana prices are only synced while an admin has them turned on.
+    if (Object.values(tcgcsv.SEALED_ONLY_CATEGORY).includes(Number(product.category_id))
+      && !(await tcgcsv.sealedExtraEnabled())) {
+      return res.status(409).json({ error: 'Magic/Lorcana sealed prices are turned off in Instance Settings' });
+    }
 
     // The local TCGCSV cache only (filled by the daily sync, which keeps sealed
     // product prices for every synced category). Never a live request, and never
