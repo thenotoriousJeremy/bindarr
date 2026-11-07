@@ -496,10 +496,19 @@ async function runSearch(meta, nameQuery = '', numberQuery = '', setQuery = '', 
     try {
       // A set code narrows to that printing (exact, usually one result -> fast
       // path in the scanner); without it, return every printing to pick from.
-      const q = setList.length ? `!"${cleanName}" ${scrySet} unique:prints` : `!"${cleanName}" unique:prints`;
-      const raw = await fetchFromScryfall(q, lang);
+      // Digital-only printings are left out, as everywhere a physical copy is
+      // being identified: there is no card to own.
+      const q = setList.length ? `!"${cleanName}" ${scrySet} unique:prints -is:digital` : `!"${cleanName}" unique:prints -is:digital`;
+      // Every printing, not the first 60 of one page. Sol Ring and the basic lands
+      // have hundreds, so "Change printing" and the scanner's set picker never
+      // offered their older ones. fetchWindow walks has_more on the shared queue
+      // and 429 retry, capped at six pages: about three seconds at /cards/search's
+      // two requests a second. `total` says how many exist beyond the cap.
+      const PRINTS_CAP = 6 * SCRY_PAGE_SIZE;
+      const { cards: raw, total } = await fetchWindow(q, lang, 0, PRINTS_CAP);
       if (raw.length) {
-        const cards = raw.map(c => normalizeCard(c, lang)).slice(0, 60);
+        if (total != null) meta.total = total;
+        const cards = raw.map(c => normalizeCard(c, lang));
         await cacheCards(cards);
         return cards;
       }
