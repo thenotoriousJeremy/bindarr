@@ -1285,7 +1285,7 @@ router.post('/collection/:id/place', async (req, res) => {
     if (!entry) return res.status(404).json({ error: 'Collection entry not found' });
 
     const comp = await db.get(`
-      SELECT c.id, c.capacity, l.id AS loc_id, l.type AS loc_type, l.sort_order, l.allow_stacking
+      SELECT c.id, c.capacity, l.id AS loc_id, l.type AS loc_type, l.sort_order, l.foil_sorting, l.allow_stacking
       FROM compartments c JOIN locations l ON c.location_id = l.id
       WHERE c.id = ? AND l.user_id = ?`, [compartment_id, req.user.id]);
     if (!comp) return res.status(400).json({ error: 'Invalid compartment' });
@@ -1330,13 +1330,17 @@ router.post('/collection/:id/place', async (req, res) => {
     } else {
       await db.run(`UPDATE collection SET compartment_id = ?, location_id = ?, position = ? WHERE id = ? AND user_id = ?`,
         [compartment_id, comp.loc_id, slot * 1000 - 500, id, req.user.id]);
-      await rebalanceCompartmentByScheme(db, compartment_id, req.user.id, { sort_order: 'custom' });
+      // Custom order keeps the rows in position order, so the half-slot written
+      // above is what puts the card between its neighbours before renumbering.
+      await rebalanceCompartmentByScheme(db, compartment_id, comp.sort_order, comp.foil_sorting);
     }
 
     if (sourceComp && sourceComp !== compartment_id) {
-      const src = await db.get(`SELECT l.type AS loc_type FROM compartments c JOIN locations l ON c.location_id = l.id WHERE c.id = ?`, [sourceComp]);
+      const src = await db.get(
+        `SELECT l.type AS loc_type, l.sort_order, l.foil_sorting FROM compartments c JOIN locations l ON c.location_id = l.id WHERE c.id = ?`,
+        [sourceComp]);
       if (src && !isBinderType(src.loc_type)) {
-        await rebalanceCompartmentByScheme(db, sourceComp, req.user.id, { sort_order: 'custom' });
+        await rebalanceCompartmentByScheme(db, sourceComp, src.sort_order, src.foil_sorting);
       }
     }
 
