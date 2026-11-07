@@ -5,6 +5,7 @@
 // would have made a fourth copy. They all produce the same normalized card shape
 // before writing, so they all write through here instead.
 const db = require('../db');
+const { RULES_TEXT_COLUMNS, rulesTextParams } = require('./mtgRulesText');
 
 const COLUMNS = [
   'id', 'name', 'supertype', 'subtypes', 'types', 'rarity', 'set_id', 'set_name',
@@ -14,6 +15,9 @@ const COLUMNS = [
   'tcgplayer_url', 'cardmarket_url', 'tcgplayer_product_id',
   'price_currency', 'price_source', 'oracle_id', 'oracle_text',
 ];
+// Magic's rules text (type line, oracle text, cost, stats, keywords), which
+// Scryfall-syntax filtering reads. Always last, matching rulesTextParams below.
+COLUMNS.push(...RULES_TEXT_COLUMNS);
 
 // A page of results can be 250 cards and one round trip per card cost more than
 // the provider fetch did, so rows go in batched — chunked small enough that the
@@ -74,6 +78,7 @@ async function cacheNormalizedCards(cards, game, opts = {}) {
         // '' for a card read and found blank, null for one never read.
         c.oracle_id || null, c.oracle_text ?? null,
       );
+      params.push(...rulesTextParams(c));
     }
     await db.run(
       `INSERT INTO card_cache (${COLUMNS.join(', ')}, last_updated)

@@ -6,6 +6,8 @@ import { CONDITIONS, PRINTINGS, GRADERS, getLanguageNamesForGame } from '../util
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { sortCardsByOrder } from '../utils/cardSort';
+import { compileCollectionFilter, syntaxErrorText } from '../utils/scryfallSyntax';
+import ScryfallSyntaxHelp from './ScryfallSyntaxHelp';
 import { useMultiSelect } from '../utils/useMultiSelect';
 import { undoToast } from '../utils/undo';
 import { stackCollectionRows } from '../utils/stackTiles';
@@ -292,6 +294,14 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     setNotCheckedOutOnly(false);
   };
 
+  // With Magic picked, the search box also takes Scryfall syntax (t:creature c:g
+  // cmc<=3), answered from the loaded rows. Compiled once per edit, not per card;
+  // null for a plain search, which keeps its name / set / number match below.
+  const syntaxFilter = useMemo(
+    () => (gameFilter === 'mtg' ? compileCollectionFilter(searchFilter) : null),
+    [gameFilter, searchFilter]
+  );
+
   // Filter + sort
   const filteredCollection = useMemo(() => {
     const translatedSearch = searchFilter ? (translateJapaneseName(searchFilter) || searchFilter).toLowerCase() : '';
@@ -300,7 +310,8 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     // so typing 稲妻 only finds it via printed_name.
     const rawSearch = searchFilter.toLowerCase();
     const result = collection.filter(item => {
-      const matchesSearch = item.name.toLowerCase().includes(translatedSearch) ||
+      const matchesSearch = syntaxFilter ? syntaxFilter.matches(item) :
+                            item.name.toLowerCase().includes(translatedSearch) ||
                             (item.printed_name || '').toLowerCase().includes(rawSearch) ||
                             (item.set_name || '').toLowerCase().includes(translatedSearch) ||
                             (item.number || '').includes(searchFilter);
@@ -346,7 +357,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       sortCardsByOrder(result, SORT_CRITERIA[sortBy] || SORT_CRITERIA['added-newest'], undefined, setsList);
     }
     return result;
-  }, [collection, searchFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter, sealedLinkFilter, favoriteOnly, graderFilter, minPriceFilter, maxPriceFilter, notCheckedOutOnly, sortBy, setsList]);
+  }, [collection, searchFilter, syntaxFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter, sealedLinkFilter, favoriteOnly, graderFilter, minPriceFilter, maxPriceFilter, notCheckedOutOnly, sortBy, setsList]);
 
   // Group duplicate cards if stack option is active. Each tile keeps the ids of
   // the rows it stands for, which is what a quantity edit in the popup works on.
@@ -466,6 +477,16 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
             )}
           </button>
         </div>
+
+        {/* Under the whole bar, so the search field keeps its height in the row. */}
+        {syntaxFilter?.error && (
+          <div role="alert" style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--accent-red)' }}>
+            {syntaxErrorText(t, syntaxFilter.error)}
+          </div>
+        )}
+        {gameFilter === 'mtg' && (
+          <div style={{ marginTop: '0.5rem' }}><ScryfallSyntaxHelp context="collection" /></div>
+        )}
 
         {showFilters && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-glass)' }}>
