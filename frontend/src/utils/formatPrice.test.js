@@ -11,6 +11,7 @@ import {
   formatPrice,
   priceText,
 } from './formatPrice.js';
+import { setActiveLocale } from './translate.js';
 
 // Polyfill minimal localStorage & window for node test environment
 if (typeof globalThis.localStorage === 'undefined') {
@@ -32,6 +33,36 @@ test('formatPrice: formats numbers and handles edge cases', () => {
   assert.equal(formatPrice(undefined), '0.00');
   assert.equal(formatPrice(''), '0.00');
   assert.equal(formatPrice('invalid'), '0.00');
+});
+
+test('formatPrice: the reader\'s notation for the locale given', () => {
+  assert.equal(formatPrice(1234.5, 'en'), '1,234.50');
+  assert.equal(formatPrice(1234.5, 'de'), '1.234,50');
+  assert.equal(formatPrice(1234.5, 'fr'), '1 234,50');
+  assert.equal(formatPrice(1234.5, 'ru'), '1 234,50');
+  assert.equal(formatPrice(1234.5, 'pt-BR'), '1.234,50');
+  assert.equal(formatPrice(1234.5, 'ja'), '1,234.50');
+  assert.equal(formatPrice('4.5', 'de'), '4,50');
+  assert.equal(formatPrice('12.50 USD', 'de'), '12,50');
+  assert.equal(formatPrice(null, 'de'), '0,00');
+  assert.equal(formatPrice(0.125, 'de'), '0,13');
+  // Not a language tag at all: still a number, in English notation.
+  assert.equal(formatPrice(12.5, 'not a locale!'), '12.50');
+});
+
+test('priceText: active interface locale for the number, row currency for the symbol', () => {
+  localStorage.clear();
+  try {
+    setActiveLocale('de');
+    assert.equal(priceText(1234.5), '$1.234,50');
+    assert.equal(priceText(4.5, 'EUR'), '€4,50');
+    assert.equal(formatPrice(4.5), '4,50', 'no locale passed: the interface language');
+    setActiveLocale('fr');
+    assert.equal(priceText(1234.5, 'GBP'), '£1 234,50');
+  } finally {
+    setActiveLocale('en');
+  }
+  assert.equal(priceText(1234.5), '$1,234.50');
 });
 
 test('currency configuration and defaults', () => {

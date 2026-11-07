@@ -8,7 +8,7 @@
 // two settings never touch each other.
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import en from '../locales/en.json';
-import { pickLocale, translate } from './translate';
+import { pickLocale, translate, setActiveLocale } from './translate';
 
 // Every *.json in ../locales is picked up automatically, so a translator only has
 // to drop de.json beside en.json — no registry to update, no import to add. Each
@@ -38,10 +38,12 @@ export const localeName = (code, inLocale = code) => {
 const Ctx = createContext(null);
 
 export function I18nProvider({ children }) {
-  const [locale, setLocale] = useState(() => (
-    localStorage.getItem('bindarr_ui_lang')
-    || pickLocale(LOCALES, navigator.languages?.length ? navigator.languages : [navigator.language || 'en'])
-  ));
+  const [locale, setLocale] = useState(() => {
+    const initial = localStorage.getItem('bindarr_ui_lang')
+      || pickLocale(LOCALES, navigator.languages?.length ? navigator.languages : [navigator.language || 'en']);
+    setActiveLocale(initial);
+    return initial;
+  });
   const [dict, setDict] = useState(() => (locale === 'en' ? en : null));
 
   useEffect(() => {
@@ -61,6 +63,8 @@ export function I18nProvider({ children }) {
     locale,
     setLocale: (next) => {
       localStorage.setItem('bindarr_ui_lang', next);
+      // Before the re-render, so prices in it are already in the new notation.
+      setActiveLocale(next);
       setLocale(next);
     },
     // t('key') / t('key', { name: 'Ash' }) / t('cards.count', { count: 3 })

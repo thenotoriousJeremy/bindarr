@@ -29,6 +29,13 @@ export const translate = (dict, fallback, locale, key, vars) => {
   });
 };
 
+// The interface language, for formatting done outside React. Components get it
+// from useT(), but a helper called from all over the app (formatPrice) has no
+// hook to call, so i18n.jsx mirrors the provider's locale here as it changes.
+let activeLocale = 'en';
+export const getActiveLocale = () => activeLocale;
+export const setActiveLocale = (locale) => { activeLocale = locale || 'en'; };
+
 // First of the browser's preferred languages we actually ship. The full tag wins
 // over the bare language, so a pt-BR reader gets pt-BR.json when it exists and
 // pt.json when it does not.
