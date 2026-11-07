@@ -243,6 +243,10 @@ const dbMod = require('../src/db');
 
 (async () => {
   await dbMod.initDb();
+  // Everything below exercises the full four-category sync. Magic/Lorcana are off
+  // by default (tcgcsvgate.test.js pins that), so turn them on directly, without
+  // setSealedExtraEnabled's background resume.
+  await dbMod.run(`UPDATE app_settings SET sealed_tcg_extra_enabled = 1 WHERE id = 1`);
   const cols = (await dbMod.all(`PRAGMA table_info(app_settings)`)).map(c => c.name);
   const originalAdapter = tcgcsv.client.defaults.adapter;
   let remoteVersion = '2026-10-25T20:05:50+0000';
@@ -264,12 +268,13 @@ const dbMod = require('../src/db');
     return { data, status: 200, statusText: 'OK', headers: {}, config };
   };
   await tcgcsv.syncIfUpdated();
-  // 1 (last-updated) + 2 (a groups list per category) + 2 x 2 groups.
-  assert.strictEqual(remoteRequests.length, 7, 'the initial targeted sync should fetch the timestamp, groups, products, and prices');
-  assert.deepStrictEqual(tcgcsv.SYNC_CATEGORIES, [3, 85], 'only the Pokémon categories anything reads are synced');
+  // 1 (last-updated) + 4 (a groups list per category) + 2 x 4 groups.
+  assert.strictEqual(remoteRequests.length, 13, 'the initial targeted sync should fetch the timestamp, groups, products, and prices');
+  assert.deepStrictEqual(tcgcsv.SYNC_CATEGORIES, [3, 85, 1, 71],
+    'only the categories something reads are synced: Pokémon, plus Magic and Lorcana for sealed product');
   assert.ok(
-    remoteRequests.every(r => r.path === '/last-updated.txt' || /^\/tcgplayer\/(3|85)\//.test(r.path)),
-    `only categories 3 and 85 may be requested (saw ${remoteRequests.map(r => r.path).join(', ')})`
+    remoteRequests.every(r => r.path === '/last-updated.txt' || /^\/tcgplayer\/(3|85|1|71)\//.test(r.path)),
+    `only categories 3, 85, 1 and 71 may be requested (saw ${remoteRequests.map(r => r.path).join(', ')})`
   );
   assert.ok(remoteRequests.every(request => request.baseURL === tcgcsv.client.defaults.baseURL),
     'every TCGCSV request must use the configured base URL');
@@ -297,7 +302,7 @@ const dbMod = require('../src/db');
   remoteVersion = '2026-10-26T20:05:50+0000';
   await dbMod.run(`UPDATE app_settings SET tcgcsv_last_checked_at = datetime('now', '-25 hours') WHERE id = 1`);
   await tcgcsv.syncIfUpdated();
-  assert.strictEqual(remoteRequests.length, fetchedRequestCount + 8,
+  assert.strictEqual(remoteRequests.length, fetchedRequestCount + 14,
     'a newer timestamp should trigger a complete sync');
   assert.strictEqual(
     (await dbMod.get(`SELECT tcgcsv_data_version FROM app_settings WHERE id = 1`)).tcgcsv_data_version,
@@ -325,6 +330,9 @@ const dbMod = require('../src/db');
       { groupId: 32, name: 'Html Group', abbreviation: 'HG', categoryId: 3 },
     ] },
     '/tcgplayer/85/groups': { success: true, results: [{ groupId: 850, name: 'JP Fixture', abbreviation: 'JPF', categoryId: 85 }] },
+    // Magic and Lorcana are synced for sealed product; empty here.
+    '/tcgplayer/1/groups': { success: true, results: [] },
+    '/tcgplayer/71/groups': { success: true, results: [] },
     '/tcgplayer/3/30/products': { success: true, results: [
       { productId: 1001, name: 'Charizard', cleanName: 'Charizard', imageUrl: 'https://img.example.test/1001.jpg',
         categoryId: 3, groupId: 30, url: 'https://www.tcgplayer.com/product/1001', modifiedOn: '2026-10-01',
@@ -368,7 +376,7 @@ const dbMod = require('../src/db');
     let settings = await dbMod.get(`SELECT tcgcsv_data_version, tcgcsv_pending_version FROM app_settings WHERE id = 1`);
     assert.strictEqual(settings.tcgcsv_pending_version, remoteVersion, 'a transient failure keeps the version pending');
     assert.strictEqual(settings.tcgcsv_data_version, '2026-10-26T20:05:50+0000', 'and the active version untouched');
-    assert.strictEqual(richRequests.length, 5);
+    assert.strictEqual(richRequests.length, 7);
 
     // ...and the next tick resumes where it stopped, without re-checking
     // last-updated.txt or refetching what is stored.
@@ -382,7 +390,7 @@ const dbMod = require('../src/db');
     ]);
     assert.strictEqual(resumed.updated, true);
     assert.strictEqual(resumed.requests, 7, 'the sync reports how many requests it sent');
-    assert.strictEqual(resumed.expectedRequests, 1 + 2 + 2 * 4, 'a full sync costs 1 + categories + 2 x groups');
+    assert.strictEqual(resumed.expectedRequests, 1 + 4 + 2 * 4, 'a full sync costs 1 + categories + 2 x groups');
     settings = await dbMod.get(`SELECT tcgcsv_data_version, tcgcsv_pending_version FROM app_settings WHERE id = 1`);
     assert.strictEqual(settings.tcgcsv_data_version, remoteVersion,
       'a 404 / success:false / HTML group must not wedge the sync: the version completes');
@@ -408,8 +416,9 @@ const dbMod = require('../src/db');
     { groupId: 32, name: 'Html Group', abbreviation: 'HG' },
   ]);
   assert.deepStrictEqual(await rawRow('/tcgplayer/3/30/products'),
-    [{ productId: 1001, name: 'Charizard', number: '004/102' }],
-    'products keep id, name and collector number; sealed product (no number) is dropped');
+    [{ productId: 1001, name: 'Charizard', number: '004/102' },
+     { productId: 1002, name: 'Fixture Booster Box', number: null, imageUrl: null, groupId: 30 }],
+    'cards keep id, name and collector number; sealed product (no number) keeps id, name, image and group');
   assert.deepStrictEqual(await rawRow('/tcgplayer/3/30/prices'),
     [{ productId: 1001, subTypeName: 'Holofoil', marketPrice: 420.5, midPrice: 450 }],
     'prices keep only priceable finishes and the two prices that are read');
@@ -606,7 +615,8 @@ const dbMod = require('../src/db');
     JSON.parse((await dbMod.get(
       `SELECT results_json FROM tcgcsv_cache WHERE path = '/tcgplayer/3/30/products' AND data_version = 'legacy-version'`
     )).results_json),
-    [{ productId: 1001, name: 'Charizard', number: '004/102' }],
+    [{ productId: 1001, name: 'Charizard', number: '004/102' },
+     { productId: 1002, name: 'Fixture Booster Box', number: null, imageUrl: null, groupId: 30 }],
     'legacy rows are slimmed into the new table, not refetched'
   );
 

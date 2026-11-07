@@ -34,6 +34,7 @@ Try it without installing anything at **[thenotoriousjeremy.github.io/bindarr](h
 - **Search and bulk add** — search or browse a whole set with multi-select; pin a set and add by collector number one keystroke at a time.
 - **Dashboard** — collection value, 7/30-day trends, rarity and type breakdowns, set completion.
 - **Graded slabs** — record grader, grade and cert number per copy (PSA cert lookup fills them in), and give a slab its own value instead of the raw card's price.
+- **Sealed products** — track purchases and individual opened/unopened units, save reusable contents recipes, link cards to the opened product they came from, and track unopened market value separately from what you paid.
 - **Cards in 11 languages** — search, scan and record Japanese, Korean, Chinese, German, French, Spanish, Italian, Portuguese and Russian printings. A copy references the printing it actually is, so it shows the name and artwork on the card while staying searchable by its English name.
 - **Exports and API** — CSV (TCGplayer-compatible) or JSON, plus a read-only API key for reading net worth from elsewhere.
 - **Multi-user** — session-token auth, admin panel for users and roles, optional public share links.
@@ -337,6 +338,14 @@ Which marketplace can price a printing depends on where it is sold, so the sourc
 Prices are stored in the currency they were quoted in and never converted — an exchange rate is a live number Bindarr has no source for — so each card shows its own symbol (`$4.50`, `€4.50`) and the card inspector names the marketplace. Collection totals sum the currencies as-is; `currencies` in the API response says when a total is mixed.
 
 A price only exists once something fetched it. The Pokémon price sweep covers the sets you own cards from, so browsing a set you own nothing in shows `0.00` until a card from it lands in your collection.
+
+### Sealed products
+
+The **Sealed** page tracks purchases as individual units, so opening one booster box does not mark every identical box as opened. Pick products from the TCGplayer catalog or enter a name manually. For products with guaranteed contents, save a reusable recipe of cards and child products; opening a unit creates those components, and child products can be tracked and opened separately. Link cards to the opened unit they came from, then use the collection's Sealed Product filter to view unlinked cards or cards linked to selected units.
+
+Search purchases by product, set, store, notes, or expansion. Filters narrow the list by game, product type, purchases with sealed or opened units, and expansion. Expansions include the purchase's own set and the sets of cards or products in its recipe.
+
+Purchase cost and market value are separate. Set a per-unit value manually for any product, or refresh a catalog-linked product from TCGCSV. The sealed inventory summary totals market value only for units that are still unopened; values are not automatically refreshed in the background.
 
 ### How often prices refresh
 

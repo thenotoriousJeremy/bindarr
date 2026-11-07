@@ -27,7 +27,7 @@ const axios = require('axios');
 const db = require('./db');
 const { recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
 const { normId, normName, fold } = require('./utils/setCatalogueMatch');
-const { slimResults } = require('./utils/tcgcsvSlim');
+const { slimResults, SEALED_ONLY_CATEGORY } = require('./utils/tcgcsvSlim');
 
 const API_BASE_URL = (process.env.TCGCSV_BASE_URL || 'https://tcgcsv.com').replace(/\/+$/, '');
 const TCGCSV_403_COOLDOWN_HOURS = 24;
@@ -41,12 +41,51 @@ const TCGCSV_PENDING_MAX_AGE_HOURS = 24;
 // Verified against the live endpoint, not guessed.
 const CATEGORY = { english: 3, japanese: 85 };
 
-// The TCGplayer categories the daily sync mirrors. Only what something reads:
-// every reader today is Pokémon (3 and 85). This is the ONE place to extend —
-// a feature that needs Magic (1) or Lorcana (71) adds the category here, and
-// adds any fields it reads to utils/tcgcsvSlim.js. Each category costs
+// The TCGplayer categories the daily sync mirrors. Only what something reads.
+// This is the ONE place to extend: a feature that needs a new category adds it
+// here, and adds any fields it reads to utils/tcgcsvSlim.js. Each category costs
 // 1 + 2 x (its group count) requests per sync.
-const SYNC_CATEGORIES = Object.values(CATEGORY);
+//
+//   3, 85  Pokémon (English, Japanese): the price sweep, the scan product map,
+//          and sealed product.
+//   1, 71  Magic, Lorcana: sealed product only (the sealed inventory's catalog
+//          and market value). utils/tcgcsvSlim.js keeps only their sealed
+//          products and those products' prices, never their cards.
+//
+// 1 and 71 are OFF unless an admin turns on Magic/Lorcana sealed tracking
+// (app_settings.sealed_tcg_extra_enabled). Fetching them still means every MTG
+// and Lorcana group's product and price lists, a multiple of the Pokémon
+// requests, and per-install volume is what got Bindarr blocked by TCGCSV once.
+// An instance that never tracks Magic sealed product should not pay for it.
+const BASE_SYNC_CATEGORIES = Object.values(CATEGORY);
+const SYNC_CATEGORIES = [...BASE_SYNC_CATEGORIES, ...Object.values(SEALED_ONLY_CATEGORY)];
+
+async function sealedExtraEnabled() {
+  const row = await db.get(`SELECT sealed_tcg_extra_enabled FROM app_settings WHERE id = 1`);
+  return !!(row && row.sealed_tcg_extra_enabled);
+}
+
+async function syncCategories() {
+  return (await sealedExtraEnabled()) ? SYNC_CATEGORIES : BASE_SYNC_CATEGORIES;
+}
+
+// Turning the gate on mid-dataset must not wait for tomorrow's last-updated.txt,
+// and must not re-download Pokémon either. Re-opening the CURRENT version as
+// pending does both: runSync resumes it, syncResults skips every path already
+// stored, so only the newly enabled categories are fetched. Turning it off needs
+// nothing: they drop out of the next version, and readers are gated meanwhile.
+async function setSealedExtraEnabled(enabled) {
+  const before = await sealedExtraEnabled();
+  await db.run(`UPDATE app_settings SET sealed_tcg_extra_enabled = ? WHERE id = 1`, [enabled ? 1 : 0]);
+  if (enabled && !before) {
+    await db.run(`
+      UPDATE app_settings
+         SET tcgcsv_pending_version = tcgcsv_data_version, tcgcsv_last_checked_at = CURRENT_TIMESTAMP
+       WHERE id = 1 AND tcgcsv_data_version IS NOT NULL AND tcgcsv_pending_version IS NULL
+    `);
+    syncIfUpdatedSafely('enabling Magic/Lorcana sealed tracking');
+  }
+}
 
 // TCGCSV rejects a request with no identifying User-Agent — a 401 with a note
 // asking you to say who you are. That is a reasonable ask of a free mirror, so the
@@ -231,7 +270,7 @@ async function cachedResults(path, dataVersion) {
 // as empty and the sync carries on — otherwise a single permanently broken group
 // would keep the version from ever completing. Anything else (network, 5xx, 403)
 // throws, and the next tick resumes from what is already stored.
-async function syncResults(path, dataVersion, { perGroup = false } = {}) {
+async function syncResults(path, dataVersion, { perGroup = false, keepProductIds = null } = {}) {
   const existing = await db.get(
     `SELECT results_json FROM tcgcsv_cache WHERE path = ? AND data_version = ?`,
     [path, dataVersion]
@@ -241,7 +280,7 @@ async function syncResults(path, dataVersion, { perGroup = false } = {}) {
   let results;
   try {
     const { data } = await pacedGet(path);
-    results = slimResults(path, parseResults(path, data));
+    results = slimResults(path, parseResults(path, data), { keepProductIds });
   } catch (error) {
     if (!perGroup || !isPermanentGroupFailure(error)) throw error;
     console.warn(`TCGCSV: recording ${path} as empty for ${dataVersion}: ${error.message}`);
@@ -314,9 +353,10 @@ async function runSync() {
     }
   }
 
+  const categories = await syncCategories();
   const groupsByCategory = {};
   let groupCount = 0;
-  for (const categoryId of SYNC_CATEGORIES) {
+  for (const categoryId of categories) {
     const groups = await syncResults(`/tcgplayer/${categoryId}/groups`, dataVersion);
     groupsByCategory[categoryId] = groups;
     groupCount += groups.length;
@@ -325,17 +365,20 @@ async function runSync() {
   // A fresh version costs last-updated.txt, one groups list per category, then
   // products + prices per group. Both per-group lists are needed: products feed the
   // price sweep and the scan product map, prices feed the sweep.
-  const expectedRequests = 1 + SYNC_CATEGORIES.length + (groupCount * 2);
+  const expectedRequests = 1 + categories.length + (groupCount * 2);
   if (expectedRequests > TCGCSV_MAX_SYNC_REQUESTS) {
     throw new Error(
       `TCGCSV sync requires ${expectedRequests} requests, exceeding the ${TCGCSV_MAX_SYNC_REQUESTS} request budget`
     );
   }
 
-  for (const categoryId of SYNC_CATEGORIES) {
+  for (const categoryId of categories) {
     for (const group of groupsByCategory[categoryId]) {
-      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/products`, dataVersion, { perGroup: true });
-      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/prices`, dataVersion, { perGroup: true });
+      const products = await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/products`, dataVersion, { perGroup: true });
+      // A sealed-only category keeps the prices of the products it kept and no
+      // card prices (utils/tcgcsvSlim.js); elsewhere the set is ignored.
+      const keepProductIds = new Set(products.map(p => p.productId));
+      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/prices`, dataVersion, { perGroup: true, keepProductIds });
     }
   }
 
@@ -765,6 +808,11 @@ module.exports = {
   categoryFor,
   setsToPrice,
   SYNC_CATEGORIES,
+  BASE_SYNC_CATEGORIES,
+  syncCategories,
+  sealedExtraEnabled,
+  setSealedExtraEnabled,
+  SEALED_ONLY_CATEGORY,
   syncIfUpdated,
   syncIfUpdatedSafely,
   updateCollectionPrices,
