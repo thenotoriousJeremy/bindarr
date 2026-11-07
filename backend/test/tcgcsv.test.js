@@ -434,10 +434,12 @@ const dbMod = require('../src/db');
   assert.strictEqual(tcgcsv.numberOf((await tcgcsv.getProducts(3, 30))[0]), '004/102');
   assert.deepStrictEqual(
     [...require('../src/utils/tcgcsvSlim').SUBTYPES_PRICED].sort(),
-    // Pokémon's finishes plus Riftbound's (riftboundPrices.FINISH_COLUMN).
-    [...new Set([...Object.keys(tcgcsv.SUBTYPE_TO_COLUMN), ...Object.keys(require('../src/riftboundPrices').FINISH_COLUMN)])].sort(),
-    'the slim cache must keep exactly the finishes the sweeps can price'
+    Object.keys(tcgcsv.SUBTYPE_TO_COLUMN).sort(),
+    'the slim cache must keep exactly the finishes the sweep can price'
   );
+  assert.deepStrictEqual([...require('../src/utils/tcgcsvSlim').RIFTBOUND_SUBTYPES].sort(),
+    Object.keys(require('../src/riftboundPrices').FINISH_COLUMN).sort(),
+    'and for category 89, exactly the finishes the Riftbound sweep prices');
   assert.strictEqual(
     (await dbMod.get(`SELECT COUNT(*) n FROM tcgcsv_cache WHERE data_version != ?`, [remoteVersion])).n, 0,
     'older versions are deleted once a sync completes'

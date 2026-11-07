@@ -35,10 +35,12 @@
 const SUBTYPES_PRICED = new Set([
   'Normal', 'Unlimited', 'Holofoil', 'Unlimited Holofoil', 'Reverse Holofoil',
   '1st Edition', '1st Edition Normal', '1st Edition Holofoil',
-  // Riftbound's foil finish (category 89). Pokémon's map has no column for it,
-  // so pricesByProduct still drops it there.
-  'Foil',
 ]);
+
+// Riftbound (category 89) quotes 'Normal' and 'Foil' (riftboundPrices.FINISH_COLUMN).
+// Foil is kept for that category only: Pokémon has no column for it.
+const RIFTBOUND_CATEGORY = 89;
+const RIFTBOUND_SUBTYPES = new Set(['Normal', 'Foil']);
 
 // TCGplayer categories synced for their sealed product only (tcgcsvApi adds these
 // to the sync). Confirmed against the live catalogue: Magic is 1, Lorcana 71.
@@ -74,8 +76,8 @@ function slimProduct(p, { sealedOnly = false } = {}) {
   return { productId: p.productId, name: p.name ?? '', number: String(rawNumber(p)) };
 }
 
-function slimPrice(r) {
-  if (!SUBTYPES_PRICED.has(r.subTypeName)) return null;
+function slimPrice(r, finishes = SUBTYPES_PRICED) {
+  if (!finishes.has(r.subTypeName)) return null;
   const marketPrice = positive(r.marketPrice);
   const midPrice = positive(r.midPrice);
   if (marketPrice == null && midPrice == null) return null;
@@ -94,7 +96,10 @@ function slimmerFor(path) {
     const sealedOnly = SEALED_ONLY_CATEGORIES.has(categoryOf(path));
     return (p) => slimProduct(p, { sealedOnly });
   }
-  if (/\/prices$/.test(path)) return slimPrice;
+  if (/\/prices$/.test(path)) {
+    const finishes = categoryOf(path) === RIFTBOUND_CATEGORY ? RIFTBOUND_SUBTYPES : SUBTYPES_PRICED;
+    return (r) => slimPrice(r, finishes);
+  }
   return null;
 }
 
@@ -113,5 +118,5 @@ function slimResults(path, results, { keepProductIds = null } = {}) {
 }
 
 module.exports = {
-  slimResults, slimmerFor, isSealedProduct, SUBTYPES_PRICED, SEALED_ONLY_CATEGORY, SEALED_ONLY_CATEGORIES,
+  slimResults, slimmerFor, isSealedProduct, SUBTYPES_PRICED, RIFTBOUND_SUBTYPES, SEALED_ONLY_CATEGORY, SEALED_ONLY_CATEGORIES,
 };
