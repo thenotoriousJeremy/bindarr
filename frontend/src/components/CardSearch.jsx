@@ -7,7 +7,7 @@ import CardEntryFields from './CardEntryFields';
 import CardImageZoom from './CardImageZoom';
 import ScryfallSyntaxHelp from './ScryfallSyntaxHelp';
 import { checkSearchSyntax, syntaxErrorText } from '../utils/scryfallSyntax';
-import { translateJapaneseName, POKEMON_EN_TO_JP, getCardDisplayName } from '../utils/langHelper';
+import { translateJapaneseName, POKEMON_EN_TO_JP, getCardDisplayName, loadNameDictionaries, hasJapaneseText } from '../utils/langHelper';
 import { useMultiSelect } from '../utils/useMultiSelect';
 import { CONDITIONS, PRINTINGS, conditionLabel, printingLabel } from '../utils/cardOptions';
 import { langName, isEnglish, displayName, translatedName, setReference, setCode, getLanguagesForGame, isLanguageSupported } from '../utils/languages';
@@ -160,6 +160,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       let finalQuery = query || '';
       if (query && game === 'pokemon') {
         const isJa = searchLang === 'ja' || searchLang === 'Japanese';
+        // The name maps are fetched on first use; a search that needs them waits.
+        if (isJa || hasJapaneseText(query)) await loadNameDictionaries().catch(() => {});
         if (isJa) {
           const jpMapped = POKEMON_EN_TO_JP[query.trim()];
           if (jpMapped) finalQuery = jpMapped;

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Search, Trash2, Edit2, LayoutGrid, List, SlidersHorizontal, X, MousePointerClick, Library } from 'lucide-react';
-import { getCardDisplayName, translateJapaneseName } from '../utils/langHelper';
+import { getCardDisplayName, translateJapaneseName, hasJapaneseText } from '../utils/langHelper';
+import { useNameDictionaries } from '../utils/useNameDictionaries';
 import { priceText } from '../utils/formatPrice';
 import Price from './Price';
 import { useFx } from '../utils/useFx';
@@ -305,9 +306,13 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     [gameFilter, searchFilter]
   );
 
+  // A Japanese query is matched through the English name the name dictionaries
+  // map it to; they are fetched the first time one is typed.
+  const namesReady = useNameDictionaries(hasJapaneseText(searchFilter));
+
   // Filter + sort
   const filteredCollection = useMemo(() => {
-    const translatedSearch = searchFilter ? (translateJapaneseName(searchFilter) || searchFilter).toLowerCase() : '';
+    const translatedSearch = searchFilter ? ((namesReady && translateJapaneseName(searchFilter)) || searchFilter).toLowerCase() : '';
     // The raw query is matched against the localized name as well as the
     // translated one: a Japanese Magic card is stored under its English `name`,
     // so typing 稲妻 only finds it via printed_name.
@@ -360,7 +365,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       sortCardsByOrder(result, SORT_CRITERIA[sortBy] || SORT_CRITERIA['added-newest'], undefined, setsList);
     }
     return result;
-  }, [collection, searchFilter, syntaxFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter, sealedLinkFilter, favoriteOnly, graderFilter, minPriceFilter, maxPriceFilter, notCheckedOutOnly, sortBy, setsList]);
+  }, [collection, searchFilter, syntaxFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter, sealedLinkFilter, favoriteOnly, graderFilter, minPriceFilter, maxPriceFilter, notCheckedOutOnly, sortBy, setsList, namesReady]);
 
   // Group duplicate cards if stack option is active. Each tile keeps the ids of
   // the rows it stands for, which is what a quantity edit in the popup works on.
