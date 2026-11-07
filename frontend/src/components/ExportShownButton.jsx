@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Download } from 'lucide-react';
 import { useT } from '../utils/i18n';
+import { saveFile } from '../utils/saveFile';
 
 // Download exactly the collection rows a filtered view is showing, as the same
 // CSV the full export in Settings writes (POST /api/export). `entryIds` may be
@@ -20,14 +21,7 @@ export default function ExportShownButton({ entryIds, showToast, style }) {
         body: JSON.stringify({ entry_ids: ids }),
       });
       if (!res.ok) { showToast && showToast(t('settings.errExport')); return; }
-      const url = URL.createObjectURL(await res.blob());
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'bindarr_collection_filtered.csv';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      await saveFile(await res.blob(), 'bindarr_collection_filtered.csv');
     } catch (err) {
       console.error(err);
       showToast && showToast(t('settings.errExportGeneric'));

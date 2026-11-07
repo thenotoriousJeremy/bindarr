@@ -1914,6 +1914,18 @@ button, input, select, textarea {
   animation: spin 1s linear infinite;
 }
 
+/* Shown while the app is reading from its offline cache (utils/offline.js). */
+.offline-banner {
+  margin-top: 0.75rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--accent-yellow);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-strong);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
 .toast {
   position: fixed;
   bottom: 80px;

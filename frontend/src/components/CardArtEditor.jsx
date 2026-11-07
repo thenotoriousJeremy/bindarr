@@ -4,6 +4,7 @@ import { artUrl, noteArtChanged, useCardArtIndex } from '../utils/cardArt';
 import { issueUrl } from '../utils/repo';
 import { useT } from '../utils/i18n';
 import { isDeviceMode } from '../apiBase';
+import { saveFile } from '../utils/saveFile';
 
 // INCOMPLETE — not mounted anywhere, and not ready to be.
 //
@@ -127,14 +128,7 @@ export default function CardArtEditor({ card, hasProviderArt, showToast, onChang
         if (!r.ok) throw new Error('art not found');
         return r.blob();
       });
-      const href = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = href;
-      a.download = `${cardId}.png`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(href), 10000);
+      await saveFile(blob, `${cardId}.png`);
 
       const body = [
         t('art.issueIntro'),

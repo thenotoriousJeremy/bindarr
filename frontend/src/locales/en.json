@@ -2070,5 +2070,7 @@
   "fx.convertedTotal": "Converted to {currency} at ECB rates of {date}",
   "fx.subtotals": "As quoted: {list}",
   "fx.noRatesTotal": "No exchange rates yet, so these are not added together.",
-  "fx.gainNeedsRate": "Needs an exchange rate to compare with what you paid"
+  "fx.gainNeedsRate": "Needs an exchange rate to compare with what you paid",
+  "offline.banner": "Offline: showing the last data this device loaded. Read-only until the connection is back.",
+  "offline.writeBlocked": "You're offline, so this change wasn't saved. Try again once the connection is back."
 }

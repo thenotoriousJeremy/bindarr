@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import basicSsl from '@vitejs/plugin-basic-ssl'
+import serviceWorker from './scripts/swPlugin.mjs'
 
 // Bake the version into the bundle. Settings used to learn its own version from
 // /api/settings/version, so any hiccup on that call left it showing "Version …"
@@ -32,7 +33,9 @@ export default defineConfig({
   // Demo build is served from https://<user>.github.io/bindarr/, so assets need
   // that sub-path prefix. Every other build (web/mobile) stays root-relative.
   base: process.env.VITE_DEMO ? '/bindarr/' : '/',
-  plugins: [react(), basicSsl(), ...(deviceWeb ? [servePublicOrt] : [])],
+  // serviceWorker emits /sw.js (offline shell + last-read data) on a web build
+  // only; the device-mode harness answers /api in the page and gets none.
+  plugins: [react(), basicSsl(), ...(deviceWeb ? [servePublicOrt] : [serviceWorker({ version: pkg.version })])],
   // Matches how the app already reads build-time config (VITE_DEMO), so this
   // needs no new global and no eslint exception.
   define: {

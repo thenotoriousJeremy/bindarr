@@ -59,6 +59,7 @@ const notify = require('./notify');
 const fxRoutes = require('./routes/fx');
 const { authenticateToken } = require('./middleware/auth');
 const { startHttps, selfSignedTls } = require('./utils/tls');
+const { PWA_FILES, setPwaHeaders } = require('./utils/serviceWorkerHeaders');
 
 
 const app = express();
@@ -597,6 +598,17 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/set-completion', require('./routes/setCompletion'));
 app.use('/api/precons', require('./routes/precons'));
 app.use('/api/notifications', notificationRoutes);
+
+// The service worker and the web app manifest: revalidated rather than cached
+// for a year, and the worker gets a policy that lets it cache card art. See
+// utils/serviceWorkerHeaders.js. A build without them falls through to the
+// catch-all like any other unknown path.
+app.get(PWA_FILES, (req, res, next) => {
+  setPwaHeaders(req, res);
+  res.sendFile(path.join(__dirname, '../../frontend/dist', req.path), (err) => {
+    if (err && !res.headersSent) next();
+  });
+});
 
 // The live overlay runs the SAME corner model the scan does, in the browser, so
 // what the user aims with and what the server matches cannot disagree. That
