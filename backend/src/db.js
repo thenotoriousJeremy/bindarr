@@ -1211,6 +1211,11 @@ async function initDb() {
   // idx_collection_comp_user_qty below cannot serve it: a composite index is only
   // usable from its leading column, and that one leads with compartment_id.
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_user_game ON collection(user_id, game)`);
+  // "This user's copies of this card": owned counts on search results, deck
+  // availability, the copies a quantity edit adds or trims, and the cards behind
+  // the value timeline (routes/stats.js). user_id alone narrows to the whole
+  // collection and leaves every lookup a scan of it.
+  await run(`CREATE INDEX IF NOT EXISTS idx_collection_user_card ON collection(user_id, card_id)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_comp_user_qty ON collection(compartment_id, user_id, quantity)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_loc_pos ON collection(location_id, position)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_card_cache_set_num ON card_cache(set_id, number)`);

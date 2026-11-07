@@ -302,28 +302,30 @@ router.get('/stats/history', async (req, res) => {
     // first, so each item's price at any past point can be looked up without
     // per-item queries. No source anywhere provides price history beyond
     // what this table accumulates over the app's actual real lifetime.
-    const cardIds = [...new Set(items.map(i => i.card_id))];
-    let historyByCard = {};
-    if (cardIds.length > 0) {
-      const placeholders = cardIds.map(() => '?').join(',');
-      // Only points in the card's current currency. After a currency switch (the
-      // admin's MTG price source, #93) the old points are a different unit, and
-      // mixing them in would draw the switch as a price move. Dropping them makes
-      // the card's earliest point in the new currency carry backward instead —
-      // the same rule realPriceAt already applies to any card with short history.
-      const historyRows = await db.all(
-        `SELECT ph.card_id, ph.price, ph.recorded_at FROM price_history ph
-           JOIN card_cache cc ON cc.id = ph.card_id
-          WHERE ph.card_id IN (${placeholders})
-            AND (ph.currency IS NULL OR ph.currency = COALESCE(cc.price_currency, 'USD'))
-          ORDER BY ph.recorded_at ASC`,
-        cardIds
-      );
-      historyRows.forEach(r => {
-        if (!historyByCard[r.card_id]) historyByCard[r.card_id] = [];
-        historyByCard[r.card_id].push({ price: r.price, time: parseSqliteUtc(r.recorded_at).getTime() });
-      });
-    }
+    //
+    // "Every card this user owns" is a subquery on the collection, the same
+    // rows and game filter as the query above, not a list of ids. That list
+    // bound one variable per distinct card, and past SQLite's 32,766 a large
+    // collection's whole timeline was a 500.
+    //
+    // Only points in the card's current currency. After a currency switch (the
+    // admin's MTG price source, #93) the old points are a different unit, and
+    // mixing them in would draw the switch as a price move. Dropping them makes
+    // the card's earliest point in the new currency carry backward instead —
+    // the same rule realPriceAt already applies to any card with short history.
+    const historyByCard = {};
+    const historyRows = await db.all(
+      `SELECT ph.card_id, ph.price, ph.recorded_at FROM price_history ph
+         JOIN card_cache cc ON cc.id = ph.card_id
+        WHERE ph.card_id IN (SELECT card_id FROM collection WHERE user_id = ?)${gameFilter}
+          AND (ph.currency IS NULL OR ph.currency = COALESCE(cc.price_currency, 'USD'))
+        ORDER BY ph.recorded_at ASC`,
+      params
+    );
+    historyRows.forEach(r => {
+      if (!historyByCard[r.card_id]) historyByCard[r.card_id] = [];
+      historyByCard[r.card_id].push({ price: r.price, time: parseSqliteUtc(r.recorded_at).getTime() });
+    });
 
     // Real price for a card at a point in time: the latest recorded snapshot
     // at or before that time; if history only starts later, carry the
