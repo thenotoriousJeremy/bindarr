@@ -3,6 +3,7 @@ import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil,
 import { useT } from '../utils/i18n';
 import { gameLabel, gameOptions } from '../utils/games';
 import { formatPrice } from '../utils/formatPrice';
+import { printingLabel } from '../utils/cardOptions';
 import SealedPurchaseForm from './SealedPurchaseForm';
 import PackPriceSplitter from './PackPriceSplitter';
 import MultiSelectDropdown from './MultiSelectDropdown';
@@ -201,7 +202,7 @@ function LinkedCardsPanel({ unitId, expectedCards, refreshKey, showToast, onChan
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', fontSize: '0.8rem' }}>
           {cards.map(c => (
             <div key={c.entry_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--text-strong)' }}>
-              <span>{c.quantity > 1 ? `${c.quantity}x ` : ''}{c.name} <span style={{ color: 'var(--text-secondary)' }}>· {c.set_name} · {c.printing}</span></span>
+              <span>{c.quantity > 1 ? `${c.quantity}x ` : ''}{c.name} <span style={{ color: 'var(--text-secondary)' }}>· {c.set_name} · {printingLabel(t, c.printing, c.game)}</span></span>
               <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                 {c.purchase_price != null && <span style={{ color: 'var(--text-secondary)' }}>${formatPrice(c.purchase_price)}</span>}
                 <button type="button" className="btn btn-secondary btn-icon-only" title={t('sealed.unlink')} aria-label={t('sealed.unlink')}
