@@ -380,11 +380,18 @@ async function initDb() {
 
   const existingCollectionCols = await all(`PRAGMA table_info(collection)`).catch(() => []);
   if (existingCollectionCols.some(c => c.name === 'sub_location_1')) {
-    console.log('Resetting locations/collection tables for the new compartment-based storage schema...');
-    await run(`PRAGMA foreign_keys = OFF`);
-    await run(`DROP TABLE IF EXISTS collection`);
-    await run(`DROP TABLE IF EXISTS locations`);
-    await run(`PRAGMA foreign_keys = ON`);
+    // A database from before compartments (sub_location_1/2 on collection, shape
+    // columns on locations). These two tables used to be DROPPED here, which
+    // emptied the collection of anyone upgrading from that release. Move them
+    // aside instead, so the statements below create the current tables, and
+    // finishPreCompartmentUpgrade() copies the cards across once those tables
+    // have every column. The _pending names mark the copy as not yet done: a
+    // crash in between resumes on the next boot instead of losing the cards.
+    console.log('Pre-compartment storage schema found: setting collection/locations aside for migration...');
+    await withTransaction(async () => {
+      await run(`ALTER TABLE collection RENAME TO ${LEGACY_COLLECTION}_pending`);
+      await run(`ALTER TABLE locations RENAME TO ${LEGACY_LOCATIONS}_pending`);
+    });
   }
 
   // Create users table
@@ -833,6 +840,24 @@ async function initDb() {
   if (!appSettingsCols.some(c => c.name === 'allow_member_set_builds')) {
     await run(`ALTER TABLE app_settings ADD COLUMN allow_member_set_builds INTEGER NOT NULL DEFAULT 0`);
   }
+  // Columns that reached card_cache and decks through their CREATE TABLE only.
+  // A database from the Pokémon-only releases has neither, and the provider
+  // migration below reads card_cache.game, so without these that upgrade could
+  // not get past initDb at all. Placed before the first statement that reads them.
+  const earlyCardCacheCols = await all(`PRAGMA table_info(card_cache)`);
+  if (!earlyCardCacheCols.some(c => c.name === 'game')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN game TEXT DEFAULT 'pokemon'`);
+  }
+  if (!earlyCardCacheCols.some(c => c.name === 'cmc')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN cmc REAL`);
+  }
+  if (!earlyCardCacheCols.some(c => c.name === 'color_identity')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN color_identity TEXT`);
+  }
+  const earlyDecksCols = await all(`PRAGMA table_info(decks)`);
+  if (!earlyDecksCols.some(c => c.name === 'game')) {
+    await run(`ALTER TABLE decks ADD COLUMN game TEXT DEFAULT 'pokemon'`);
+  }
   // Which API English Pokémon cards and sets come from.
   //
   // TCGdex for a NEW install: 218 English sets against pokemontcg.io's 174, every
@@ -1194,6 +1219,9 @@ async function initDb() {
     await run(`ALTER TABLE locations ADD COLUMN game TEXT DEFAULT 'any'`);
   }
 
+  // collection and locations now have every column a copied row needs.
+  await finishPreCompartmentUpgrade();
+
   const usersCols = await all(`PRAGMA table_info(users)`);
   if (!usersCols.some(c => c.name === 'tcg_api_key')) {
     await run(`ALTER TABLE users ADD COLUMN tcg_api_key TEXT DEFAULT ''`);
@@ -1360,6 +1388,87 @@ async function initDb() {
   // Last: this release has now brought the file up to date. Not written when a
   // step above throws, so the next boot still knows the migration is unfinished.
   await run(`PRAGMA user_version = ${releaseMarker(SCHEMA_RELEASE)}`);
+}
+
+// The rest of the pre-compartment upgrade started at the top of initDb: copy the
+// set-aside rows into the current tables, then rename the originals to their
+// final legacy_* names, all in one transaction. Those names existing is what
+// says it is done, so this never runs twice, and the originals stay as a
+// recovery copy: nothing in them is deleted.
+//
+// Cards come across unplaced (no location, no compartment), so they show up in
+// Unsorted. Their old places were page/slot strings in containers whose shape no
+// longer exists, and guessing a compartment would file cards where they are not.
+// Locations come across as plain containers with no compartments, if their type,
+// sort order and foil setting still mean something; the rest are listed in the
+// log to be recreated.
+const LEGACY_COLLECTION = 'legacy_collection_pre_compartments';
+const LEGACY_LOCATIONS = 'legacy_locations_pre_compartments';
+const LOCATION_TYPES = ['Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other'];
+
+async function finishPreCompartmentUpgrade() {
+  const pendingCollection = `${LEGACY_COLLECTION}_pending`;
+  const pendingLocations = `${LEGACY_LOCATIONS}_pending`;
+  const pending = await get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [pendingCollection]);
+  if (!pending) return;
+
+  const sortSchemes = require('../../shared/sortSchemes.json');
+  const sortOrderKnown = (v) => v == null || v === 'custom' || Object.prototype.hasOwnProperty.call(sortSchemes, v) ||
+    (typeof v === 'string' && v.startsWith('[') && (() => { try { return Array.isArray(JSON.parse(v)); } catch { return false; } })());
+  const columnsOf = async (table) => (await all(`PRAGMA table_info(${table})`)).map(c => c.name);
+
+  // Off for the copy, so a card whose card_cache row went missing years ago is
+  // carried over as it was instead of failing the whole upgrade. The pragma is a
+  // no-op inside a transaction, hence out here.
+  await run(`PRAGMA foreign_keys = OFF`);
+  try {
+    const result = await withTransaction(async () => {
+      const hasLocations = await get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [pendingLocations]);
+      const migratedLocations = [];
+      const skippedLocations = [];
+      if (hasLocations) {
+        const legacyLocCols = await columnsOf(pendingLocations);
+        const legacyLocs = await all(`SELECT * FROM ${pendingLocations} ORDER BY id`);
+        for (const loc of legacyLocs) {
+          const clean = LOCATION_TYPES.includes(loc.type) && sortOrderKnown(loc.sort_order) &&
+            (loc.foil_sorting == null || ['normals_first', 'foils_first'].includes(loc.foil_sorting));
+          if (!clean) { skippedLocations.push(loc); continue; }
+          // Same id, so the legacy rows' location_id still names the container.
+          const row = { id: loc.id, name: loc.name, type: loc.type, user_id: legacyLocCols.includes('user_id') ? loc.user_id : null };
+          if (loc.sort_order != null) row.sort_order = loc.sort_order;
+          if (loc.foil_sorting != null) row.foil_sorting = loc.foil_sorting;
+          const cols = Object.keys(row);
+          await run(`INSERT INTO locations (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`, cols.map(c => row[c]));
+          migratedLocations.push(loc);
+        }
+      }
+
+      // Every column both tables share, id included so a new row can be matched
+      // to its legacy original. Placement is left to the new table's defaults.
+      const newCols = await columnsOf('collection');
+      const unplaced = new Set(['location_id', 'compartment_id', 'position']);
+      const shared = (await columnsOf(pendingCollection)).filter(c => newCols.includes(c) && !unplaced.has(c));
+      const copied = await run(
+        `INSERT INTO collection (${shared.join(', ')}) SELECT ${shared.join(', ')} FROM ${pendingCollection} ORDER BY id`
+      );
+
+      await run(`ALTER TABLE ${pendingCollection} RENAME TO ${LEGACY_COLLECTION}`);
+      if (hasLocations) await run(`ALTER TABLE ${pendingLocations} RENAME TO ${LEGACY_LOCATIONS}`);
+      return { cards: copied.changes, migratedLocations, skippedLocations, hasLocations };
+    });
+
+    console.log(`Pre-compartment upgrade: copied ${result.cards} collection row(s) into Unsorted and ` +
+      `${result.migratedLocations.length} location(s) as containers without pages/rows (add them in Storage).`);
+    if (result.migratedLocations.some(l => l.description)) {
+      console.log('Location descriptions are not part of the current schema; they remain in the legacy table.');
+    }
+    for (const loc of result.skippedLocations) {
+      console.log(`  Not migrated, recreate by hand: location #${loc.id} "${loc.name}" (type ${loc.type}, sort ${loc.sort_order}, user ${loc.user_id}).`);
+    }
+    console.log(`The original rows are kept in ${LEGACY_COLLECTION}${result.hasLocations ? ` and ${LEGACY_LOCATIONS}` : ''}.`);
+  } finally {
+    await run(`PRAGMA foreign_keys = ON`);
+  }
 }
 
 // Cards and locations from before multi-user carry `user_id IS NULL`. They belong
