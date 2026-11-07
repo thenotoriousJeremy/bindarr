@@ -11,6 +11,7 @@ const pokemonProvider = require('../utils/pokemonProvider');
 const psaApi = require('../psaApi');
 const gradedPrices = require('../gradedPrices');
 const cardApi = require('../utils/cardApi');
+const scryfallSyntax = require('../utils/scryfallSyntax');
 const { searchLimiter } = require('../middleware/auth');
 const { resolveCardPrice, parseCardRow, recordPrice } = require('../utils/priceHelpers');
 const { parseSetList } = require('../utils/setQuery');
@@ -144,8 +145,13 @@ router.all('/search', searchLimiter, async (req, res) => {
     // Every provider takes the same options object and ignores what does not
     // apply to it, so there is one call here rather than a branch per provider.
     const api = game === 'mtg' ? scryfallApi : (game === 'lorcana' ? lorcastApi : await pokemonApiFor(lang));
+    // Magic takes Scryfall syntax in the name box (t:creature c:g cmc<=3). It is
+    // searched intact, so the name/number splitting above is for plain names only;
+    // the number and set fields still apply.
+    const syntax = game === 'mtg' ? await scryfallSyntax.forSearch(rawName || q, { prints, image }) : null;
+    const fields = syntax ? { ...normalizeSearchParams({ number: rawNumber, set: rawSet }), syntax } : { name, number, set };
     let { cards, total } = await api.searchCards({
-      name, number, set, scope, userId: req.user.id, lang,
+      ...fields, scope, userId: req.user.id, lang,
       apiKey: req.user.tcg_api_key, allPrints: prints === '1', page, limit,
     });
 
@@ -178,6 +184,10 @@ router.all('/search', searchLimiter, async (req, res) => {
     }
     res.json(cards);
   } catch (error) {
+    // A query that cannot be read (or that Scryfall refused) is the user's to
+    // fix: say what is wrong with it rather than "Search failed".
+    const syntaxProblem = scryfallSyntax.errorBody(error);
+    if (syntaxProblem) return res.status(400).json(syntaxProblem);
     console.error(error);
     if (error.message === 'INVALID_API_KEY') {
       return res.status(403).json({ error: 'Invalid API Key' });

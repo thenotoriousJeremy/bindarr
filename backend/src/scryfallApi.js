@@ -3,6 +3,7 @@ const db = require('./db');
 const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
 const { parseSetList } = require('./utils/setQuery');
 const { rulesTextFields } = require('./utils/mtgRulesText');
+const scryfallSyntax = require('./utils/scryfallSyntax');
 const cardSearchSql = require('./utils/cardSearchSql');
 const languages = require('./utils/languages');
 const { cacheNormalizedCards } = require('./utils/cardCache');
@@ -185,6 +186,10 @@ const CACHE_AGE_LIMIT_MS = 1000 * 60 * 60 * 24 * 3; // 3 days
 // English adds nothing to the query: that is already Scryfall's default, and
 // staying on the exact old query string keeps the English path byte-identical.
 function langSearch(q, lang) {
+  // Scryfall syntax that names its own language (lang:ja, -lang:en) keeps it. The
+  // picker's language is not added on top; Scryfall is only told that non-English
+  // printings may come back.
+  if (lang === scryfallSyntax.QUERY_LANGUAGE) return { q, params: '&include_multilingual=true' };
   const code = languages.resolve(lang).scryfall;
   if (code === 'en') return { q, params: '' };
   return { q: `${q} lang:${code}`, params: '&include_multilingual=true' };
@@ -481,13 +486,61 @@ async function fetchWindow(q, lang, offset, limit, order) {
 // exist upstream in all (null when the answer came from cache, which has no
 // such count). Wrapping keeps the many early returns in the body unchanged.
 // Same options object as tcgApi/tcgdexApi — see the note there.
+// `syntax` is a parsed Scryfall-syntax query (utils/scryfallSyntax.forSearch),
+// which takes the place of `name` and is searched by runSyntaxSearch instead.
 async function searchCards({
   name = '', number = '', set = '', scope = 'database', userId = null,
-  lang = null, allPrints = false, page = 1, limit = 60,
+  lang = null, allPrints = false, page = 1, limit = 60, syntax = null,
 } = {}) {
   const meta = { total: null };
-  const cards = await runSearch(meta, name, number, set, scope, userId, lang, allPrints, page, limit);
+  const cards = syntax
+    ? await runSyntaxSearch(meta, syntax, { number, set, scope, userId, lang, page, limit })
+    : await runSearch(meta, name, number, set, scope, userId, lang, allPrints, page, limit);
   return { cards, total: meta.total };
+}
+
+// Scryfall syntax typed into the name box (t:creature c:g cmc<=3).
+//
+// Search & Add sends it to Scryfall intact, because Scryfall reads its own
+// syntax. It goes in parentheses, so the form's set, number and language terms AND
+// with the whole query; appended bare, `t:goblin or t:elf set:mh3` would have
+// bound the set to the elves alone. Your collection is something Scryfall cannot
+// see, so that scope (the deck builder's search) is answered from the cached rows
+// by the same evaluator the collection screen runs.
+//
+// None of runSearch's plain-name heuristics apply. There is no local LIKE lookup
+// (it cannot read syntax) and no first-word fallback (it would answer an empty
+// `t:goblin c:u` with every goblin). Results are not re-sorted by collector number
+// either: Scryfall's order, or the user's own order:, is the one asked for.
+async function runSyntaxSearch(meta, syntax, { number = '', set = '', scope, userId, lang, page = 1, limit = 60 }) {
+  const offset = (page - 1) * limit;
+  if (scope === 'collection') {
+    if (!userId) return [];
+    return scryfallSyntax.collectionMatches({ userId, syntax, limit, offset });
+  }
+  const cleanNumber = String(number || '').trim().replace(/^#/, '').split('/')[0].trim();
+  const q = scryfallSyntax.catalogQuery(syntax, {
+    setList: parseSetList(set),
+    // Scryfall stores "488", not "0488".
+    number: cleanNumber.replace(/^0+/, '') || cleanNumber,
+  });
+  try {
+    const { cards: raw, total } = await fetchWindow(q, syntax.ownLanguage ? scryfallSyntax.QUERY_LANGUAGE : lang, offset, limit);
+    if (total != null) meta.total = total;
+    const cards = raw.map(c => normalizeCard(c, lang));
+    await cacheCards(cards);
+    return cards;
+  } catch (err) {
+    const status = err.response && err.response.status;
+    // 404 = nothing matched; 422 = a page past the last one.
+    if (status === 404 || status === 422) return [];
+    // 400 = Scryfall read the query and refused it. That is about what the user
+    // typed, so pass on what Scryfall said instead of "the card API is down".
+    if (status === 400) throw await scryfallSyntax.upstreamRejected(err.response.data);
+    console.error('Scryfall syntax search failed:', err.message);
+    if (status === 429) throw new Error('RATE_LIMIT_EXCEEDED');
+    throw new Error('UPSTREAM_UNAVAILABLE');
+  }
 }
 
 // Search MTG cards: local card_cache first (game='mtg'), then Scryfall. Mirrors
