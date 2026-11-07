@@ -250,7 +250,7 @@ router.post('/import', importLimiter, async (req, res) => {
     const noCopies = rawItems.filter(item => !(stated(item) >= 1)).length;
     rawItems = rawItems.filter(item => stated(item) >= 1);
     if (rawItems.length === 0 && noCopies) {
-      return res.status(400).json({ error: 'No rows to import: every row has a quantity of 0.' });
+      return res.status(400).json({ error: 'No rows to import: no row has a quantity of 1 or more.' });
     }
 
     // Before any row is looked up, so a file that asks for too many copies costs
@@ -365,7 +365,7 @@ router.post('/import', importLimiter, async (req, res) => {
 
     const unmatched = unmatchedCount ? ` ${unmatchedCount} unmatched ManaBox printings were skipped.` : '';
     const empty = noCopies
-      ? ` ${noCopies} row${noCopies === 1 ? '' : 's'} with a quantity of 0 ${noCopies === 1 ? 'was' : 'were'} skipped.`
+      ? ` ${noCopies} row${noCopies === 1 ? '' : 's'} with a quantity of 0 (or none readable) ${noCopies === 1 ? 'was' : 'were'} skipped.`
       : '';
     const adjusted = clampedRows
       ? ` ${clampedRows} row${clampedRows === 1 ? '' : 's'} had a quantity outside 1–${MAX_QUANTITY} and ${clampedRows === 1 ? 'was' : 'were'} imported with the nearest number in range.`

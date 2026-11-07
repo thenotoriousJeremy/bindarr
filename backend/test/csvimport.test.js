@@ -119,6 +119,17 @@ function testMapper() {
     ['pokemon', 'Lightly Played', 'Reverse Holofoil'],
   ], "TCGplayer's seller export puts the finish in the condition cell");
 
+  // Moxfield's and Archidekt's collection exports, by their own header rows.
+  const [moxfield] = parseThirdPartyCSV([{ 'Count': '3', 'Tradelist Count': '0', 'Name': 'Sol Ring', 'Edition': 'c21',
+    'Condition': 'NM', 'Language': 'English', 'Foil': 'foil', 'Alter': 'False', 'Proxy': 'False', 'Purchase Price': '1.10',
+    'Collector Number': '263' }], 'csv');
+  assert.deepStrictEqual([moxfield.game, moxfield.set_code, moxfield.collector_number, moxfield.quantity, moxfield.printing],
+    ['mtg', 'c21', '263', 3, 'Holofoil']);
+  const [archidekt] = parseThirdPartyCSV([{ 'Quantity': '1', 'Name': 'Sol Ring', 'Set Code': 'c21', 'Set Name': 'Commander 2021',
+    'Collector Number': '263', 'Condition': 'NM', 'Language': 'English', 'Foil': 'false',
+    'Scryfall ID': SCRYFALL[3].id, 'Oracle ID': '6ad8011d-3471-4369-9d68-b264cc027487' }], 'csv');
+  assert.deepStrictEqual([archidekt.game, archidekt.card_id, archidekt.printing], ['mtg', mtg(SCRYFALL[3].id), 'Normal']);
+
   // A printing the collection.printing CHECK constraint refuses never gets through.
   const [odd] = parseThirdPartyCSV([{ 'Name': 'Sol Ring', 'Set': 'C21', 'Number': '263', 'Printing': 'Shiny?' }], 'csv');
   assert.strictEqual(odd.printing, 'Normal');
@@ -137,7 +148,7 @@ async function testManaBox() {
   assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
   assert.strictEqual(res.body.count, 6, 'two Breakers and four singles; the 0-copy Bolt is not one of them');
   assert.deepStrictEqual(res.body.unresolved, []);
-  assert.match(res.body.message, /1 row with a quantity of 0 was skipped/);
+  assert.match(res.body.message, /1 row with a quantity of 0 \(or none readable\) was skipped/);
 
   // Every row was asked for by its Scryfall id: the exact printing, in one batch.
   assert.strictEqual(batches.length, 1);
@@ -166,7 +177,7 @@ async function testDragonShield() {
   assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
   assert.strictEqual(res.body.count, 4);
   assert.deepStrictEqual(res.body.unresolved, [], 'the padding row is not reported as an unmatched card');
-  assert.match(res.body.message, /1 row with a quantity of 0 was skipped/);
+  assert.match(res.body.message, /1 row with a quantity of 0 \(or none readable\) was skipped/);
 
   // No ids here, so set + number; The List's CON-31 is sent whole.
   assert.deepStrictEqual(batches[0].map(i => `${i.set}:${i.collector_number}`), ['mh3:1', 'c21:263', 'plst:CON-31']);
@@ -207,10 +218,12 @@ async function main() {
     await run();
   }
 
-  // A file whose every row says 0 copies imports nothing, and says why.
-  const none = await importCsv('Name,Set code,Collector number,Quantity,Scryfall ID\nSol Ring,C21,263,0,');
+  // A file with no copies to import (0, or a quantity nobody can read) imports
+  // nothing, and says why.
+  const none = await importCsv('Name,Set code,Collector number,Quantity,Scryfall ID\nSol Ring,C21,263,0,\nSol Ring,C21,263,a few,');
   assert.strictEqual(none.statusCode, 400);
-  assert.match(none.body.error, /quantity of 0/);
+  assert.match(none.body.error, /no row has a quantity of 1 or more/);
+  assert.strictEqual((await db.get(`SELECT COUNT(*) n FROM collection`)).n, 4, 'nothing was added');
 }
 
 main()
