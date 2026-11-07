@@ -417,6 +417,17 @@ async function listSets(lang) {
   return sets;
 }
 
+// One set's cards as card_cache-shaped rows, from the single set request. Briefs
+// only (name, number, art), so the rows are thin and deliberately NOT cached here:
+// upserting a brief over a hydrated row would reset its rarity and prices. Same
+// signature as pokemontcgapi.getSetCards, so a caller holding either client can ask.
+async function getSetCards(setId, lang = 'en') {
+  const code = languages.toCode(lang);
+  const { data } = await client.get(`/${code}/sets/${encodeURIComponent(setId)}`);
+  const set = { id: (data && data.id) || setId, name: (data && data.name) || setId };
+  return ((data && data.cards) || []).map(brief => normalizeCard({ ...brief, set }, code));
+}
+
 // Pokémon TCG Pocket — the phone game. Its cards have artwork and set codes but
 // no physical printing, so they can never be the answer to a camera scan. TCGdex
 // publishes them alongside the paper sets with nothing on the set brief to tell
@@ -592,7 +603,7 @@ async function learnEnglishName(card) {
 
 // `client` is exported for tests (stub the axios adapter), like tcgApi.tcgClient.
 module.exports = {
-  searchCards, getCardById, getPrintingInLang, hydrateCard, listSets, fetchAndCacheSets, cacheCards, normalizeCard,
+  searchCards, getCardById, getPrintingInLang, hydrateCard, listSets, getSetCards, fetchAndCacheSets, cacheCards, normalizeCard,
   updateCollectionPrices, learnEnglishName, providerId, idLanguage, client,
   // setIndex.listAllSets filters digital sets out of a build with these, and
   // globalIndex groups the coverage breakdown by series.
