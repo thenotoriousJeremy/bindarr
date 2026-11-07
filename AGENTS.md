@@ -81,7 +81,7 @@ Use `npm ci` in each package scope for reproducible CI/container installs. Backe
 ## Runtime/Tooling Preferences
 
 - Use **npm**, with separate root, `backend/`, and `frontend/` manifests/lockfiles; this is not an npm workspace.
-- Local documented floor: Node 18+ and npm 9+. Use **Node 20** for server/container/CI parity; Node 22 is used only by mobile/demo release workflows.
+- Local documented floor: Node 22.12+ and npm 10+ (Vite 8 and the Capacitor CLI refuse anything older). Use **Node 24** (LTS, supported until April 2028) for server/container/CI parity; every workflow, the mobile/demo releases included, runs on it.
 - Frontend: React/Vite, ESM, JSX, HTTPS on `https://localhost:5173`. Backend: Node/Express/CommonJS on `http://localhost:3001` by default.
 - Native dependencies (`sqlite3`, `sharp`, `onnxruntime-node`) are platform-sensitive. Install/rebuild in the target environment; Docker production uses Debian/glibc, not Alpine.
 - Configure runtime through `.env.example`. Preserve `DB_PATH`, TLS, CORS, `PUBLIC_BASE_URL`, `TRUST_PROXY`, bootstrap auth, and provider-key semantics. Do not commit `.env`, database/WAL files, build output, models, catalogs, or generated native assets.

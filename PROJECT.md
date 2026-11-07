@@ -844,6 +844,7 @@ only `decks.checked_out` changes.
 
 Setup and Docker deployment: see [README.md](README.md). Quick reference:
 
+- Runtime: Node 24 in the image (`node:24-slim`, Debian/glibc) and in every workflow; Node 22.12+ works locally. Bump the Dockerfile, the workflows and these docs together.
 - Backend: `cd backend && npm run dev` (nodemon) or `npm start`; port `3001`.
 - Frontend: `cd frontend && npm run dev` (Vite, port `5173`, proxies `/api` → `3001`).
 - Tests: `npm test` from the root (or `cd backend && npm test`) runs every unit suite in `backend/test/` plus the e2e suites under `backend/test/e2e/`. `npm run test:e2e` runs only the latter. No framework — each file is a plain `node` script.
