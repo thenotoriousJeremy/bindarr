@@ -5,6 +5,7 @@ import { CURRENCIES, getCurrency, setCurrency } from '../utils/formatPrice';
 import { LOCALES, localeName, useT } from '../utils/i18n';
 import { REPO_URL } from '../utils/repo';
 import { saveFile } from '../utils/saveFile';
+import NotificationSettings from './NotificationSettings';
 import { isDeviceMode } from '../apiBase';
 import InstanceSettings from './InstanceSettings';
 import PreconImportModal from './PreconImportModal';
@@ -990,6 +991,8 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
             </div>
           )}
         </div>
+
+        <NotificationSettings isAdmin={user?.role === 'admin'} showToast={showToast} />
 
         {/* Collection Backup & Data Options Panel */}
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
