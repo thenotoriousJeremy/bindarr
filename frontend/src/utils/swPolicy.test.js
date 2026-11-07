@@ -56,6 +56,8 @@ test('the shell is cached; /ort and /models are left to their own revalidation',
 
 test('cross-origin: card images only', () => {
   assert.equal(classifyRequest(req('https://cards.scryfall.io/large/front/a.jpg', { destination: 'image' })), 'image');
+  // Riftbound art.
+  assert.equal(classifyRequest(req('https://cmsassets.rgpub.io/sanity/images/a.png', { destination: 'image' })), 'image');
   assert.equal(classifyRequest(req('http://insecure.example/a.jpg', { destination: 'image' })), 'bypass');
   assert.equal(classifyRequest(req('https://fonts.gstatic.com/x.woff2', { destination: 'font' })), 'bypass');
   assert.equal(classifyRequest(req('https://api.scryfall.com/cards/x')), 'bypass');

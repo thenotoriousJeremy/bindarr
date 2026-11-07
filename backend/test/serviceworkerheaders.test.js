@@ -49,6 +49,11 @@ setPwaHeaders({ path: '/manifest.webmanifest' }, manifestRes);
 assert.strictEqual(manifestRes.headers['Cache-Control'], 'no-cache');
 assert.strictEqual(manifestRes.headers['Content-Security-Policy'], PAGE);
 
+// Every card-art host the page may load is fetchable by the worker, Riftbound's
+// included: the worker's connect-src is derived from the page's img-src.
+const rift = workerCsp("default-src 'self';connect-src 'self';img-src 'self' https://cmsassets.rgpub.io");
+assert.ok(rift.includes("connect-src 'self' https://cmsassets.rgpub.io"));
+
 assert.deepStrictEqual(PWA_FILES, ['/sw.js', '/manifest.webmanifest']);
 
 console.log('serviceworkerheaders: all assertions passed');
