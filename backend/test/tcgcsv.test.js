@@ -247,6 +247,15 @@ const dbMod = require('../src/db');
   // by default (tcgcsvgate.test.js pins that), so turn them on directly, without
   // setSealedExtraEnabled's background resume.
   await dbMod.run(`UPDATE app_settings SET sealed_tcg_extra_enabled = 1 WHERE id = 1`);
+  // And the automatic sync only runs for categories something needs
+  // (tcgcsvApi.demandedCategories; tcgcsvgate.test.js pins the empty case): one
+  // Pokémon card for 3/85, one Magic sealed purchase for 1/71.
+  const demandUser = (await dbMod.run(
+    `INSERT INTO users (username, password_hash, share_token) VALUES ('tcgcsv-demand', 'x', 'tcgcsv-demand')`
+  )).lastID;
+  await dbMod.run(`INSERT INTO card_cache (id, name, game) VALUES ('tcgcsv-demand-card', 'Demand', 'pokemon')`);
+  await dbMod.run(`INSERT INTO collection (card_id, user_id, quantity) VALUES ('tcgcsv-demand-card', ?, 1)`, [demandUser]);
+  await dbMod.run(`INSERT INTO sealed_purchases (user_id, product_name, game) VALUES (?, 'Demand Bundle', 'mtg')`, [demandUser]);
   const cols = (await dbMod.all(`PRAGMA table_info(app_settings)`)).map(c => c.name);
   const originalAdapter = tcgcsv.client.defaults.adapter;
   let remoteVersion = '2026-10-25T20:05:50+0000';

@@ -1175,9 +1175,10 @@ function CameraScanner({ onAddSuccess, showToast }) {
 
         // Append to recent scans history log. entry_id (the last inserted row)
         // lets the recent-scans price splitter target these exact entries and the
-        // inspector edit/delete the entry. Carry the entry fields it was saved with.
+        // inspector edit/delete the entry; member_ids (every row this add made)
+        // is what the tile's quantity stands for. Carry the entry fields it was saved with.
         setRecentScans(prev => [{
-          ...card, card_id: card.id, placementLabel, entry_id: data.id,
+          ...card, card_id: card.id, placementLabel, entry_id: data.id, member_ids: data.ids,
           quantity: qty, condition: autoCondition, printing: autoPrinting,
           language: autoLanguage, purchase_price: resolveCardPrice(card, autoPrinting), location_id: null,
         }, ...prev].slice(0, 10));
@@ -1853,7 +1854,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
         // Append to recent scans history. Carry entry_id + saved fields so the
         // strip supports tap-to-edit / long-press-delete like the auto-add path.
         setRecentScans(prev => [{
-          ...selectedCard, card_id: selectedCard.id, placementLabel, entry_id: data.id,
+          ...selectedCard, card_id: selectedCard.id, placementLabel, entry_id: data.id, member_ids: data.ids,
           quantity: parseInt(quantity, 10), condition, printing, language,
           purchase_price: parseFloat(purchasePrice) || 0, location_id: null,
         }, ...prev].slice(0, 10));
@@ -2956,7 +2957,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
               {(showAllMatches ? scanMatches : scanMatches.slice(0, PICKER_PREVIEW)).map(card => (
                 <div key={card.id} className="tcg-card" onClick={() => openQuickAdd(card)} style={{ cursor: 'pointer' }}>
                   <div className="tcg-card-inner" style={{ border: '1px solid var(--border-glass-hover)' }}>
-                    <img src={card.image_url} alt={getCardDisplayName(card.name, addLanguage(card), card.printed_name)} className="tcg-card-image" />
+                    {/* Lazy: "Change printing" can fill this with hundreds of printings. */}
+                    <img src={card.image_url} alt={getCardDisplayName(card.name, addLanguage(card), card.printed_name)} className="tcg-card-image" loading="lazy" decoding="async" />
                   </div>
                   {/* Name and number are what the choice is actually made on —
                       the picture is already on screen above them, and at 0.75/0.65rem

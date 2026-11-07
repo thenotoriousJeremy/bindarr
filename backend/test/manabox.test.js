@@ -2,7 +2,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { parseManaboxText } = require('../src/utils/csvMappers');
+const { parseManaboxText, parseDecklistLine } = require('../src/utils/csvMappers');
 
 const cards = parseManaboxText(fs.readFileSync(path.join(__dirname, 'fixtures', 'manabox', 'Patrick.txt'), 'utf8'));
 const card = (set, number, printing = 'Normal') => cards.find(c =>
@@ -18,9 +18,40 @@ assert.deepStrictEqual(card('PLS', '58'), {
   printing: 'Normal',
   game: 'mtg'
 });
-assert.strictEqual(card('POR', '118').printing, 'Normal', 'non-foil annotation must not make a card foil');
-assert.strictEqual(card('7ED', '339', 'Holofoil').quantity, 1, 'ManaBox foil markers must be retained');
+// † and ★ are part of Scryfall's collector number, not annotations: POR 118† is
+// the Starter Deck printing of Blaze, a different card_cache row from POR 118, so
+// stripping the mark looked up the wrong printing.
+assert.strictEqual(card('POR', '118†').printing, 'Normal', 'a dagger must not make a card foil');
+assert.strictEqual(card('POR', '118'), undefined, 'the dagger stays on the number');
+assert.strictEqual(card('7ED', '339★', 'Holofoil').quantity, 1, 'ManaBox foil markers must be retained');
 assert.ok(cards.length > 0, 'the supplied ManaBox export must yield cards');
+
+// The tokens exporters put after a name are parsed out of it, never left on it.
+const line = (text) => parseDecklistLine(text);
+assert.deepStrictEqual(line('1 Master Transmuter (PLST) CON-31'),
+  { quantity: 1, name: 'Master Transmuter', set_code: 'PLST', collector_number: 'CON-31', foil: false },
+  "The List's set-prefixed number is read whole");
+assert.deepStrictEqual(line('1 Rescue, Pepper Potts (MSC) 755 *F*'),
+  { quantity: 1, name: 'Rescue, Pepper Potts', set_code: 'MSC', collector_number: '755', foil: true });
+assert.strictEqual(line('1 Sol Ring (C21) 263 *E*').foil, true, 'etched is a foil finish');
+assert.strictEqual(line('1 Sol Ring (C21) 263 foil').foil, true, 'a trailing finish word after a printing');
+assert.deepStrictEqual(line('1 Foil (PCY) 34'),
+  { quantity: 1, name: 'Foil', set_code: 'PCY', collector_number: '34', foil: false }, 'Foil is also a card');
+for (const xmage of ['4 [M10:146] Lightning Bolt', '4 Lightning Bolt [M10:146]']) {
+  assert.deepStrictEqual(line(xmage),
+    { quantity: 4, name: 'Lightning Bolt', set_code: 'M10', collector_number: '146', foil: false }, xmage);
+}
+assert.deepStrictEqual(line('1x Sol Ring (c21) 263 [Ramp] ^Have,#37d67a^'),
+  { quantity: 1, name: 'Sol Ring', set_code: 'c21', collector_number: '263', foil: false }, 'Archidekt tags');
+assert.strictEqual(line('1 Hazmat Suit (Used) (UNH) 57').name, 'Hazmat Suit (Used)', 'the last (SET) is the printing');
+assert.deepStrictEqual(line('4 Pikachu ex SVI 63'),
+  { quantity: 4, name: 'Pikachu ex', set_code: 'SVI', collector_number: '63', foil: false });
+assert.strictEqual(line('1 Mewtwo GX').name, 'Mewtwo GX', 'a trailing uppercase word is part of the name');
+assert.strictEqual(line('// COMMANDER'), null);
+assert.strictEqual(line(`1 ${' '.repeat(100000)}(`), null, 'a wall of text is not a card line (and is not backtracked over)');
+
+// A printing whose lines add up to no copies is not a printing to import.
+assert.deepStrictEqual(parseManaboxText('0 Sol Ring (C21) 263\n1 Blaze (POR) 118†').map(c => c.collector_number), ['118†']);
 
 async function testImportRoute() {
   const os = require('os');

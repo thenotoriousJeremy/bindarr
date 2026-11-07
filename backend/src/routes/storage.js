@@ -123,6 +123,9 @@ const GAME_RESTRICTIONS = ['any', 'pokemon', 'mtg'];
 // anything else so the route answers 400 instead of storing it. The client's
 // picker (frontend/src/utils/binderLayout.js) offers the same range.
 const MAX_PAGE_COLUMNS = 12;
+// Pages (or rows) a new container may be created with. Far past any real binder
+// or box, and small enough that creating one cannot hold the database for long.
+const MAX_COMPARTMENTS = 1000;
 function normalizePageColumns(value) {
   if (value === undefined) return undefined;
   if (value === null || value === '') return null;
@@ -164,21 +167,33 @@ router.post('/locations', async (req, res) => {
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
+  const plan = compartmentPlan || defaultCompartmentPlan(type);
+  const compartmentCount = Math.max(1, parseInt(plan.count, 10) || 1);
+  // Every page or row is a row inserted while the transaction below holds the
+  // database, so the plan is bounded the way a request body is.
+  if (compartmentCount > MAX_COMPARTMENTS) {
+    return res.status(400).json({ error: `A container can have at most ${MAX_COMPARTMENTS} pages or rows` });
+  }
   try {
-    const existing = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [name, req.user.id]);
-    if (existing) {
+    // The container and its compartments land together or not at all: a failure
+    // between the two INSERTs used to leave a container with no pages, which
+    // nothing could file into and the name check then refused to recreate.
+    const locationId = await db.withTransaction(async () => {
+      const existing = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [name, req.user.id]);
+      if (existing) return null;
+
+      const result = await db.run(`
+        INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, rule_config, game, fixed_slots, page_columns, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [name, type, sort_order, foil_sorting || 'normals_first', rule_type, ruleConfigJson, game, fixedSlotsJson, pageColumns, req.user.id]);
+      await db.createCompartments(result.lastID, compartmentCount, Math.max(1, parseInt(plan.capacity, 10) || 40));
+      return result.lastID;
+    });
+    if (!locationId) {
       return res.status(400).json({ error: 'A location with this name already exists' });
     }
 
-    const result = await db.run(`
-      INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, rule_config, game, fixed_slots, page_columns, user_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [name, type, sort_order, foil_sorting || 'normals_first', rule_type, ruleConfigJson, game, fixedSlotsJson, pageColumns, req.user.id]);
-
-    const plan = compartmentPlan || defaultCompartmentPlan(type);
-    await db.createCompartments(result.lastID, Math.max(1, parseInt(plan.count, 10) || 1), Math.max(1, parseInt(plan.capacity, 10) || 40));
-
-    res.status(200).json({ message: 'Location created', id: result.lastID });
+    res.status(200).json({ message: 'Location created', id: locationId });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to create location' });
@@ -773,44 +788,51 @@ router.post('/locations/:id/apply-all', async (req, res) => {
 router.post('/locations/:id/resort', async (req, res) => {
   const { id } = req.params;
   try {
-    const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-    if (!location) return res.status(404).json({ error: 'Location not found' });
+    // One transaction from the first read to the last placement. The re-sort
+    // empties every slot before refilling them, so an error part way used to
+    // leave the rest of the container's cards in it with no slot at all.
+    const results = await db.withTransaction(async () => {
+      const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+      if (!location) return null;
 
-    const cards = await db.all(`
-      SELECT c.id as entry_id, c.card_id, c.printing, c.language, c.quantity, c.favorite, c.is_trade, c.list_type,
-             cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.image_url, cc.game,
-             cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
-      FROM collection c
-      JOIN card_cache cc ON c.card_id = cc.id
-      WHERE c.location_id = ? AND c.user_id = ?
-    `, [id, req.user.id]);
-    cards.forEach(c => { try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; } });
+      const cards = await db.all(`
+        SELECT c.id as entry_id, c.card_id, c.printing, c.language, c.quantity, c.favorite, c.is_trade, c.list_type,
+               cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.image_url, cc.game,
+               cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
+        FROM collection c
+        JOIN card_cache cc ON c.card_id = cc.id
+        WHERE c.location_id = ? AND c.user_id = ?
+      `, [id, req.user.id]);
+      cards.forEach(c => { try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; } });
 
-    if (cards.length === 0) return res.json([]);
+      if (cards.length === 0) return [];
 
-    await db.run(`UPDATE collection SET compartment_id = NULL, position = 0 WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
+      await db.run(`UPDATE collection SET compartment_id = NULL, position = 0 WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
 
-    const ordered = sortCards(cards, location.sort_order, location.foil_sorting);
+      const ordered = sortCards(cards, location.sort_order, location.foil_sorting);
 
-    let workingCompartments = await loadCompartments(db, id, req.user.id);
-    const results = [];
+      let workingCompartments = await loadCompartments(db, id, req.user.id);
+      const placed = [];
 
-    for (const entry of ordered) {
-      const recommended = await recommendSlot(db, location, entry, workingCompartments, []);
-      if (!recommended) { results.push({ entry, recommended: null }); continue; }
+      for (const entry of ordered) {
+        const recommended = await recommendSlot(db, location, entry, workingCompartments, []);
+        if (!recommended) { placed.push({ entry, recommended: null }); continue; }
 
-      const finalLoc = recommended.location_id || Number(id);
-      await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`, [
-        finalLoc, recommended.compartment_id, recommended.position, entry.entry_id, req.user.id
-      ]);
-      results.push({ entry, recommended });
+        const finalLoc = recommended.location_id || Number(id);
+        await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`, [
+          finalLoc, recommended.compartment_id, recommended.position, entry.entry_id, req.user.id
+        ]);
+        placed.push({ entry, recommended });
 
-      if (finalLoc === Number(id) && !recommended.stacked) {
-        workingCompartments = workingCompartments.map(c =>
-          c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
-        );
+        if (finalLoc === Number(id) && !recommended.stacked) {
+          workingCompartments = workingCompartments.map(c =>
+            c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
+          );
+        }
       }
-    }
+      return placed;
+    });
+    if (!results) return res.status(404).json({ error: 'Location not found' });
 
     res.json(results);
   } catch (error) {

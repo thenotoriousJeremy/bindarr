@@ -6,9 +6,10 @@ import { translateJapaneseName } from '../utils/langHelper';
 import { displayName } from '../utils/languages';
 import CheckoutWizardModal from './CheckoutWizardModal';
 import { useBackGuard } from '../utils/useBackGuard';
-import { buildDeckExport, parseDeckLine } from '../utils/deckText';
+import { buildDeckExport, parseDeckLine, pickDeckLineCard } from '../utils/deckText';
 import { defaultGame, gameOptions, showGamePicker, isGameEnabled } from '../utils/games';
 import CardImage from './CardImage';
+import DeckListActions from './DeckListActions';
 import { useT } from '../utils/i18n';
 
 // Basic Energy (Pokémon) & Basic Lands (MTG) are exempt from the "max 4 of a card" deck rule.
@@ -609,7 +610,7 @@ function DeckBuilder({ showToast }) {
 
     for (const line of lines) {
       const parsed = parseDeckLine(line);
-      if (!parsed) continue;
+      if (!parsed || parsed.qty < 1) continue;
       const { qty, name: rawName } = parsed;
 
       try {
@@ -617,7 +618,7 @@ function DeckBuilder({ showToast }) {
         if (res.ok) {
           const cards = await res.json();
           if (cards.length > 0) {
-            const card = cards[0];
+            const card = pickDeckLineCard(cards, parsed);
             const owned = card.owned_qty || 0;
             const inDeck = activeDeck.cards.find(c => c.id === card.id)?.quantity || 0;
             results.push({
@@ -675,7 +676,7 @@ function DeckBuilder({ showToast }) {
       const lines = importText.split('\n').map(l => l.trim()).filter(Boolean);
       for (const line of lines) {
         const parsed = parseDeckLine(line);
-        if (!parsed) continue;
+        if (!parsed || parsed.qty < 1) continue;
         const { qty, name: rawName } = parsed;
 
         try {
@@ -686,7 +687,7 @@ function DeckBuilder({ showToast }) {
               await fetch(`/api/decks/${activeDeck.id}/cards`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ card_id: cards[0].id, quantity: qty })
+                body: JSON.stringify({ card_id: pickDeckLineCard(cards, parsed).id, quantity: qty })
               });
               addedCount++;
             }
@@ -1514,6 +1515,7 @@ function DeckBuilder({ showToast }) {
               >
                 <Upload size={14} /> Import
               </button>
+              <DeckListActions deck={activeDeck} showToast={showToast} onCollectionChanged={() => loadDeckDetails(activeDeck.id)} />
               {/* Checkout / Return button */}
               {activeDeck.checked_out ? (
                 <button

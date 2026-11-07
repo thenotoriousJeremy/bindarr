@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, lazy, Suspense } from 'react';
-import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords, StickyNote, Package, Smartphone } from 'lucide-react';
+import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords, StickyNote, Package, ListChecks, Smartphone } from 'lucide-react';
 import Login from './components/Login';
 import Logo from './components/Logo';
 import { App as CapacitorApp } from '@capacitor/app';
@@ -20,6 +20,7 @@ const SetupWizard = lazy(() => import('./components/SetupWizard'));
 const SharedCollection = lazy(() => import('./components/SharedCollection'));
 const SharedContainer = lazy(() => import('./components/SharedContainer'));
 const DeckBuilder = lazy(() => import('./components/DeckBuilder'));
+const Lists = lazy(() => import('./components/Lists'));
 const Notes = lazy(() => import('./components/Notes'));
 const SealedList = lazy(() => import('./components/SealedList'));
 
@@ -501,6 +502,8 @@ function App() {
         );
       case 'deckbuilder':
         return <DeckBuilder showToast={showToast} />;
+      case 'lists':
+        return <Lists active={activeTab === 'lists'} statsTrigger={statsTrigger} showToast={showToast} />;
       case 'notes':
         return <Notes showToast={showToast} />;
       case 'sealed':
@@ -579,6 +582,15 @@ function App() {
           >
             <Swords size={18} />
             <span className="nav-tab-label">{t('nav.deckBuilder')}</span>
+          </button>
+          <button
+            className={`nav-tab ${activeTab === 'lists' ? 'active' : ''}`}
+            onClick={() => goTab('lists')}
+            aria-label={t('nav.lists')}
+            title={t('nav.lists')}
+          >
+            <ListChecks size={18} />
+            <span className="nav-tab-label">{t('nav.lists')}</span>
           </button>
 
           <button

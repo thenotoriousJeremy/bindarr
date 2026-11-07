@@ -227,7 +227,9 @@ export function FilterBuilder({ value, onChange, setsList = [], fieldOptions = {
         if (options.length === 0) {
           options = KNOWN_OPTIONS[rule.field] || [];
           if (rule.field === 'set_name') options = setsList.map(s => s.name);
-          if (rule.field === 'set_id') options = setsList.map(s => s.id);
+          // Magic cards carry Scryfall's bare code ("mh3"), where the sets table
+          // prefixes the id ("mtg-mh3"): a rule on the prefixed one never matched.
+          if (rule.field === 'set_id') options = setsList.map(s => (s.game === 'mtg' ? String(s.id).replace(/^mtg-/, '') : s.id));
         }
         
         return (

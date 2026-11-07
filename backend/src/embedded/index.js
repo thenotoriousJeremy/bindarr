@@ -22,9 +22,11 @@
 // The few settings the bundled modules read from a server's environment at load
 // time. DB_PATH is a name, not a path: the SQLite plugin decides where it lives.
 // CV_MODEL_DIR only has to be set so nothing falls back to __dirname; the fs stub
-// holds no models whatever it is.
+// holds no models whatever it is. The pre-migration snapshot (db.js) is a VACUUM
+// INTO a server's BACKUP_DIR, which a phone does not have; its backup is the full
+// export in Settings.
 if (typeof process === 'undefined') globalThis.process = { env: {} };
-const DEVICE_ENV = { DB_PATH: 'bindarr.db', CV_MODEL_DIR: '/device/models' };
+const DEVICE_ENV = { DB_PATH: 'bindarr.db', CV_MODEL_DIR: '/device/models', BINDARR_SKIP_PRE_MIGRATION_SNAPSHOT: '1' };
 for (const [key, value] of Object.entries(DEVICE_ENV)) {
   if (process.env[key] === undefined) process.env[key] = value;
 }
@@ -75,6 +77,8 @@ app.use('/api', require('../routes/backup'));
 app.use('/api/sets', require('../routes/sets'));
 app.use('/api/decks', require('../routes/decks'));
 app.use('/api/settings', require('../routes/settings'));
+// Full paths inside (/lists, /decks/:id/missing-list, /cards/:id/decks), as on a server.
+app.use('/api', require('../routes/lists'));
 
 // The phone's one account. Named `admin` because that is the owner account's name
 // on a server too, and db.js looks the owner up by it: initDb adopts orphaned rows

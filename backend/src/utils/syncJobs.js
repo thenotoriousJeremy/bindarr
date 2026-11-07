@@ -4,7 +4,6 @@
 // refreshing for half the installs.
 'use strict';
 
-const tcgApi = require('../tcgApi');
 const scryfallApi = require('../scryfallApi');
 const lorcastApi = require('../lorcastApi');
 
@@ -21,23 +20,10 @@ async function syncSets(force = false) {
   await lorcastApi.fetchAndCacheSets(force);
 }
 
-// Every provider's price refresh. Not forced: each one asks shouldSweepPrices
-// whether it is due against the admin's price_refresh_days, so calling this far
-// more often than that costs one indexed read per provider.
-function sweepPrices() {
-  tcgApi.updateCollectionPrices();
-  scryfallApi.updateCollectionPrices();
-  lorcastApi.updateCollectionPrices();
-  // Non-English Pokémon cards: their ids 404 on pokemontcg.io, so tcgApi's sweep
-  // skips them and this is their only price refresh. No-op until the user
-  // actually owns one.
-  require('../tcgdexApi').updateCollectionPrices();
-  require('../pokemontcgapi').updateCollectionPrices();
-  // TCGCSV runs LAST of the Pokémon sweeps on purpose. It writes the same columns
-  // as the other two and is the better source — TCGplayer market prices in USD,
-  // and 97% coverage against TCGdex's 8% — so it should have the final say on any
-  // card it can place.
-  require('../tcgcsvApi').updateCollectionPrices();
-}
+// Every provider's price refresh, through utils/priceSweeps: its one ordered list,
+// run sequentially and single-flight. Each sweep asks shouldSweepPrices whether it
+// is due, so ticking far more often than price_refresh_days costs one indexed read
+// per provider. Resolves, never rejects.
+const sweepPrices = () => require('./priceSweeps').runPriceSweeps();
 
 module.exports = { syncSets, sweepPrices };

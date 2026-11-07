@@ -69,6 +69,34 @@ async function syncCategories() {
   return (await sealedExtraEnabled()) ? SYNC_CATEGORIES : BASE_SYNC_CATEGORIES;
 }
 
+// Which of those categories something on THIS instance actually needs. A fresh
+// install, and every dev or test boot on a throwaway database, has nothing to
+// price, yet a full sync is ~800 requests: booting those got this project's
+// User-Agent and then a developer's IP flagged by TCGCSV. So the automatic paths
+// (boot, the daily schedule, the price sweep) sync a category only on demand:
+//
+//   3, 85  a Pokémon card in any collection or wishlist, or a Pokémon sealed
+//          purchase.
+//   1, 71  the Magic/Lorcana sealed gate is on AND a Magic or Lorcana sealed
+//          purchase exists.
+//
+// `explicit` is an admin acting on purpose: building a product map (which the
+// first Pokémon scan-catalog download does, before any card exists) or turning
+// the sealed gate on. That syncs every category the gate allows, demand or not;
+// otherwise a new install could never set up Pokémon scanning.
+async function demandedCategories({ explicit = false } = {}) {
+  const allowed = await syncCategories();
+  if (explicit) return allowed;
+  const row = await db.get(`
+    SELECT
+      EXISTS (SELECT 1 FROM collection c JOIN card_cache cc ON cc.id = c.card_id
+               WHERE cc.game = 'pokemon')
+      OR EXISTS (SELECT 1 FROM sealed_purchases WHERE game = 'pokemon') AS pokemon,
+      EXISTS (SELECT 1 FROM sealed_purchases WHERE game IN ('mtg', 'lorcana')) AS extra
+  `);
+  return allowed.filter(c => (BASE_SYNC_CATEGORIES.includes(c) ? !!row.pokemon : !!row.extra));
+}
+
 // Turning the gate on mid-dataset must not wait for tomorrow's last-updated.txt,
 // and must not re-download Pokémon either. Re-opening the CURRENT version as
 // pending does both: runSync resumes it, syncResults skips every path already
@@ -83,7 +111,7 @@ async function setSealedExtraEnabled(enabled) {
          SET tcgcsv_pending_version = tcgcsv_data_version, tcgcsv_last_checked_at = CURRENT_TIMESTAMP
        WHERE id = 1 AND tcgcsv_data_version IS NOT NULL AND tcgcsv_pending_version IS NULL
     `);
-    syncIfUpdatedSafely('enabling Magic/Lorcana sealed tracking');
+    syncIfUpdatedSafely('enabling Magic/Lorcana sealed tracking', { explicit: true });
   }
 }
 
@@ -318,7 +346,7 @@ async function checkLastUpdated(currentVersion) {
   return dataVersion;
 }
 
-async function runSync() {
+async function runSync(categories) {
   const requestsAtStart = requestsSent;
   const requestsThisRun = () => requestsSent - requestsAtStart;
   const state = await db.get(`
@@ -353,7 +381,6 @@ async function runSync() {
     }
   }
 
-  const categories = await syncCategories();
   const groupsByCategory = {};
   let groupCount = 0;
   for (const categoryId of categories) {
@@ -397,12 +424,24 @@ async function runSync() {
   return { updated: true, dataVersion, groups: groupCount, expectedRequests, requests };
 }
 
-async function syncIfUpdated() {
+// Logged once per stretch with nothing to sync, not on every hourly tick.
+let noDemandLogged = false;
+
+async function syncIfUpdated({ explicit = false } = {}) {
   if (process.env.BINDARR_DISABLE_TCGCSV_SYNC === '1') {
     return { updated: false, disabled: true };
   }
   if (syncPromise) return syncPromise;
-  const running = runSync();
+  const categories = await demandedCategories({ explicit });
+  if (!categories.length) {
+    if (!noDemandLogged) {
+      console.log('TCGCSV sync skipped: nothing on this instance needs TCGCSV prices yet (no Pokémon cards or sealed purchases).');
+      noDemandLogged = true;
+    }
+    return { updated: false, skipped: 'no-demand', requests: 0 };
+  }
+  noDemandLogged = false;
+  const running = runSync(categories);
   syncPromise = running;
   try {
     return await running;
@@ -790,9 +829,9 @@ async function updateCollectionPrices(force = false, scope = 'owned') {
 
 // Run the daily sync for a reader that can live with the existing cache. Never
 // throws; returns the sync result, or null when it failed.
-async function syncIfUpdatedSafely(context) {
+async function syncIfUpdatedSafely(context, options) {
   try {
-    return await syncIfUpdated();
+    return await syncIfUpdated(options);
   } catch (err) {
     if (isCooldownError(err)) {
       console.warn(`TCGCSV sync paused by HTTP 403 cooldown; ${context} uses the cached data.`);
@@ -810,6 +849,7 @@ module.exports = {
   SYNC_CATEGORIES,
   BASE_SYNC_CATEGORIES,
   syncCategories,
+  demandedCategories,
   sealedExtraEnabled,
   setSealedExtraEnabled,
   SEALED_ONLY_CATEGORY,

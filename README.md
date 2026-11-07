@@ -47,6 +47,14 @@ Architecture, the scan pipeline, and the data model are in [PROJECT.md](PROJECT.
 
 ### ManaBox imports
 
+**Collections:** **Settings → Import Backup** takes a ManaBox `.txt` export, or
+a `.csv` export from ManaBox, Dragon Shield, TCGplayer, Moxfield or Archidekt.
+Columns are matched by name in any spelling. A Scryfall ID picks the exact
+printing, foil and etched copies import as Foil, and rows with a quantity of 0
+are skipped. A file with Magic-only columns (Scryfall ID, Trade Quantity,
+Tradelist Count) is read as Magic; a TCGplayer export names no game, so it is
+read as Pokémon unless it has a Game or Product Line column.
+
 **Decks:** Open **Deck Builder → Create Deck → + Quick Import Decklist**, choose
 **ManaBox text export**, then select the `.txt` export. Bindarr reads the
 filename as the deck name, uses MTG Commander defaults, and resolves each
@@ -173,8 +181,9 @@ All optional.
 | `TRUST_PROXY` | — | Number of proxy hops (usually `1`) when a reverse proxy terminates TLS, so rate limiting sees the real client IP. |
 | `CV_MODEL_DIR` | `/app/database/models` in the image | Where the scan models and catalogs live. Must be on persistent storage, or an image update discards every catalog you built. |
 | `CV_SCAN_GAP` | `0.10` | How far a match must stand above its runner-ups before it counts as an answer rather than "this card is not in the catalog". Lower accepts more guesses. |
-| `BACKUP_INTERVAL_HOURS` | `24` | Automatic database snapshot interval. `0` disables. |
-| `BACKUP_KEEP_LAST` | `10` | How many snapshots to retain. |
+| `BACKUP_DIR` | `backups/` beside `DB_PATH` | Where automatic, manual and pre-upgrade snapshots are written, listed and downloaded from. See [Backup and restore](#backup-and-restore). |
+| `BACKUP_INTERVAL_HOURS` | `24` | Automatic database snapshot interval, `0.25`–`8784`. `0` disables. Counted from the last backup, which is kept in the database, so restarts do not delay it. An unreadable value falls back to `24` with a warning in the log. |
+| `BACKUP_KEEP_LAST` | `10` | How many regular snapshots to retain. Pre-upgrade snapshots are kept separately (the newest 3). |
 
 #### SSO with a private CA
 
@@ -408,7 +417,11 @@ Dragging is mouse-only — on a phone a drag would fight the page-swipe, so touc
 
 Everything is in one SQLite file (`DB_PATH`, in the `bindarr-data` volume under Docker).
 
-Bindarr snapshots the database itself every 24 hours into a `backups/` folder beside it, keeping the last 10. That runs while the server is live and needs no downtime.
+Bindarr snapshots the database itself every 24 hours into a `backups/` folder beside it (`BACKUP_DIR` moves it), keeping the last 10. That runs while the server is live and needs no downtime. The time of the last backup is kept in the database, so an install that restarts more often than daily still gets one. Each snapshot is written under a temporary name, checked with SQLite's `quick_check`, and only then renamed to `.bak`: a backup that ran out of disk or was interrupted is deleted and logged, never left looking like a good one, and older backups are not touched. **Admin → Database Backup** lists the same folder and can take one on demand.
+
+Before a new release migrates the schema of a database that holds data, it first writes `pre-migration-bindarr-<old>-to-<new>-<time>.bak` there. The newest three are kept, separately from the regular rotation. If that snapshot cannot be written (an unwritable `BACKUP_DIR`, a full disk), the log says so loudly and startup continues with the regular backups untouched. To roll an upgrade back, restore the pre-migration file with the release named first in its name.
+
+`docker stop` (or Ctrl+C) shuts Bindarr down cleanly: it stops taking requests, gives a running backup, price sweep or catalog build a few seconds to reach a safe point, then closes the database, which folds the WAL back into `bindarr.db`. A second signal stops it at once. Background work — the backup, the weekly set refresh, the hourly price check and TCGCSV sync — runs on schedules kept in the database, so a restart neither delays nor repeats it, and anything that fell due while the server was down runs shortly after it starts.
 
 For an off-box copy, stop the container first so the WAL is checkpointed:
 

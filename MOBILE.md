@@ -73,7 +73,7 @@ reported as not in the catalog rather than matched to something else.
 ### Backups and moving to a server
 
 Settings → Collection Backup → **Export full backup** saves the whole account
-(storage and each copy's place in it, decks, notes, and the card data and price
+(storage and each copy's place in it, decks, lists, notes, sealed product, and the card data and price
 history behind them) through the share sheet. **Import Backup** recognises the file
 and restores it, replacing what the account has. The same file restores on a
 server, which is how a collection moves off the phone (`routes/backup.js`). The

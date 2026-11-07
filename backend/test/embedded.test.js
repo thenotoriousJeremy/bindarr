@@ -176,6 +176,11 @@ async function testBackupRoundTrip() {
   const purchase = await db.run(`INSERT INTO sealed_purchases (user_id, product_name, quantity) VALUES (1, 'Booster Box', 1)`);
   const unit = await db.run(`INSERT INTO sealed_units (purchase_id, opened_at) VALUES (?, CURRENT_TIMESTAMP)`, [purchase.lastID]);
   await db.run(`UPDATE collection SET sealed_unit_id = ? WHERE card_id = 'mtg-embedded-1'`, [unit.lastID]);
+  // The deck's missing-cards list, with one wanted card.
+  const wish = await db.run(`INSERT INTO card_lists (user_id, name, kind, deck_id) VALUES (1, 'Elves wants', 'missing', ?)`, [deckId]);
+  await db.run(`INSERT INTO card_list_items (list_id, card_id, quantity_wanted) VALUES (?, 'mtg-embedded-1', 2)`, [wish.lastID]);
+  const lists = await call('GET', '/api/lists');
+  assert.strictEqual(lists.status, 200, 'lists are mounted on the device');
 
   const backup = await call('GET', '/api/backup');
   assert.strictEqual(backup.status, 200);
@@ -188,6 +193,7 @@ async function testBackupRoundTrip() {
   await db.run(`DELETE FROM decks`);
   await db.run(`DELETE FROM collection`);
   await db.run(`DELETE FROM sealed_purchases`);
+  await db.run(`DELETE FROM card_lists`);
   await db.run(`DELETE FROM price_history`);
   await db.run(`DELETE FROM card_cache WHERE id = 'mtg-embedded-1'`);
 
@@ -213,6 +219,11 @@ async function testBackupRoundTrip() {
        JOIN sealed_purchases p ON p.id = u.purchase_id WHERE c.card_id = 'mtg-embedded-1'`
   );
   assert.strictEqual(opened && opened.product_name, 'Booster Box', 'sealed product and the copy opened from it come back linked');
+  const wanted = await db.get(
+    `SELECT l.name, d.name AS deck, i.quantity_wanted FROM card_list_items i JOIN card_lists l ON l.id = i.list_id
+       JOIN decks d ON d.id = l.deck_id WHERE i.card_id = 'mtg-embedded-1'`
+  );
+  assert.deepStrictEqual(wanted, { name: 'Elves wants', deck: 'Elves', quantity_wanted: 2 }, 'lists come back tied to their renumbered deck');
   const titles = (await db.all(`SELECT title FROM notes ORDER BY title`)).map(n => n.title);
   assert.ok(titles.includes('Keep') && !titles.includes('Throwaway'), 'restore replaces, it does not merge');
 
