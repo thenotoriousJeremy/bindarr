@@ -52,6 +52,7 @@ const notesRoutes = require('./routes/notes');
 const cardArtRoutes = require('./routes/cardArt');
 const sealedRoutes = require('./routes/sealed');
 const backupRoutes = require('./routes/backup');
+const trashRoutes = require('./routes/trash');
 const { authenticateToken } = require('./middleware/auth');
 const { startHttps, selfSignedTls } = require('./utils/tls');
 
@@ -333,6 +334,12 @@ const scheduler = createScheduler({
       run: () => db.run(`DELETE FROM sessions WHERE expires_at <= DATETIME('now')`),
     },
     {
+      // Deleted cards past their 30 days in the trash (utils/collectionTrash.js).
+      name: 'trash-purge',
+      every: () => 24 * HOUR,
+      run: () => require('./utils/collectionTrash').purgeExpiredTrash(),
+    },
+    {
       // BACKUP_INTERVAL_HOURS (default 24; 0 disables). backup.js explains where
       // the first period is counted from.
       name: 'backup',
@@ -517,6 +524,7 @@ app.use(BIG_BODY_PATHS, express.json({ limit: '15mb' }));
 app.use(BACKUP_BODY_PATH, express.json({ limit: '200mb' }));
 
 // --- AUTHENTICATED API ROUTES ---
+app.use('/api/collection/trash', trashRoutes);
 app.use('/api', collectionRoutes);
 app.use('/api', storageRoutes);
 app.use('/api', statsRoutes);

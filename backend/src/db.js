@@ -1509,6 +1509,25 @@ async function initDb() {
   await run(`DROP INDEX IF EXISTS idx_collection_tags_tag_id`);
   await run(`DROP INDEX IF EXISTS idx_audit_logs_user_date`);
 
+  // Deleted copies, kept 30 days so a delete can be undone (utils/collectionTrash.js).
+  // The whole collection row is kept as JSON rather than as mirrored columns, so a
+  // column added to collection later is carried through a delete and restore
+  // without this table having to learn about it. entry_id is the row's original
+  // id: AUTOINCREMENT never hands it out again, so it can come back under it.
+  await run(`
+    CREATE TABLE IF NOT EXISTS collection_trash (
+      entry_id INTEGER PRIMARY KEY,
+      batch_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      card_id TEXT,
+      deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      row_json TEXT NOT NULL,
+      links_json TEXT
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_collection_trash_user_batch ON collection_trash(user_id, batch_id)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_collection_trash_deleted ON collection_trash(deleted_at)`);
+
   // --- SEED DATA & MIGRATION TO DEFAULT ADMIN ---
   const userCount = await get(`SELECT COUNT(*) as count FROM users`);
   let adminId = null;

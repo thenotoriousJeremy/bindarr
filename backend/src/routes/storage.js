@@ -349,6 +349,32 @@ router.get('/locations/:id/compartments', async (req, res) => {
   }
 });
 
+// Dry run of cutting a container down to `count` pages/rows: how many copies the
+// pages past the cut hold, all of which would go to Unsorted. The client asks
+// before saving so the user can see that number and back out.
+router.get('/locations/:id/shrink-preview', async (req, res) => {
+  const { id } = req.params;
+  const count = parseInt(req.query.count, 10);
+  if (!Number.isInteger(count) || count < 1) return res.status(400).json({ error: 'count must be a positive integer' });
+  try {
+    const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!loc) return res.status(404).json({ error: 'Location not found' });
+    const removed = (await loadCompartmentOrder(id)).slice(count).map(c => c.id);
+    let wouldMove = 0;
+    if (removed.length > 0) {
+      const row = await db.get(
+        `SELECT COUNT(*) AS n FROM collection WHERE user_id = ? AND compartment_id IN (${removed.map(() => '?').join(',')})`,
+        [req.user.id, ...removed]
+      );
+      wouldMove = row.n;
+    }
+    res.json({ wouldMove, pagesRemoved: removed.length });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to preview the change' });
+  }
+});
+
 router.post('/locations/:id/compartments', async (req, res) => {
   const { id } = req.params;
   const { before_id, after_id, idx, capacity } = req.body || {};

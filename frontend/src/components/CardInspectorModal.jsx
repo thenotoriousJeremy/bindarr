@@ -15,6 +15,7 @@ import UsedInDecks from './UsedInDecks';
 import CardArtEditor from './CardArtEditor';
 import { useBackGuard } from '../utils/useBackGuard';
 import { useT } from '../utils/i18n';
+import { undoToast } from '../utils/undo';
 
 // MTG color identity pip colors (WUBRG), approximating the printed mana colors.
 const MTG_COLOR_BG = {
@@ -391,7 +392,11 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     try {
       const res = await fetch(`/api/collection/${targetEntryId}`, { method: 'DELETE' });
       if (res.ok) {
-        showToast && showToast(t('collection.cardRemoved', { name: card.name }));
+        const data = await res.json().catch(() => ({}));
+        showToast && showToast(t('collection.cardRemoved', { name: card.name }), undoToast(
+          data.trash_batch && { kind: 'trash', batch: data.trash_batch },
+          { showToast, t, onDone: () => onUpdate && onUpdate() }
+        ));
         onDeleted && onDeleted(targetEntryId);
         onUpdate && onUpdate();
         onClose();

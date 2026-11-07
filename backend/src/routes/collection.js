@@ -21,6 +21,7 @@ const { syncDeckAllocation } = require('../utils/deckAllocation');
 const { splitPrice } = require('../utils/splitPrice');
 const { allocateSealedUnitCost } = require('../utils/sealedCostAllocation');
 const { readQuantity } = require('../utils/requestBounds');
+const { trashEntries, placementFor } = require('../utils/collectionTrash');
 
 const router = express.Router();
 
@@ -1382,15 +1383,67 @@ router.post('/collection/:id/place', async (req, res) => {
   }
 });
 
+// 4c. Undo a move to Unsorted: put each copy back where it was, if that slot can
+// still take it. Only copies still in Unsorted move; one the user has filed
+// somewhere since stays where they put it.
+router.post('/collection/restore-placement', async (req, res) => {
+  const list = Array.isArray(req.body && req.body.placements) ? req.body.placements : null;
+  if (!list || list.length === 0) return res.status(400).json({ error: 'placements is required' });
+  if (list.length > 5000) return res.status(400).json({ error: 'Too many placements' });
+  try {
+    const result = await db.withTransaction(async () => {
+      let restored = 0;
+      let unplaced = 0;
+      const touched = new Map();
+      for (const p of list) {
+        const entryId = parseInt(p && p.entry_id, 10);
+        if (!Number.isInteger(entryId)) continue;
+        const entry = await db.get(
+          `SELECT * FROM collection WHERE id = ? AND user_id = ? AND compartment_id IS NULL AND location_id IS NULL`,
+          [entryId, req.user.id]
+        );
+        if (!entry) continue;
+        const place = await placementFor({
+          ...entry,
+          location_id: parseInt(p.location_id, 10) || null,
+          compartment_id: parseInt(p.compartment_id, 10) || null,
+          position: Number(p.position) || 0
+        }, req.user.id);
+        if (!place.compartment_id && !place.location_id) { unplaced++; continue; }
+        await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`,
+          [place.location_id, place.compartment_id, place.position, entryId, req.user.id]);
+        if (place.rebalance) touched.set(place.compartment_id, place.rebalance);
+        restored++;
+      }
+      for (const [compId, scheme] of touched) {
+        await rebalanceCompartmentByScheme(db, compId, scheme.sort_order, scheme.foil_sorting);
+      }
+      return { restored, unplaced };
+    });
+    res.json(result);
+  } catch (error) {
+    console.error('Restore placement failed:', error);
+    res.status(500).json({ error: 'Failed to put cards back' });
+  }
+});
+
 // 5. Delete Card from Collection
+// Into the trash, so it can be undone (utils/collectionTrash.js). ?trash=0 skips
+// the trash, for a client undoing its own add: that copy never existed as far as
+// the user is concerned, and listing it in the trash would only be noise.
 router.delete('/collection/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const result = await db.run(`DELETE FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-    if (result.changes === 0) {
+    if (req.query.trash === '0') {
+      const result = await db.run(`DELETE FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+      if (result.changes === 0) return res.status(404).json({ error: 'Collection entry not found' });
+      return res.json({ message: 'Card removed from collection' });
+    }
+    const { batchId, trashed } = await trashEntries([id], req.user.id);
+    if (trashed === 0) {
       return res.status(404).json({ error: 'Collection entry not found' });
     }
-    res.json({ message: 'Card removed from collection' });
+    res.json({ message: 'Card removed from collection', trash_batch: batchId });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to remove card' });
@@ -1452,8 +1505,8 @@ router.post('/collection/bulk', async (req, res) => {
     }
 
     if (action === 'delete') {
-      const result = await db.run(`DELETE FROM collection WHERE id IN (${placeholders}) AND user_id = ?`, [...ids, req.user.id]);
-      return res.json({ message: `Deleted ${result.changes} card(s)`, affected: result.changes });
+      const { batchId, trashed } = await trashEntries(ids, req.user.id);
+      return res.json({ message: `Deleted ${trashed} card(s)`, affected: trashed, trash_batch: batchId });
     }
 
     if (action === 'trade' || action === 'untrade') {
@@ -1626,10 +1679,16 @@ router.post('/collection/bulk', async (req, res) => {
     let moved = 0;
     let noRoom = 0;
     const touched = new Map();
+    // Where each copy sat before a move to Unsorted, for the client's Undo
+    // (POST /collection/restore-placement).
+    const previous = [];
     for (const id of ids) {
       const entry = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
       if (!entry) continue;
       if (!locationId) {
+        if (entry.location_id || entry.compartment_id) {
+          previous.push({ entry_id: entry.id, location_id: entry.location_id, compartment_id: entry.compartment_id, position: entry.position });
+        }
         await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE id = ? AND user_id = ?`, [id, req.user.id]);
         moved++;
         continue;
@@ -1651,7 +1710,8 @@ router.post('/collection/bulk', async (req, res) => {
     return res.json({
       message: noRoom ? `Moved ${moved} card(s); ${noRoom} did not fit because the container is full` : `Moved ${moved} card(s)`,
       affected: moved,
-      container_full: noRoom > 0
+      container_full: noRoom > 0,
+      ...(locationId ? {} : { previous })
     });
   } catch (error) {
     console.error(error);

@@ -7,10 +7,12 @@ import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } fro
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { useMultiSelect } from '../utils/useMultiSelect';
+import { undoToast } from '../utils/undo';
 import { stackCollectionRows } from '../utils/stackTiles';
 import { defaultGameFilter, gameOptions, isGameEnabled, showGamePicker } from '../utils/games';
 import { useT } from '../utils/i18n';
 import CardInspectorModal from './CardInspectorModal';
+import TrashModal from './TrashModal';
 import AddToDeckSelect from './AddToDeckSelect';
 import AddToListSelect from './AddToListSelect';
 import ExportShownButton from './ExportShownButton';
@@ -75,6 +77,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const [inspectorCard, setInspectorCard] = useState(null);
   const [inspectorStartEdit, setInspectorStartEdit] = useState(false);
   const [subTab, setSubTab] = useState('collection'); // 'collection', 'wishlist'
+  const [showTrash, setShowTrash] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
 
   // Search & Filter state
@@ -185,7 +188,11 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       });
 
       if (response.ok) {
-        showToast(t('collection.cardRemoved', { name: cardName }));
+        const data = await response.json().catch(() => ({}));
+        showToast(t('collection.cardRemoved', { name: cardName }), undoToast(
+          data.trash_batch && { kind: 'trash', batch: data.trash_batch },
+          { showToast, t, onDone: () => { onUpdate(); fetchCollection(); } }
+        ));
         onUpdate();
       } else {
         showToast(t('collection.errDelete'));
@@ -379,6 +386,14 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => setShowTrash(true)}
+            style={{ fontSize: '0.8rem', padding: '0.4rem 0.9rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+          >
+            <Trash2 size={14} />
+            {t('trash.open')}
+          </button>
           {/* Multi-select toggle (long-press cards is the primary path) */}
           <button
             className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
@@ -939,6 +954,14 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
         showToast={showToast}
         onViewStorage={handleViewStorage}
       />
+
+      {showTrash && (
+        <TrashModal
+          onClose={() => setShowTrash(false)}
+          onRestored={() => { onUpdate(); fetchCollection(); }}
+          showToast={showToast}
+        />
+      )}
     </div>
   );
 }
