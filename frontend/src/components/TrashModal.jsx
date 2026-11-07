@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { X, RotateCcw, Trash2 } from 'lucide-react';
 import CardImage from './CardImage';
-import { useBackGuard } from '../utils/useBackGuard';
+import Modal from './Modal';
 import { useT } from '../utils/i18n';
 import { runUndo, undoResult, parseSqliteUtc, daysLeft } from '../utils/undo';
 
@@ -13,7 +13,6 @@ export default function TrashModal({ onClose, onRestored, showToast }) {
   const { t, locale } = useT();
   const [batches, setBatches] = useState(null);
   const [busy, setBusy] = useState(null);
-  useBackGuard(true, onClose);
 
   const load = async () => {
     try {
@@ -64,8 +63,9 @@ export default function TrashModal({ onClose, onRestored, showToast }) {
   };
 
   return (
-    <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
-      <div className="glass-panel" style={{ width: '560px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.9rem', background: 'var(--bg-secondary)' }} onClick={(e) => e.stopPropagation()}>
+    <Modal onClose={onClose} label={t('trash.title')}
+      overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      className="glass-panel" style={{ width: '560px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.9rem', background: 'var(--bg-secondary)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
           <h3 style={{ margin: 0 }}>{t('trash.title')}</h3>
           <div style={{ display: 'flex', gap: '0.4rem' }}>
@@ -114,7 +114,6 @@ export default function TrashModal({ onClose, onRestored, showToast }) {
             </div>
           </div>
         ))}
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -5,6 +5,7 @@ import { gameLabel, gameOptions } from '../utils/games';
 import { formatPrice } from '../utils/formatPrice';
 import { printingLabel } from '../utils/cardOptions';
 import SealedPurchaseForm from './SealedPurchaseForm';
+import Modal from './Modal';
 import PackPriceSplitter from './PackPriceSplitter';
 import MultiSelectDropdown from './MultiSelectDropdown';
 
@@ -506,17 +507,16 @@ export default function SealedList({ showToast }) {
       )}
 
       {(showForm || editingPurchase) && (
-        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
-          onClick={() => { setShowForm(false); setEditingPurchase(null); }}>
-          <div style={{ maxWidth: '560px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
+        <Modal onClose={() => { setShowForm(false); setEditingPurchase(null); }} label={t('sealed.addPurchase')} closeOnBackdrop={false}
+          overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
+          style={{ maxWidth: '560px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
             <SealedPurchaseForm
               initial={editingPurchase || undefined}
               showToast={showToast}
               onCancel={() => { setShowForm(false); setEditingPurchase(null); }}
               onSaved={() => { setShowForm(false); setEditingPurchase(null); load(); }}
             />
-          </div>
-        </div>
+        </Modal>
       )}
 
       {loading ? (

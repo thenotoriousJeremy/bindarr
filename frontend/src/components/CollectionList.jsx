@@ -17,6 +17,7 @@ import { undoToast } from '../utils/undo';
 import { stackCollectionRows } from '../utils/stackTiles';
 import { defaultGameFilter, gameOptions, isGameEnabled, showGamePicker } from '../utils/games';
 import { useT } from '../utils/i18n';
+import { onActivateKey } from '../utils/a11y';
 import { useApi } from '../utils/useApi';
 import { LatestRequest, fetchJson, isAbortError } from '../utils/request';
 import { loadCollectionPages } from '../utils/collectionPages';
@@ -77,7 +78,7 @@ const CollectionTile = memo(function CollectionTile({ item, selected, selectMode
     <div
       className="tcg-card tilt-card-wrapper"
       style={{ cursor: 'pointer', touchAction: 'pan-y' }}
-      onClick={(e) => onActivate(item, e)}
+      role="button" tabIndex={0} onClick={(e) => onActivate(item, e)} onKeyDown={onActivateKey((e) => onActivate(item, e))}
       {...pressHandlers(item.entry_id)}
     >
       <div className="tcg-card-inner" style={{ ...getCardRarityBorder(item.rarity), ...(selected ? { outline: '3px solid var(--accent-red)', outlineOffset: '2px' } : {}) }}>
@@ -197,7 +198,7 @@ const CollectionRow = memo(function CollectionRow({ item, selected, selectMode, 
             />
           )}
           <div
-            onClick={(e) => onActivate(item, e)}
+            role="button" tabIndex={-1} onClick={(e) => onActivate(item, e)} onKeyDown={onActivateKey((e) => onActivate(item, e))}
             {...pressHandlers(item.entry_id)}
             style={{ position: 'relative', width: '36px', height: '50px', flexShrink: 0, overflow: 'hidden', borderRadius: '4px', cursor: 'pointer', touchAction: 'pan-y', ...getCardRarityBorder(item.rarity) }}
           >
@@ -207,7 +208,7 @@ const CollectionRow = memo(function CollectionRow({ item, selected, selectMode, 
             )}
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div onClick={(e) => onActivate(item, e)} {...pressHandlers(item.entry_id)} style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{name}</div>
+            <div role="button" tabIndex={0} onClick={(e) => onActivate(item, e)} onKeyDown={onActivateKey((e) => onActivate(item, e))} {...pressHandlers(item.entry_id)} style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{name}</div>
             <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
               <span>{item.set_name} • #{item.number}</span>
               <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 3px', borderRadius: '3px', flexShrink: 0, ...getRarityBadgeStyle(item.rarity) }}>

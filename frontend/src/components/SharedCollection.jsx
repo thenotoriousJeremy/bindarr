@@ -5,11 +5,12 @@ import RiotNotice from './RiotNotice';
 import Price from './Price';
 import { PRINTINGS, conditionLabel, printingLabel } from '../utils/cardOptions';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
-import { useBackGuard } from '../utils/useBackGuard';
+import Modal from './Modal';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { displayName } from '../utils/languages';
 import CardImage from './CardImage';
 import { useT } from '../utils/i18n';
+import { onActivateKey } from '../utils/a11y';
 import { apiErrorText } from '../utils/apiError';
 import { lazyNamed } from '../utils/lazyWithReload';
 import ChartFallback from './charts/ChartFallback';
@@ -78,7 +79,6 @@ function SharedCollection({ shareToken }) {
   const [stackByPrinting, setStackByPrinting] = useState(false);
 
   const [activeCard, setActiveCard] = useState(null);
-  useBackGuard(!!activeCard, () => setActiveCard(null));
 
   useEffect(() => {
     const urlTheme = new URLSearchParams(window.location.search).get('theme');
@@ -296,7 +296,7 @@ function SharedCollection({ shareToken }) {
           </h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '1.25rem' }}>
             {topValuable.map((card) => (
-              <div key={card.entry_id} onClick={() => setActiveCard(card)} className="dashboard-card-clickable"
+              <div key={card.entry_id} role="button" tabIndex={0} onClick={() => setActiveCard(card)} onKeyDown={onActivateKey(() => setActiveCard(card))} className="dashboard-card-clickable"
                 style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', cursor: 'pointer' }}>
                 <CardImage card={card} style={{ width: '48px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '5px', boxShadow: '0 2px 6px rgba(0,0,0,0.4)' }} />
                 <div style={{ flex: 1, overflow: 'hidden' }}>
@@ -400,7 +400,7 @@ function SharedCollection({ shareToken }) {
             const rarity = (card.rarity || '').toLowerCase();
             const isUltra = rarity.includes('rare') || rarity.includes('secret') || rarity.includes('promo') || rarity.includes('ultra');
             return (
-              <div key={card.entry_id} className="tcg-card tilt-card-wrapper" onClick={() => setActiveCard(card)}>
+              <div key={card.entry_id} className="tcg-card tilt-card-wrapper" role="button" tabIndex={0} onClick={() => setActiveCard(card)} onKeyDown={onActivateKey(() => setActiveCard(card))}>
                 <div className={`tcg-card-inner ${isUltra ? 'rarity-glow-ultra' : ''}`}>
                   <CardImage card={card} className="tcg-card-image" loading="lazy" />
                   {getFoilOverlayClass(card.printing) && (
@@ -435,13 +435,12 @@ function SharedCollection({ shareToken }) {
 
       {/* Read-only Card Detail Modal */}
       {activeCard && (
-        <div className="modal-overlay" style={{
+        <Modal onClose={() => setActiveCard(null)} label={activeCard.name} overlayStyle={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
           backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999, padding: '1rem'
-        }} onClick={() => setActiveCard(null)}>
-          <div className="glass-panel" style={{ maxWidth: '680px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '2rem', display: 'flex', flexWrap: 'wrap', gap: '2rem', position: 'relative' }} onClick={(e) => e.stopPropagation()}>
-            <button className="btn btn-secondary btn-icon-only" onClick={() => setActiveCard(null)} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
+        }} className="glass-panel" style={{ maxWidth: '680px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '2rem', display: 'flex', flexWrap: 'wrap', gap: '2rem', position: 'relative' }}>
+            <button className="btn btn-secondary btn-icon-only" onClick={() => setActiveCard(null)} aria-label={t('common.close')} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
               <X size={16} />
             </button>
             <div style={{ flex: '1 1 240px', display: 'flex', justifyContent: 'center' }}>
@@ -485,8 +484,7 @@ function SharedCollection({ shareToken }) {
                 )}
               </div>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
       {/* A public share with Riftbound cards carries Riot's notice too. */}
       {(data?.collection || []).some(c => c.game === 'riftbound') && <RiotNotice style={{ textAlign: 'center', padding: '0 1rem 1.5rem' }} />}

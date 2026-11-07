@@ -1,5 +1,7 @@
 import { X } from 'lucide-react';
 import CardImage from './CardImage';
+import Modal from './Modal';
+import { useT } from '../utils/i18n';
 
 // Full-screen card art viewer, shared by the collection inspector and the
 // Search & Add quick-add drawer so "tap the art to enlarge" works the same
@@ -8,14 +10,17 @@ import CardImage from './CardImage';
 // Takes the whole card rather than a URL so a card with no art enlarges to its
 // card back instead of to a broken image at full screen size.
 //
-// stopPropagation on every click: both callers sit inside an overlay whose own
-// click handler dismisses the popup, so without it, closing the zoom would
+// Clicks stay inside: callers sit inside an overlay whose own click handler
+// dismisses the popup, and <Modal> stops them so closing the zoom does not
 // dismiss the popup underneath as well.
 export default function CardImageZoom({ card, onClose }) {
+  const { t } = useT();
   return (
-    <div
-      className="modal-overlay"
-      style={{
+    <Modal
+      onClose={onClose}
+      label={card?.name}
+      style={{ display: 'flex', maxHeight: '88vh', maxWidth: '88vw' }}
+      overlayStyle={{
         position: 'fixed',
         top: 0, left: 0, right: 0, bottom: 0,
         backgroundColor: 'rgba(0,0,0,0.92)',
@@ -27,11 +32,11 @@ export default function CardImageZoom({ card, onClose }) {
         cursor: 'zoom-out',
         padding: 'max(1rem, max(env(safe-area-inset-top, 0px), var(--sat, 0px))) 1rem max(1rem, max(env(safe-area-inset-bottom, 0px), var(--sab, 0px))) 1rem'
       }}
-      onClick={(e) => { e.stopPropagation(); onClose(); }}
     >
       <button
         className="btn btn-secondary btn-icon-only"
-        onClick={(e) => { e.stopPropagation(); onClose(); }}
+        onClick={onClose}
+        aria-label={t('common.close')}
         style={{
           position: 'absolute',
           top: 'max(1rem, max(env(safe-area-inset-top, 0px), var(--sat, 0px)))',
@@ -46,7 +51,6 @@ export default function CardImageZoom({ card, onClose }) {
       </button>
       <CardImage
         card={card}
-        onClick={(e) => e.stopPropagation()}
         style={{
           maxHeight: '88vh',
           maxWidth: '88vw',
@@ -57,6 +61,6 @@ export default function CardImageZoom({ card, onClose }) {
           filter: 'drop-shadow(0 20px 60px rgba(0,0,0,0.8))'
         }}
       />
-    </div>
+    </Modal>
   );
 }

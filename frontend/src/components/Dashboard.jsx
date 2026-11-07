@@ -6,6 +6,7 @@ import { useFx } from '../utils/useFx';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { defaultGameFilter, gameOptions, showGamePicker, gameLabel } from '../utils/games';
 import { useT } from '../utils/i18n';
+import { onActivateKey } from '../utils/a11y';
 import { lazyNamed } from '../utils/lazyWithReload';
 import ChartFallback from './charts/ChartFallback';
 
@@ -385,7 +386,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
               {topValuable.map((card, idx) => (
                 <div 
                   key={idx} 
-                  onClick={() => setInspectorCard(card)}
+                  role="button" tabIndex={0} onClick={() => setInspectorCard(card)} onKeyDown={onActivateKey(() => setInspectorCard(card))}
                   style={{ 
                     display: 'flex', 
                     gap: '0.75rem', 
@@ -435,7 +436,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                 {recentAdditions.map((card, idx) => (
                   <div
                     key={idx}
-                    onClick={() => setInspectorCard(card)}
+                    role="button" tabIndex={0} onClick={() => setInspectorCard(card)} onKeyDown={onActivateKey(() => setInspectorCard(card))}
                     style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', cursor: 'pointer', transition: 'all 0.2s ease' }}
                     className="dashboard-card-clickable"
                   >

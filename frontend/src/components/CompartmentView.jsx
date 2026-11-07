@@ -374,6 +374,10 @@ export default function CompartmentView({
     } else if (['ArrowLeft', 'ArrowUp'].includes(e.key)) {
       e.preventDefault();
       setCoverflowActiveIndex(prev => Math.max(0, prev - 1));
+    } else if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
+      // Keyboard stand-in for tapping the front card.
+      const active = e.currentTarget.querySelector('.box-coverflow-card.active');
+      if (active) { e.preventDefault(); active.click(); }
     }
   };
 
@@ -459,7 +463,7 @@ export default function CompartmentView({
                 onBlur={() => { if (editingLabel) { setEditingLabel(false); onRename(labelDraft); } }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') { setEditingLabel(false); onRename(labelDraft); }
-                  else if (e.key === 'Escape') setEditingLabel(false);
+                  else if (e.key === 'Escape') { e.preventDefault(); setEditingLabel(false); }
                 }}
                 style={{ padding: '0.15rem 0.4rem', fontSize: '0.75rem', width: '110px' }}
               />
@@ -837,7 +841,7 @@ export default function CompartmentView({
                 onBlur={() => { if (editingLabel) { setEditingLabel(false); onRename(labelDraft); } }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') { setEditingLabel(false); onRename(labelDraft); }
-                  else if (e.key === 'Escape') setEditingLabel(false);
+                  else if (e.key === 'Escape') { e.preventDefault(); setEditingLabel(false); }
                 }}
                 style={{ padding: '0.15rem 0.4rem', fontSize: '0.8rem', width: '150px' }}
               />
@@ -871,11 +875,15 @@ export default function CompartmentView({
           </div>
         ) : (
           <>
+          {/* The coverflow is one keyboard stop: arrows move between cards and
+              Enter/Space taps the front one (handleCoverflowKeyDown). The cards'
+              own click handlers are the pointer path; giving each a tab stop
+              would put a whole row of cards in the tab order. */}
+          {/* eslint-disable jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-tabindex */}
           <div
             ref={coverflowContainerRef}
             className="box-coverflow-container"
             tabIndex={0}
-            style={{ outline: 'none' }}
             onTouchStart={handleCoverflowTouchStart}
             onTouchEnd={(e) => handleCoverflowTouchEnd(e, renderedCards.length)}
             onMouseDown={handleCoverflowMouseDown}
@@ -1031,6 +1039,7 @@ export default function CompartmentView({
               &rarr;
             </button>
           </div>
+          {/* eslint-enable jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-tabindex */}
 
           {(() => {
             const activeCard = renderedCards[activeCardIndex];

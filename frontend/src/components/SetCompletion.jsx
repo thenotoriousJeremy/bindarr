@@ -3,6 +3,7 @@ import { Search, RefreshCw, ShoppingCart, Heart } from 'lucide-react';
 import CardImage from './CardImage';
 import CardImageZoom from './CardImageZoom';
 import { useT } from '../utils/i18n';
+import { onActivateKey } from '../utils/a11y';
 import { priceText } from '../utils/formatPrice';
 import { useFx } from '../utils/useFx';
 import { totalPrices } from '../utils/convertPrice';
@@ -237,7 +238,7 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
               value={query}
               onChange={(e) => { setQuery(e.target.value); setPickerOpen(true); }}
               onFocus={() => setPickerOpen(true)}
-              onKeyDown={(e) => { if (e.key === 'Escape') setPickerOpen(false); }}
+              onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setPickerOpen(false); } }}
               style={{ width: '100%', paddingLeft: '2.4rem' }}
             />
             <Search size={16} style={{ position: 'absolute', left: '0.9rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
@@ -403,7 +404,7 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
                 const done = isComplete(card, variantView);
                 const have = card.owned > 0;
                 return (
-                  <div key={card.id} className="tcg-card" onClick={() => setZoom(card)} title={`${displayName(card)} #${card.number}`}>
+                  <div key={card.id} className="tcg-card" role="button" tabIndex={0} onClick={() => setZoom(card)} onKeyDown={onActivateKey(() => setZoom(card))} title={`${displayName(card)} #${card.number}`}>
                     <div className="tcg-card-inner" style={done ? undefined : { borderStyle: 'dashed' }}>
                       <CardImage card={card} game={data.game} className="tcg-card-image" loading="lazy" draggable={false}
                         style={have ? undefined : { filter: 'grayscale(1)', opacity: 0.4 }} />

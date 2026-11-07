@@ -6,8 +6,9 @@ import { displayName } from '../utils/languages';
 import CheckoutWizardModal from './CheckoutWizardModal';
 import ScryfallSyntaxHelp from './ScryfallSyntaxHelp';
 import { syntaxErrorText } from '../utils/scryfallSyntax';
-import { useBackGuard } from '../utils/useBackGuard';
 import { useTabParam, setTabParam } from '../utils/router';
+import Modal from './Modal';
+import { onActivateKey } from '../utils/a11y';
 import { buildDeckExport, parseDeckLine, pickDeckLineCard } from '../utils/deckText';
 import { buildMassEntry, massEntryPage } from '../utils/tcgMassEntryUrl';
 import { defaultGame, gameOptions, showGamePicker, LEGACY_GAME } from '../utils/games';
@@ -170,9 +171,6 @@ function DeckBuilder({ showToast }) {
   // clobber one another (last-writer-wins on the server upsert).
   const [savingCard, setSavingCard] = useState(false);
 
-  useBackGuard(showCreateModal, () => setShowCreateModal(false));
-  useBackGuard(showSimulator, () => setShowSimulator(false));
-  useBackGuard(!!deckDraft, () => setDeckDraft(null));
 
   useEffect(() => {
     fetchDecks();
@@ -1183,7 +1181,10 @@ function DeckBuilder({ showToast }) {
                         ? 'linear-gradient(145deg, rgba(211,32,42,0.06), rgba(15,23,42,0.65))'
                         : 'linear-gradient(145deg, rgba(234,179,8,0.06), rgba(15,23,42,0.65))'
                     }}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => openDeck(deck.id)}
+                    onKeyDown={onActivateKey(() => openDeck(deck.id))}
                     onMouseEnter={e => {
                       e.currentTarget.style.transform = 'translateY(-3px)';
                       e.currentTarget.style.boxShadow = `0 12px 30px ${accentColor}25`;
@@ -1473,7 +1474,7 @@ function DeckBuilder({ showToast }) {
                           {new Date(deck.created_at).toLocaleDateString()}
                         </td>
                         <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
-                          <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }} onClick={e => e.stopPropagation()}>
+                          <div role="presentation" style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }} onClick={e => e.stopPropagation()}>
                             {deck.checked_out ? (
                               <button className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', color: '#eab308' }} onClick={() => handleReturn(deck)} disabled={checkingOut}>
                                 {t('deck.return')}
@@ -1507,11 +1508,12 @@ function DeckBuilder({ showToast }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           {/* Header */}
           {deckDraft && (
-            <div className="modal-overlay" style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(0,0,0,0.7)' }} onClick={() => setDeckDraft(null)}>
-              <div className="glass-panel" style={{ width: '480px', maxWidth: '100%', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }} onClick={(event) => event.stopPropagation()}>
+            <Modal onClose={() => setDeckDraft(null)} label={t('deck.editProperties')} closeOnBackdrop={false}
+              overlayStyle={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(0,0,0,0.7)' }}
+              className="glass-panel" style={{ width: '480px', maxWidth: '100%', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <h3 style={{ margin: 0 }}>{t('deck.editProperties')}</h3>
-                  <button className="btn btn-secondary btn-icon-only" onClick={() => setDeckDraft(null)}><X size={15} /></button>
+                  <button className="btn btn-secondary btn-icon-only" onClick={() => setDeckDraft(null)} aria-label={t('common.close')}><X size={15} /></button>
                 </div>
                 <label className="form-group" style={{ margin: 0 }}>
                   {t('deck.deckName')}
@@ -1553,8 +1555,7 @@ function DeckBuilder({ showToast }) {
                   <button className="btn btn-secondary" onClick={() => setDeckDraft(null)}>{t('common.cancel')}</button>
                   <button className="btn btn-primary" disabled={!deckDraft.name.trim()} onClick={handleSaveDeckProperties}>{t('deck.saveProperties')}</button>
                 </div>
-              </div>
-            </div>
+            </Modal>
           )}
 
           <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', position: 'relative', overflow: 'hidden' }}>
@@ -1762,7 +1763,7 @@ function DeckBuilder({ showToast }) {
 
                           return (
                             <div key={card.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.35rem 0.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-glass)', gap: '0.5rem' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', minWidth: 0, flex: 1 }} onClick={() => setPreviewCard(card)}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', minWidth: 0, flex: 1 }} role="button" tabIndex={0} onClick={() => setPreviewCard(card)} onKeyDown={onActivateKey(() => setPreviewCard(card))}>
                                 <CardImage card={card} style={{ width: '24px', height: '33px', objectFit: 'cover', borderRadius: '2px', flexShrink: 0 }} />
                                 <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, overflow: 'hidden' }}>
                                   <span style={{ fontSize: '0.8rem', color: 'var(--text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(card)} ({card.set_name} • #{card.number})</span>
@@ -1842,7 +1843,7 @@ function DeckBuilder({ showToast }) {
                                 // line instead of squeezing the name to nothing; the
                                 // name's 10rem basis is what decides when to wrap.
                                 <div key={card.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', background: missingCopies(card) > 0 ? 'rgba(127,29,29,0.16)' : 'rgba(255,255,255,0.01)', borderRadius: 'var(--radius-sm)', border: missingCopies(card) > 0 ? '1px solid var(--accent-red)' : '1px solid var(--border-glass)', gap: '0.6rem' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', minWidth: 0, flex: '1 1 10rem' }} onClick={() => setPreviewCard(card)}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', minWidth: 0, flex: '1 1 10rem' }} role="button" tabIndex={0} onClick={() => setPreviewCard(card)} onKeyDown={onActivateKey(() => setPreviewCard(card))}>
                                     <CardImage card={card} style={{ width: '32px', height: '44px', objectFit: 'cover', borderRadius: '2px', flexShrink: 0 }} />
                                     <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
                                       <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(card)}</div>
@@ -1908,7 +1909,7 @@ function DeckBuilder({ showToast }) {
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '0.75rem' }}>
                               {list.map(card => (
                                 <div key={card.id} style={{ position: 'relative', borderRadius: '6px', overflow: 'hidden', border: missingCopies(card) > 0 ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)', background: missingCopies(card) > 0 ? 'rgba(127,29,29,0.16)' : 'rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', transition: 'transform 0.15s' }}>
-                                  <div style={{ position: 'relative', width: '100%', aspectRatio: 0.718, cursor: 'pointer' }} onClick={() => setPreviewCard(card)}>
+                                  <div style={{ position: 'relative', width: '100%', aspectRatio: 0.718, cursor: 'pointer' }} role="button" tabIndex={0} onClick={() => setPreviewCard(card)} onKeyDown={onActivateKey(() => setPreviewCard(card))}>
                                     <CardImage card={card} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                                     <span style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.85)', color: 'var(--accent-yellow)', fontSize: '0.75rem', fontWeight: 800, padding: '1px 6px', borderRadius: '10px', border: '1px solid var(--accent-yellow)' }}>
                                       x{card.quantity}
@@ -2060,9 +2061,10 @@ function DeckBuilder({ showToast }) {
 
       {/* A. Create Deck Modal */}
       {showCreateModal && (
-        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}>
-          <div className="glass-panel" style={{ maxWidth: '480px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '1.75rem', position: 'relative', border: '1px solid rgba(255,255,255,0.15)' }}>
-            <button className="btn btn-secondary btn-icon-only" onClick={() => setShowCreateModal(false)} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
+        <Modal onClose={() => setShowCreateModal(false)} label={t('deck.createTitle')} closeOnBackdrop={false}
+          overlayStyle={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}
+          className="glass-panel" style={{ maxWidth: '480px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '1.75rem', position: 'relative', border: '1px solid rgba(255,255,255,0.15)' }}>
+            <button className="btn btn-secondary btn-icon-only" onClick={() => setShowCreateModal(false)} aria-label={t('common.close')} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
               <X size={16} />
             </button>
 
@@ -2087,10 +2089,14 @@ function DeckBuilder({ showToast }) {
                     const on = newDeckGame === value;
                     const { Icon } = look;
                     return (
-                      <div
+                      <button
+                        type="button"
                         key={value}
+                        aria-pressed={on}
                         onClick={() => pickNewDeckGame(value)}
                         style={{
+                          color: 'inherit',
+                          font: 'inherit',
                           padding: '0.75rem',
                           borderRadius: 'var(--radius-sm)',
                           border: on ? `2px solid ${look.color}` : '1px solid var(--border-glass)',
@@ -2106,7 +2112,7 @@ function DeckBuilder({ showToast }) {
                         <Icon size={22} style={{ color: on ? look.color : 'var(--text-muted)' }} />
                         <span style={{ fontSize: '0.85rem', fontWeight: 700, color: on ? look.color : 'var(--text-secondary)' }}>{look.titleKey ? t(look.titleKey) : label}</span>
                         {look.subKey && <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{t(look.subKey)}</span>}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -2202,11 +2208,15 @@ function DeckBuilder({ showToast }) {
                   {DECK_ACCENT_COLORS.map(c => {
                     const isSelected = newDeckAccentColor === c.hex;
                     return (
-                      <div
+                      <button
+                        type="button"
                         key={c.hex}
                         onClick={() => setNewDeckAccentColor(c.hex)}
                         title={c.name}
+                        aria-label={c.name}
+                        aria-pressed={isSelected}
                         style={{
+                          padding: 0,
                           width: '26px',
                           height: '26px',
                           borderRadius: '50%',
@@ -2299,15 +2309,15 @@ function DeckBuilder({ showToast }) {
                 <button type="submit" className="btn btn-primary" style={{ flex: 2, fontWeight: 700 }}>{t('deck.createDeck')}</button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* B. Draw Hand Simulator Modal */}
       {showSimulator && (
-        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}>
-          <div className="glass-panel" style={{ maxWidth: '1000px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem', position: 'relative' }}>
-            <button className="btn btn-secondary btn-icon-only" onClick={() => setShowSimulator(false)} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
+        <Modal onClose={() => setShowSimulator(false)} label={t('deck.handSimulator')} closeOnBackdrop={false}
+          overlayStyle={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}
+          className="glass-panel" style={{ maxWidth: '1000px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem', position: 'relative' }}>
+            <button className="btn btn-secondary btn-icon-only" onClick={() => setShowSimulator(false)} aria-label={t('common.close')} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
               <X size={16} />
             </button>
 
@@ -2345,7 +2355,7 @@ function DeckBuilder({ showToast }) {
                     border: '1px solid var(--border-glass)',
                     position: 'relative',
                     cursor: 'pointer'
-                  }} onClick={() => setPreviewCard(card)}>
+                  }} role="button" tabIndex={0} onClick={() => setPreviewCard(card)} onKeyDown={onActivateKey(() => setPreviewCard(card))}>
                     <CardImage card={card} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   </div>
                 ))
@@ -2399,15 +2409,15 @@ function DeckBuilder({ showToast }) {
                 100% { background-position: 200% center; }
               }
             `}</style>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* C. Export Modal */}
       {showExportModal && (
-        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}>
-          <div className="glass-panel" style={{ maxWidth: '500px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '1.75rem', position: 'relative' }}>
-            <button className="btn btn-secondary btn-icon-only" onClick={() => setShowExportModal(false)} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
+        <Modal onClose={() => setShowExportModal(false)} label={t('deck.exportTitle')} closeOnBackdrop={false}
+          overlayStyle={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}
+          className="glass-panel" style={{ maxWidth: '500px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '1.75rem', position: 'relative' }}>
+            <button className="btn btn-secondary btn-icon-only" onClick={() => setShowExportModal(false)} aria-label={t('common.close')} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
               <X size={16} />
             </button>
             <h3 style={{ fontSize: '1.2rem', color: 'var(--text-strong)', marginBottom: '0.5rem' }}>{t('deck.exportTitle')}</h3>
@@ -2441,15 +2451,15 @@ function DeckBuilder({ showToast }) {
                 <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleOpenMassEntry}>{t('deck.copyOpenTcg')}</button>
               )}
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* D. Import Modal with Collection Comparison */}
       {showImportModal && (
-        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}>
-          <div className="glass-panel" style={{ maxWidth: '600px', width: '100%', padding: '1.75rem', position: 'relative', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
-            <button className="btn btn-secondary btn-icon-only" onClick={() => { setShowImportModal(false); setImportComparison(null); }} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
+        <Modal onClose={() => { setShowImportModal(false); setImportComparison(null); }} label={t('deck.importTitle')} dirty={!!importText.trim()} closeOnBackdrop={false}
+          overlayStyle={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}
+          className="glass-panel" style={{ maxWidth: '600px', width: '100%', padding: '1.75rem', position: 'relative', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+            <button className="btn btn-secondary btn-icon-only" onClick={() => { setShowImportModal(false); setImportComparison(null); }} aria-label={t('common.close')} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
               <X size={16} />
             </button>
             <h3 style={{ fontSize: '1.2rem', color: 'var(--text-strong)', marginBottom: '0.5rem' }}>{t('deck.importTitle')}</h3>
@@ -2509,15 +2519,15 @@ function DeckBuilder({ showToast }) {
                 <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleImportDeck}>{t('deck.importMatched')}</button>
               )}
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* E. High-Res Card Art Preview Popover */}
       {previewCard && (
-        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setPreviewCard(null)}>
-          <div className="glass-panel" style={{ maxWidth: '340px', padding: '1rem', position: 'relative', textAlign: 'center', animation: 'draw-card-anim 0.25s ease-out forwards' }} onClick={e => e.stopPropagation()}>
-            <button className="btn btn-secondary btn-icon-only" onClick={() => setPreviewCard(null)} style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', borderRadius: '50%', zIndex: 10 }}>
+        <Modal onClose={() => setPreviewCard(null)} label={displayName(previewCard)}
+          overlayStyle={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+          className="glass-panel" style={{ maxWidth: '340px', padding: '1rem', position: 'relative', textAlign: 'center', animation: 'draw-card-anim 0.25s ease-out forwards' }}>
+            <button className="btn btn-secondary btn-icon-only" onClick={() => setPreviewCard(null)} aria-label={t('common.close')} style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', borderRadius: '50%', zIndex: 10 }}>
               <X size={16} />
             </button>
             <CardImage
@@ -2528,8 +2538,7 @@ function DeckBuilder({ showToast }) {
             <p style={{ color: 'var(--text-secondary)', margin: 0, fontSize: '0.75rem' }}>
               {previewCard.set_name} • #{previewCard.number} ({previewCard.rarity || 'Common'})
             </p>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Checkout Locator Modal */}

@@ -15,6 +15,7 @@ import { defaultGame, gameOptions, showGamePicker, gameLabel } from '../utils/ga
 import CardImage from './CardImage';
 import AddToListSelect from './AddToListSelect';
 import { useT } from '../utils/i18n';
+import { onActivateKey, useEscape } from '../utils/a11y';
 import RiotNotice from './RiotNotice';
 import { apiErrorText } from '../utils/apiError';
 import { LatestRequest, isAbortError } from '../utils/request';
@@ -521,6 +522,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
     setGrade('');
     setCertNumber('');
   };
+  useEscape(isDrawerOpen, closeDrawer);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -914,7 +916,11 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                 key={card.id}
                 className="tcg-card"
                 style={{ cursor: 'pointer', touchAction: 'pan-y' }}
+                role="button"
+                tabIndex={0}
+                aria-pressed={selectMode ? isSelected : undefined}
                 onClick={(e) => handleCardClick(card, e)}
+                onKeyDown={onActivateKey((e) => handleCardClick(card, e))}
                 {...pressHandlers(card.id)}
               >
                 <div className={`tcg-card-inner ${glowClass}`} style={isSelected ? { outline: '3px solid var(--accent-red)', outlineOffset: '2px' } : undefined}>
@@ -992,7 +998,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       )}
 
       {/* Drawer Dialog Backdrop */}
-      <div className={`drawer-backdrop ${isDrawerOpen ? 'open' : ''}`} onClick={closeDrawer}></div>
+      {/* Pointer-only dismissal; Esc is the keyboard twin (useEscape above). */}
+      <div role="presentation" className={`drawer-backdrop ${isDrawerOpen ? 'open' : ''}`} onClick={closeDrawer}></div>
 
       {/* Quick Add Drawer Sheet */}
       <div className={`quick-add-drawer ${isDrawerOpen ? 'open' : ''}`}>
@@ -1010,7 +1017,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                   {' • '}#{selectedCard.number})
                 </p>
               </div>
-              <button className="btn btn-secondary btn-icon-only" onClick={closeDrawer} style={{ borderRadius: '50%', flexShrink: 0 }}>
+              <button type="button" className="btn btn-secondary btn-icon-only" onClick={closeDrawer} aria-label={t('common.close')} style={{ borderRadius: '50%', flexShrink: 0 }}>
                 <X size={18} />
               </button>
             </div>
@@ -1018,7 +1025,11 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
             <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', width: '100%', maxWidth: '100%', boxSizing: 'border-box', overflow: 'hidden' }}>
               {/* Tap the art to enlarge, same as the collection inspector. */}
               <div
+                role="button"
+                tabIndex={0}
+                aria-label={t('inspector.fullScreen')}
                 onClick={() => setIsFullScreen(true)}
+                onKeyDown={onActivateKey(() => setIsFullScreen(true))}
                 title={t('inspector.zoomHint')}
                 style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', lineHeight: 0 }}
               >
