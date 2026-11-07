@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend, BarChart, Bar, XAxis, YAxis } from 'recharts';
 import { Search, Trophy, Compass, Library, ShieldAlert, Sparkles, X, MapPin, SlidersHorizontal } from 'lucide-react';
 import Logo from './Logo';
+import RiotNotice from './RiotNotice';
 import { priceText } from '../utils/formatPrice';
 import { PRINTINGS } from '../utils/cardOptions';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
@@ -491,6 +492,8 @@ function SharedCollection({ shareToken }) {
           </div>
         </div>
       )}
+      {/* A public share with Riftbound cards carries Riot's notice too. */}
+      {(data?.collection || []).some(c => c.game === 'riftbound') && <RiotNotice style={{ textAlign: 'center', padding: '0 1rem 1.5rem' }} />}
     </div>
   );
 }

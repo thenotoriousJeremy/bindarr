@@ -19,6 +19,8 @@ import {
   copyLimit, isBasicEnergyOrLand, deckWarnings, ruleWarningText,
 } from '../utils/deckRules';
 import { deckCardUndo, undoToast } from '../utils/undo';
+import RiotNotice from './RiotNotice';
+import { RIFTBOUND_GROUPS, riftboundGroup } from '../utils/riftbound';
 
 // Total copies of a card (matched by name) already in a deck's card list.
 const deckCountByName = (deckCards, name) =>
@@ -59,6 +61,7 @@ const GAME_PICKER_LOOK = {
   pokemon: { Icon: Zap, color: 'var(--accent-yellow)', tint: 'rgba(234, 179, 8, 0.12)', titleKey: 'deck.gamePokemonWithSystem', subKey: 'deck.standard60' },
   mtg: { Icon: Swords, color: '#ef4444', tint: 'rgba(239, 68, 68, 0.12)', titleKey: 'deck.gameMtgWithSystem', subKey: 'deck.constructedCommander' },
   lorcana: { Icon: Layers, color: '#a855f7', tint: 'rgba(168, 85, 247, 0.12)', titleKey: 'deck.gameLorcanaWithSystem', subKey: 'deck.standard60' },
+  riftbound: { Icon: Swords, color: '#38bdf8', tint: 'rgba(56, 189, 248, 0.12)', subKey: 'deck.riftboundConstructed' },
 };
 const PLAIN_PICKER_LOOK = { Icon: Gamepad2, color: 'var(--text-strong)', tint: 'rgba(255, 255, 255, 0.08)' };
 
@@ -802,6 +805,7 @@ function DeckBuilder({ showToast }) {
     return 'Character';
   };
   const cardGroup = (card) => {
+    if (deckGame === 'riftbound') return riftboundGroup(card);
     if (deckGame === 'mtg') return mtgCardType(card);
     if (deckGame === 'lorcana') return lorcanaCardType(card);
     let type = card.supertype || 'Pokémon';
@@ -810,7 +814,7 @@ function DeckBuilder({ showToast }) {
   };
 
   // Groups order based on game
-  const GROUP_ORDER = deckGame === 'mtg'
+  const GROUP_ORDER = deckGame === 'riftbound' ? RIFTBOUND_GROUPS : deckGame === 'mtg'
     ? ['Creature', 'Planeswalker', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Battle', 'Land', 'Other']
     : (deckGame === 'lorcana'
       ? ['Character', 'Action', 'Item', 'Location', 'Other']
@@ -1918,6 +1922,8 @@ function DeckBuilder({ showToast }) {
                     )}
                     {t('deck.healthTitle')}
                   </h3>
+
+                  {deckGame === 'riftbound' && <RiotNotice style={{ marginTop: 0 }} />}
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', fontSize: '0.8rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>

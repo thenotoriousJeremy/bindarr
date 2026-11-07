@@ -1,6 +1,7 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload, Eye, EyeOff, SlidersHorizontal, Info, Bug, Lightbulb, MessagesSquare, ScrollText, Github, Layers, Languages, Smartphone, Server, PackageOpen } from 'lucide-react';
 import { GAMES, enabledGames, setGameEnabled, gameOptions, defaultGame, isGameEnabled } from '../utils/games';
+import RiotNotice from './RiotNotice';
 import { CURRENCIES, getCurrency, setCurrency } from '../utils/formatPrice';
 import { LOCALES, localeName, useT } from '../utils/i18n';
 import { REPO_URL } from '../utils/repo';
@@ -1235,6 +1236,8 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
             <Info size={20} style={{ color: 'var(--accent-yellow)' }} />
             <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>{t('settings.aboutTitle')}</h3>
           </div>
+          {/* Riot requires this notice wherever Riftbound content is enabled. */}
+          {isGameEnabled('riftbound') && <RiotNotice style={{ margin: 0 }} />}
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
             <div>

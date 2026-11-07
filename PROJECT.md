@@ -5,7 +5,7 @@ features, see [README.md](README.md); this document explains **how the system is
 built and why**.
 
 Bindarr is a self-hosted trading-card collection manager for **Pokémon**,
-**Magic: The Gathering**, and **Disney Lorcana**. It identifies cards from a phone photo (no typing),
+**Magic: The Gathering**, **Disney Lorcana** and **Riftbound**. It identifies cards from a phone photo (no typing),
 tracks their real-world physical location (which binder page / box row slot),
 values the collection over time, and helps you pull and re-file the cards for a
 deck.
@@ -386,6 +386,37 @@ Tests: `test/pokemonidmap.test.js` (the mapping table, from
 `test/fixtures/pokemonmigration`), `test/pokemonmigration.test.js` (preview,
 apply, re-run, revert over a temp DB through the admin router),
 `test/pokemonmigrationapi.test.js` (pokemontcgapi.com target).
+
+#### Riftbound
+
+`riftcodexApi.js` reads RiftCodex (free, no key, `RIFTCODEX_BASE_URL`). The
+catalogue is fetched whole (pages of 100) on first use — a search, the set list, an
+id, a catalog build — cached through `cacheNormalizedCards` with `keepPrices` (it
+carries no prices, so its re-cache must not null the swept ones), and refreshed by
+the weekly set refresh only on installs that hold Riftbound cards. Search reads the
+cache, with domain/type/rarity/supertype filters.
+
+Ids are `riftbound-` + the lowercased `riftbound_id` with every character outside
+`[a-z0-9-]` written as `.` + hex (`unl-229*-219` → `riftbound-unl-229.2a-219`),
+which round-trips and needs no escaping in URLs, SQL or CSV. Records sharing a
+`riftbound_id` are either one printing listed twice (identical faces; the record
+with a TCGplayer product is kept) or distinct printings (OPP promo and Metal): the
+canonical one keeps the plain id, the others get `~<RiftCodex id>`. Names never
+merge printings. New card columns: `orientation` (battlefields are landscape),
+`artist`, `card_text`, `attributes` (energy/might/power JSON; energy is also `cmc`).
+
+Prices: `riftboundPrices.js` reads TCGCSV category 89 from `tcgcsvApi`'s cache
+(same pacing, 403 cooldown and base URL). Category 89 is synced only once the
+install has a Riftbound card, and backfilled into the current version the first
+time. Match is by product id only; Normal → `price_normal`, Foil →
+`price_holofoil`, trend prefers Normal; a missing quote leaves the stored price.
+Own clock: `riftbound_prices_swept_at`.
+
+Deck rules (`utils/riftboundDeck.js`): per-zone copy limits enforced on add, the
+rest returned as `warnings` by `GET /api/decks/:id`. Scan: `cardSets` lists
+cached sets, `catalog.embedUrl` embeds Riot's full-width art; landscape art is
+squashed into the square as printed, like the camera dewarp of a card held the way
+it is printed. Real-model accuracy is unmeasured.
 
 #### Two names per card, and which is which
 

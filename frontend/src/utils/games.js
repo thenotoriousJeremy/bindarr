@@ -13,7 +13,13 @@
 // what the game supports — see gameInfo below.
 import GAME_TABLE from '../../../shared/games.js';
 
-export const GAMES = GAME_TABLE;
+// A game marked `nativeApp: false` is left out of the store-distributed native
+// app. Riftbound is: Riot's fan policy (Legal Jibber Jabber, section 3) does not
+// allow projects using its IP on the App Store or Google Play without a licence
+// or an approved Riot API key, and Bindarr has neither. The web app is unaffected.
+// window.Capacitor is what the native shell injects; bare Node has none.
+const isNativeShell = () => !!globalThis.Capacitor?.isNativePlatform?.();
+export const GAMES = GAME_TABLE.filter(g => g.nativeApp !== false || !isNativeShell());
 
 const byValue = new Map(GAMES.map(g => [g.value, g]));
 

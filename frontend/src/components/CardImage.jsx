@@ -61,6 +61,9 @@ export default function CardImage({ card, src, alt, game, ...imgProps }) {
       alt={alt ?? card?.name ?? ''}
       // Lets callers style or test the placeholder state without re-deriving it.
       data-card-back={isBack ? 'true' : undefined}
+      // A landscape card (a Riftbound battlefield) lies on its side in portrait
+      // slots; index.css turns it there. The drawn back is portrait, so not it.
+      data-orientation={card?.orientation === 'landscape' && !isBack ? 'landscape' : undefined}
       onError={(e) => {
         if (step < chain.length - 1) setStep(step + 1);
         imgProps.onError?.(e);

@@ -40,6 +40,9 @@ export function ruleWarningText(t, warning, format) {
         names: listNames(t, warning.cards.map(c => `${c.name} (${c.colors.join('')})`)),
       });
     default:
+      // Riftbound's own rules (shared/deckRules.mjs riftboundWarnings): one string
+      // each under deck.rb.<rule>, with the warning's details as its placeholders.
+      if (String(warning.code).startsWith('rb_')) return t(`deck.rb.${warning.code.slice(3)}`, warning);
       return warning.code;
   }
 }

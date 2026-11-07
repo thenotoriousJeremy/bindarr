@@ -15,6 +15,7 @@ import { defaultGame, gameOptions, showGamePicker, gameLabel } from '../utils/ga
 import CardImage from './CardImage';
 import AddToListSelect from './AddToListSelect';
 import { useT } from '../utils/i18n';
+import RiotNotice from './RiotNotice';
 
 // Search failures worth explaining in-page rather than only as a toast. `keyHint`
 // marks the ones a user API key actually fixes; an upstream 5xx does not. Title
@@ -583,7 +584,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                 <input
                   type="text"
                   className="input-control"
-                  placeholder={t(game === 'mtg' ? 'search.namePlaceholderMtg' : 'search.namePlaceholderPokemon')}
+                  placeholder={t(game === 'mtg' ? 'search.namePlaceholderMtg' : game === 'riftbound' ? 'search.namePlaceholderRiftbound' : 'search.namePlaceholderPokemon')}
                   value={query}
                   onChange={(e) => { setQuery(e.target.value); setSyntaxError(null); }}
                   aria-invalid={syntaxError ? true : undefined}
@@ -637,7 +638,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                 type="text"
                 className="input-control"
                 list="known-set-codes"
-                placeholder={t(game === 'mtg' ? 'search.setsPlaceholderMtg' : 'search.setsPlaceholderPokemon')}
+                placeholder={t(game === 'mtg' ? 'search.setsPlaceholderMtg' : game === 'riftbound' ? 'search.setsPlaceholderRiftbound' : 'search.setsPlaceholderPokemon')}
                 value={setCodeQuery}
                 onChange={(e) => setSetCodeQuery(e.target.value)}
               />
@@ -772,6 +773,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         </div>
       )}
 
+      {game === 'riftbound' && <RiotNotice style={{ margin: '0 0 1rem' }} />}
+
       {/* Loading state */}
       {loading && <div className="spinner"></div>}
 
@@ -780,7 +783,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem', alignItems: 'end' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t('search.filterType')}</label>
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t(game === 'riftbound' ? 'search.filterDomain' : 'search.filterType')}</label>
               <select className="select-control" value={filterType} onChange={e => setFilterType(e.target.value)}>
                 <option value="">{t('collection.allTypes')}</option>
                 {uniqueTypes.map(type => <option key={type} value={type}>{type}</option>)}
@@ -796,7 +799,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t('search.filterSupertype')}</label>
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t(game === 'riftbound' ? 'search.filterCardType' : 'search.filterSupertype')}</label>
               <select className="select-control" value={filterSupertype} onChange={e => setFilterSupertype(e.target.value)}>
                 <option value="">{t('collection.allSupertypes')}</option>
                 {uniqueSupertypes.map(s => <option key={s} value={s}>{s}</option>)}
