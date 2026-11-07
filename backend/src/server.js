@@ -95,6 +95,12 @@ function checkScanModels() {
     console.warn(`STARTUP: scan models missing from ${dir} (${missing.join(', ')}) — card scanning is disabled.`);
     console.warn('STARTUP: fetch them with  node scripts/fetch-models.mjs   (Docker: docker exec <container> node scripts/fetch-models.mjs)');
   }
+  const modelAssets = require('./utils/modelAssets');
+  const outdated = modelAssets.MODELS.filter(modelAssets.isOutdated).map(a => a.name);
+  if (outdated.length) {
+    console.warn(`STARTUP: ${outdated.join(', ')} is an older release's model — scanning works, but the live card outline is ~4x slower than it needs to be.`);
+    console.warn('STARTUP: update it from Admin → Catalog (Update), or  node scripts/fetch-models.mjs');
+  }
 }
 checkScanModels();
 
@@ -443,12 +449,16 @@ app.use('/api/settings', settingsRoutes);
 // what the user aims with and what the server matches cannot disagree. That
 // means the browser has to be able to fetch the model — unauthenticated, because
 // the outline runs before login is relevant and the file is public weights.
-// Immutable: the filename changes when the model does.
+// Revalidated, NOT immutable. This used to say "immutable: the filename changes
+// when the model does" — and then 1.8.3 swapped cornelius for fastweb-single
+// under the same name, so every browser that had loaded the old one kept it for
+// 30 days. The ETag sendFile sets makes a revalidation a ~200-byte 304, and the
+// native app keys its own cache off that same ETag (cardDetector.fetchModel).
 // Only the corner model. Serving the whole directory would also expose the
 // 56 MB embedding catalog, which the browser never needs and which nobody
 // should be able to pull off an install by guessing a filename.
 app.get('/models/cornelius.onnx', (req, res) => {
-  res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+  res.setHeader('Cache-Control', 'public, no-cache');
   // MODEL_DIR, not a hardcoded backend/data: the container keeps the models on
   // the persisted volume (CV_MODEL_DIR=/app/database/models). Hardcoded, this
   // 404'd in every Docker install, the worker fell back to the pure-JS contour
