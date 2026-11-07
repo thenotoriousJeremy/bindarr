@@ -1,16 +1,24 @@
-import { useState, useEffect, useMemo } from 'react';
-import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend, BarChart, Bar, XAxis, YAxis } from 'recharts';
+import { Suspense, useState, useEffect, useMemo } from 'react';
 import { Search, Trophy, Compass, Library, ShieldAlert, Sparkles, X, MapPin, SlidersHorizontal } from 'lucide-react';
 import Logo from './Logo';
 import RiotNotice from './RiotNotice';
 import Price from './Price';
-import { PRINTINGS } from '../utils/cardOptions';
+import { PRINTINGS, conditionLabel, printingLabel } from '../utils/cardOptions';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { useBackGuard } from '../utils/useBackGuard';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { displayName } from '../utils/languages';
 import CardImage from './CardImage';
 import { useT } from '../utils/i18n';
+import { apiErrorText } from '../utils/apiError';
+import { lazyNamed } from '../utils/lazyWithReload';
+import ChartFallback from './charts/ChartFallback';
+
+// The plots are code-split (charts/SharedCharts), so a visitor sees the numbers
+// and cards without waiting for recharts.
+const sharedCharts = () => import('./charts/SharedCharts');
+const SharedSetBars = lazyNamed(sharedCharts, 'SharedSetBars');
+const SharedDonut = lazyNamed(sharedCharts, 'SharedDonut');
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
@@ -87,7 +95,7 @@ function SharedCollection({ shareToken }) {
         const response = await fetch(`/api/shared/${shareToken}?list=${listType}`);
         if (!response.ok) {
           const errData = await response.json();
-          throw new Error(errData.error || t('shared.errLoad'));
+          throw new Error(apiErrorText(t, errData, 'shared.errLoad'));
         }
         setData(await response.json());
       } catch (err) {
@@ -204,16 +212,9 @@ function SharedCollection({ shareToken }) {
         {chartData.length === 0 ? (
           <div className="chart-empty">{t('shared.noData')}</div>
         ) : (
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie data={chartData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value">
-                {chartData.map((entry, i) => <Cell key={i} fill={entry[colorKey]} />)}
-              </Pie>
-              <Tooltip contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }} itemStyle={{ color: 'var(--text-strong)' }} labelStyle={{ color: 'var(--text-strong)' }} formatter={(v) => [v, t('dash.cards')]} />
-              <Legend verticalAlign="bottom" height={36} iconSize={10} style={{ fontSize: '0.75rem' }}
-                formatter={(value) => <span style={{ color: 'var(--text-secondary)' }}>{value}</span>} />
-            </PieChart>
-          </ResponsiveContainer>
+          <Suspense fallback={<ChartFallback />}>
+            <SharedDonut data={chartData} colorKey={colorKey} />
+          </Suspense>
         )}
       </div>
     </div>
@@ -276,14 +277,9 @@ function SharedCollection({ shareToken }) {
               {sets.length === 0 ? (
                 <div className="chart-empty">{t('shared.noSetData')}</div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={sets} layout="vertical" margin={{ left: 10, right: 30, top: 10, bottom: 10 }}>
-                    <XAxis type="number" stroke="var(--text-secondary)" tickFormatter={(v) => `$${v}`} />
-                    <YAxis dataKey="name" type="category" width={120} stroke="var(--text-secondary)" tickLine={false} axisLine={false} style={{ fontSize: '0.8rem' }} />
-                    <Tooltip contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }} itemStyle={{ color: 'var(--text-strong)' }} labelStyle={{ color: 'var(--text-strong)' }} formatter={(v) => [`$${v}`, t('dash.value')]} />
-                    <Bar dataKey="value" fill="var(--accent-red)" radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <Suspense fallback={<ChartFallback />}>
+                  <SharedSetBars data={sets} />
+                </Suspense>
               )}
             </div>
           </div>
@@ -361,7 +357,7 @@ function SharedCollection({ shareToken }) {
                 <label>{t('card.printing')}</label>
                 <select className="select-control" value={printingFilter} onChange={(e) => setPrintingFilter(e.target.value)}>
                   <option value="">{t('collection.allPrintings')}</option>
-                  {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+                  {PRINTINGS.map(p => <option key={p} value={p}>{printingLabel(t, p)}</option>)}
                 </select>
               </div>
             </div>
@@ -410,9 +406,9 @@ function SharedCollection({ shareToken }) {
                   {getFoilOverlayClass(card.printing) && (
                     <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
                   )}
-                  {getPrintingBadgeLabel(card.printing) && (
+                  {getPrintingBadgeLabel(card.printing, t) && (
                     <span style={{ position: 'absolute', top: '6px', left: '6px', fontSize: '0.6rem', fontWeight: 800, padding: '2px 5px', borderRadius: '3px', zIndex: 6, ...getPrintingBadgeStyle(card.printing) }}>
-                      {getPrintingBadgeLabel(card.printing)}
+                      {getPrintingBadgeLabel(card.printing, t)}
                     </span>
                   )}
                   {card.quantity > 1 && (
@@ -477,8 +473,8 @@ function SharedCollection({ shareToken }) {
                   {activeCard.subtypes.length > 0 && (<><span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>{t('shared.specSubtypes')}</span> <span style={{ color: 'var(--text-strong)' }}>{activeCard.subtypes.join(', ')}</span></>)}
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.8rem', marginTop: '0.25rem' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>{t('inspector.specCondition')}</span> <span style={{ color: 'var(--text-strong)' }}>{activeCard.condition}</span>
-                  <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>{t('inspector.specPrinting')}</span> <span style={{ color: 'var(--text-strong)' }}>{activeCard.printing}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>{t('inspector.specCondition')}</span> <span style={{ color: 'var(--text-strong)' }}>{conditionLabel(t, activeCard.condition)}</span>
+                  <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>{t('inspector.specPrinting')}</span> <span style={{ color: 'var(--text-strong)' }}>{printingLabel(t, activeCard.printing, activeCard.game)}</span>
                   <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>{t('inspector.specLanguage')}</span> <span style={{ color: 'var(--text-strong)' }}>{activeCard.language}</span>
                 </div>
                 {shareLocations && activeCard.location && (

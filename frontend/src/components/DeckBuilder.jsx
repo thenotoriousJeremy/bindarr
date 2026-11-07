@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import { Plus, Trash2, X, ChevronLeft, Play, BarChart2, Search, LogOut, PackageCheck, LayoutGrid, List, Download, Upload, Eye, Filter, CheckCircle, AlertTriangle, Layers, Zap, Swords, Gamepad2, SlidersHorizontal, ArrowRight, FolderPlus, FileText, MapPin, Crown } from 'lucide-react';
-import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { shuffleArray } from '../utils/shuffle';
-import { translateJapaneseName } from '../utils/langHelper';
+import { translateJapaneseName, loadNameDictionaries, hasJapaneseText } from '../utils/langHelper';
 import { displayName } from '../utils/languages';
 import CheckoutWizardModal from './CheckoutWizardModal';
 import ScryfallSyntaxHelp from './ScryfallSyntaxHelp';
@@ -21,6 +20,17 @@ import {
 import { deckCardUndo, undoToast } from '../utils/undo';
 import RiotNotice from './RiotNotice';
 import { RIFTBOUND_GROUPS, riftboundGroup } from '../utils/riftbound';
+import { apiErrorText } from '../utils/apiError';
+import { lazyNamed } from '../utils/lazyWithReload';
+import ChartFallback from './charts/ChartFallback';
+
+// The analytics plots are code-split (charts/DeckCharts), so recharts is fetched
+// when a deck's stats are first drawn rather than with the deck list.
+const deckCharts = () => import('./charts/DeckCharts');
+const CostCurveBars = lazyNamed(deckCharts, 'CostCurveBars');
+const SupertypeDonut = lazyNamed(deckCharts, 'SupertypeDonut');
+const TypeBars = lazyNamed(deckCharts, 'TypeBars');
+
 
 // Total copies of a card (matched by name) already in a deck's card list.
 const deckCountByName = (deckCards, name) =>
@@ -255,7 +265,7 @@ function DeckBuilder({ showToast }) {
         body: JSON.stringify({ ...deckDraft, target_size: parseInt(deckDraft.target_size, 10) || 60 })
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || t('deck.errCreateGeneric'));
+      if (!response.ok) throw new Error(apiErrorText(t, data, 'deck.errCreateGeneric'));
       setActiveDeck(deck => ({ ...deck, ...deckDraft, name: deckDraft.name.trim(), target_size: parseInt(deckDraft.target_size, 10) || 60 }));
       setDeckDraft(null);
       fetchDecks();
@@ -315,7 +325,7 @@ function DeckBuilder({ showToast }) {
         await loadDeckDetails(activeDeck.id);
       } else {
         const data = await response.json().catch(() => ({}));
-        showToast(data.error || 'Failed to add card.');
+        showToast(apiErrorText(t, data, 'inspector.errAddDeck'));
       }
     } catch (err) {
       console.error(err);
@@ -476,6 +486,8 @@ function DeckBuilder({ showToast }) {
           setSearchResults(Array.from(byCardId.values()));
         }
       } else {
+        // The name maps are fetched on first use; a Japanese query waits for them.
+        if (deckSearchGame !== 'mtg' && hasJapaneseText(searchQuery)) await loadNameDictionaries().catch(() => {});
         const finalQuery = deckSearchGame === 'mtg' ? searchQuery : (translateJapaneseName(searchQuery) || searchQuery);
         const response = await fetch(`/api/search?name=${encodeURIComponent(finalQuery)}&scope=collection&game=${deckSearchGame}`);
         if (response.ok) {
@@ -522,7 +534,7 @@ function DeckBuilder({ showToast }) {
         if (errData && errData.details && errData.details.length > 0) {
           showToast(t('deck.errCheckout', { detail: errData.details[0], extra: errData.details.length > 1 ? t('deck.andMore', { count: errData.details.length - 1 }) : '' }));
         } else {
-          showToast(errData?.error || 'Failed to check out deck.');
+          showToast(apiErrorText(t, errData, 'deck.errCheckoutGeneric'));
         }
       }
     } catch (err) {
@@ -1966,14 +1978,9 @@ function DeckBuilder({ showToast }) {
                       <BarChart2 size={14} style={{ color: '#3b82f6' }} /> Energy / Mana Cost Curve
                     </h3>
                     <div style={{ width: '100%', height: '180px' }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={manaCurveData} margin={{ top: 10, right: 10, left: -20, bottom: 5 }}>
-                          <XAxis dataKey="cost" stroke="var(--text-muted)" fontSize={10} tickLine={false} />
-                          <YAxis stroke="var(--text-muted)" fontSize={10} tickLine={false} />
-                          <Tooltip contentStyle={{ background: 'rgba(0,0,0,0.8)', border: '1px solid var(--border-glass)', borderRadius: '4px', fontSize: '0.8rem', color: 'var(--text-strong)' }} />
-                          <Bar dataKey="count" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
+                      <Suspense fallback={<ChartFallback />}>
+                        <CostCurveBars data={manaCurveData} />
+                      </Suspense>
                     </div>
                   </div>
                 )}
@@ -1985,24 +1992,9 @@ function DeckBuilder({ showToast }) {
                       <BarChart2 size={14} style={{ color: 'var(--accent-red)' }} /> Supertype Breakdown
                     </h3>
                     <div style={{ width: '100%', height: '180px' }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={supertypeData}
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={50}
-                            outerRadius={70}
-                            paddingAngle={3}
-                            dataKey="value"
-                          >
-                            {supertypeData.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                            ))}
-                          </Pie>
-                          <Tooltip contentStyle={{ background: 'rgba(0,0,0,0.8)', border: '1px solid var(--border-glass)', borderRadius: '4px', fontSize: '0.8rem', color: 'var(--text-strong)' }} />
-                        </PieChart>
-                      </ResponsiveContainer>
+                      <Suspense fallback={<ChartFallback />}>
+                        <SupertypeDonut data={supertypeData} colors={PIE_COLORS} />
+                      </Suspense>
                     </div>
                     {/* Legend */}
                     <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
@@ -2023,23 +2015,9 @@ function DeckBuilder({ showToast }) {
                       <BarChart2 size={14} style={{ color: 'var(--accent-yellow)' }} /> {t(deckGame === 'mtg' ? 'deck.colorLandDist' : 'dash.typeDistribution')}
                     </h3>
                     <div style={{ width: '100%', height: '220px' }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={energyData} margin={{ top: 10, right: 10, left: -20, bottom: 5 }}>
-                          <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={10} tickLine={false} />
-                          <YAxis stroke="var(--text-muted)" fontSize={10} tickLine={false} />
-                          <Tooltip contentStyle={{ background: 'rgba(0,0,0,0.8)', border: '1px solid var(--border-glass)', borderRadius: '4px', fontSize: '0.8rem', color: 'var(--text-strong)' }} />
-                          <Bar dataKey="value" fill="var(--accent-yellow)" radius={[4, 4, 0, 0]}>
-                            {energyData.map((entry, idx) => {
-                              const colorMap = {
-                                'White': '#fef08a', 'Blue': '#3b82f6', 'Black': '#475569', 'Red': '#ef4444', 'Green': '#10b981', 'Colorless': '#cbd5e1',
-                                'Land (Plains)': '#fef08a', 'Land (Island)': '#60a5fa', 'Land (Swamp)': '#475569', 'Land (Mountain)': '#f87171', 'Land (Forest)': '#4ade80', 'Land (Nonbasic)': '#d97706',
-                                'Grass': '#4ade80', 'Fire': '#f87171', 'Water': '#60a5fa', 'Lightning': '#facc15', 'Psychic': '#c084fc', 'Fighting': '#f97316', 'Darkness': '#475569', 'Metal': '#94a3b8', 'Dragon': '#a855f7', 'Fairy': '#f472b6'
-                              };
-                              return <Cell key={`cell-${idx}`} fill={colorMap[entry.name] || 'var(--accent-yellow)'} />;
-                            })}
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
+                      <Suspense fallback={<ChartFallback />}>
+                        <TypeBars data={energyData} />
+                      </Suspense>
                     </div>
                   </div>
                 )}

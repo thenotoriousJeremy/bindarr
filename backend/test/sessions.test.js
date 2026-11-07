@@ -177,7 +177,7 @@ async function testStatusCodesNeverFakeAnExpiredSession() {
   });
   assert.strictEqual(wrong.status, 400, `a wrong current password is a bad request, not a lost session (got ${wrong.status})`);
   assert.match(wrong.body.error, /current password/i);
-  assert.strictEqual(wrong.body.code, undefined, 'and it must not carry the session marker');
+  assert.notStrictEqual(wrong.body.code, 'session_expired', 'and it must not carry the session marker');
   assert.strictEqual((await probe(token)).status, 200, 'the session survives the typo');
   assert.strictEqual((await db.get(`SELECT password_hash FROM users WHERE id = ?`, [trainerId])).password_hash, before,
     'and the password is unchanged');
@@ -198,7 +198,8 @@ async function testStatusCodesNeverFakeAnExpiredSession() {
   // ...and a failed sign-in, which is a 401 too, does not: nobody was signed in.
   const badLogin = await api('POST', '/api/auth/login', { body: { username: 'trainer', password: 'nope-nope-1' } });
   assert.strictEqual(badLogin.status, 401);
-  assert.strictEqual(badLogin.body.code, undefined);
+  // It may carry its own code (invalid_credentials, for the UI to translate), never the marker.
+  assert.notStrictEqual(badLogin.body.code, 'session_expired');
   console.log('PASS: only the auth gate answers 401 with the session-expired marker');
 }
 

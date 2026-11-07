@@ -1,5 +1,4 @@
-import { useState, useEffect } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, AreaChart, Area } from 'recharts';
+import { Suspense, useState, useEffect } from 'react';
 import { TrendingUp, Coins, Library, Trophy, Plus, ArrowUpRight } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { priceText, currencySymbol } from '../utils/formatPrice';
@@ -7,6 +6,15 @@ import { useFx } from '../utils/useFx';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { defaultGameFilter, gameOptions, showGamePicker, gameLabel } from '../utils/games';
 import { useT } from '../utils/i18n';
+import { lazyNamed } from '../utils/lazyWithReload';
+import ChartFallback from './charts/ChartFallback';
+
+// The plots are code-split (charts/DashboardCharts): recharts is the largest
+// dependency in the app, and the numbers and lists here should not wait for it.
+const charts = () => import('./charts/DashboardCharts');
+const ValueTimeline = lazyNamed(charts, 'ValueTimeline');
+const SetValueBars = lazyNamed(charts, 'SetValueBars');
+const DistributionDonut = lazyNamed(charts, 'DistributionDonut');
 import CardInspectorModal from './CardInspectorModal';
 import CardImage from './CardImage';
 import { PokemonMigrationNotice } from './PokemonMigrationBanner';
@@ -336,24 +344,9 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
           ) : chartHistory.length < 2 ? (
             <div className="chart-empty">{t('dash.notEnoughHistory')}</div>
           ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartHistory} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--type-grass)" stopOpacity={0.4}/>
-                    <stop offset="95%" stopColor="var(--type-grass)" stopOpacity={0.0}/>
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="date" stroke="var(--text-secondary)" style={{ fontSize: '0.7rem' }} />
-                <YAxis stroke="var(--text-secondary)" style={{ fontSize: '0.7rem' }} tickFormatter={(v) => `${unitSymbol}${v}`} />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }}
-                  labelStyle={{ color: 'var(--text-primary)' }}
-                  formatter={(v) => [`${unitSymbol}${v}`, t('dash.portfolioValue')]}
-                />
-                <Area type="monotone" dataKey="value" stroke="var(--type-grass)" strokeWidth={2} fillOpacity={1} fill="url(#colorVal)" />
-              </AreaChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<ChartFallback />}>
+              <ValueTimeline data={chartHistory} symbol={unitSymbol} />
+            </Suspense>
           )}
         </div>
       </div>
@@ -370,18 +363,9 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
               {chartSets.length === 0 ? (
                 <div className="chart-empty">{t('dash.noSetData')}</div>
               ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartSets} layout="vertical" margin={{ left: 10, right: 30, top: 10, bottom: 10 }}>
-                  <XAxis type="number" stroke="var(--text-secondary)" tickFormatter={(v) => `${unitSymbol}${v}`} />
-                  <YAxis dataKey="name" type="category" width={120} stroke="var(--text-secondary)" tickLine={false} axisLine={false} style={{ fontSize: '0.8rem' }} />
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }}
-                    labelStyle={{ color: 'var(--text-primary)' }}
-                    formatter={(v) => [`${unitSymbol}${v}`, t('dash.value')]}
-                  />
-                  <Bar dataKey="value" fill="var(--accent-red)" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              <Suspense fallback={<ChartFallback />}>
+                <SetValueBars data={chartSets} symbol={unitSymbol} />
+              </Suspense>
               )}
             </div>
           </div>
@@ -396,36 +380,9 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                 {typeChartData.length === 0 ? (
                   <div className="chart-empty">{t('dash.noTypeData')}</div>
                 ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={typeChartData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={50}
-                      outerRadius={80}
-                      paddingAngle={3}
-                      dataKey="value"
-                    >
-                      {typeChartData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }}
-                      itemStyle={{ color: 'var(--text-strong)' }}
-                      labelStyle={{ color: 'var(--text-strong)' }}
-                      formatter={(v) => [v, t('dash.cards')]}
-                    />
-                    <Legend 
-                      verticalAlign="bottom" 
-                      height={36} 
-                      iconSize={10} 
-                      style={{ fontSize: '0.75rem' }} 
-                      formatter={(value) => <span style={{ color: 'var(--text-secondary)' }}>{value}</span>}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
+                <Suspense fallback={<ChartFallback />}>
+                  <DistributionDonut data={typeChartData} colorKey="color" innerRadius={50} outerRadius={80} />
+                </Suspense>
                 )}
               </div>
             </div>
@@ -437,36 +394,9 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                 {rarityChartData.length === 0 ? (
                   <div className="chart-empty">{t('dash.noRarityData')}</div>
                 ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={rarityChartData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={45}
-                      outerRadius={78}
-                      paddingAngle={3}
-                      dataKey="value"
-                    >
-                      {rarityChartData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.fill} />
-                      ))}
-                    </Pie>
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }}
-                      itemStyle={{ color: 'var(--text-strong)' }}
-                      labelStyle={{ color: 'var(--text-strong)' }}
-                      formatter={(v) => [v, t('dash.cards')]}
-                    />
-                    <Legend 
-                      verticalAlign="bottom" 
-                      height={36} 
-                      iconSize={10} 
-                      style={{ fontSize: '0.75rem' }} 
-                      formatter={(value) => <span style={{ color: 'var(--text-secondary)', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
+                <Suspense fallback={<ChartFallback />}>
+                  <DistributionDonut data={rarityChartData} colorKey="fill" innerRadius={45} outerRadius={78} legendEllipsis />
+                </Suspense>
                 )}
               </div>
             </div>
@@ -509,7 +439,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                       <span>{card.set_name} • {card.rarity}</span>
                       {card.printing && card.printing !== 'Normal' && (
                         <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 4px', borderRadius: '3px', flexShrink: 0, ...getPrintingBadgeStyle(card.printing) }}>
-                          {getPrintingBadgeLabel(card.printing)}
+                          {getPrintingBadgeLabel(card.printing, t)}
                         </span>
                       )}
                     </div>
@@ -549,7 +479,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                         <span>{card.set_name} • #{card.number}</span>
                         {card.printing && card.printing !== 'Normal' && (
                           <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 4px', borderRadius: '3px', flexShrink: 0, ...getPrintingBadgeStyle(card.printing) }}>
-                            {getPrintingBadgeLabel(card.printing)}
+                            {getPrintingBadgeLabel(card.printing, t)}
                           </span>
                         )}
                       </div>

@@ -3,6 +3,7 @@ import { Database, Play, Square, RefreshCw, Check, AlertTriangle, Cpu, Download,
 import SetTree from './SetTree';
 import { useT } from '../utils/i18n';
 import { gameInfo, gameLabel } from '../utils/games';
+import { fillParts } from '../utils/translate';
 
 // Scan catalogs.
 //
@@ -157,8 +158,10 @@ function ReadyMadeCard({ engine, onDownload, busy, enginePresent, productMaps, m
           matched and then resolved to nothing. The product map is what closes that
           gap, and it downloads with the catalog. */}
       <p style={HINT}>
-        <strong style={{ color: 'var(--text-strong)' }}>Magic</strong> {t('catalog.magicVsPokemon').split('Magic')[1]?.split('Pokémon')[0]?.trim()}
-        {' '}<strong style={{ color: 'var(--text-strong)' }}>Pokémon</strong>{t('catalog.magicVsPokemon').split('Pokémon')[1]}
+        {fillParts(t('catalog.magicVsPokemon'), {
+          magic: <strong key="magic" style={{ color: 'var(--text-strong)' }}>Magic</strong>,
+          pokemon: <strong key="pokemon" style={{ color: 'var(--text-strong)' }}>Pokémon</strong>,
+        })}
       </p>
       <div className="collection-table-wrapper" style={{ overflowX: 'auto' }}>
         <table className="collection-table">

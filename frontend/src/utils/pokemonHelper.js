@@ -1,4 +1,3 @@
-import POKEMON_TRANSLATIONS from '../../../shared/pokemonTranslations.js';
 import { langCode } from './languages.js';
 
 const PREFIXES = {
@@ -71,10 +70,12 @@ const SUFFIX_PATTERNS = [
   /^(.*?)(-GX)$/i,
 ];
 
-export function translatePokemonName(name, language) {
+// POKEMON_TRANSLATIONS is passed in rather than imported: it is fetched on first
+// use (see langHelper.js), so a caller without it gets the English name back.
+export function translatePokemonName(name, language, POKEMON_TRANSLATIONS) {
   if (!name) return '';
   const code = langCode(language);
-  if (!code || code === 'en') return name;
+  if (!code || code === 'en' || !POKEMON_TRANSLATIONS) return name;
 
   // Direct hit in dictionary
   if (POKEMON_TRANSLATIONS[name]?.[code]) {
@@ -136,5 +137,3 @@ export function translatePokemonName(name, language) {
 
   return `${finalPrefix}${translatedBase}${finalSuffix}`;
 }
-
-export { POKEMON_TRANSLATIONS };

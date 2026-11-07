@@ -5,6 +5,7 @@ import { translatedName, setCode, isEnglish, langCode } from '../utils/languages
 import { formatPrice, priceText } from '../utils/formatPrice';
 import Price from './Price';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
+import { conditionLabel, printingLabel } from '../utils/cardOptions';
 import { tcgplayerUrl, cardmarketUrl, searchUrl, priceSource, noLinkReason } from '../utils/marketplaceLinks';
 import CardImage from './CardImage';
 import CardImageZoom from './CardImageZoom';
@@ -19,6 +20,7 @@ import { useT } from '../utils/i18n';
 import { undoToast } from '../utils/undo';
 import RiotNotice from './RiotNotice';
 import { isLandscape } from '../utils/riftbound';
+import { apiErrorText } from '../utils/apiError';
 
 // MTG color identity pip colors (WUBRG), approximating the printed mana colors.
 const MTG_COLOR_BG = {
@@ -236,7 +238,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         // card already holding it, which a generic failure toast would throw away
         // and leave the user re-typing a number that was never the problem.
         const body = await res.json().catch(() => null);
-        showToast && showToast(body?.error || t('inspector.errUpdate'));
+        showToast && showToast(apiErrorText(t, body, 'inspector.errUpdate'));
       }
     } catch (err) {
       console.error(err);
@@ -324,7 +326,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         body: JSON.stringify({ entry_ids: [targetEntryId], action: 'add_to_deck', value: deckId })
       });
       const data = await res.json().catch(() => ({}));
-      showToast && showToast(res.ok ? (data.message || t('inspector.addedToDeck')) : (data.error || t('inspector.errAddDeck')));
+      showToast && showToast(res.ok ? (data.message || t('inspector.addedToDeck')) : apiErrorText(t, data, 'inspector.errAddDeck'));
     } catch (err) {
       console.error(err);
       showToast && showToast(t('inspector.errAddDeckGeneric'));
@@ -381,7 +383,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         onClose();
       } else {
         const body = await res.json().catch(() => null);
-        showToast && showToast(body?.error || t('inspector.errUpdate'));
+        showToast && showToast(apiErrorText(t, body, 'inspector.errUpdate'));
       }
     } catch (err) {
       console.error(err);
@@ -719,7 +721,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                       the same styling as a real one. */}
                   {!(activeCard.market_value > 0) && condition && condition !== 'Near Mint' && (
                     <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '0.1rem', lineHeight: 1.35 }}>
-                      {t('inspector.priceNearMintOnly', { condition })}
+                      {t('inspector.priceNearMintOnly', { condition: conditionLabel(t, condition) })}
                     </div>
                   )}
                 </div>
@@ -786,12 +788,12 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 {activeCard.grader && activeCard.grader !== 'Raw' ? (
                   <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specGrade')}</span> <span style={{ color: 'var(--accent-yellow)', fontWeight: 700 }}>{activeCard.grader}{activeCard.grade != null ? ` ${activeCard.grade}` : ''}</span></div>
                 ) : (
-                  <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specCondition')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.condition}</span></div>
+                  <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specCondition')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{conditionLabel(t, activeCard.condition)}</span></div>
                 )}
                 {activeCard.cert_number && (
                   <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specCert')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.cert_number}</span></div>
                 )}
-                <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specPrinting')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.printing}</span></div>
+                <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specPrinting')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{printingLabel(t, activeCard.printing, activeCard.game || activeCard.supertype)}</span></div>
                 <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specLanguage')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.language}</span></div>
                 <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specSupertype')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.supertype}</span></div>
               </div>
@@ -935,7 +937,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               )}
 
               {activeCard.notes && (
-                <div style={{ background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '0.6rem 0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                <div style={{ background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.6rem 0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                   {activeCard.notes}
                 </div>
               )}

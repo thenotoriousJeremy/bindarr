@@ -6,7 +6,7 @@ import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '.
 import { priceText } from '../utils/formatPrice';
 import { getSortCategories, changedCategories } from '../utils/sortCategories';
 import { useFx } from '../utils/useFx';
-import { isBinderType } from '../utils/cardOptions';
+import { isBinderType, conditionLabel } from '../utils/cardOptions';
 import { displayName } from '../utils/languages';
 import { useLongPress } from '../utils/useLongPress';
 import { pageColumns as resolvePageColumns, layoutPockets } from '../utils/binderLayout';
@@ -74,6 +74,7 @@ function DroppablePocket({ enabled, dropId, dropData, dragId, dragCard, children
 }
 
 function PrintingBadge({ printing }) {
+  const { t } = useT();
   if (!printing || printing === 'Normal') return null;
   return (
     <div style={{
@@ -83,7 +84,7 @@ function PrintingBadge({ printing }) {
       zIndex: 20, boxShadow: '0 2px 4px rgba(0,0,0,0.5)',
       ...getPrintingBadgeStyle(printing)
     }}>
-      {getPrintingBadgeLabel(printing)}
+      {getPrintingBadgeLabel(printing, t)}
     </div>
   );
 }
@@ -122,14 +123,14 @@ export function FocusedCardInfo({ card, slotNumber, moveSelect = null }) {
             )}
             {card.printing && card.printing !== 'Normal' && (
               <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', ...getPrintingBadgeStyle(card.printing) }}>
-                {getPrintingBadgeLabel(card.printing)}
+                {getPrintingBadgeLabel(card.printing, t)}
               </span>
             )}
             {card.printing === 'Normal' && <span style={infoChipStyle}>{t('compartment.printingNormal')}</span>}
             {card.supertype && <span style={{ ...infoChipStyle, color: 'var(--text-strong)' }} title={t('compartment.supertype')}>{card.supertype}</span>}
             {(card.types || []).length > 0 && <span style={infoChipStyle} title={t('compartment.types')}>{card.types.join(' / ')}</span>}
             {(card.subtypes || []).length > 0 && <span style={infoChipStyle} title={t('compartment.subtypes')}>{card.subtypes.join(' / ')}</span>}
-            {card.condition && <span style={infoChipStyle}>{card.condition}</span>}
+            {card.condition && <span style={infoChipStyle}>{conditionLabel(t, card.condition)}</span>}
             {card.language && card.language !== 'English' && <span style={infoChipStyle}>{card.language}</span>}
             {card.quantity > 1 && <span style={{ ...infoChipStyle, color: 'var(--text-strong)' }}>x{card.quantity}</span>}
             {card.price_trend > 0 && (
@@ -622,7 +623,7 @@ export default function CompartmentView({
                     ...getCardRarityBorder(card.rarity),
                     ...(isTarget ? {
                       border: '2.5px solid var(--accent-green)',
-                      boxShadow: '0 0 15px rgba(34,197,94,0.4), inset 0 0 20px rgba(34,197,94,0.3)'
+                      boxShadow: '0 0 15px var(--accent-green-glow), inset 0 0 20px var(--accent-green-glow)'
                     } : {}),
                     ...(card.entry_id === currentActiveId ? { border: '2.5px solid var(--accent-yellow)', boxShadow: '0 0 10px rgba(250,204,21,0.5)' } : {}),
                     ...(isSelected(card.entry_id) ? selectedOutline : {}),
@@ -917,7 +918,7 @@ export default function CompartmentView({
                 
                 const highlightStyle = isTarget ? { 
                   border: '2px solid var(--accent-green)', 
-                  boxShadow: '0 0 20px rgba(34,197,94,0.6)' 
+                  boxShadow: '0 0 20px var(--accent-green-glow)' 
                 } : {};
 
                 if (card.__empty) {

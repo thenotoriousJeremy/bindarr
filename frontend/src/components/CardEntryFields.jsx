@@ -1,4 +1,4 @@
-import { CONDITIONS, getPrintings, getLanguageNamesForGame, GRADERS, GRADES } from '../utils/cardOptions';
+import { CONDITIONS, getPrintings, getLanguageNamesForGame, GRADERS, GRADES, conditionLabel, printingLabel } from '../utils/cardOptions';
 import { useT } from '../utils/i18n';
 
 // The most copies one add or edit may ask for. Mirrors the server's bound
@@ -64,7 +64,7 @@ export default function CardEntryFields({
       <select className="select-control" value={graded ? 'Near Mint' : condition} disabled={graded}
         title={graded ? t('card.conditionGradedHint') : undefined}
         onChange={(e) => onCondition(e.target.value)}>
-        {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+        {CONDITIONS.map(c => <option key={c} value={c}>{conditionLabel(t, c)}</option>)}
       </select>
     </div>
   );
@@ -72,7 +72,7 @@ export default function CardEntryFields({
     <div className="form-group" style={groupStyle}>
       <label>{t('card.printing')}</label>
       <select className="select-control" value={printing} onChange={(e) => onPrinting(e.target.value)}>
-        {printings.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+        {printings.map(p => <option key={p.value} value={p.value}>{printingLabel(t, p.value, game)}</option>)}
       </select>
     </div>
   );

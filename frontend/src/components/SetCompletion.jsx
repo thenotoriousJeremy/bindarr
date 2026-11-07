@@ -9,6 +9,7 @@ import { totalPrices } from '../utils/convertPrice';
 import { defaultGame, gameOptions, showGamePicker } from '../utils/games';
 import { getLanguagesForGame, displayName } from '../utils/languages';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
+import { printingLabel } from '../utils/cardOptions';
 import { filterCards, isComplete, purchaseList, valueParts } from '../utils/setCompletion';
 import { buildMassEntry, massEntryPage } from '../utils/tcgMassEntryUrl';
 
@@ -385,14 +386,14 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
                       {variantView && card.variants.length > 0 && (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px', marginTop: '0.2rem' }}>
                           {card.variants.map(v => (
-                            <span key={v.printing} title={`${v.printing}${v.owned ? ` × ${v.owned}` : ''}`}
+                            <span key={v.printing} title={`${printingLabel(t, v.printing, card.game)}${v.owned ? ` × ${v.owned}` : ''}`}
                               style={{
                                 fontSize: '0.55rem', fontWeight: 800, padding: '1px 4px', borderRadius: '3px',
                                 ...(v.owned > 0
                                   ? getPrintingBadgeStyle(v.printing)
                                   : { background: 'transparent', color: 'var(--text-muted)', border: '1px dashed var(--border-glass-hover)' }),
                               }}>
-                              {getPrintingBadgeLabel(v.printing) || t('sets.normalBadge')}
+                              {getPrintingBadgeLabel(v.printing, t) || t('sets.normalBadge')}
                             </span>
                           ))}
                         </div>

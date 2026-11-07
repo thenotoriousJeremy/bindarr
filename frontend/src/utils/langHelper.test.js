@@ -1,7 +1,23 @@
 // Self-check for card display name localization and Japanese translation fallback.
 // Run: `node src/utils/langHelper.test.js`
 import assert from 'node:assert';
-import { getCardDisplayName, translateJapaneseName } from './langHelper.js';
+import { getCardDisplayName, translateJapaneseName, loadNameDictionaries, nameDictionariesReady, onNameDictionaries, hasJapaneseText, POKEMON_EN_TO_JP } from './langHelper.js';
+
+// 0. The dictionaries are fetched on first use. Until then a name is the English
+// one and a Japanese query maps to nothing — and asking is what starts the fetch.
+assert.strictEqual(nameDictionariesReady(), false);
+let arrived = 0;
+onNameDictionaries(() => { arrived++; });
+assert.strictEqual(getCardDisplayName('Charizard', 'English'), 'Charizard', 'English never needs them');
+assert.strictEqual(nameDictionariesReady(), false, 'and does not fetch them');
+assert.strictEqual(getCardDisplayName('Charizard', 'Japanese'), 'Charizard', 'not loaded yet: English');
+assert.strictEqual(translateJapaneseName('リザードン'), '', 'not loaded yet: unmapped');
+assert.strictEqual(loadNameDictionaries(), loadNameDictionaries(), 'one fetch, however many ask');
+await loadNameDictionaries();
+assert.strictEqual(nameDictionariesReady(), true);
+assert.strictEqual(arrived, 1, 'listeners hear about it once');
+assert.strictEqual(POKEMON_EN_TO_JP.Charizard, 'リザードン', 'the exported map is filled in place');
+assert.ok(hasJapaneseText('リザードン ex') && hasJapaneseText('稲妻') && !hasJapaneseText('Charizard') && !hasJapaneseText(''));
 
 // 1. When printed_name exists, it always wins regardless of language.
 assert.strictEqual(getCardDisplayName('Ancestral Katana', 'Japanese', '祖先の刀'), '祖先の刀');

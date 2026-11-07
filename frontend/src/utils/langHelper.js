@@ -1,21 +1,46 @@
-import LORCANA_TRANSLATIONS from '../../../shared/lorcanaTranslations.js';
-import POKEMON_TRANSLATIONS from '../../../shared/pokemonTranslations.js';
 import { translatePokemonName } from './pokemonHelper.js';
 import { langCode } from './languages.js';
+import { loadNameDictionaries, nameDictionaries, onNameDictionaries } from './nameDictionaries.js';
 
+// The name dictionaries are fetched on first use (see nameDictionaries.js). Until
+// they land a name shows in English and a Japanese query goes unmapped; asking is
+// what starts the fetch, and useNameDictionaries re-renders what was drawn
+// meanwhile.
+let POKEMON_TRANSLATIONS = null;
+let LORCANA_TRANSLATIONS = null;
+// Filled in place when the dictionaries arrive, so an importer's reference stays good.
 export const POKEMON_EN_TO_JP = {};
 export const POKEMON_JP_TO_EN = {};
-for (const [en, langs] of Object.entries(POKEMON_TRANSLATIONS)) {
-  if (langs.ja) {
-    POKEMON_EN_TO_JP[en] = langs.ja;
-    POKEMON_JP_TO_EN[langs.ja] = en;
+
+const take = ({ pokemon, lorcana }) => {
+  POKEMON_TRANSLATIONS = pokemon;
+  LORCANA_TRANSLATIONS = lorcana;
+  for (const [en, langs] of Object.entries(pokemon)) {
+    if (langs.ja) {
+      POKEMON_EN_TO_JP[en] = langs.ja;
+      POKEMON_JP_TO_EN[langs.ja] = en;
+    }
   }
-}
+};
+if (nameDictionaries()) take(nameDictionaries());
+else onNameDictionaries(take);
+
+export const nameDictionariesReady = () => POKEMON_TRANSLATIONS !== null;
+export { loadNameDictionaries, onNameDictionaries };
+
+// Only text in Japanese script needs the dictionaries to map a search; the ranges
+// are the ones translateJapaneseName keeps.
+const JAPANESE_TEXT = /[\u3000-\u3fff\uff00-\uffef\u4e00-\u9faf]/;
+export const hasJapaneseText = (text) => JAPANESE_TEXT.test(String(text || ''));
 
 export const translateLorcanaName = (englishName, language) => {
   if (!englishName) return '';
   const lang = langCode(language);
   if (!lang || lang === 'en') return englishName;
+  if (!LORCANA_TRANSLATIONS) {
+    loadNameDictionaries();
+    return englishName;
+  }
 
   const { characters = {}, versions = {} } = LORCANA_TRANSLATIONS;
 
@@ -45,6 +70,10 @@ export const getCardDisplayName = (englishName, language, printedName, game) => 
   if (!englishName) return '';
   const code = langCode(language);
   if (!code || code === 'en') return englishName;
+  if (!nameDictionariesReady()) {
+    loadNameDictionaries();
+    return englishName;
+  }
 
   // Lorcana translation check
   if (game === 'lorcana' || englishName.includes(' - ') || (LORCANA_TRANSLATIONS.characters && LORCANA_TRANSLATIONS.characters[englishName])) {
@@ -53,7 +82,7 @@ export const getCardDisplayName = (englishName, language, printedName, game) => 
   }
 
   // Pokemon translation check
-  const pkmTranslated = translatePokemonName(englishName, language);
+  const pkmTranslated = translatePokemonName(englishName, language, POKEMON_TRANSLATIONS);
   if (pkmTranslated && pkmTranslated !== englishName) return pkmTranslated;
 
   return englishName;
@@ -88,6 +117,10 @@ const JP_EN_PREFIX = {
 export const translateJapaneseName = (rawJpName) => {
   let jp = String(rawJpName || '').replace(/[^\u3000-㿿぀-ゟ゠-ヿ＀-￯一-龯]/g, '').trim();
   if (!jp) return '';
+  if (!nameDictionariesReady()) {
+    loadNameDictionaries();
+    return '';
+  }
 
   let prefix = '';
   for (const [jpPrefix, en] of Object.entries(JP_EN_PREFIX)) {
@@ -104,5 +137,3 @@ export const translateJapaneseName = (rawJpName) => {
 
   return '';
 };
-
-export { translatePokemonName, POKEMON_TRANSLATIONS, LORCANA_TRANSLATIONS };

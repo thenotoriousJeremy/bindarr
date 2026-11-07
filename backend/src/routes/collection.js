@@ -209,13 +209,13 @@ router.all('/search', searchLimiter, async (req, res) => {
       return res.status(403).json({ error: 'Invalid API Key' });
     }
     if (error.message === 'RATE_LIMIT_EXCEEDED') {
-      return res.status(429).json({ error: 'Rate limit exceeded' });
+      return res.status(429).json({ error: 'Rate limit exceeded', code: 'rate_limited' });
     }
     if (['POKEMONTCGAPI_KEY_REQUIRED', 'POKEMONTCGAPI_KEY_INVALID'].includes(error.message)) {
       return res.status(503).json({ error: 'The administrator needs to configure a valid POKEMONTCGAPI_KEY on the server.' });
     }
     if (error.message === 'UPSTREAM_UNAVAILABLE') {
-      return res.status(503).json({ error: 'Card API is having trouble. Try again in a moment.' });
+      return res.status(503).json({ error: 'Card API is having trouble. Try again in a moment.', code: 'provider_unavailable' });
     }
     res.status(500).json({ error: 'Search failed' });
   }
@@ -745,8 +745,9 @@ router.get('/collection', async (req, res) => {
 // hundred cards travel exactly the same path (cache lookup, compartment
 // resolution, rebalance, price history). Throws AddCardError for caller-visible
 // failures; anything else is a genuine 500.
+// `code` (and `params` for its placeholders) lets the UI say it in the user's language.
 class AddCardError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, code, params) { super(message); this.status = status; this.code = code; this.params = params; }
 }
 
 // Mirrors the collection.grader CHECK constraint in db.js. 'Raw' is the default
@@ -783,7 +784,7 @@ async function resolveCardForAdd(user, { card_id, game = 'pokemon', language = '
   if (!card) {
     card = await cardApi.getCardById(card_id, { game, tcgApiKey: user.tcg_api_key });
     if (!card) {
-      throw new AddCardError(404, `Card ID ${card_id} not found.`);
+      throw new AddCardError(404, `Card ID ${card_id} not found.`, 'card_not_found');
     }
   }
 
@@ -859,7 +860,7 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
       [user.id, grader, certValue]
     );
     if (dup) {
-      throw new AddCardError(409, `${grader} cert ${certValue} is already in your collection as ${dup.name}.`);
+      throw new AddCardError(409, `${grader} cert ${certValue} is already in your collection as ${dup.name}.`, 'cert_in_use', { grader, cert: certValue, name: dup.name });
     }
   }
 
@@ -1007,10 +1008,10 @@ router.post('/collection', async (req, res) => {
     res.status(200).json(await addCardToCollection(req.user, req.body));
   } catch (error) {
     if (error instanceof AddCardError) {
-      return res.status(error.status).json({ error: error.message });
+      return res.status(error.status).json({ error: error.message, code: error.code, params: error.params });
     }
     console.error(error);
-    res.status(500).json({ error: 'Failed to add card' });
+    res.status(500).json({ error: 'Failed to add card', code: 'add_failed' });
   }
 });
 
@@ -1083,7 +1084,7 @@ router.put('/collection/:id', async (req, res) => {
 
   try {
     const entry = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-    if (!entry) return res.status(404).json({ error: 'Collection entry not found' });
+    if (!entry) return res.status(404).json({ error: 'Collection entry not found', code: 'entry_not_found' });
 
     let isMoving = location_id !== undefined && location_id !== entry.location_id;
     let finalCompartmentId = entry.compartment_id;
@@ -1170,9 +1171,9 @@ router.put('/collection/:id', async (req, res) => {
       if (target) await cardApi.hydrate(target);
       let next = target && (await db.get(`SELECT * FROM card_cache WHERE id = ?`, [target]));
       if (target && !next) next = await cardApi.getCardById(target, { tcgApiKey: req.user.tcg_api_key });
-      if (!next) return res.status(404).json({ error: `Card ID ${target} not found.` });
+      if (!next) return res.status(404).json({ error: `Card ID ${target} not found.`, code: 'card_not_found' });
       if ((next.game || cardApi.gameOf(next.id)) !== (entry.game || cardApi.gameOf(entry.card_id))) {
-        return res.status(400).json({ error: 'A printing can only be changed to one from the same game.' });
+        return res.status(400).json({ error: 'A printing can only be changed to one from the same game.', code: 'printing_other_game' });
       }
       next = await tcgdexApi.learnEnglishName(next);
       const names = (c) => [c && c.name, c && c.printed_name].filter(Boolean).map(n => String(n).trim().toLowerCase());
@@ -1223,7 +1224,7 @@ router.put('/collection/:id', async (req, res) => {
           `SELECT id FROM collection WHERE user_id = ? AND grader = ? AND cert_number = ? AND id != ?`,
           [req.user.id, grader, cert, id]
         );
-        if (dup) return res.status(409).json({ error: `${grader} cert ${cert} is already in your collection.` });
+        if (dup) return res.status(409).json({ error: `${grader} cert ${cert} is already in your collection.`, code: 'cert_in_use', params: { grader, cert } });
       }
       updates.push('grader = ?', 'grade = ?', 'cert_number = ?');
       params.push(grader, g, cert);
@@ -1238,7 +1239,7 @@ router.put('/collection/:id', async (req, res) => {
       } else {
         const value = Number(market_value);
         if (!Number.isFinite(value) || value < 0) {
-          return res.status(400).json({ error: 'market_value must be a number of 0 or more' });
+          return res.status(400).json({ error: 'market_value must be a number of 0 or more', code: 'invalid_market_value' });
         }
         updates.push('market_value = ?', 'market_value_source = ?', "market_value_at = CURRENT_TIMESTAMP");
         params.push(value, 'manual');
@@ -1298,7 +1299,7 @@ router.put('/collection/:id', async (req, res) => {
     res.json({ message: 'Collection entry updated successfully', placement: finalPlacement, container_full: resolvedFull, rule_rejected: resolvedRejected, stack_entry_ids: tileIds });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Failed to update entry' });
+    res.status(500).json({ error: 'Failed to update entry', code: 'update_failed' });
   }
 });
 
@@ -1313,7 +1314,7 @@ router.post('/collection/:id/market-value/fetch', searchLimiter, async (req, res
       SELECT c.id, c.grade, c.grader, cc.name, cc.set_name, cc.number, cc.game, cc.tcgplayer_product_id
       FROM collection c JOIN card_cache cc ON cc.id = c.card_id
       WHERE c.id = ? AND c.user_id = ?`, [req.params.id, req.user.id]);
-    if (!entry) return res.status(404).json({ error: 'Collection entry not found' });
+    if (!entry) return res.status(404).json({ error: 'Collection entry not found', code: 'entry_not_found' });
     if (!entry.grader || entry.grader === 'Raw') {
       return res.status(400).json({ error: 'This copy is not graded. Graded prices apply to slabs only.' });
     }
@@ -1350,7 +1351,7 @@ router.post('/collection/:id/place', async (req, res) => {
   const { compartment_id, slot, swap_with } = req.body;
   try {
     const entry = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-    if (!entry) return res.status(404).json({ error: 'Collection entry not found' });
+    if (!entry) return res.status(404).json({ error: 'Collection entry not found', code: 'entry_not_found' });
 
     const comp = await db.get(`
       SELECT c.id, c.capacity, l.id AS loc_id, l.type AS loc_type, l.sort_order, l.foil_sorting, l.allow_stacking
@@ -1388,7 +1389,7 @@ router.post('/collection/:id/place', async (req, res) => {
       const cnt = await db.get(
         `SELECT ${comp.allow_stacking ? `COUNT(DISTINCT ${STACK_KEY_SQL})` : 'COUNT(*)'} AS n
          FROM collection WHERE compartment_id = ? AND user_id = ?`, [compartment_id, req.user.id]);
-      if (cnt.n >= comp.capacity) return res.status(400).json({ error: 'COMPARTMENT_FULL' });
+      if (cnt.n >= comp.capacity) return res.status(400).json({ error: 'COMPARTMENT_FULL', code: 'compartment_full' });
     }
 
     const sourceComp = entry.compartment_id;
@@ -1473,17 +1474,17 @@ router.delete('/collection/:id', async (req, res) => {
   try {
     if (req.query.trash === '0') {
       const result = await db.run(`DELETE FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-      if (result.changes === 0) return res.status(404).json({ error: 'Collection entry not found' });
+      if (result.changes === 0) return res.status(404).json({ error: 'Collection entry not found', code: 'entry_not_found' });
       return res.json({ message: 'Card removed from collection' });
     }
     const { batchId, trashed } = await trashEntries([id], req.user.id);
     if (trashed === 0) {
-      return res.status(404).json({ error: 'Collection entry not found' });
+      return res.status(404).json({ error: 'Collection entry not found', code: 'entry_not_found' });
     }
     res.json({ message: 'Card removed from collection', trash_batch: batchId });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Failed to remove card' });
+    res.status(500).json({ error: 'Failed to remove card', code: 'delete_failed' });
   }
 });
 

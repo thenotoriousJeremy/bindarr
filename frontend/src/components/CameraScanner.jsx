@@ -4,7 +4,7 @@ import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
 import Price from './Price';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
-import { CONDITIONS, getPrintings } from '../utils/cardOptions';
+import { CONDITIONS, getPrintings, conditionLabel, printingLabel } from '../utils/cardOptions';
 import CardEntryFields from './CardEntryFields';
 import CardInspectorModal from './CardInspectorModal';
 import { useBackGuard } from '../utils/useBackGuard';
@@ -2630,13 +2630,13 @@ function CameraScanner({ onAddSuccess, showToast }) {
                   <div className="form-group" style={{ marginBottom: 0, flex: 1, textAlign: 'left' }}>
                     <label>{t('card.condition')}</label>
                     <select className="select-control" value={autoAddCond} onChange={(e) => setAutoAddCond(e.target.value)}>
-                      {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                      {CONDITIONS.map(c => <option key={c} value={c}>{conditionLabel(t, c)}</option>)}
                     </select>
                   </div>
                   <div className="form-group" style={{ marginBottom: 0, flex: 1, textAlign: 'left' }}>
                     <label>{t('card.printing')}</label>
                     <select className="select-control" value={autoAddPrint} onChange={(e) => setAutoAddPrint(e.target.value)}>
-                      {getPrintings(autoAddTargetCard.game || autoAddTargetCard.supertype).map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                      {getPrintings(autoAddTargetCard.game || autoAddTargetCard.supertype).map(p => <option key={p.value} value={p.value}>{printingLabel(t, p.value, autoAddTargetCard.game || autoAddTargetCard.supertype)}</option>)}
                     </select>
                   </div>
                 </div>

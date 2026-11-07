@@ -346,7 +346,7 @@ function isCredential(value) {
 // Register a new user
 router.post('/register', authLimiter, async (req, res) => {
   if (!REGISTRATION_ENABLED) {
-    return res.status(403).json({ error: 'Registration is disabled. Ask an administrator for an account.' });
+    return res.status(403).json({ error: 'Registration is disabled. Ask an administrator for an account.', code: 'registration_disabled' });
   }
   const { username, password } = req.body;
   if (!isCredential(username) || !isCredential(password)) {
@@ -364,7 +364,7 @@ router.post('/register', authLimiter, async (req, res) => {
 
     const existingUser = await db.get(`SELECT id FROM users WHERE username = ?`, [cleanUsername]);
     if (existingUser) {
-      return res.status(400).json({ error: 'Username is already taken' });
+      return res.status(400).json({ error: 'Username is already taken', code: 'username_taken' });
     }
 
     const passwordHash = db.hashPassword(password);
@@ -399,7 +399,7 @@ router.post('/login', authLimiter, async (req, res) => {
     const cleanUsername = username.trim().toLowerCase();
     const user = await db.get(`SELECT * FROM users WHERE username = ?`, [cleanUsername]);
     if (!user || !verifyPassword(password, user.password_hash)) {
-      return res.status(401).json({ error: 'Invalid username or password' });
+      return res.status(401).json({ error: 'Invalid username or password', code: 'invalid_credentials' });
     }
 
     const token = await generateSession(user.id);
@@ -510,7 +510,7 @@ router.put('/settings', authenticateToken, async (req, res) => {
       // 400, never 401: a 401 here read as "your session has expired", and the app
       // signed the user out for mistyping their current password.
       if (typeof current_password !== 'string' || !current_password || !verifyPassword(current_password, currentUser.password_hash)) {
-        return res.status(400).json({ error: 'Current password is incorrect' });
+        return res.status(400).json({ error: 'Current password is incorrect', code: 'wrong_password' });
       }
       const newHash = db.hashPassword(password);
       await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, req.user.id]);

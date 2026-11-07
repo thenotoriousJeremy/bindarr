@@ -7,7 +7,7 @@ import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '.
 import CardInspectorModal from './CardInspectorModal';
 import { useMultiSelect } from '../utils/useMultiSelect';
 import { undoToast, placementUndo } from '../utils/undo';
-import { isBinderType as computeIsBinder, binderSpread } from '../utils/cardOptions';
+import { isBinderType as computeIsBinder, binderSpread, conditionLabel, printingLabel } from '../utils/cardOptions';
 import { displayName } from '../utils/languages';
 import CompartmentView, { FocusedCardInfo } from './CompartmentView';
 import BoxMap from './BoxMap';
@@ -22,6 +22,7 @@ import { isDeviceMode } from '../apiBase';
 import { artPocketsByPage } from '../utils/binderArtGeometry';
 import { useBackGuard } from '../utils/useBackGuard';
 import { useT } from '../utils/i18n';
+import { apiErrorText } from '../utils/apiError';
 
 // An Unsorted-queue card that can be dragged into a binder pocket. Split in two
 // so the hook only mounts when dragging is on — the queue also renders for
@@ -537,7 +538,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         setActiveLocationId(data.id);
         onUpdate();
       } else {
-        showToast(data.error || 'Failed to create container.');
+        showToast(apiErrorText(t, data, 'loc.errCreate'));
       }
     } catch (err) {
       console.error(err);
@@ -557,7 +558,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           body: JSON.stringify({ data: String(reader.result || ''), name: file.name.replace(/\.[^.]+$/, '') })
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || t('loc.errCreate'));
+        if (!response.ok) throw new Error(apiErrorText(t, data, 'loc.errCreate'));
         showToast(data.message);
         setActiveLocationId(data.id);
         await refreshAll();
@@ -613,7 +614,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         onUpdate();
       } else {
         const data = await res.json().catch(() => ({}));
-        showToast(data.error || 'Failed to update container.');
+        showToast(apiErrorText(t, data, 'loc.errUpdateContainer'));
       }
     } catch (err) {
       console.error(err);
@@ -667,7 +668,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       } else {
         const friendlyError = (data.error || '').toLowerCase().includes('do not match the destination binder rules')
           ? t('loc.moveRuleMismatch')
-          : (data.error || t('loc.errMove'));
+          : apiErrorText(t, data, 'loc.errMove');
         showToast(friendlyError);
       }
     } catch (err) {
@@ -696,7 +697,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         showToast(t('loc.compartmentMoved'));
         await Promise.all([fetchCompartments(selectedLoc.id), fetchLocations()]);
       } else {
-        showToast(data.error || t('loc.errMove'));
+        showToast(apiErrorText(t, data, 'loc.errMove'));
       }
     } catch (err) {
       console.error(err);
@@ -715,7 +716,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       const res = await fetch(`/api/compartments/${compartmentId}`, { method: 'DELETE' });
       const data = await res.json();
       if (res.ok) { showToast(t('loc.compartmentRemoved')); await Promise.all([fetchCompartments(activeLocationId), fetchLocations()]); }
-      else showToast(data.error || 'Failed to remove compartment.');
+      else showToast(apiErrorText(t, data, 'loc.errRemoveCompartment'));
     } catch (err) { console.error(err); showToast(t('loc.errRemoveCompartment')); }
   };
 
@@ -789,7 +790,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       if (res.ok) { showToast(t('loc.cardMoved')); await refreshAll(); }
       else {
         const errData = await res.json().catch(()=>({}));
-        showToast(errData.error || 'Failed to move card.');
+        showToast(apiErrorText(t, errData, 'loc.errMove'));
       }
     } catch (err) { console.error(err); showToast(t('loc.errMove')); }
   };
@@ -828,7 +829,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         setPickedEntryId(null);
         await refreshAll(); onUpdate();
       } else {
-        showToast(data.error === 'COMPARTMENT_FULL' ? 'That page/row is full.' : (data.error || 'Failed to place card.'));
+        showToast(apiErrorText(t, data, 'loc.errPlace'));
       }
     } catch (err) { console.error(err); showToast(t('loc.errPlace')); }
   };
@@ -861,7 +862,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        showToast(body?.error || t('loc.errPlace'));
+        showToast(apiErrorText(t, body, 'loc.errPlace'));
         return;
       }
       showToast(t('loc.movedToUnsorted'), undoToast(placementUndo(allCards.find(c => c.entry_id === entryId)), {
@@ -964,7 +965,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       });
       const data = await res.json();
       if (res.ok) { showToast(data.message); await refreshAll(); onUpdate(); }
-      else showToast(data.error || 'Failed to file batch.');
+      else showToast(apiErrorText(t, data, 'loc.errFileBatch'));
     } catch (err) { console.error(err); showToast(t('loc.errFileBatch')); }
   };
 
@@ -1370,7 +1371,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </div>
             )}
 
-            <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.04))', borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.55rem', fontSize: '0.72rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ background: 'var(--surface-1)', borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.55rem', fontSize: '0.72rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               {/* Label only — the count sits in the value beside it, so this is
                   not loc.cardsCurrentlyStored, whose sentence carries a {count}
                   this row has nowhere to put. */}
@@ -2002,7 +2003,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 
                 <div style={{ textAlign: 'center' }}>
                   <strong style={{ fontSize: '1rem', display: 'block' }}>{displayName(filingQueue[filingIndex].entry)}</strong>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{filingQueue[filingIndex].entry.set_name} • {filingQueue[filingIndex].entry.printing}</span>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{filingQueue[filingIndex].entry.set_name} • {printingLabel(t, filingQueue[filingIndex].entry.printing, filingQueue[filingIndex].entry.game)}</span>
                 </div>
                 
                 {(() => {
@@ -2198,7 +2199,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   const isHighlighted = picked || isSelected;
                   const rarityBorder = getCardRarityBorder(card.rarity);
                   const foilClass = getFoilOverlayClass(card.printing);
-                  const printingBadgeLabel = getPrintingBadgeLabel(card.printing);
+                  const printingBadgeLabel = getPrintingBadgeLabel(card.printing, t);
 
                   return (
                     <DraggableCard
@@ -2312,7 +2313,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   const isHighlighted = picked || isSelected;
                   const rarityBorder = getCardRarityBorder(card.rarity);
                   const foilClass = getFoilOverlayClass(card.printing);
-                  const printingBadgeLabel = getPrintingBadgeLabel(card.printing);
+                  const printingBadgeLabel = getPrintingBadgeLabel(card.printing, t);
 
                   return (
                     <DraggableCard
@@ -2358,7 +2359,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           <span>{card.set_name || 'Unset'} {card.number ? `#${card.number}` : ''}</span>
                           {card.condition && (
                             <span style={{ padding: '1px 3px', borderRadius: '2px', background: 'rgba(0,0,0,0.4)', fontSize: '0.55rem', fontWeight: 700 }}>
-                              {card.condition}
+                              {conditionLabel(t, card.condition)}
                             </span>
                           )}
                           {printingBadgeLabel && (
@@ -2420,7 +2421,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   {filingQueue[filingIndex].entry.name}
                 </div>
                 <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {filingQueue[filingIndex].entry.set_name} &middot; {filingQueue[filingIndex].entry.printing}
+                  {filingQueue[filingIndex].entry.set_name} &middot; {printingLabel(t, filingQueue[filingIndex].entry.printing, filingQueue[filingIndex].entry.game)}
                 </div>
               </div>
             </div>

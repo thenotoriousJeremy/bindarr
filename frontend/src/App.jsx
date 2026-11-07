@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, Suspense } from 'react';
 import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords, StickyNote, Package, ListChecks, Smartphone, Library } from 'lucide-react';
 import Login from './components/Login';
 import Logo from './components/Logo';
@@ -11,23 +11,26 @@ import { isSessionExpired } from './utils/sessionExpiry';
 import { loadStoredUser, saveStoredUser } from './utils/storedUser';
 import { readOidcCode } from './utils/webOidc';
 import { clearOfflineData, isOffline, isWriteMethod, noteApiResponse, noteApiUnreachable, offlineWriteResponse, setWriteBlockedText, subscribeOffline } from './utils/offline';
+import { lazyWithReload } from './utils/lazyWithReload';
+import { useNameDictionaries } from './utils/useNameDictionaries';
 
 // View components are code-split so heavy deps (recharts in the chart views)
-// load on demand instead of in the initial bundle.
-const Dashboard = lazy(() => import('./components/Dashboard'));
-const AddCards = lazy(() => import('./components/AddCards'));
-const CollectionList = lazy(() => import('./components/CollectionList'));
-const LocationManager = lazy(() => import('./components/LocationManager'));
-const Settings = lazy(() => import('./components/Settings'));
-const AdminPanel = lazy(() => import('./components/AdminPanel'));
-const SetupWizard = lazy(() => import('./components/SetupWizard'));
-const SharedCollection = lazy(() => import('./components/SharedCollection'));
-const SharedContainer = lazy(() => import('./components/SharedContainer'));
-const DeckBuilder = lazy(() => import('./components/DeckBuilder'));
-const Lists = lazy(() => import('./components/Lists'));
-const Notes = lazy(() => import('./components/Notes'));
-const SealedList = lazy(() => import('./components/SealedList'));
-const SetCompletion = lazy(() => import('./components/SetCompletion'));
+// load on demand instead of in the initial bundle. A view whose chunk an upgrade
+// removed reloads the page once rather than crashing (see utils/chunkReload).
+const Dashboard = lazyWithReload(() => import('./components/Dashboard'));
+const AddCards = lazyWithReload(() => import('./components/AddCards'));
+const CollectionList = lazyWithReload(() => import('./components/CollectionList'));
+const LocationManager = lazyWithReload(() => import('./components/LocationManager'));
+const Settings = lazyWithReload(() => import('./components/Settings'));
+const AdminPanel = lazyWithReload(() => import('./components/AdminPanel'));
+const SetupWizard = lazyWithReload(() => import('./components/SetupWizard'));
+const SharedCollection = lazyWithReload(() => import('./components/SharedCollection'));
+const SharedContainer = lazyWithReload(() => import('./components/SharedContainer'));
+const DeckBuilder = lazyWithReload(() => import('./components/DeckBuilder'));
+const Lists = lazyWithReload(() => import('./components/Lists'));
+const Notes = lazyWithReload(() => import('./components/Notes'));
+const SealedList = lazyWithReload(() => import('./components/SealedList'));
+const SetCompletion = lazyWithReload(() => import('./components/SetCompletion'));
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -129,6 +132,10 @@ const handledOidcReturns = new Set();
 
 function App() {
   const { t } = useT();
+  // Names of non-English cards come from dictionaries fetched on first use
+  // (utils/langHelper). Re-render once they land, so every open view swaps the
+  // English names it drew in the meantime.
+  useNameDictionaries();
   const [token, setToken] = useState(localStorage.getItem('bindarr_token'));
   // Through utils/storedUser, which also strips the API keys older builds kept in
   // this copy.

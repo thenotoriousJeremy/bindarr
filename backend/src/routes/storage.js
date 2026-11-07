@@ -192,7 +192,7 @@ router.post('/locations', async (req, res) => {
       return result.lastID;
     });
     if (!locationId) {
-      return res.status(400).json({ error: 'A location with this name already exists' });
+      return res.status(400).json({ error: 'A location with this name already exists', code: 'location_name_taken' });
     }
 
     res.status(200).json({ message: 'Location created', id: locationId });
@@ -250,7 +250,7 @@ router.put('/locations/:id', async (req, res) => {
     if (name) {
       const dup = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ? AND id != ?`, [name, req.user.id, id]);
       if (dup) {
-        return res.status(400).json({ error: 'A location with this name already exists' });
+        return res.status(400).json({ error: 'A location with this name already exists', code: 'location_name_taken' });
       }
     }
 
@@ -422,14 +422,14 @@ router.patch('/compartments/:id/reorder', async (req, res) => {
     `, [id, req.user.id]);
     if (!current) return res.status(404).json({ error: 'Compartment not found' });
     if (current.compartment_locked || current.container_locked) {
-      return res.status(400).json({ error: 'This page is locked. Unlock it before moving or reordering.' });
+      return res.status(400).json({ error: 'This page is locked. Unlock it before moving or reordering.', code: 'page_locked' });
     }
 
     const targetLocationId = Number(location_id || current.location_id);
     const targetLocation = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [targetLocationId, req.user.id]);
     if (!targetLocation) return res.status(404).json({ error: 'Target location not found' });
     if (targetLocation.locked) {
-      return res.status(400).json({ error: 'The destination binder is locked. Unlock it before moving a page there.' });
+      return res.status(400).json({ error: 'The destination binder is locked. Unlock it before moving a page there.', code: 'binder_locked' });
     }
 
     if (current.location_id !== targetLocationId) {
@@ -568,7 +568,7 @@ router.delete('/locations/:id/compartments/:comp_id', async (req, res) => {
 
     const totalComps = await db.get(`SELECT COUNT(*) as count FROM compartments WHERE location_id = ?`, [id]);
     if (totalComps.count <= 1) {
-      return res.status(400).json({ error: 'Cannot delete the last compartment of a location' });
+      return res.status(400).json({ error: 'Cannot delete the last compartment of a location', code: 'last_compartment' });
     }
 
     await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE compartment_id = ? AND user_id = ?`, [comp_id, req.user.id]);
@@ -645,7 +645,7 @@ router.delete('/compartments/:id', async (req, res) => {
     const comp = await getOwnedCompartment(id, req.user.id);
     if (!comp) return res.status(404).json({ error: 'Compartment not found' });
     const total = await db.get(`SELECT COUNT(*) AS count FROM compartments WHERE location_id = ?`, [comp.loc_id]);
-    if (total.count <= 1) return res.status(400).json({ error: 'Cannot delete the last compartment of a location' });
+    if (total.count <= 1) return res.status(400).json({ error: 'Cannot delete the last compartment of a location', code: 'last_compartment' });
     await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE compartment_id = ? AND user_id = ?`, [id, req.user.id]);
     await db.run(`DELETE FROM compartments WHERE id = ?`, [id]);
     res.json({ message: 'Compartment deleted (cards inside moved to Unsorted)' });

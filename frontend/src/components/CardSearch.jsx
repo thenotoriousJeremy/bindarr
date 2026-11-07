@@ -7,15 +7,16 @@ import CardEntryFields from './CardEntryFields';
 import CardImageZoom from './CardImageZoom';
 import ScryfallSyntaxHelp from './ScryfallSyntaxHelp';
 import { checkSearchSyntax, syntaxErrorText } from '../utils/scryfallSyntax';
-import { translateJapaneseName, POKEMON_EN_TO_JP, getCardDisplayName } from '../utils/langHelper';
+import { translateJapaneseName, POKEMON_EN_TO_JP, getCardDisplayName, loadNameDictionaries, hasJapaneseText } from '../utils/langHelper';
 import { useMultiSelect } from '../utils/useMultiSelect';
-import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
+import { CONDITIONS, PRINTINGS, conditionLabel, printingLabel } from '../utils/cardOptions';
 import { langName, isEnglish, displayName, translatedName, setReference, setCode, getLanguagesForGame, isLanguageSupported } from '../utils/languages';
 import { defaultGame, gameOptions, showGamePicker, gameLabel } from '../utils/games';
 import CardImage from './CardImage';
 import AddToListSelect from './AddToListSelect';
 import { useT } from '../utils/i18n';
 import RiotNotice from './RiotNotice';
+import { apiErrorText } from '../utils/apiError';
 
 // Search failures worth explaining in-page rather than only as a toast. `keyHint`
 // marks the ones a user API key actually fixes; an upstream 5xx does not. Title
@@ -160,6 +161,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       let finalQuery = query || '';
       if (query && game === 'pokemon') {
         const isJa = searchLang === 'ja' || searchLang === 'Japanese';
+        // The name maps are fetched on first use; a search that needs them waits.
+        if (isJa || hasJapaneseText(query)) await loadNameDictionaries().catch(() => {});
         if (isJa) {
           const jpMapped = POKEMON_EN_TO_JP[query.trim()];
           if (jpMapped) finalQuery = jpMapped;
@@ -206,7 +209,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         } else if (response.status === 503) {
           setSearchError('upstream');
         }
-        showToast(errData.error || t('search.errRequest'));
+        showToast(apiErrorText(t, errData, 'search.errRequest'));
       }
     } catch (err) {
       console.error(err);
@@ -337,7 +340,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         exitSelectMode();
         onAddSuccess();
       } else {
-        showToast(data.error || t('search.errBulkAdd'));
+        showToast(apiErrorText(t, data, 'search.errBulkAdd'));
       }
     } catch (err) {
       console.error(err);
@@ -366,7 +369,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       })
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || t('search.errAddCard'));
+    if (!response.ok) throw new Error(apiErrorText(t, data, 'search.errAddCard'));
     return data;
   };
 
@@ -385,7 +388,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       const res = await fetch(`/api/search?${params.toString()}`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        showToast(err.error || t('search.errLookup'));
+        showToast(apiErrorText(t, err, 'search.errLookup'));
         return;
       }
       const matches = await res.json();
@@ -545,7 +548,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         // A rejected cert number (already in the collection) explains itself; the
         // generic message would send the user back to re-type a correct number.
         const body = await response.json().catch(() => null);
-        showToast(body?.error || t('search.errAddDb'));
+        showToast(apiErrorText(t, body, 'search.errAddDb'));
       }
     } catch (err) {
       console.error(err);
@@ -703,10 +706,10 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
               style={{ flex: '1 1 180px', fontSize: '1.1rem', fontWeight: 700 }}
             />
             <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)} style={{ fontSize: '0.75rem', maxWidth: '150px' }}>
-              {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+              {CONDITIONS.map(c => <option key={c} value={c}>{conditionLabel(t, c)}</option>)}
             </select>
             <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)} style={{ fontSize: '0.75rem', maxWidth: '150px' }}>
-              {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+              {PRINTINGS.map(p => <option key={p} value={p}>{printingLabel(t, p, game)}</option>)}
             </select>
             <input
               type="number"
@@ -849,10 +852,10 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={clearSelection}>{t('bulk.clear')}</button>
           <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
           <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)} style={{ fontSize: '0.72rem', maxWidth: '150px', padding: '0.3rem 0.4rem' }}>
-            {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+            {CONDITIONS.map(c => <option key={c} value={c}>{conditionLabel(t, c)}</option>)}
           </select>
           <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)} style={{ fontSize: '0.72rem', maxWidth: '150px', padding: '0.3rem 0.4rem' }}>
-            {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+            {PRINTINGS.map(p => <option key={p} value={p}>{printingLabel(t, p, game)}</option>)}
           </select>
           <input
             type="number"
@@ -1013,7 +1016,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                 </div>
               </div>
               <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('search.tcgMarketPrice', { printing })}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('search.tcgMarketPrice', { printing: printingLabel(t, printing, selectedCard.game || game) })}</div>
                 <div style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--accent-yellow)', overflow: 'hidden', textOverflow: 'ellipsis' }}><Price value={resolveCardPrice(selectedCard, printing)} currency={selectedCard.price_currency} /></div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{t('search.rarityLabel')} <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{selectedCard.rarity}</span></div>
               </div>
