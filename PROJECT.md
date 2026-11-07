@@ -257,6 +257,25 @@ the rest of the app is game-agnostic. Every card carries a `game` field
 (`pokemon` | `mtg`) and a `language`. A user's Pokémon TCG API key (stored
 per-user) is passed through where available.
 
+#### The game registry
+
+Which games exist is one table, `shared/games.json` (with an ESM twin,
+`shared/games.js`, for the frontend and bare-Node tests; `test/games.test.js`
+fails if they differ). Each entry carries the game's value and labels, card-id
+prefixes, provider, printed languages, printing scheme, feature flags (prices,
+scan, grading, graded prices, decks), default deck format and size, card-back
+key, marketplace link kinds and how a published scan catalog keys its rows.
+`backend/src/utils/games.js` and `frontend/src/utils/games.js` wrap it. Lists of
+games (validation, pickers, catalog builds, container restrictions, the
+languages each game is printed in) read it; genuinely game-specific behaviour
+stays in the provider that owns it.
+
+`games.gameOfId` is explicit about card ids: a registered prefix names its game;
+an unprefixed id is pokemontcg.io's only in that API's `<set>-<number>` shape;
+anything else is unknown, and `cardApi.getCardById` answers null (the routes,
+404) instead of asking pokemontcg.io about it. A new game must register a prefix
+— the shape check cannot tell a foreign `abc-1` from a Pokémon one.
+
 `utils/pokemonProvider.js` owns the Pokémon provider decision. It is asked,
 never re-derived from the language: four call sites once derived it themselves and
 four of them disagreed, which is how 21,828 rows were cached with the wrong
@@ -730,7 +749,7 @@ only `decks.checked_out` changes.
 - **Backend has no auto-reload** in production/local `node src/server.js`; restart it after backend changes so new routes/data load. Frontend uses Vite HMR.
 - **SQLite runs in WAL mode** — checkpoint/stop before file-level backups so `-wal`/`-shm` are flushed. A clean stop (SIGTERM/SIGINT) closes the connection, which does the checkpoint.
 - **Background work goes in `server.js`'s scheduler job list**, not a new `setInterval`: an in-memory timer resets on every restart. A new price provider is one `utils/priceSweeps.js` entry plus its `SWEEP_COLUMN` key (`test/pricesweeplist.test.js` holds the two together).
-- **Everything is game-scoped** (`pokemon` | `mtg`); new card fields must be threaded through both `tcgApi.js` and `scryfallApi.js` normalization.
+- **Everything is game-scoped** (the values in `shared/games.json`); new card fields must be threaded through every provider's normalization, and a new game is a registry entry first.
 - **`position = slot * 1000`** is the single source of truth for slot order; never assume packed array index equals slot.
 - **Scanning needs a catalog**: the two ONNX models identify nothing on their own, and there is no second matcher to fall back to. `/api/scan-match` answers `503 notBuilt` with the fix in the message rather than an empty candidate list, which reads to the user as "your card could not be identified". A catalog is per (game, language) and only as complete as the provider's data for that language.
 - **Frontend lint is strict**: CI runs `eslint --max-warnings 0`, so unused vars/imports and empty blocks fail the Docker build.

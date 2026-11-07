@@ -379,7 +379,7 @@ async function fetchPokemonSet(set) {
 // it. Returns the fetched cards so a caller can count them.
 async function cacheSetCards(game, set, lang, { excludeChildCodes = [] } = {}) {
   const code = langOf(lang);
-  if (game !== 'mtg' && game !== 'pokemon' && game !== 'lorcana') throw new Error('only mtg/pokemon/lorcana');
+  if (!require('./utils/games').hasFeature(game, 'scan')) throw new Error(`no catalog source for game ${game}`);
   if (game === 'lorcana') {
     const lorcastApi = require('./lorcastApi');
     const cleanSet = String(set || '').replace(/^lorcana-/, '');

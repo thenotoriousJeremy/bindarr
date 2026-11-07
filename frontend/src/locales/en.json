@@ -1646,6 +1646,7 @@
   "setup.scan.catalogBody": "A prebuilt catalog of card images to match against. It is a fixed snapshot, so cards printed after its date are not in it.",
   "setup.scan.catalogMeta": "{size} · snapshot {snapshot}",
   "setup.scan.lorcanaLocalNote": "Disney Lorcana has no prebuilt snapshot and must be built locally in Admin → Catalogs.",
+  "setup.scan.localOnlyNote": "{game} has no prebuilt snapshot and must be built locally in Admin → Catalogs.",
   "setup.scan.buildLocally": "Build locally",
   "setup.scan.needModels": "Download the recogniser first. A catalog is unusable without it.",
   "setup.scan.buildHint": "Admin → Catalogs can also build a catalog here from the sets you own. That stays current as new sets release, and takes minutes per set.",

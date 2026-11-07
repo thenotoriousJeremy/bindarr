@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const cardApi = require('../utils/cardApi');
+const games = require('../utils/games');
 const { parseCardRow, recordPrice } = require('../utils/priceHelpers');
 const { validateDeckAddition, loadRules } = require('../utils/deckRules');
 const {
@@ -81,7 +82,11 @@ router.post('/', async (req, res) => {
   if (!name) {
     return res.status(400).json({ error: 'Deck name is required' });
   }
-  const deckGame = ['pokemon', 'mtg', 'lorcana'].includes(game) ? game : 'pokemon';
+  // A game the registry does not know is refused; it used to become a Pokémon deck.
+  const deckGame = games.parseGame(game);
+  if (!deckGame || !games.hasFeature(deckGame, 'decks')) {
+    return res.status(400).json({ error: 'Invalid game' });
+  }
   const targetSizeNum = parseInt(target_size, 10) || 60;
 
   try {

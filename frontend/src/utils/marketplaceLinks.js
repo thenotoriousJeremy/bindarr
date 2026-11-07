@@ -1,3 +1,5 @@
+import { gameInfo, gameOfCard, LEGACY_GAME } from './games.js';
+
 // Links to the marketplaces a card's price comes from.
 //
 // The rule: a "view this card" link resolves to THAT CARD or it does not exist.
@@ -14,10 +16,11 @@
 // A search is still offered — see searchUrl — but as its own separately labelled
 // action, so the reader knows which one they are getting.
 function cardGame(card) {
-  if (card?.game) return card.game;
-  if (card?.supertype === 'MTG' || String(card?.id).startsWith('mtg-')) return 'mtg';
-  if (card?.supertype === 'Lorcana' || String(card?.id).startsWith('lorcana-')) return 'lorcana';
-  return 'pokemon';
+  if (card?.game && gameInfo(card.game)) return card.game;
+  // Rows selected without the game column still say what they are this way.
+  if (card?.supertype === 'MTG') return 'mtg';
+  if (card?.supertype === 'Lorcana') return 'lorcana';
+  return gameOfCard(card) || LEGACY_GAME;
 }
 
 // Does this name stand a chance in an English-language marketplace search?
@@ -71,8 +74,10 @@ export function cardmarketUrl(card) {
 // zero results every time, and an action that cannot work is worse than none.
 export function searchUrl(card) {
   if (!searchable(card)) return null;
-  const g = cardGame(card);
-  const line = g === 'mtg' ? 'magic' : (g === 'lorcana' ? 'lorcana-tcg' : 'pokemon');
+  // TCGplayer's product-line slug for the game. A game with no verified slug has
+  // none in the registry, and gets no search rather than one aimed at a guess.
+  const line = gameInfo(cardGame(card))?.marketplaces?.tcgplayerSearchLine;
+  if (!line) return null;
   // Name only. Appending set name + number narrowed a lot of searches to zero
   // hits — Scryfall's own links search the bare name for the same reason.
   return `https://www.tcgplayer.com/search/${line}/product?q=${encodeURIComponent(card.name)}`;

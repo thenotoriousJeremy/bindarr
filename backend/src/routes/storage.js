@@ -115,7 +115,9 @@ router.get('/locations', async (req, res) => {
 });
 
 const RULE_TYPES = ['any', 'alphabetical_range', 'specific_sets', 'compound'];
-const GAME_RESTRICTIONS = ['any', 'pokemon', 'mtg'];
+// Every game in the registry. This list once named only Pokémon and Magic, so a
+// container could not be restricted to Lorcana even though the picker offered it.
+const GAME_RESTRICTIONS = ['any', ...require('../utils/games').VALUES];
 
 // Binder page width in pockets. null (or '') means automatic: the client lays the
 // page out from its capacity. Capped at 12, wider than any common pocket page, so

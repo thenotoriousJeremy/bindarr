@@ -12,6 +12,7 @@ const psaApi = require('../psaApi');
 const gradedPrices = require('../gradedPrices');
 const cardApi = require('../utils/cardApi');
 const scryfallSyntax = require('../utils/scryfallSyntax');
+const games = require('../utils/games');
 const { searchLimiter } = require('../middleware/auth');
 const { resolveCardPrice, parseCardRow, recordPrice } = require('../utils/priceHelpers');
 const { parseSetList } = require('../utils/setQuery');
@@ -142,10 +143,12 @@ router.all('/search', searchLimiter, async (req, res) => {
   // a sane cap on how much one Scryfall search will page through per request.
   const page = Math.max(1, parseInt(query.page, 10) || 1);
   const limit = Math.min(250, Math.max(1, parseInt(query.limit, 10) || 60));
+  // An unknown game used to fall through to a Pokémon search.
+  if (!games.isGame(game)) return res.status(400).json({ error: 'Invalid game' });
   try {
     // Every provider takes the same options object and ignores what does not
     // apply to it, so there is one call here rather than a branch per provider.
-    const api = game === 'mtg' ? scryfallApi : (game === 'lorcana' ? lorcastApi : await pokemonApiFor(lang));
+    const api = await cardApi.apiForGame(game, lang);
     // Magic takes Scryfall syntax in the name box (t:creature c:g cmc<=3). It is
     // searched intact, so the name/number splitting above is for plain names only;
     // the number and set fields still apply.
@@ -227,8 +230,7 @@ router.get('/collection/cert/:certNumber', searchLimiter, async (req, res) => {
     // unknown — PSA grades sports cards and tickets too, and guessing 'pokemon' for
     // a 1986 Fleer basketball card would return nonsense candidates rather than an
     // honest empty list.
-    const brand = `${cert.brand || ''} ${cert.category || ''}`.toUpperCase();
-    const game = /POKEMON/.test(brand) ? 'pokemon' : (/MAGIC|GATHERING/.test(brand) ? 'mtg' : (/LORCANA/.test(brand) ? 'lorcana' : null));
+    const game = games.gameOfPsaBrand(`${cert.brand || ''} ${cert.category || ''}`);
     let candidates = [];
     if (game) {
       const name = psaApi.searchableName(cert.subject);
@@ -237,7 +239,7 @@ router.get('/collection/cert/:certNumber', searchLimiter, async (req, res) => {
         // discriminator between printings of the same name, and the search treats
         // it as optional so a label without one still returns something.
         const number = cert.card_number || '';
-        const api = game === 'mtg' ? scryfallApi : (game === 'lorcana' ? lorcastApi : await pokemonApiFor(null));
+        const api = await cardApi.apiForGame(game, null);
         ({ cards: candidates } = await api.searchCards({
           name, number, userId: req.user.id, apiKey: req.user.tcg_api_key,
           allPrints: true, limit: 24,
@@ -262,7 +264,7 @@ router.get('/collection/cert/:certNumber', searchLimiter, async (req, res) => {
 // match nothing. Read-only counts, no build controls.
 router.get('/scan-sets', async (req, res) => {
   const { game = 'pokemon', lang } = req.query;
-  if (game !== 'mtg' && game !== 'pokemon' && game !== 'lorcana') return res.status(400).json({ error: 'Invalid game' });
+  if (!games.hasFeature(game, 'scan')) return res.status(400).json({ error: 'Invalid game' });
   try {
     // `builtLangs` rides along because the scanner's language picker has no other
     // way to know: it offered all eleven languages, and for ten of them a Pokémon
@@ -318,7 +320,7 @@ async function pokemonBySetNumber(langName, number, setId, tcgApiKey) {
 router.post('/scan-match', searchLimiter, async (req, res) => {
   try {
     const { game = 'pokemon', image, set = '', lang, cropped = false, embedding, thumb, detected } = req.body || {};
-    if (game !== 'mtg' && game !== 'pokemon' && game !== 'lorcana') return res.status(400).json({ error: 'Invalid game' });
+    if (!games.hasFeature(game, 'scan')) return res.status(400).json({ error: 'Invalid game' });
     // A photo, or the embedding of one. The phone app in device mode has no server
     // to send pixels to, so it runs milo on its own crop and sends the 128 numbers;
     // the sweep and everything after it is the same scan.
@@ -411,8 +413,9 @@ router.post('/scan-match', searchLimiter, async (req, res) => {
         // Same re-expression as MTG above. A catalog built in the scanned language
         // returns localised ids already, so this is a no-op then; it matters when
         // the match fell back to the English catalog (no catalog in that language,
-        // or a card the localised one does not cover).
-        const use = await localizedPokemon(card, langName);
+        // or a card the localised one does not cover). Pokémon only: any other
+        // game reaching this branch has a local catalog and nothing to re-express.
+        const use = game === 'pokemon' ? await localizedPokemon(card, langName) : card;
         return { ...cand, name: use.name, set: use.set_id, number: use.number, card: use };
       }
       if (game === 'lorcana') {
@@ -860,9 +863,13 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
   {
     const { card, cardId } = resolvedCard || await resolveCardForAdd(user, { card_id, game, language });
 
-    const effectiveGame = (req.body.game && req.body.game !== 'pokemon')
-      ? req.body.game
-      : (card.game || cardApi.gameOf(cardId));
+    // The card's own game, not the request's: the request used to win whenever it
+    // named anything but Pokémon, so a client could file a Pokémon card as Magic.
+    // It is only a fallback for a row that carries no game, and only for a game
+    // the id does not contradict.
+    const effectiveGame = (games.isGame(card.game) ? card.game : null)
+      || cardApi.gameOf(cardId, req.body.game)
+      || games.LEGACY_GAME;
 
     if (location_id) {
       const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [location_id, req.user.id]);

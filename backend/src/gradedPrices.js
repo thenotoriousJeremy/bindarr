@@ -115,7 +115,7 @@ async function query(params, apiKey) {
 // `game` gates this: the provider covers Pokémon only, and an MTG slab must be
 // told that plainly instead of getting a silent miss that reads as "no data".
 async function fetchGradedPrice({ game, name, setName, number, grader, grade, tcgPlayerId, apiKey }) {
-  if (game && game !== 'pokemon') {
+  if (game && !require('./utils/games').hasFeature(game, 'gradedPrices')) {
     throw new GradedPriceError(400, 'Automatic graded prices cover Pokémon only. Enter the value by hand for this card.');
   }
   const key = gradeKey(grader, grade);

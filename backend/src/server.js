@@ -420,7 +420,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 function warmScanCatalogs() {
   try {
     const cvScan = require('./cvScan');
-    const warm = ['mtg', 'pokemon', 'lorcana'].filter(g => cvScan.isBuilt(g));
+    const warm = require('./utils/games').withFeature('scan').filter(g => cvScan.isBuilt(g));
     for (const g of warm) {
       cvScan.load(g).catch(err => console.warn(`cvScan ${g} warm-up failed:`, err.message));
       // Locally built non-English catalogs too (e.g. German Pokémon, #80): they

@@ -82,7 +82,8 @@ function compartmentAcceptsCard(compartment, cardMetadata) {
 
 function locationAcceptsCard(location, cardMetadata) {
   if (location.game && location.game !== 'any') {
-    const cardGame = cardMetadata.game || 'pokemon';
+    // A row with no game predates multi-game support (utils/games LEGACY_GAME).
+    const cardGame = cardMetadata.game || require('./games').LEGACY_GAME;
     if (cardGame !== location.game) return false;
   }
 

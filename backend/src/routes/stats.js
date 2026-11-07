@@ -1,6 +1,11 @@
 const express = require('express');
 const db = require('../db');
 const { resolveCardPrice, isVintageSet, parseSqliteUtc } = require('../utils/priceHelpers');
+const games = require('../utils/games');
+
+// A ?game= the registry does not know matched no rows and read as an empty
+// collection; say it is wrong instead.
+const badGame = (game) => !!game && !games.isGame(game);
 
 const router = express.Router();
 
@@ -9,6 +14,7 @@ router.get('/stats', async (req, res) => {
   try {
     // Optional per-game view (e.g. only Pokémon or only MTG). Absent = all games.
     const { game } = req.query;
+    if (badGame(game)) return res.status(400).json({ error: 'Invalid game' });
     const gameFilter = game ? ` AND cc.game = ?` : '';
     const statsParams = game ? [req.user.id, game] : [req.user.id];
 
@@ -66,7 +72,8 @@ router.get('/stats', async (req, res) => {
         nearMintCount += qty;
       }
 
-      if (isVintageSet(row.set_id)) {
+      // Pokémon set ids only: 'ex', 'si' and 'base' prefixes mean nothing to Magic.
+      if (row.game === 'pokemon' && isVintageSet(row.set_id)) {
         vintageCount += qty;
       }
 
@@ -299,6 +306,7 @@ router.get('/stats', async (req, res) => {
 router.get('/stats/history', async (req, res) => {
   try {
     const { period = '30d', game } = req.query;
+    if (badGame(game)) return res.status(400).json({ error: 'Invalid game' });
     const gameFilter = game ? ` AND cc.game = ?` : '';
     const params = game ? [req.user.id, game] : [req.user.id];
 
@@ -427,6 +435,7 @@ router.get('/stats/history', async (req, res) => {
 router.get('/stats/networth', async (req, res) => {
   try {
     const { game } = req.query;
+    if (badGame(game)) return res.status(400).json({ error: 'Invalid game' });
     const gameFilter = game ? ` AND cc.game = ?` : '';
     const params = game ? [req.user.id, game] : [req.user.id];
 
