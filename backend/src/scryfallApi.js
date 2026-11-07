@@ -828,9 +828,11 @@ async function updateCollectionPrices(force = false) {
       console.log(`MTG price update complete: ${pairs.length} priced, ${notFound} not found on Scryfall.`);
     } catch (e) {
       console.error('MTG price update failed:', e.message);
+      require('./notify').emit({ type: 'price_sweep_failed', source: 'scryfall', error: e.message });
     }
   } catch (err) {
     console.error('Error during MTG price update:', err.message);
+    require('./notify').emit({ type: 'price_sweep_failed', source: 'scryfall', error: err.message });
   }
 }
 

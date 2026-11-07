@@ -54,6 +54,8 @@ const sealedRoutes = require('./routes/sealed');
 const backupRoutes = require('./routes/backup');
 const trashRoutes = require('./routes/trash');
 const binderArtRoutes = require('./routes/binderArt');
+const notificationRoutes = require('./routes/notifications');
+const notify = require('./notify');
 const { authenticateToken } = require('./middleware/auth');
 const { startHttps, selfSignedTls } = require('./utils/tls');
 
@@ -352,10 +354,11 @@ const scheduler = createScheduler({
       // every code edit, for data that cannot have changed since the last one.
       //
       // utils/priceSweeps owns the list and its order, and runs the sweeps one
-      // after another.
+      // after another. Its summary goes to notify.js, which looks for price moves
+      // worth telling users about and reports a failed sweep to the admins.
       name: 'price-sweeps',
       every: () => HOUR,
-      run: () => runPriceSweeps(),
+      run: () => runPriceSweeps().then(summary => notify.emit({ type: 'price_sweep_done', summary })),
     },
     {
       // Expired sessions, so the table doesn't grow unbounded. Lookups already
@@ -397,6 +400,7 @@ const shutdown = createShutdown({
     // images, writing what it has (atomically) so a resume reuses all of it.
     stopPriceSweeps();
     require('./catalog').stop();
+    notify.stop();
   },
   pendingWork: () => {
     const catalog = require('./catalog');
@@ -484,6 +488,8 @@ dbInit.then(async () => {
   // Started regardless: the jobs retry on their own clocks.
   backup.logPolicy();
   scheduler.start();
+  // Deliver any notifications still queued from before the restart.
+  notify.start();
 }, (err) => {
   // Fatal, and said so. This used to log and carry on listening: /api/health
   // answered 503 forever, an orchestrator saw a live process, and nothing
@@ -571,6 +577,7 @@ app.use('/api', listsRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/set-completion', require('./routes/setCompletion'));
 app.use('/api/precons', require('./routes/precons'));
+app.use('/api/notifications', notificationRoutes);
 
 // The live overlay runs the SAME corner model the scan does, in the browser, so
 // what the user aims with and what the server matches cannot disagree. That
