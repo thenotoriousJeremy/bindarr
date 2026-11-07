@@ -1,7 +1,5 @@
 const express = require('express');
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const db = require('../db');
 const tcgApi = require('../tcgApi');
 const scryfallApi = require('../scryfallApi');
@@ -9,7 +7,7 @@ const catalog = require('../catalog');
 const { parseCardRow } = require('../utils/priceHelpers');
 const languages = require('../utils/languages');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
-const { BACKUP_DIR, listBackups, createBackup } = require('../backup');
+const { BACKUP_DIR, listBackups, createBackup, resolveBackupFile } = require('../backup');
 
 const router = express.Router();
 
@@ -411,9 +409,10 @@ router.post('/backups', async (req, res) => {
 });
 
 router.get('/backups/:file/download', (req, res) => {
-  const name = path.basename(req.params.file); // strip any path traversal
-  const full = path.join(BACKUP_DIR, name);
-  if (!name.endsWith('.bak') || !fs.existsSync(full)) {
+  // Only a file listed in BACKUP_DIR; backup.resolveBackupFile refuses anything
+  // that names a path rather than a file there.
+  const full = resolveBackupFile(req.params.file);
+  if (!full) {
     return res.status(404).json({ error: 'Backup not found' });
   }
   res.download(full);

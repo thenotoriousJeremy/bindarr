@@ -298,7 +298,63 @@ async function splitStackedRows() {
   return split;
 }
 
+// --- PRE-MIGRATION SNAPSHOT ---
+// initDb's migrations are idempotent and mostly additive, but they run against
+// the only copy of someone's collection, and one of them drops tables. So before
+// a DIFFERENT release migrates a database that holds data, it is snapshotted
+// (backup.createPreMigrationBackup: same atomic, verified write as every backup).
+//
+// "A different release" is one pragma read. PRAGMA user_version records the
+// release that last completed initDb on this file, as major*1e6 + minor*1e3 +
+// patch — it was unused (0) until now, so every existing install takes one
+// snapshot on its first boot of this code. Keyed to the release rather than to a
+// schema number someone has to remember to bump: every release that ships a
+// migration has a new version, and dev restarts on the same version cost nothing.
+const SCHEMA_RELEASE = require('../package.json').version;
+
+function releaseMarker(version) {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(version || ''));
+  return m ? Number(m[1]) * 1e6 + Number(m[2]) * 1e3 + Number(m[3]) : 0;
+}
+const markerRelease = (marker) => (marker > 0
+  ? `${Math.floor(marker / 1e6)}.${Math.floor(marker / 1e3) % 1e3}.${marker % 1e3}`
+  : null);
+
+// Anything worth keeping? A brand-new file has no tables, and a database whose
+// tables are all empty has nothing to lose.
+async function hasData() {
+  const tables = await all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`);
+  for (const { name } of tables) {
+    if (await get(`SELECT 1 AS present FROM "${name.replace(/"/g, '""')}" LIMIT 1`)) return true;
+  }
+  return false;
+}
+
+async function snapshotBeforeMigrating() {
+  const { user_version: stored } = await get(`PRAGMA user_version`);
+  if (stored === releaseMarker(SCHEMA_RELEASE) || !(await hasData())) return;
+  const from = markerRelease(stored);
+  try {
+    const snap = await require('./backup').createPreMigrationBackup({ from, to: SCHEMA_RELEASE });
+    console.log(snap.reused
+      ? `Pre-migration snapshot for ${from || 'an unversioned database'} -> ${SCHEMA_RELEASE} already taken: ${snap.file}.`
+      : `Pre-migration snapshot taken before upgrading ${from || 'an unversioned database'} -> ${SCHEMA_RELEASE}: ${snap.file} (${snap.size} bytes).`);
+  } catch (err) {
+    // Carry on, loudly. Refusing to start would turn a full disk or an unwritable
+    // BACKUP_DIR into an outage, with a restart loop and no way into the admin
+    // page to download the backups that already exist; the migrations are
+    // additive and each statement is atomic. The rotating backups are untouched.
+    console.error('==================================================================');
+    console.error(`PRE-MIGRATION SNAPSHOT FAILED: ${err.message}`);
+    console.error(`Upgrading ${from || 'an unversioned database'} -> ${SCHEMA_RELEASE} WITHOUT a fresh snapshot.`);
+    console.error('Check BACKUP_DIR and free disk space. Existing backups are untouched.');
+    console.error('==================================================================');
+  }
+}
+
 async function initDb() {
+  await snapshotBeforeMigrating();
+
   const existingCollectionCols = await all(`PRAGMA table_info(collection)`).catch(() => []);
   if (existingCollectionCols.some(c => c.name === 'sub_location_1')) {
     console.log('Resetting locations/collection tables for the new compartment-based storage schema...');
@@ -1277,6 +1333,10 @@ async function initDb() {
     await adoptOrphanRows(adminId);
     await seedStarterLocations(adminId);
   }
+
+  // Last: this release has now brought the file up to date. Not written when a
+  // step above throws, so the next boot still knows the migration is unfinished.
+  await run(`PRAGMA user_version = ${releaseMarker(SCHEMA_RELEASE)}`);
 }
 
 // Cards and locations from before multi-user carry `user_id IS NULL`. They belong
