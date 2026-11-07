@@ -37,7 +37,7 @@ function serveFrontend(distPath) {
   // a 200 the import fails on a MIME error that reads like an app bug, and a cache
   // in front of us may keep the page under the asset's URL.
   router.use('/assets', (req, res) => res.status(404).end());
-  router.get('*', (req, res, next) => {
+  router.get('/{*splat}', (req, res, next) => {
     if (req.path.startsWith('/api')) return next();
     // Revalidated like everything unhashed: it names the hashed bundle, so a copy
     // kept without asking would hold a browser on the previous release.

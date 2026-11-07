@@ -52,26 +52,31 @@ const PUBLIC_API_ROUTES = ['/api/health'];
 const PUBLIC_AUTH_ROUTES = ['/config', '/oidc/login', '/oidc/callback', '/oidc/exchange', '/bootstrap', '/register', '/login'];
 
 const express = require('express');
+// Express 5's router keeps a mount only as a compiled matcher, with no path to read
+// back, so each use() records the path it was given on the layers it adds.
+const routerUse = express.Router.prototype.use;
+express.Router.prototype.use = function useRecordingMountPath(...args) {
+  const before = this.stack.length;
+  const result = routerUse.apply(this, args);
+  const first = args[0];
+  const at = typeof first === 'string' ? first : Array.isArray(first) ? first.join(',') : '/';
+  for (const layer of this.stack.slice(before)) layer.mountPath = at;
+  return result;
+};
 let app = null;
 express.application.listen = function captureInsteadOfListening() {
   app = this;
   return { close() {}, on() {}, address: () => null };
 };
 require('../src/server');
-assert.ok(app && app._router, 'server.js never called app.listen, so there is no app to inspect');
+assert.ok(app && app.router, 'server.js never called app.listen, so there is no app to inspect');
 
 const auth = require('../src/middleware/auth');
 const { authenticateToken, requireAdmin } = auth;
 
 const isRouter = (layer) => Array.isArray(layer.handle && layer.handle.stack);
-// Express 4 keeps a mount only as a regexp: /^\/api\/auth\/?(?=\/|$)/i.
-function mountPath(layer) {
-  if (layer.regexp && layer.regexp.fast_slash) return '/';
-  return layer.regexp.source
-    .replace(/^\^/, '')
-    .replace('\\/?(?=\\/|$)', '')
-    .replace(/\\\//g, '/');
-}
+// Recorded by useRecordingMountPath above; route layers are never compared by it.
+const mountPath = (layer) => layer.mountPath || '/';
 const methodsOf = (route) => Object.keys(route.methods).filter(m => route.methods[m]).map(m => (m === '_all' ? 'ALL' : m.toUpperCase()));
 
 // Every middleware function reachable from the app, with where it is mounted.
@@ -106,7 +111,7 @@ check('every rate limiter exported by middleware/auth.js is mounted', () => {
     .filter(([name, fn]) => typeof fn === 'function' && (typeof fn.resetKey === 'function' || /Limiter$/.test(name)));
   assert.ok(limiters.length >= 3, `expected the three documented limiters, found ${limiters.map(([n]) => n).join(', ')}`);
 
-  const mounted = collect(app._router.stack, '', []);
+  const mounted = collect(app.router.stack, '', []);
   const unmounted = [];
   for (const [name, fn] of limiters) {
     const sites = mounted.filter(m => m.fn === fn).map(m => m.where);
@@ -126,7 +131,7 @@ check('every rate limiter exported by middleware/auth.js is mounted', () => {
 });
 
 // --- 2. Nothing new sits above the /api gate -----------------------------------
-const stack = app._router.stack;
+const stack = app.router.stack;
 const gateIndex = stack.findIndex(l => l.handle === authenticateToken && !l.route && mountPath(l) === '/api');
 
 check('one authenticateToken gate is mounted at /api', () => {
