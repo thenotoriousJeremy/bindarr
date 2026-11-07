@@ -18,7 +18,11 @@
   --accent-blue-glow: rgba(59, 130, 246, 0.4);
   --accent-yellow: #eab308;
   --accent-yellow-glow: rgba(234, 179, 8, 0.4);
-  
+  /* Success / "goes here": drop targets, ✓ badges, pull-from-here borders. The
+     light theme inherits this one, as it does the other accents. */
+  --accent-green: #22c55e;
+  --accent-green-glow: rgba(34, 197, 94, 0.4);
+
   /* Pokémon Type Colors for Visual Coding */
   --type-grass: #4ade80;
   --type-fire: #f87171;
@@ -127,6 +131,8 @@
   --accent-blue-glow: rgba(56, 189, 248, 0.5);
   --accent-yellow: #facc15;
   --accent-yellow-glow: rgba(250, 204, 21, 0.5);
+  --accent-green: #4ade80;
+  --accent-green-glow: rgba(74, 222, 128, 0.5);
 
   --logo-cover: #ef4444;
   --logo-spine: #b91c1c;
@@ -311,6 +317,8 @@
   --accent-blue-glow: rgba(2, 132, 199, 0.5);
   --accent-yellow: #f59e0b;
   --accent-yellow-glow: rgba(245, 158, 11, 0.5);
+  --accent-green: #16a34a;
+  --accent-green-glow: rgba(22, 163, 74, 0.5);
 
   --logo-cover: #d97706;
   --logo-spine: #92400e;
@@ -501,6 +509,9 @@
   --accent-blue-glow: rgba(6, 182, 212, 0.5);
   --accent-yellow: #fbbf24;
   --accent-yellow-glow: rgba(251, 191, 36, 0.5);
+  /* Emerald, one of Lorcana's six inks. */
+  --accent-green: #10b981;
+  --accent-green-glow: rgba(16, 185, 129, 0.5);
 
   --logo-cover: #7c3aed;
   --logo-spine: #5b21b6;
@@ -691,6 +702,8 @@
   --accent-blue-glow: rgba(153, 153, 255, 0.4);
   --accent-yellow: #ffcc00;
   --accent-yellow-glow: rgba(255, 204, 0, 0.4);
+  --accent-green: #66cc66;
+  --accent-green-glow: rgba(102, 204, 102, 0.4);
 
   --logo-cover: #ff9900;
   --logo-spine: #cc6633;

@@ -622,7 +622,7 @@ export default function CompartmentView({
                     ...getCardRarityBorder(card.rarity),
                     ...(isTarget ? {
                       border: '2.5px solid var(--accent-green)',
-                      boxShadow: '0 0 15px rgba(34,197,94,0.4), inset 0 0 20px rgba(34,197,94,0.3)'
+                      boxShadow: '0 0 15px var(--accent-green-glow), inset 0 0 20px var(--accent-green-glow)'
                     } : {}),
                     ...(card.entry_id === currentActiveId ? { border: '2.5px solid var(--accent-yellow)', boxShadow: '0 0 10px rgba(250,204,21,0.5)' } : {}),
                     ...(isSelected(card.entry_id) ? selectedOutline : {}),
@@ -917,7 +917,7 @@ export default function CompartmentView({
                 
                 const highlightStyle = isTarget ? { 
                   border: '2px solid var(--accent-green)', 
-                  boxShadow: '0 0 20px rgba(34,197,94,0.6)' 
+                  boxShadow: '0 0 20px var(--accent-green-glow)' 
                 } : {};
 
                 if (card.__empty) {
