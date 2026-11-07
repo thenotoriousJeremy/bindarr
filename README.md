@@ -466,7 +466,13 @@ docker run --rm -v bindarr-data:/data -v "$PWD":/backup alpine cp /data/bindarr.
 
 Restore by dropping the file back into the volume with the container stopped. Individual users can also export their own account from the app: **Export full backup** (Settings → Collection Backup) holds everything they own — storage and where each copy sits, decks, notes, and the card data behind them — and **Import Backup** restores it, here or on another Bindarr, replacing what the account has. On a member's account, the card details are looked up again from the card databases rather than taken from the file, so restoring there needs internet access; an admin's restore uses the file's copy. CSV and JSON exports remain for spreadsheets and other apps.
 
-**Lost the admin password?** There's no self-service reset, and `DEFAULT_ADMIN_PASSWORD` will not change an existing account — it is only used when no accounts exist. Delete the database file to start fresh and create the owner account again.
+**Lost the admin password?** Reset it from the command line. Your collection stays as it is:
+
+```bash
+docker exec -it bindarr node scripts/reset-password.js admin
+```
+
+This prints a new random password, or uses one you pass with `-e NEW_PASSWORD=...`. It also signs that account out of every session. It works for any username, and exits non-zero if there is no such user. If you run it as root, the script switches to the user that owns the database first, so it cannot leave files the server is unable to write. Without Docker, run `node scripts/reset-password.js <username>` from the `backend` folder; it reads the same `DB_PATH` and `.env` as the server. `DEFAULT_ADMIN_PASSWORD` will not change an existing account. It is only used when no accounts exist.
 
 > **Upgrading from before v1.5.0:** the database file was renamed `pokemon_cards.db` → `bindarr.db`. First start renames it automatically, sidecars included. Old `pokemon_cards.*.bak` backups still restore.
 
