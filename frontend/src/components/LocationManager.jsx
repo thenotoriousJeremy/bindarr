@@ -23,6 +23,8 @@ import { artPocketsByPage } from '../utils/binderArtGeometry';
 import VirtualGrid from './VirtualGrid';
 import { useBackGuard } from '../utils/useBackGuard';
 import { useTabParam, setTabParam } from '../utils/router';
+import Modal from './Modal';
+import { onActivateKey } from '../utils/a11y';
 import { useT } from '../utils/i18n';
 import { apiErrorText } from '../utils/apiError';
 
@@ -122,9 +124,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   // Per-compartment filing-rule editor.
   const [rulesComp, setRulesComp] = useState(null);
-  useBackGuard(!!rulesComp, () => setRulesComp(null));
-  useBackGuard(showRulesModal, () => setShowRulesModal(false));
-  useBackGuard(!!capacityUpdatePending, () => setCapacityUpdatePending(null));
   const [compRuleDraft, setCompRuleDraft] = useState([]);
 
   const [unsortedSearch, setUnsortedSearch] = useState('');
@@ -1241,8 +1240,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       )}
 
       {rulesComp && (
-        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRulesComp(null)}>
-          <div className="glass-panel" style={{ width: '480px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', background: 'var(--bg-secondary)' }} onClick={(e) => e.stopPropagation()}>
+        <Modal onClose={() => setRulesComp(null)} label={`${rulesComp.display_label}: Accepts`} closeOnBackdrop={false}
+          overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          className="glass-panel" style={{ width: '480px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', background: 'var(--bg-secondary)' }}>
             <h3 style={{ margin: 0 }}>{rulesComp.display_label}: Accepts</h3>
             <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0 }}>
               Rules controlling which cards may be filed into this {isBinderType ? 'page' : 'row'}. No rules = accepts anything the container allows.
@@ -1252,13 +1252,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               <button className="btn btn-secondary" onClick={() => setRulesComp(null)}>{t('common.cancel')}</button>
               <button className="btn btn-primary" onClick={saveCompartmentRules}>{t('loc.saveRules')}</button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {capacityUpdatePending && (
-        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div className="glass-panel" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--bg-secondary)' }}>
+        <Modal onClose={() => setCapacityUpdatePending(null)} label={t('loc.syncCapacity')} closeOnBackdrop={false}
+          overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          className="glass-panel" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--bg-secondary)' }}>
             <h3 style={{ margin: 0 }}>{t('loc.syncCapacity')}</h3>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0 }}>
               Do you want to apply the capacity <strong>{capacityUpdatePending.capacity}</strong> to ALL compartments in this container, or just this specific one?
@@ -1267,13 +1267,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               <button className="btn btn-secondary" onClick={() => { handleSetCapacity(capacityUpdatePending.id, capacityUpdatePending.capacity, false); setCapacityUpdatePending(null); }}>{t('loc.justThisOne')}</button>
               <button className="btn btn-primary" onClick={() => { handleSetCapacity(capacityUpdatePending.id, capacityUpdatePending.capacity, true); setCapacityUpdatePending(null); }}>{t('loc.applyToAll')}</button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {showRulesModal && selectedLoc && (
-        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
-          <div className="glass-panel" style={{ width: '400px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--bg-secondary)' }}>
+        <Modal onClose={() => setShowRulesModal(false)} label={t('loc.containerSettings')} closeOnBackdrop={false}
+          overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
+          className="glass-panel" style={{ width: '400px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--bg-secondary)' }}>
             <h3 style={{ margin: 0 }}>{t('loc.containerSettings')}</h3>
 
             <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
@@ -1435,8 +1435,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               <button className="btn btn-secondary" onClick={() => setShowRulesModal(false)}>{t('common.cancel')}</button>
               <button className="btn btn-primary" onClick={saveContainerSettings}>{t('admin.saveSettings')}</button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Tabs stay visible during filing so there's always a way back — otherwise
@@ -2061,7 +2060,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       style={{ background: 'rgba(255, 193, 7, 0.15)', border: '1px solid #ffc107', borderRadius: 'var(--radius-sm)', padding: '0.75rem', width: '100%', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
                       onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255, 193, 7, 0.25)'; }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255, 193, 7, 0.15)'; }}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => locateRecommendedSpot(rec)}
+                      onKeyDown={onActivateKey(() => locateRecommendedSpot(rec))}
                       title={t('loc.snapToSlot')}
                     >
                       <div style={{ fontSize: '0.7rem', color: '#ffc107', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 'bold', marginBottom: '0.25rem' }}>{t('loc.clickToLocate')}</div>
@@ -2474,7 +2476,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             {currentRecSpot ? (
               <>
                 <div
+                  role="button"
+                  tabIndex={0}
                   onClick={() => locateRecommendedSpot(currentRecSpot)}
+                  onKeyDown={onActivateKey(() => locateRecommendedSpot(currentRecSpot))}
                   title={t('loc.tapToSnap')}
                   style={{ background: 'rgba(255,193,7,0.14)', border: '1px solid #ffc107', borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.6rem', cursor: 'pointer' }}
                 >

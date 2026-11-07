@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Shield, UserPlus, Key, Trash2, ToggleLeft, ToggleRight, Search, Users, HardDriveDownload, Download, Sparkles } from 'lucide-react';
-import { useBackGuard } from '../utils/useBackGuard';
+import Modal from './Modal';
 import CatalogPanel from './CatalogPanel';
 import InstanceSettings from './InstanceSettings';
 import SetupWizard from './SetupWizard';
@@ -31,7 +31,6 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
 
   // Change Password Modal States
   const [targetUser, setTargetUser] = useState(null);
-  useBackGuard(!!targetUser, () => setTargetUser(null));
   const [updatePassword, setUpdatePassword] = useState('');
   const [pwdLoading, setPwdLoading] = useState(false);
   const mountedRef = useRef(true);
@@ -550,7 +549,7 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
 
       {/* Change Password Dialog Overlay */}
       {targetUser && (
-        <div className="modal-overlay" style={{
+        <Modal onClose={() => { setTargetUser(null); setUpdatePassword(''); }} label={t('admin.resetPassword')} dirty={!!updatePassword} closeOnBackdrop={false} overlayStyle={{
           position: 'fixed',
           top: 0, left: 0, right: 0, bottom: 0,
           backgroundColor: 'rgba(0,0,0,0.6)',
@@ -559,8 +558,7 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
           alignItems: 'center',
           justifyContent: 'center',
           zIndex: 999
-        }}>
-          <div className="glass-panel" style={{ maxWidth: '380px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+        }} className="glass-panel" style={{ maxWidth: '380px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <div>
               <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>{t('admin.resetPassword')}</h3>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{t('admin.resetPasswordFor')} <strong>{targetUser.username}</strong></p>
@@ -591,8 +589,7 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
     </div>

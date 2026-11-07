@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ListChecks, PackagePlus, X } from 'lucide-react';
-import { useBackGuard } from '../utils/useBackGuard';
+import Modal from './Modal';
 import { useT } from '../utils/i18n';
 
 // Two deck-level actions that live beside the deck builder rather than in it:
@@ -13,7 +13,6 @@ export default function DeckListActions({ deck, showToast, onCollectionChanged }
   const [locations, setLocations] = useState([]);
   const [locationId, setLocationId] = useState('');
 
-  useBackGuard(collectOpen, () => setCollectOpen(false));
 
   useEffect(() => {
     if (!collectOpen) return;
@@ -70,8 +69,9 @@ export default function DeckListActions({ deck, showToast, onCollectionChanged }
       </button>
 
       {collectOpen && (
-        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(0,0,0,0.7)' }} onClick={() => setCollectOpen(false)}>
-          <div className="glass-panel" style={{ width: '420px', maxWidth: '100%', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }} onClick={(e) => e.stopPropagation()}>
+        <Modal onClose={() => setCollectOpen(false)} label={t('lists.collectTitle', { name: deck.name })}
+          overlayStyle={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(0,0,0,0.7)' }}
+          className="glass-panel" style={{ width: '420px', maxWidth: '100%', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 style={{ margin: 0 }}>{t('lists.collectTitle', { name: deck.name })}</h3>
               <button className="btn btn-secondary btn-icon-only" onClick={() => setCollectOpen(false)} aria-label={t('common.close')}><X size={15} /></button>
@@ -88,8 +88,7 @@ export default function DeckListActions({ deck, showToast, onCollectionChanged }
               <button className="btn btn-secondary" onClick={() => setCollectOpen(false)}>{t('common.cancel')}</button>
               <button className="btn btn-primary" onClick={collect} disabled={busy}>{t('lists.collectConfirm')}</button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </>
   );

@@ -628,6 +628,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
                 <input 
                   type="checkbox" 
                   checked={shareEnabled} 
+                  aria-label={t('settings.shareLibrary')}
                   onChange={(e) => handleShareToggle(e.target.checked)}
                   disabled={shareLoading}
                   style={{ opacity: 0, width: 0, height: 0 }}
@@ -729,6 +730,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
                     <input
                       type="checkbox"
                       checked={shareLocations}
+                      aria-label={t('settings.showLocations')}
                       onChange={(e) => handleLocationsToggle(e.target.checked)}
                       disabled={shareLoading}
                       style={{ opacity: 0, width: 0, height: 0 }}

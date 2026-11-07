@@ -15,7 +15,8 @@ import AddToDeckSelect from './AddToDeckSelect';
 import AddToListSelect from './AddToListSelect';
 import UsedInDecks from './UsedInDecks';
 import CardArtEditor from './CardArtEditor';
-import { useBackGuard } from '../utils/useBackGuard';
+import Modal from './Modal';
+import { onActivateKey } from '../utils/a11y';
 import { useT } from '../utils/i18n';
 import { undoToast } from '../utils/undo';
 import RiotNotice from './RiotNotice';
@@ -84,7 +85,6 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
   const [printingsTotal, setPrintingsTotal] = useState(null);
   const hasToggledRef = useRef(false);
 
-  useBackGuard(isFullScreen, () => setIsFullScreen(false));
 
   const targetEntryId = card?.entry_id || card?.id;
   if (targetEntryId !== prevTargetId) {
@@ -165,7 +165,6 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     onClose && onClose();
   };
 
-  useBackGuard(!!card, handleClose);
 
   if (!card || !activeCard) return null;
 
@@ -427,7 +426,8 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     || [p.set_name, p.set_id, p.number].some(v => String(v || '').toLowerCase().includes(printingsQuery)));
 
   return (
-    <div className="modal-overlay" style={{
+    <>
+    <Modal onClose={handleClose} label={activeCard.name} closeOnBackdrop={mode !== 'edit'} overlayStyle={{
       position: 'fixed',
       top: 0, left: 0, right: 0, bottom: 0,
       backgroundColor: 'rgba(0,0,0,0.75)',
@@ -436,9 +436,8 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
       alignItems: 'center',
       justifyContent: 'center',
       zIndex: 999
-    }} onClick={handleClose}>
-      <div className={`glass-panel card-inspector ${mode === 'edit' ? 'mode-edit' : ''}`} onClick={(e) => e.stopPropagation()}>
-        <button className="btn btn-secondary btn-icon-only" onClick={handleClose} style={{
+    }} className={`glass-panel card-inspector ${mode === 'edit' ? 'mode-edit' : ''}`}>
+        <button className="btn btn-secondary btn-icon-only" onClick={handleClose} aria-label={t('common.close')} style={{
           position: 'absolute',
           top: '1rem',
           right: '1rem',
@@ -452,7 +451,11 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         <div className="ci-image-col" style={{ flex: '1 1 260px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <div
             className="ci-image-wrap"
+            role="button"
+            tabIndex={0}
+            aria-label={t('inspector.fullScreen')}
             onClick={() => setIsFullScreen(true)}
+            onKeyDown={onActivateKey(() => setIsFullScreen(true))}
             title={t('inspector.zoomHint')}
             style={{ position: 'relative', width: '100%', maxWidth: isLandscape(faceCard) ? '420px' : '300px', cursor: 'pointer' }}
           >
@@ -875,7 +878,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                   )}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '0.6rem', maxHeight: '280px', overflowY: 'auto', padding: '0.25rem' }}>
                     {visiblePrintings.slice(0, printingsShown).map(p => (
-                      <div key={p.id} className="tcg-card" onClick={() => handleChangePrinting(p)} style={{ cursor: 'pointer' }}>
+                      <div key={p.id} className="tcg-card" role="button" tabIndex={0} onClick={() => handleChangePrinting(p)} onKeyDown={onActivateKey(() => handleChangePrinting(p))} style={{ cursor: 'pointer' }}>
                         <div className="tcg-card-inner" style={{ border: '1px solid var(--border-glass-hover)' }}>
                           <CardImage card={p} className="tcg-card-image" loading="lazy" decoding="async" />
                         </div>
@@ -909,8 +912,11 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
 
               {/* Storage Container details (clickable to view in storage) */}
               {activeCard.list_type !== 'wishlist' && (
-                <div 
+                <div
+                  role={onViewStorage ? 'button' : undefined}
+                  tabIndex={onViewStorage ? 0 : undefined}
                   onClick={() => onViewStorage && activeCard.list_type !== 'wishlist' && onViewStorage(activeCard)}
+                  onKeyDown={onViewStorage ? onActivateKey(() => onViewStorage(activeCard)) : undefined}
                   style={{
                     display: 'flex', alignItems: 'center', gap: '0.5rem',
                     background: 'rgba(255, 71, 71, 0.03)', padding: '0.65rem 0.75rem',
@@ -994,12 +1000,12 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
             </>
           )}
         </div>
-      </div>
+    </Modal>
 
       {isFullScreen && (
         <CardImageZoom card={faceCard} onClose={() => setIsFullScreen(false)} />
       )}
-    </div>
+    </>
   );
 }
 

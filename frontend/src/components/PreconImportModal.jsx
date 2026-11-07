@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { X, Search, ArrowLeft, PackageOpen } from 'lucide-react';
-import { useBackGuard } from '../utils/useBackGuard';
+import Modal from './Modal';
 import { useT } from '../utils/i18n';
 
 // Import a preconstructed Magic deck or a Secret Lair drop, by name, from
@@ -12,7 +12,6 @@ const MODES = ['collection', 'deck', 'both'];
 
 export default function PreconImportModal({ onClose, showToast }) {
   const { t } = useT();
-  useBackGuard(true, onClose);
 
   const [q, setQ] = useState('');
   const [type, setType] = useState('');
@@ -112,8 +111,9 @@ export default function PreconImportModal({ onClose, showToast }) {
   const muted = { fontSize: '0.75rem', color: 'var(--text-muted)' };
 
   return (
-    <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
-      <div className="glass-panel" style={{ width: '620px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }} onClick={(e) => e.stopPropagation()}>
+    <Modal onClose={onClose} label={t('precon.title')} dirty={!!selected}
+      overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      className="glass-panel" style={{ width: '620px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           {selected && (
             <button type="button" className="btn btn-secondary btn-icon-only" onClick={back} aria-label={t('common.back')} title={t('common.back')} style={{ width: '28px', height: '28px', padding: 0 }}>
@@ -239,7 +239,6 @@ export default function PreconImportModal({ onClose, showToast }) {
             </div>
           </>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }

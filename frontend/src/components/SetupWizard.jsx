@@ -7,6 +7,7 @@ import {
 import { GAMES, enabledGames, setGameEnabled, defaultGame, gameLabel } from '../utils/games';
 import { containerTypeKey } from '../utils/cardOptions';
 import { LOCALES, localeName, useT } from '../utils/i18n';
+import Modal from './Modal';
 
 // First-run setup.
 //
@@ -492,7 +493,7 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
                   onChange={(e) => setEditName(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') renameLocation(l.id);
-                    if (e.key === 'Escape') setEditingId(null);
+                    if (e.key === 'Escape') { e.preventDefault(); setEditingId(null); }
                   }}
                   style={{ ...input, flex: 1 }}
                 />
@@ -579,12 +580,11 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
   const last = step === STEPS.length - 1;
 
   return (
-    <div style={{
+    <Modal onClose={onClose} label={t('setup.dialogLabel')} closeOnBackdrop={false} overlayStyle={{
       position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center',
       padding: '1rem', background: 'rgba(0,0,0,0.72)',
       backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
-    }}>
-      <div style={{
+    }} style={{
         width: '100%', maxWidth: 580, maxHeight: '90vh', display: 'flex', flexDirection: 'column',
         padding: '1.25rem', background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)',
         borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-glow)',
@@ -627,8 +627,7 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

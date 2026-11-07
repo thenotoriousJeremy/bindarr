@@ -9,6 +9,7 @@ import {
 } from '../utils/binderArtGeometry';
 import BinderArtPiece from './BinderArtPiece';
 import CardImage from './CardImage';
+import Modal from './Modal';
 import { useT } from '../utils/i18n';
 
 // Upload, place and print artwork for one binder page or spread (issue #104).
@@ -383,8 +384,9 @@ function BinderArtworkEditor({ location, compartments, pageIndex, cardsByCompart
   const targetLabel = (key) => t(`binderArt.target.${key}`);
 
   return (
-    <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div className="glass-panel" role="dialog" aria-label={t('binderArt.title')} style={{ width: 'min(1100px, 100%)', maxHeight: '100%', overflow: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', background: 'var(--bg-secondary)' }}>
+    <Modal onClose={onClose} label={t('binderArt.title')} dirty={dirty} closeOnBackdrop={false}
+      overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      className="glass-panel" style={{ width: 'min(1100px, 100%)', maxHeight: '100%', overflow: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', background: 'var(--bg-secondary)' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: '14rem' }}>
             <h2 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--text-strong)' }}>{t('binderArt.title')}</h2>
@@ -447,8 +449,14 @@ function BinderArtworkEditor({ location, compartments, pageIndex, cardsByCompart
             )}
 
             {composition && (
+              // A 2-D drag surface: arrow keys nudge the artwork (onStageKey). No
+              // ARIA widget role describes free positioning, so it is an
+              // "application" region that still needs focus and key handling.
+              /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */
               <div
                 className="binder-art-stage"
+                role="application"
+                aria-label={t('binderArt.title')}
                 tabIndex={0}
                 onKeyDown={onStageKey}
                 onPointerDown={onPointerDown}
@@ -461,6 +469,7 @@ function BinderArtworkEditor({ location, compartments, pageIndex, cardsByCompart
                   cursor: transform ? 'grab' : 'default',
                 }}
               >
+                {/* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
                 {src && transform && (
                   <img
                     className="binder-art-ghost"
@@ -558,8 +567,7 @@ function BinderArtworkEditor({ location, compartments, pageIndex, cardsByCompart
           <button type="button" className="btn btn-secondary" style={{ fontSize: '0.75rem' }} onClick={close}>{t('binderArt.close')}</button>
           <button type="button" className="btn btn-primary" style={{ fontSize: '0.75rem' }} disabled={!artwork || busy || !dirty} onClick={save}>{t('binderArt.save')}</button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

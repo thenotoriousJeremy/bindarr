@@ -8,6 +8,8 @@ import { CONDITIONS, getPrintings, conditionLabel, printingLabel } from '../util
 import CardEntryFields from './CardEntryFields';
 import CardInspectorModal from './CardInspectorModal';
 import { useBackGuard } from '../utils/useBackGuard';
+import Modal from './Modal';
+import { onActivateKey, useEscape } from '../utils/a11y';
 import { useMultiSelect } from '../utils/useMultiSelect';
 import { langName, langCode, getLanguagesForGame, isLanguageSupported } from '../utils/languages';
 import { requestDetect, stopDetect, smoothQuad, meanCornerDrift, DETECT_W } from '../utils/cardDetector';
@@ -543,16 +545,29 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [dupConfirmCard, setDupConfirmCard] = useState(null);
   const [dupQty, setDupQty] = useState(1);
 
-  useBackGuard(scanMatches.length > 0, () => {
+  // Back / Esc on the match picker and the duplicate prompt (their <Modal>s
+  // own the back guard).
+  const dismissMatches = () => {
     setScanMatches([]);
     autoArmed.current = true;
     capturedQuad.current = null;
     resolvedDupIdRef.current = null;
-  });
-  useBackGuard(!!dupConfirmCard, () => {
+  };
+  const dismissDupConfirm = () => {
     setDupConfirmCard(null);
     resolvedDupIdRef.current = null;
-  });
+  };
+  // Cancel, Back or Esc on the auto-add popup: drop the card and re-arm.
+  const cancelAutoAdd = () => {
+    setAutoAddTargetCard(null);
+    setAutoAddCountdown(null);
+    setAutoAddAlternatives([]);
+    setAutoAddEditing(false);
+    autoArmed.current = true;
+    capturedQuad.current = null;
+    resolvedDupIdRef.current = null;
+    showToast(t('scan.autoAddCancelled'));
+  };
   useBackGuard(!!inspectorEntry, () => setInspectorEntry(null));
   useBackGuard(recentSelect.selectMode, recentSelect.exitSelectMode);
   
@@ -1810,6 +1825,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
       startCamera();
     }
   };
+  useEscape(isDrawerOpen, closeDrawer);
 
   const removeRecentTile = (entryId) => setRecentScans(prev => prev.filter(s => s.entry_id !== entryId));
   // Tap: open the inspector, unless a long-press just armed selection or we're
@@ -1890,7 +1906,10 @@ function CameraScanner({ onAddSuccess, showToast }) {
         <div 
           className="camera-preview-wrapper" 
           style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+          role="button"
+          tabIndex={0}
           onClick={startCamera}
+          onKeyDown={onActivateKey(startCamera)}
         >
           {cameraErrorKey ? (
             <div style={{ textAlign: 'center', padding: '2rem' }}>
@@ -2564,9 +2583,12 @@ function CameraScanner({ onAddSuccess, showToast }) {
       {/* Auto Add Countdown Overlay. Tap the card (before the countdown ends) to
           pause auto-add and adjust condition/printing before it's saved. */}
       {autoAddTargetCard && (autoAddCountdown !== null || autoAddEditing) && (
-        <div
-          className="modal-backdrop"
-          style={{
+        <Modal
+          onClose={cancelAutoAdd}
+          label={getCardDisplayName(autoAddTargetCard.name, addLanguage(autoAddTargetCard), autoAddTargetCard.printed_name)}
+          closeOnBackdrop={false}
+          overlayClassName="modal-backdrop"
+          overlayStyle={{
             position: 'fixed',
             top: 0, left: 0, right: 0, bottom: 0,
             backgroundColor: 'rgba(0,0,0,0.85)',
@@ -2577,8 +2599,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
             zIndex: 1100,
             padding: '1rem'
           }}
-        >
-          <div className="glass-panel animate-fade-in scan-confirm-modal" style={{ maxWidth: '420px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: '1.25rem', alignItems: 'center', textAlign: 'center', border: '1px solid var(--accent-red)' }}>
+          className="glass-panel animate-fade-in scan-confirm-modal" style={{ maxWidth: '420px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: '1.25rem', alignItems: 'center', textAlign: 'center', border: '1px solid var(--accent-red)' }}>
             <div>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 800 }}>{t(autoAddEditing ? 'scan.adjustAndAdd' : 'scan.exactMatch')}</span>
               {/* The name AS PRINTED when the provider gave one, so a Japanese
@@ -2590,6 +2611,9 @@ function CameraScanner({ onAddSuccess, showToast }) {
             </div>
 
             <div
+              role={autoAddEditing ? undefined : 'button'}
+              tabIndex={autoAddEditing ? undefined : 0}
+              onKeyDown={autoAddEditing ? undefined : onActivateKey((e) => e.currentTarget.click())}
               onClick={() => {
                 if (autoAddEditing) return;
                 // Pause and open the editor with sensible defaults.
@@ -2659,15 +2683,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                   <button
                     type="button"
                     className="btn btn-secondary"
-                    onClick={() => {
-                      setAutoAddTargetCard(null);
-                      setAutoAddCountdown(null);
-                      setAutoAddEditing(false);
-                      autoArmed.current = true;
-                      capturedQuad.current = null;
-                      resolvedDupIdRef.current = null;
-                      showToast(t('scan.autoAddCancelled'));
-                    }}
+                    onClick={cancelAutoAdd}
                     style={{ flex: 1, fontSize: '0.75rem', padding: '0.45rem 0' }}
                   >
                     {t('common.cancel')}
@@ -2696,15 +2712,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                   <button
                     type="button"
                     className="btn btn-secondary"
-                    onClick={() => {
-                      setAutoAddTargetCard(null);
-                      setAutoAddCountdown(null);
-                      setAutoAddAlternatives([]);
-                      autoArmed.current = true;
-                      capturedQuad.current = null;
-                      resolvedDupIdRef.current = null;
-                      showToast(t('scan.autoAddCancelled'));
-                    }}
+                    onClick={cancelAutoAdd}
                     style={{ flex: 1, fontSize: '0.75rem', padding: '0.45rem 0' }}
                   >
                     {t('common.cancel')}
@@ -2772,15 +2780,17 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 </button>
               </div>
             )}
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Duplicate-Scan Confirm Overlay: the just-added card was scanned again. */}
       {dupConfirmCard && (
-        <div
-          className="modal-backdrop"
-          style={{
+        <Modal
+          onClose={dismissDupConfirm}
+          label={t('scan.sameCardAgain')}
+          closeOnBackdrop={false}
+          overlayClassName="modal-backdrop"
+          overlayStyle={{
             position: 'fixed',
             top: 0, left: 0, right: 0, bottom: 0,
             backgroundColor: 'rgba(0,0,0,0.85)',
@@ -2791,8 +2801,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
             zIndex: 1100,
             padding: '1rem'
           }}
-        >
-          <div className="glass-panel animate-fade-in scan-confirm-modal" style={{ maxWidth: '420px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: '1.25rem', alignItems: 'center', textAlign: 'center', border: '1px solid var(--accent-yellow)' }}>
+          className="glass-panel animate-fade-in scan-confirm-modal" style={{ maxWidth: '420px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: '1.25rem', alignItems: 'center', textAlign: 'center', border: '1px solid var(--accent-yellow)' }}>
             <div>
               <span style={{ fontSize: '0.75rem', color: 'var(--accent-yellow)', textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 800 }}>{t('scan.sameCardAgain')}</span>
               <h3 style={{ fontSize: '1.25rem', color: 'var(--text-strong)', margin: '0.25rem 0 0.5rem 0' }}>{getCardDisplayName(dupConfirmCard.name, addLanguage(dupConfirmCard), dupConfirmCard.printed_name)}</h3>
@@ -2864,13 +2873,12 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 Done — that was another photo of the same card
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Scan Results Suggestions Popup Modal */}
       {scanMatches.length > 0 && (
-        <div style={{
+        <Modal onClose={dismissMatches} label={t('scan.identifiedTitle')} closeOnBackdrop={false} overlayStyle={{
           position: 'fixed',
           top: 0, left: 0, right: 0, bottom: 0,
           backgroundColor: 'rgba(0,0,0,0.85)',
@@ -2880,8 +2888,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
           justifyContent: 'center',
           zIndex: 1000,
           padding: '1rem'
-        }}>
-          <div className="glass-panel scan-suggestions-modal" style={{ maxWidth: '560px', width: '100%', display: 'flex', flexDirection: 'column', gap: '1.25rem', maxHeight: '90vh', overflowY: 'auto' }}>
+        }} className="glass-panel scan-suggestions-modal" style={{ maxWidth: '560px', width: '100%', display: 'flex', flexDirection: 'column', gap: '1.25rem', maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
               <h3 style={{ fontSize: '1.1rem', color: 'var(--text-strong)', margin: 0 }}>{t('scan.identifiedTitle')}</h3>
               <button 
@@ -2955,7 +2962,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 identify, and the answer is usually near the top. */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '0.75rem', maxHeight: '350px', overflowY: 'auto', padding: '0.25rem' }}>
               {(showAllMatches ? scanMatches : scanMatches.slice(0, PICKER_PREVIEW)).map(card => (
-                <div key={card.id} className="tcg-card" onClick={() => openQuickAdd(card)} style={{ cursor: 'pointer' }}>
+                <div key={card.id} className="tcg-card" role="button" tabIndex={0} onClick={() => openQuickAdd(card)} onKeyDown={onActivateKey(() => openQuickAdd(card))} style={{ cursor: 'pointer' }}>
                   <div className="tcg-card-inner" style={{ border: '1px solid var(--border-glass-hover)' }}>
                     {/* Lazy: "Change printing" can fill this with hundreds of printings. */}
                     <img src={card.image_url} alt={getCardDisplayName(card.name, addLanguage(card), card.printed_name)} className="tcg-card-image" loading="lazy" decoding="async" />
@@ -3017,8 +3024,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 {t('common.cancel')}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Recent Scans History Panel */}
@@ -3049,7 +3055,11 @@ function CameraScanner({ onAddSuccess, showToast }) {
               return (
               <div
                 key={idx}
+                role="button"
+                tabIndex={0}
+                aria-pressed={recentSelect.selectMode ? selected : undefined}
                 onClick={() => activateRecent(item)}
+                onKeyDown={onActivateKey(() => activateRecent(item))}
                 {...recentSelect.pressHandlers(item.entry_id)}
                 title={t('scan.tapEditHoldSelect')}
                 style={{ flex: '0 0 auto', width: '76px', display: 'flex', flexDirection: 'column', gap: '0.25rem', cursor: 'pointer', userSelect: 'none', WebkitTouchCallout: 'none', opacity: recentSelect.selectMode && !selected ? 0.55 : 1 }}
@@ -3082,7 +3092,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
       )}
 
       {/* Drawer Overlay for Selected Card */}
-      <div className={`drawer-backdrop ${isDrawerOpen ? 'open' : ''}`} onClick={closeDrawer}></div>
+      {/* Pointer-only dismissal; Esc is the keyboard twin (useEscape above). */}
+      <div role="presentation" className={`drawer-backdrop ${isDrawerOpen ? 'open' : ''}`} onClick={closeDrawer}></div>
       <div className={`quick-add-drawer ${isDrawerOpen ? 'open' : ''}`}>
         {selectedCard && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', width: '100%', maxWidth: '100%', boxSizing: 'border-box', overflow: 'hidden' }}>
