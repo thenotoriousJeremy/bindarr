@@ -10,6 +10,8 @@ import CardImageZoom from './CardImageZoom';
 import CardEntryFields from './CardEntryFields';
 import PriceHistoryChart from './PriceHistoryChart';
 import AddToDeckSelect from './AddToDeckSelect';
+import AddToListSelect from './AddToListSelect';
+import UsedInDecks from './UsedInDecks';
 import CardArtEditor from './CardArtEditor';
 import { useBackGuard } from '../utils/useBackGuard';
 import { useT } from '../utils/i18n';
@@ -815,6 +817,8 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 </div>
               )}
 
+              <UsedInDecks cardId={activeCard.card_id || activeCard.id} />
+
               {/* Right card, wrong set: re-file this copy under another printing. */}
               {printings ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -915,6 +919,12 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 <AddToDeckSelect
                   onAdd={handleAddToDeck}
                   placeholder={t('inspector.addToDeck')}
+                  style={{ fontSize: '0.8rem', padding: '0.45rem 0.5rem', maxWidth: '140px' }}
+                />
+                <AddToListSelect
+                  cardIds={[activeCard.card_id || activeCard.id]}
+                  game={activeCard.game}
+                  showToast={showToast}
                   style={{ fontSize: '0.8rem', padding: '0.45rem 0.5rem', maxWidth: '140px' }}
                 />
 

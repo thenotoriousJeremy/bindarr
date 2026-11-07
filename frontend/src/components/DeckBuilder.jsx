@@ -9,6 +9,7 @@ import { useBackGuard } from '../utils/useBackGuard';
 import { buildDeckExport, parseDeckLine, pickDeckLineCard } from '../utils/deckText';
 import { defaultGame, gameOptions, showGamePicker, isGameEnabled } from '../utils/games';
 import CardImage from './CardImage';
+import DeckListActions from './DeckListActions';
 import { useT } from '../utils/i18n';
 
 // Basic Energy (Pokémon) & Basic Lands (MTG) are exempt from the "max 4 of a card" deck rule.
@@ -1514,6 +1515,7 @@ function DeckBuilder({ showToast }) {
               >
                 <Upload size={14} /> Import
               </button>
+              <DeckListActions deck={activeDeck} showToast={showToast} onCollectionChanged={() => loadDeckDetails(activeDeck.id)} />
               {/* Checkout / Return button */}
               {activeDeck.checked_out ? (
                 <button

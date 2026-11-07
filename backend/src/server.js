@@ -53,6 +53,7 @@ const statsRoutes = require('./routes/stats');
 const importExportRoutes = require('./routes/importExport');
 const setsRoutes = require('./routes/sets');
 const decksRoutes = require('./routes/decks');
+const listsRoutes = require('./routes/lists');
 const settingsRoutes = require('./routes/settings');
 const notesRoutes = require('./routes/notes');
 const cardArtRoutes = require('./routes/cardArt');
@@ -535,6 +536,8 @@ app.use('/api', notesRoutes);
 app.use('/api', sealedRoutes);
 app.use('/api/sets', setsRoutes);
 app.use('/api/decks', decksRoutes);
+// Full paths inside (/lists, /decks/:id/missing-list, /cards/:id/decks), like collectionRoutes.
+app.use('/api', listsRoutes);
 app.use('/api/settings', settingsRoutes);
 
 // The live overlay runs the SAME corner model the scan does, in the browser, so

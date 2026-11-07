@@ -738,6 +738,52 @@ async function initDb() {
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_sealed_template_components_template ON sealed_template_components(template_id)`);
 
+  // Named card lists: wishlists, buylists, "what this deck still needs" lists.
+  // Cards wanted, not cards owned — so neither the collection table (rows there
+  // are physical copies with a slot) nor a deck (format rules, checkout). Owned
+  // and missing counts are computed against the collection on read
+  // (utils/listOwnership.js), never stored, so they cannot go stale.
+  //
+  // `game` NULL means the list takes cards of any game. `deck_id` links a
+  // 'missing' list to the deck it was built from, so rebuilding it updates the
+  // same list; SET NULL keeps the shopping list when the deck is deleted.
+  await run(`
+    CREATE TABLE IF NOT EXISTS card_lists (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'wishlist' CHECK(kind IN ('wishlist', 'buylist', 'missing', 'custom')),
+      game TEXT,
+      notes TEXT DEFAULT '',
+      deck_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(deck_id) REFERENCES decks(id) ON DELETE SET NULL
+    )
+  `);
+  // One row per wanted card: adding a card already on the list merges into its
+  // quantity rather than listing it twice. `any_printing` counts every printing
+  // of the same card (same game, same name) as owned; condition_min and language
+  // narrow which owned copies count.
+  await run(`
+    CREATE TABLE IF NOT EXISTS card_list_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      list_id INTEGER NOT NULL,
+      card_id TEXT NOT NULL,
+      quantity_wanted INTEGER NOT NULL DEFAULT 1 CHECK(quantity_wanted BETWEEN 1 AND 9999),
+      any_printing INTEGER NOT NULL DEFAULT 0,
+      condition_min TEXT CHECK(condition_min IS NULL OR condition_min IN ('Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged')),
+      language TEXT,
+      notes TEXT DEFAULT '',
+      added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(list_id, card_id),
+      FOREIGN KEY(list_id) REFERENCES card_lists(id) ON DELETE CASCADE,
+      FOREIGN KEY(card_id) REFERENCES card_cache(id)
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_card_lists_user ON card_lists(user_id)`);
+
   // --- MIGRATIONS ---
   // When each game's price sweep last ran. Scryfall updates prices once a day,
   // so a sweep more often than that cannot return anything new — and the boot
