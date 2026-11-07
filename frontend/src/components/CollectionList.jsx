@@ -248,15 +248,15 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     const units = new Map();
     collection.forEach(item => {
       if (item.sealed_unit_id == null || units.has(item.sealed_unit_id)) return;
-      const details = [item.sealed_product_store, item.sealed_product_date, item.sealed_unit_number ? `Unit ${item.sealed_unit_number}` : null]
+      const details = [item.sealed_product_store, item.sealed_product_date, item.sealed_unit_number ? t('sealed.unitLabel', { n: item.sealed_unit_number }) : null]
         .filter(Boolean);
       units.set(item.sealed_unit_id, {
         value: item.sealed_unit_id,
-        label: `${item.sealed_product_name || 'Sealed product'}${details.length ? ` · ${details.join(' · ')}` : ''}`,
+        label: `${item.sealed_product_name || t('sealed.otherType')}${details.length ? ` · ${details.join(' · ')}` : ''}`,
       });
     });
     return Array.from(units.values()).sort((a, b) => a.label.localeCompare(b.label));
-  }, [collection]);
+  }, [collection, t]);
 
   const activeFilterCount =
     [locationFilter, rarityFilter, conditionFilter, graderFilter, printingFilter,
@@ -713,7 +713,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
             {sealedUnits.map(u => (
               <option key={u.id} value={u.id}>
                 {u.product_name}{u.store ? ` \u00b7 ${u.store}` : ''}{u.unit_price != null ? ` \u00b7 $${Number(u.unit_price).toFixed(2)}` : ''}
-                {u.expected_cards != null ? ` \u00b7 ${u.linked_cards}/${u.expected_cards} cards` : ''}
+                {u.expected_cards != null ? ` \u00b7 ${t('sealed.linkedOfExpected', { linked: u.linked_cards, expected: u.expected_cards })}` : ''}
               </option>
             ))}
           </select>

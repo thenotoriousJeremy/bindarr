@@ -1023,6 +1023,7 @@
   "sealed.sourceLinkUpdated": "Box link updated.",
   "sealed.sourcePriceAllocated": "Box link updated. Pack price set to {price} each.",
   "sealed.notLinked": "Not linked to a box",
+  "sealed.linkedOfExpected": "{linked}/{expected} cards",
   "collection.wishlist": "Wishlist",
   "collection.select": "Select",
   "collection.selectHint": "Or long-press any card to start selecting",
