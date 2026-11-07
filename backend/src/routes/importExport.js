@@ -244,6 +244,13 @@ router.post('/import', importLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Invalid data payload' });
     }
     if (rawItems.length > MAX_IMPORT_ROWS) return tooManyRows(res, rawItems.length);
+
+    // Bindarr's JSON backup carries no game, but its card ids do: without this an
+    // MTG or Lorcana backup was restored with every copy filed as Pokémon.
+    rawItems = rawItems.map(item => (item && typeof item === 'object'
+      ? { ...item, game: cardApi.gameOf(item.card_id || item.id, item.game) }
+      : item));
+
     // A row stating zero copies (or a quantity nobody can read) names a card the
     // file's owner does not have. `|| 1` below used to import one copy of it.
     const stated = (item) => (item.quantity == null || item.quantity === '' ? 1 : parseInt(item.quantity, 10));

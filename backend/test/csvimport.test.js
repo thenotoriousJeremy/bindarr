@@ -80,13 +80,13 @@ tcgdexApi.client.defaults.adapter = async (config) => {
 };
 
 const handler = importRouter.stack.find(layer => layer.route?.path === '/import').route.stack.at(-1).handle;
-async function importCsv(data) {
+async function importCsv(data, format = 'csv') {
   const res = {
     statusCode: 200,
     status(code) { this.statusCode = code; return this; },
     json(body) { this.body = body; return this; },
   };
-  await handler({ body: { format: 'csv', data }, user: { id: 1, tcg_api_key: '' } }, res);
+  await handler({ body: { format, data }, user: { id: 1, tcg_api_key: '' } }, res);
   return res;
 }
 const imported = () => db.all(`
@@ -224,6 +224,19 @@ async function main() {
   assert.strictEqual(none.statusCode, 400);
   assert.match(none.body.error, /no row has a quantity of 1 or more/);
   assert.strictEqual((await db.get(`SELECT COUNT(*) n FROM collection`)).n, 4, 'nothing was added');
+
+  // Bindarr's own JSON backup names no game; its card ids do. A Magic copy used to
+  // come back filed as Pokémon.
+  await db.run(`DELETE FROM collection`);
+  const backup = await importCsv(JSON.stringify([
+    { card_id: mtg(SCRYFALL[0].id), quantity: 1, printing: 'Holofoil' },
+    { card_id: 'tcgdex-en-sv01-001', quantity: 1 },
+  ]), 'json');
+  assert.strictEqual(backup.statusCode, 200, JSON.stringify(backup.body));
+  assert.deepStrictEqual((await imported()).map(r => [r.card_id, r.game]), [
+    [mtg(SCRYFALL[0].id), 'mtg'],
+    ['tcgdex-en-sv01-001', 'pokemon'],
+  ]);
 }
 
 main()
