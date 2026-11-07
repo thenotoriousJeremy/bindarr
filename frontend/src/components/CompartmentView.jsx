@@ -10,6 +10,7 @@ import { displayName } from '../utils/languages';
 import { useLongPress } from '../utils/useLongPress';
 import { pageColumns as resolvePageColumns, layoutPockets } from '../utils/binderLayout';
 import CardImage from './CardImage';
+import BinderArtPiece from './BinderArtPiece';
 import { useT } from '../utils/i18n';
 
 const infoChipStyle = { fontSize: '0.6rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)', whiteSpace: 'nowrap' };
@@ -218,7 +219,12 @@ export default function CompartmentView({
   // onActiveSlotChange(compartmentId, slot) reports the slot it centres, so the
   // map follows arrow keys, swipes and the wheel as well as its own seeks.
   seekTo = null,
-  onActiveSlotChange = null
+  onActiveSlotChange = null,
+
+  // Binder artwork (binders only): Map of 0-based pocket index to
+  // { src, style } for the pockets that show a picture. A card filed in such a
+  // pocket still shows as the card; only an empty pocket shows the artwork.
+  artPockets = null
 }) {
   const { t } = useT();
   const isBinder = isBinderType(locationType);
@@ -674,14 +680,16 @@ export default function CompartmentView({
                   dropId={`pocket-${compartment.id}-${pos}`}
                   dropData={{ compartmentId: compartment.id, slot: pos, occupantEntryId: null }}
                   key={`empty-${i}`}
-                  className="binder-pocket empty"
+                  className={`binder-pocket empty ${artPockets?.get(i) ? 'has-art' : ''}`}
                   onClick={placementMode && pickedEntryId ? () => onPlaceSlot(compartment.id, pos, null) : undefined}
                   style={{
                     ...(isTarget ? { borderColor: 'var(--accent-green)', background: 'rgba(34,197,94,0.1)' } : {}),
                     ...(placementMode && pickedEntryId ? { cursor: 'pointer', borderColor: 'var(--accent-red)', background: 'rgba(255,71,71,0.08)' } : {})
                   }}
                 >
-                  <span className="slot-number">{pos}</span>
+                  {artPockets?.get(i)
+                    ? <BinderArtPiece src={artPockets.get(i).src} style={artPockets.get(i).style} />
+                    : <span className="slot-number">{pos}</span>}
                   {isTarget && (
                     <div style={{ color: 'var(--accent-green)', fontWeight: 'bold', fontSize: '0.8rem', marginTop: '0.5rem' }}>{t('compartment.pull')}</div>
                   )}

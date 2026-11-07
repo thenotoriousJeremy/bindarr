@@ -53,6 +53,7 @@ const cardArtRoutes = require('./routes/cardArt');
 const sealedRoutes = require('./routes/sealed');
 const backupRoutes = require('./routes/backup');
 const trashRoutes = require('./routes/trash');
+const binderArtRoutes = require('./routes/binderArt');
 const { authenticateToken } = require('./middleware/auth');
 const { startHttps, selfSignedTls } = require('./utils/tls');
 
@@ -562,6 +563,7 @@ app.use('/api', importExportRoutes);
 app.use('/api', notesRoutes);
 app.use('/api', sealedRoutes);
 app.use('/api', backupRoutes);
+app.use('/api', binderArtRoutes);
 app.use('/api/sets', setsRoutes);
 app.use('/api/decks', decksRoutes);
 // Full paths inside (/lists, /decks/:id/missing-list, /cards/:id/decks), like collectionRoutes.

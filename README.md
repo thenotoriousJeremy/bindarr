@@ -449,6 +449,14 @@ A container set to **Custom** order files by hand rather than by a sort scheme. 
 
 Dragging is mouse-only — on a phone a drag would fight the page-swipe, so touch files by tapping instead: turn on **Arrange**, tap the card, tap the pocket. Both routes go through the same placement rules, so a locked or full container refuses either way.
 
+## Binder artwork
+
+Open a binder page and choose **Artwork** to decorate it with a picture of your own. Upload a JPEG, PNG or WebP (up to 12 MB), then drag it into place, set its width and rotation, and pick **Left page**, **Right page** or **Both pages** for a spread. Tap a pocket to switch it between artwork and a card. Set the insert size (63 × 88 mm by default) and the spacing between your pockets so the print lines up with your pages.
+
+**Print** lays out only the artwork pockets, each at its real size, with corner cut marks and optional labels saying which page, row and column each insert goes in. Choose A4 or US Letter, print at 100% with *Fit to page* off, and check that the line marked 50 mm measures 50 mm. *Save as PDF* in the print dialog gives you a file.
+
+Artwork pockets show their piece of the picture whenever they are empty, including on a shared binder. Artwork never counts as a card. Images live in `binder-art/` beside the database; back that folder up with it.
+
 ## Backup and restore
 
 Everything is in one SQLite file (`DB_PATH`, in the `bindarr-data` volume under Docker).

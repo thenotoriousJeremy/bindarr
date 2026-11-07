@@ -3,6 +3,7 @@ import { ShieldAlert } from 'lucide-react';
 import Logo from './Logo';
 import { isBinderType, binderSpread } from '../utils/cardOptions';
 import CompartmentView from './CompartmentView';
+import { artPocketsByPage } from '../utils/binderArtGeometry';
 import { useT } from '../utils/i18n';
 
 // A single shared container, drawn with the same CompartmentView the owner sees:
@@ -50,6 +51,17 @@ function SharedContainer({ shareToken, containerId }) {
     return byComp;
   }, [data]);
 
+  // The owner's binder artwork. These image URLs are public share routes, so
+  // they go straight into <img src>.
+  const artByPage = useMemo(() => {
+    if (!data || !isBinderType(data.location?.type)) return new Map();
+    const byPage = artPocketsByPage({ layers: data.artwork || [], compartments: data.compartments || [], pageColumns: data.location.page_columns });
+    for (const pockets of byPage.values()) {
+      for (const [slot, piece] of pockets) pockets.set(slot, { ...piece, src: piece.imageUrl });
+    }
+    return byPage;
+  }, [data]);
+
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '80vh' }}>
@@ -86,6 +98,7 @@ function SharedContainer({ shareToken, containerId }) {
     pageColumns: location.page_columns,
     sortOrder: location.sort_order,
     locationType: location.type,
+    artPockets: artByPage.get(compartment.id) || null,
   });
 
   // Binders page through a spread at a time; a box shows one row at a time, the
