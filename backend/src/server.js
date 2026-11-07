@@ -17,7 +17,8 @@ const scryfallApi = require('./scryfallApi');
 const lorcastApi = require('./lorcastApi');
 const backup = require('./backup');
 const { createScheduler } = require('./scheduler');
-const { runPriceSweeps } = require('./utils/priceSweeps');
+const { runPriceSweeps, requestStop: stopPriceSweeps } = require('./utils/priceSweeps');
+const { createShutdown, whenTrue } = require('./utils/shutdown');
 
 // Which module owns the Pokémon `sets` table. Asked per call rather than resolved
 // once: the provider is a setting an admin can change while the server is up, and
@@ -352,6 +353,37 @@ const scheduler = createScheduler({
   ],
 });
 
+// The HTTP and (optional) HTTPS listeners, assigned at the bottom of this file.
+let httpServer = null;
+let httpsServer = null;
+
+// SIGTERM (docker stop) and SIGINT (Ctrl+C) stop the listeners and the job
+// timers, give running work a bounded few seconds to reach a safe point, close
+// the database and exit 0; a second signal exits at once. utils/shutdown.js has
+// the sequence and the reasons.
+const shutdown = createShutdown({
+  servers: () => [httpServer, httpsServer],
+  stopJobs: () => {
+    scheduler.stop();
+    // Between two sweeps, not mid-sweep; a catalog build after its in-flight
+    // images, writing what it has (atomically) so a resume reuses all of it.
+    stopPriceSweeps();
+    require('./catalog').stop();
+  },
+  pendingWork: () => {
+    const catalog = require('./catalog');
+    return [
+      { name: 'database startup', promise: dbInit },
+      ...scheduler.inFlight(),
+      { name: 'backup', promise: backup.pending() },
+      { name: 'catalog build', promise: catalog.state() ? whenTrue(() => !catalog.state()) : null },
+    ];
+  },
+  closeDb: () => new Promise((resolve, reject) => db.dbConnection.close(err => (err ? reject(err) : resolve()))),
+});
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
 // Warm the scan models and catalogs. Two ONNX sessions plus an embedding table
 // take ~400 ms to load; paying that on the first scan instead would make the
 // slowest scan of a session the one a user is most likely to judge. Not awaited
@@ -406,27 +438,36 @@ async function startupTasks() {
 
 // Initialize Database on startup
 let dbReady = false;
-db.initDb()
-  .then(async () => {
-    // Before dbReady, so no request can normalize a Magic card against the
-    // default price source on an install configured for Cardmarket. One indexed
-    // read, and it never throws (see scryfallApi.loadPriceSource).
-    await scryfallApi.loadPriceSource();
-    dbReady = true;
-    console.log('Database tables verified/created successfully.');
+const dbInit = db.initDb()
+  // Before dbReady, so no request can normalize a Magic card against the
+  // default price source on an install configured for Cardmarket. One indexed
+  // read, and it never throws (see scryfallApi.loadPriceSource).
+  .then(() => scryfallApi.loadPriceSource());
 
-    try {
-      await startupTasks();
-    } catch (err) {
-      console.error('Startup tasks failed:', err);
-    }
-    // Started regardless: the jobs retry on their own clocks.
-    backup.logPolicy();
-    scheduler.start();
-  })
-  .catch(err => {
-    console.error('Failed to initialize database:', err);
-  });
+dbInit.then(async () => {
+  dbReady = true;
+  console.log('Database tables verified/created successfully.');
+
+  try {
+    await startupTasks();
+  } catch (err) {
+    console.error('Startup tasks failed:', err);
+  }
+  // Started regardless: the jobs retry on their own clocks.
+  backup.logPolicy();
+  scheduler.start();
+}, (err) => {
+  // Fatal, and said so. This used to log and carry on listening: /api/health
+  // answered 503 forever, an orchestrator saw a live process, and nothing
+  // restarted it. Without its schema the server has nothing to serve, so it
+  // exits non-zero and leaves the restart to whatever supervises it (Docker's
+  // restart policy, systemd) — which is also what makes the operator look.
+  // Explicit rather than an exit on unhandled rejection: that one is a
+  // log-and-continue on purpose (top of this file).
+  console.error('Failed to initialize database:', err);
+  console.error(`STARTUP: cannot serve without the database at ${db.dbPath}; exiting.`);
+  shutdown('Database initialisation failed', 1);
+});
 
 // Readiness/liveness probe for orchestrators (Docker HEALTHCHECK, etc.).
 // Unauthenticated; pings the DB so a wedged database reads as unhealthy.
@@ -548,12 +589,12 @@ app.use((err, req, res, next) => {
 });
 
 // Start Express Server
-app.listen(PORT, '0.0.0.0', () => {
+httpServer = app.listen(PORT, '0.0.0.0', async () => {
   console.log(`=========================================`);
   console.log(`Bindarr Server running on port ${PORT}`);
   console.log(`Access local: http://localhost:${PORT}`);
   console.log(`=========================================`);
   // Camera scanning needs a secure context, so a LAN/Docker install serves TLS
   // too when HTTPS_PORT is set. Certificates live beside the database.
-  startHttps(app, path.join(path.dirname(db.dbPath), 'ssl'));
+  httpsServer = await startHttps(app, path.join(path.dirname(db.dbPath), 'ssl'));
 });

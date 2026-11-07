@@ -49,6 +49,12 @@ if (!fs.existsSync(dbDir)) {
 const dbPath = resolveDbPath(requestedDbPath);
 
 console.log(`Connecting to SQLite database at: ${dbPath}`);
+// Settles when the open does. A connection that failed to open does not fail the
+// queries queued on it — sqlite3 drops them, so initDb's promise never settled
+// and the server sat listening, answering 503 forever. initDb awaits this first.
+let settleOpen;
+const opened = new Promise((resolve, reject) => { settleOpen = (err) => (err ? reject(err) : resolve()); });
+opened.catch(() => {});   // initDb reports it; never an unhandled rejection on its own
 const dbConnection = new sqlite3.Database(dbPath, (err) => {
   if (err) {
     console.error('Error opening database:', err.message);
@@ -58,6 +64,7 @@ const dbConnection = new sqlite3.Database(dbPath, (err) => {
     dbConnection.run('PRAGMA journal_mode = WAL');
     dbConnection.run('PRAGMA busy_timeout = 5000');
   }
+  settleOpen(err);
 });
 
 // --- Connection lock --------------------------------------------------------
@@ -353,6 +360,7 @@ async function snapshotBeforeMigrating() {
 }
 
 async function initDb() {
+  await opened;
   await snapshotBeforeMigrating();
 
   const existingCollectionCols = await all(`PRAGMA table_info(collection)`).catch(() => []);
