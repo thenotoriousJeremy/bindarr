@@ -13,9 +13,9 @@ const helmet = require('helmet');
 const compression = require('compression');
 const path = require('path');
 const db = require('./db');
-const tcgApi = require('./tcgApi');
 const scryfallApi = require('./scryfallApi');
 const lorcastApi = require('./lorcastApi');
+const { runPriceSweeps } = require('./utils/priceSweeps');
 
 // Which module owns the Pokémon `sets` table. Asked per call rather than resolved
 // once: the provider is a setting an admin can change while the server is up, and
@@ -349,34 +349,16 @@ db.initDb()
     // skips on any clock drift at all — "23h 59m elapsed" is not due, so the
     // refresh silently becomes every other day. An hourly tick that refuses in
     // one indexed read costs nothing and has no such edge.
-    setInterval(() => {
-      tcgApi.updateCollectionPrices();
-      scryfallApi.updateCollectionPrices();
-      lorcastApi.updateCollectionPrices();
-      // Non-English Pokémon cards: their ids 404 on pokemontcg.io, so tcgApi's
-      // sweep skips them and this is their only price refresh. No-op until the
-      // user actually owns one.
-      require('./tcgdexApi').updateCollectionPrices();
-      require('./pokemontcgapi').updateCollectionPrices();
-      // TCGCSV runs LAST of the Pokémon sweeps on purpose. It writes the same
-      // columns as the other two and is the better source — TCGplayer market
-      // prices in USD, and 97% coverage against TCGdex's 8% — so it should have
-      // the final say on any card it can place.
-      require('./tcgcsvApi').updateCollectionPrices();
-    }, 1000 * 60 * 60);
+    //
+    // utils/priceSweeps owns the list and its order, runs the sweeps one after
+    // another, and skips a tick while the previous run is still going.
+    setInterval(() => runPriceSweeps(), 1000 * 60 * 60);
 
     // Shortly after startup, catch up if the last sweep was over a day ago.
     // NOT forced: without that gate this re-ran on every restart, which under
     // nodemon meant a full sweep on every code edit — for data that cannot have
     // changed since the last one.
-    setTimeout(() => {
-      tcgApi.updateCollectionPrices();
-      scryfallApi.updateCollectionPrices();
-      lorcastApi.updateCollectionPrices();
-      require('./tcgdexApi').updateCollectionPrices();
-      require('./pokemontcgapi').updateCollectionPrices();
-      require('./tcgcsvApi').updateCollectionPrices();
-    }, 30000);
+    setTimeout(() => runPriceSweeps(), 30000);
 
     // Periodically purge expired sessions so the table doesn't grow unbounded
     setInterval(() => {
