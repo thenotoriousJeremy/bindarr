@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, MapPin, Trash2, Star, Maximize2, ExternalLink, Search, Layers, RefreshCw } from 'lucide-react';
+import { X, MapPin, Trash2, Star, Maximize2, ExternalLink, Search, Layers, RefreshCw, FlipHorizontal2 } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { translatedName, setCode, isEnglish, langCode } from '../utils/languages';
 import { formatPrice, priceText } from '../utils/formatPrice';
@@ -60,6 +60,8 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
   const [localizedCard, setLocalizedCard] = useState(null);
   const [prevTargetId, setPrevTargetId] = useState(card?.entry_id || card?.id || null);
   const [isFullScreen, setIsFullScreen] = useState(false);
+  // Showing the back face of a double-faced Magic card (#103).
+  const [showBack, setShowBack] = useState(false);
   // Other printings of this card, for re-filing a copy saved under the wrong set.
   const [printings, setPrintings] = useState(null);
   const [findingPrintings, setFindingPrintings] = useState(false);
@@ -71,9 +73,17 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
   if (targetEntryId !== prevTargetId) {
     setPrevTargetId(targetEntryId);
     if (localizedCard) setLocalizedCard(null);
+    // A new card opens on its front, not on whichever side the last one was left.
+    if (showBack) setShowBack(false);
   }
 
   const activeCard = card ? (localizedCard || card) : null;
+  const flipped = showBack && !!activeCard?.image_url_back;
+  // The back face as a card of its own for CardImage. No id on purpose: contributed
+  // art is keyed by card id and is front art, so it must not cover the back.
+  const faceCard = flipped
+    ? { name: activeCard.name, game: activeCard.game, image_url: activeCard.image_url_back }
+    : activeCard;
 
   useEffect(() => {
     fetch('/api/locations')
@@ -413,7 +423,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 uploads it, and a card with no provider art rendered as a broken
                 image icon here alone. */}
             <CardImage
-              card={activeCard}
+              card={faceCard}
               style={{
                 width: '100%',
                 aspectRatio: 0.718,
@@ -443,6 +453,20 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               <Maximize2 size={12} />
               <span>{t('inspector.fullScreen')}</span>
             </div>
+            {activeCard.image_url_back && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-icon-only"
+                // The art itself opens full screen; flipping must not.
+                onClick={(e) => { e.stopPropagation(); setShowBack(b => !b); }}
+                aria-label={t('inspector.flipCard')}
+                aria-pressed={flipped}
+                title={t('inspector.flipCard')}
+                style={{ position: 'absolute', bottom: '0.6rem', left: '0.6rem', borderRadius: '50%' }}
+              >
+                <FlipHorizontal2 size={16} />
+              </button>
+            )}
           </div>
           <CardArtEditor
             card={activeCard}
@@ -832,7 +856,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
       </div>
 
       {isFullScreen && (
-        <CardImageZoom card={activeCard} onClose={() => setIsFullScreen(false)} />
+        <CardImageZoom card={faceCard} onClose={() => setIsFullScreen(false)} />
       )}
     </div>
   );

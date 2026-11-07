@@ -879,6 +879,7 @@
   "shared.specSubtypes": "Subtypes:",
   "inspector.zoomHint": "Click to view full screen",
   "inspector.fullScreen": "Full Screen",
+  "inspector.flipCard": "Flip card",
   "inspector.wishlistItem": "Wishlist Item",
   "inspector.forTrade": "For Trade",
   "inspector.owned.one": "x{count} owned",
