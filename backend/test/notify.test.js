@@ -344,6 +344,37 @@ async function main() {
   await notify.flush();
   assert.deepStrictEqual(received.map(m => m.path), ['/bob'], 'bob alone is told about his card');
 
+  // A card on a card_lists wishlist (routes/lists.js) is watched like a wishlisted copy;
+  // a buylist is not a wishlist.
+  assert.ok(await db.get(`SELECT name FROM sqlite_master WHERE name = 'card_list_items'`), 'card_lists ships in initDb');
+  assert.strictEqual((await api('GET', '/', alice, null, 'admin')).json.wishlist_lists, true);
+  await card('mtg-listed', 'Listed Card');
+  await card('mtg-buy', 'Buylist Card');
+  const wl = (await db.run(`INSERT INTO card_lists (user_id, name, kind) VALUES (?, 'Wants', 'wishlist')`, [alice])).lastID;
+  const bl = (await db.run(`INSERT INTO card_lists (user_id, name, kind) VALUES (?, 'Buys', 'buylist')`, [alice])).lastID;
+  await db.run(`INSERT INTO card_list_items (list_id, card_id) VALUES (?, 'mtg-listed')`, [wl]);
+  await db.run(`INSERT INTO card_list_items (list_id, card_id) VALUES (?, 'mtg-buy')`, [bl]);
+  await price('mtg-listed', 10);
+  await price('mtg-buy', 10);
+  await notify.checkPriceMoves();
+  await price('mtg-listed', 20);
+  await price('mtg-buy', 20);
+  received.length = 0;
+  await notify.checkPriceMoves();
+  await notify.flush();
+  const listed = received.find(m => m.path === '/hook/SECRETPATH');
+  assert.ok(listed, 'a card_lists wishlist card is notified');
+  assert.deepStrictEqual(listed.body.data.moves.map(m => [m.card_id, m.source]), [['mtg-listed', 'wishlist']]);
+  // Switching wishlists off leaves only owned cards.
+  r = await api('PUT', '/prefs', alice, { price_enabled: true, price_pct: 15, price_abs: 5, min_price: 1, include_wishlist: false }, 'admin');
+  assert.strictEqual(r.status, 200);
+  await price('mtg-listed', 60);
+  await db.run(`UPDATE notification_price_state SET notified_at = NULL WHERE user_id = ?`, [alice]);
+  received.length = 0;
+  await notify.checkPriceMoves();
+  await notify.flush();
+  assert.strictEqual(received.length, 0, 'include_wishlist=false ignores wishlist cards');
+
   // Thresholds are per user: bob raises his bar, his next move stays quiet.
   r = await api('PUT', '/prefs', bob, { price_enabled: true, price_pct: 500, price_abs: null, min_price: 1, include_wishlist: true });
   assert.strictEqual(r.status, 200, r.text);

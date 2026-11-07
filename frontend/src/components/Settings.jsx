@@ -992,7 +992,8 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
           )}
         </div>
 
-        <NotificationSettings isAdmin={user?.role === 'admin'} showToast={showToast} />
+        {/* Sent by a server; a phone-only install has none to send them. */}
+        {!deviceMode && <NotificationSettings isAdmin={user?.role === 'admin'} showToast={showToast} />}
 
         {/* Collection Backup & Data Options Panel */}
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
