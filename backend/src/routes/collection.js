@@ -857,8 +857,12 @@ router.get('/collection', async (req, res) => {
 });
 
 // 2a. One entry with every column: what the card popup shows when the grid it
-// was opened from loaded only the grid's columns.
-router.get('/collection/:id(\\d+)', async (req, res) => {
+// was opened from loaded only the grid's columns. A plain :id rather than
+// Express's :id(\\d+), because the on-device router (embedded/router.js) has no
+// inline patterns: anything not a number is passed on to whichever route owns
+// that /collection/<word>.
+router.get('/collection/:id', async (req, res, next) => {
+  if (!/^\d+$/.test(req.params.id)) return next();
   try {
     const row = await db.get(`
       SELECT ${COLLECTION_FULL_COLUMNS}

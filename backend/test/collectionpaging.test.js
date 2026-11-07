@@ -165,6 +165,8 @@ async function main() {
   res = await get('/collection/5', bob);
   assert.strictEqual(res.status, 404, 'another user\'s entry is not found');
   assert.deepStrictEqual(Object.keys(await res.json()), ['error']);
+  res = await get('/collection/notanumber');
+  assert.strictEqual(res.status, 404, 'a non-numeric id is passed on to other routes, not looked up');
   console.log('PASS: GET /collection/:id returns the full row to its owner only');
 
   // --- 5. Bad paging is a 400, not a silent full dump. ---
