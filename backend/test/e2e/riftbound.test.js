@@ -76,6 +76,8 @@ async function main() {
       CV_MODEL_DIR: modelDir,
       RIFTCODEX_BASE_URL: `http://127.0.0.1:${riftcodex.address().port}`,
       RIFTCODEX_GAP_MS: '0',
+      // Never sync TCGCSV from a test server, whoever runs this file.
+      BINDARR_DISABLE_TCGCSV_SYNC: '1',
     },
   });
   let serverLog = '';
