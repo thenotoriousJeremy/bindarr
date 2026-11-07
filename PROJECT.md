@@ -28,8 +28,9 @@ to ship.
 ```
 backend/
   src/
-    server.js              Express app: middleware, route mounts, static SPA, health, admin bootstrap
+    server.js              Express app: middleware, route mounts, static SPA, health, job list, startup/shutdown
     db.js                  SQLite connection (promisified run/get/all), schema init, password hashing
+    scheduler.js           Background jobs on clocks kept in job_runs, checked every 15 minutes
     middleware/auth.js     authenticateToken (session lookup), requireAdmin, rate limiters
     routes/
       auth.js              register / login / logout / me / per-user settings
@@ -58,7 +59,10 @@ backend/
       npz.js               Minimal .npz reader, for the published (not locally built) catalogs
       pokemonProvider.js   The single Pokémon provider decision for this language
       languages.js         Language code/name resolution
-    backup.js              DB backup helpers
+      priceSweeps.js       The ordered price-sweep list and its sequential, single-flight runner
+      shutdown.js          SIGTERM/SIGINT: close listeners, stop jobs, bounded wait, close SQLite
+      staticCache.js       Cache headers for frontend/dist (hashed assets/ immutable, the rest revalidated)
+    backup.js              Atomic, verified VACUUM INTO snapshots in BACKUP_DIR; pre-migration snapshots
   scripts/                 fetch-models.mjs, catalog builders, the scan-gate measurement harness
   data/models/             cornelius.onnx, milo.onnx and the built catalogs (CV_MODEL_DIR)
   test/                    Node test suites and an e2e runner under test/e2e/
@@ -107,6 +111,63 @@ permission bits, which is not the same question as whether the filesystem will
 accept a file — and warms the two ONNX sessions and the default catalog, so the
 first scan of a session does not pay for the load. An unwritable model directory
 is reported and survived: everything except catalog builds still works.
+
+The listener starts at once and never waits on network work; `/api/health`
+answers 503 until `initDb` finishes. A database that cannot be opened or
+migrated is fatal: the error is logged and the process exits 1, so a
+supervisor restarts it instead of a live process answering 503 forever.
+Before a different release migrates a database that holds data, `initDb`
+writes a `pre-migration-…` snapshot (see Backups below).
+
+### Background jobs
+
+`scheduler.js` runs the periodic work from `server.js`'s job list, on clocks kept
+in the `job_runs` table rather than in timers, so a restart neither resets a
+period nor skips a run: one 15-minute check compares each job's period against
+its stored last run, and whatever fell due while the server was down runs at the
+first check after boot. Each job is single-flight but independent of the others,
+and a failure is recorded and retried after an hour.
+
+| Job | Every | Notes |
+|-----|-------|-------|
+| `sets-refresh` | 7 days | Forced set refresh for all three games, set-cache reload, catalog auto-update. Run (forced) during startup when overdue; otherwise startup only fills empty set tables. |
+| `tcgcsv-sync` | 1 hour | `tcgcsvApi.syncIfUpdated`, whose own gate reads `last-updated.txt` at most daily. A 403 cooldown is not an error. Off with `BINDARR_DISABLE_TCGCSV_SYNC=1`. |
+| `price-sweeps` | 1 hour | `utils/priceSweeps.runPriceSweeps`: one ordered list, sequential, TCGCSV last, single-flight, failures isolated. Each provider's `shouldSweepPrices` gate decides whether it is actually due. |
+| `session-purge` | 1 day | Deletes expired sessions. |
+| `backup` | `BACKUP_INTERVAL_HOURS` | First period counted from the newest existing backup, or from first boot on a new database. |
+
+### Backups
+
+`backup.js` snapshots with `VACUUM INTO` a temporary file in `BACKUP_DIR`
+(default `backups/` beside the database), verifies it with `PRAGMA quick_check`
+and a table count on a separate read-only connection, then renames it to `.bak`;
+on failure the temporary file is removed and older backups are untouched.
+Snapshots are serialised. Regular ones rotate to `BACKUP_KEEP_LAST`;
+`pre-migration-<db>-<from>-to-<to>-<time>.bak` keep their own last three, and at
+most one is taken per upgrade, so a restart loop on a failing migration cannot
+rotate the real pre-upgrade copy out. `PRAGMA user_version` holds the release
+that last completed `initDb` (`major*1e6 + minor*1e3 + patch`), which is how a
+pending upgrade is detected. A pre-migration snapshot that fails is logged loudly
+and startup continues. The admin list, create and download routes use the same
+directory, and a download resolves only a plain `.bak` file directly inside it.
+
+### Shutdown
+
+SIGTERM (`docker stop`) and SIGINT run `utils/shutdown.js`: close the HTTP and
+HTTPS listeners (requests in progress finish), stop the scheduler, ask the price
+sweeps to stop between sweeps and a catalog build to stop and write what it has,
+wait at most 8 s for running work, close SQLite (which checkpoints the WAL) and
+exit 0. A second signal exits immediately. In Docker, node is PID 1 —
+`entrypoint.sh` execs gosu, which execs node — so the signal reaches it.
+
+### Static files
+
+`utils/staticCache.js` serves `frontend/dist`: Vite's content-hashed `assets/`
+with `max-age=1y, immutable`; every file with a fixed name (`/ort/`'s
+onnxruntime wasm, the manifest, the logo, `index.html` and the SPA fallback)
+with `Cache-Control: no-cache` and an ETag, so it revalidates to a 304 and an
+upgrade is picked up on the next load. `/models/cornelius.onnx` is revalidated
+the same way by its own route.
 
 ### Auth
 
@@ -174,7 +235,7 @@ by `cardApi.hydrate` when a card enters the collection, fetches that one card
 with prices (2 credits); and the automatic sweep prices owned/decked cards in
 batches, only those whose stored price has aged past three days, as often as
 `app_settings.price_refresh_days` allows (`shouldSweepPrices` is the single gate;
-the timer in server.js is unforced). `cacheListedCards` also puts a kept row's
+the hourly `price-sweeps` job is unforced). `cacheListedCards` also puts a kept row's
 `last_updated` back, so a listing cannot make an old price look fresh to the sweep.
 User-entered names are quoted as literal query phrases; set IDs go through the
 separate `set` parameter.
@@ -498,6 +559,7 @@ for cards not yet saved.
 | `sets` | Set catalog (names/ordering) for dividers and set-scoped scan |
 | `pokemontcgapi_cache` | Bounded persistent response cache: `request` (credential digest + path/query), `body`, `etag`, `fetched_at`; no API keys |
 | `app_settings` | App-wide key/value settings (e.g. registration toggle) |
+| `job_runs` | Background job clocks (`scheduler.js`): `name`, `last_run_at`, `last_status` (`ok`/`error`/`baseline`), `last_error` |
 
 **Entry identity**: a `collection.id` (`entry_id`) uniquely identifies one
 physical stack. Features that track individual copies (checkout locator, storage
@@ -564,7 +626,8 @@ only `decks.checked_out` changes.
 ## Conventions & gotchas
 
 - **Backend has no auto-reload** in production/local `node src/server.js`; restart it after backend changes so new routes/data load. Frontend uses Vite HMR.
-- **SQLite runs in WAL mode** — checkpoint/stop before file-level backups so `-wal`/`-shm` are flushed.
+- **SQLite runs in WAL mode** — checkpoint/stop before file-level backups so `-wal`/`-shm` are flushed. A clean stop (SIGTERM/SIGINT) closes the connection, which does the checkpoint.
+- **Background work goes in `server.js`'s scheduler job list**, not a new `setInterval`: an in-memory timer resets on every restart. A new price provider is one `utils/priceSweeps.js` entry plus its `SWEEP_COLUMN` key (`test/pricesweeplist.test.js` holds the two together).
 - **Everything is game-scoped** (`pokemon` | `mtg`); new card fields must be threaded through both `tcgApi.js` and `scryfallApi.js` normalization.
 - **`position = slot * 1000`** is the single source of truth for slot order; never assume packed array index equals slot.
 - **Scanning needs a catalog**: the two ONNX models identify nothing on their own, and there is no second matcher to fall back to. `/api/scan-match` answers `503 notBuilt` with the fix in the message rather than an empty candidate list, which reads to the user as "your card could not be identified". A catalog is per (game, language) and only as complete as the provider's data for that language.

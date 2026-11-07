@@ -172,20 +172,33 @@ router.get('/stats', async (req, res) => {
     // One query for the whole thing, rather than one per set inside a loop: this
     // ran a COUNT(DISTINCT) per set the user owns cards from, which on a broad
     // collection is dozens of round trips to answer a single panel.
+    //
+    // Magic is the one game whose two tables spell a set differently: card_cache
+    // holds Scryfall's bare code ("mh3", scryfallApi.normalizeCard) and `sets` the
+    // prefixed id ("mtg-mh3", fetchAndCacheSets), so this lookup never matched and
+    // no Magic set ever appeared here. Every other reader of both forms (the sets
+    // route, catalog's new-set count, compartmentSort.fixedSetKey, the scanner and
+    // search set pickers) already converts, so the id is mapped here rather than
+    // re-keying either table.
+    //
+    // Owned counts collector numbers, not card ids: each language of a Magic
+    // printing is its own card_cache row, and #12 in English and in Japanese is
+    // still one card of the set.
     const setIds = Object.keys(setCounts);
     const setProgress = [];
     if (setIds.length) {
       const holes = setIds.map(() => '?').join(',');
       const rows = await db.all(`
-        SELECT cc.set_id,
-               COUNT(DISTINCT c.card_id) AS owned,
+        SELECT cc.game, cc.set_id,
+               COUNT(DISTINCT COALESCE(NULLIF(cc.number, ''), cc.id)) AS owned,
                (SELECT COALESCE(NULLIF(s.printed_total, 0), NULLIF(s.total, 0))
-                  FROM sets s WHERE s.id = cc.set_id) AS size
+                  FROM sets s
+                 WHERE s.id = CASE WHEN cc.game = 'mtg' THEN 'mtg-' || LOWER(cc.set_id) ELSE cc.set_id END) AS size
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
-        WHERE c.user_id = ? AND cc.set_id IN (${holes})
-        GROUP BY cc.set_id
-      `, [req.user.id, ...setIds]);
+        WHERE c.user_id = ?${gameFilter} AND cc.set_id IN (${holes})
+        GROUP BY cc.game, cc.set_id
+      `, [...statsParams, ...setIds]);
 
       for (const row of rows) {
         // A set the sync has not reached yet has no size, so it has no completion
@@ -302,28 +315,30 @@ router.get('/stats/history', async (req, res) => {
     // first, so each item's price at any past point can be looked up without
     // per-item queries. No source anywhere provides price history beyond
     // what this table accumulates over the app's actual real lifetime.
-    const cardIds = [...new Set(items.map(i => i.card_id))];
-    let historyByCard = {};
-    if (cardIds.length > 0) {
-      const placeholders = cardIds.map(() => '?').join(',');
-      // Only points in the card's current currency. After a currency switch (the
-      // admin's MTG price source, #93) the old points are a different unit, and
-      // mixing them in would draw the switch as a price move. Dropping them makes
-      // the card's earliest point in the new currency carry backward instead —
-      // the same rule realPriceAt already applies to any card with short history.
-      const historyRows = await db.all(
-        `SELECT ph.card_id, ph.price, ph.recorded_at FROM price_history ph
-           JOIN card_cache cc ON cc.id = ph.card_id
-          WHERE ph.card_id IN (${placeholders})
-            AND (ph.currency IS NULL OR ph.currency = COALESCE(cc.price_currency, 'USD'))
-          ORDER BY ph.recorded_at ASC`,
-        cardIds
-      );
-      historyRows.forEach(r => {
-        if (!historyByCard[r.card_id]) historyByCard[r.card_id] = [];
-        historyByCard[r.card_id].push({ price: r.price, time: parseSqliteUtc(r.recorded_at).getTime() });
-      });
-    }
+    //
+    // "Every card this user owns" is a subquery on the collection, the same
+    // rows and game filter as the query above, not a list of ids. That list
+    // bound one variable per distinct card, and past SQLite's 32,766 a large
+    // collection's whole timeline was a 500.
+    //
+    // Only points in the card's current currency. After a currency switch (the
+    // admin's MTG price source, #93) the old points are a different unit, and
+    // mixing them in would draw the switch as a price move. Dropping them makes
+    // the card's earliest point in the new currency carry backward instead —
+    // the same rule realPriceAt already applies to any card with short history.
+    const historyByCard = {};
+    const historyRows = await db.all(
+      `SELECT ph.card_id, ph.price, ph.recorded_at FROM price_history ph
+         JOIN card_cache cc ON cc.id = ph.card_id
+        WHERE ph.card_id IN (SELECT card_id FROM collection WHERE user_id = ?)${gameFilter}
+          AND (ph.currency IS NULL OR ph.currency = COALESCE(cc.price_currency, 'USD'))
+        ORDER BY ph.recorded_at ASC`,
+      params
+    );
+    historyRows.forEach(r => {
+      if (!historyByCard[r.card_id]) historyByCard[r.card_id] = [];
+      historyByCard[r.card_id].push({ price: r.price, time: parseSqliteUtc(r.recorded_at).getTime() });
+    });
 
     // Real price for a card at a point in time: the latest recorded snapshot
     // at or before that time; if history only starts later, carry the

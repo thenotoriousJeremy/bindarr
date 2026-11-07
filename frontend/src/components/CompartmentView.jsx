@@ -147,7 +147,7 @@ export default function CompartmentView({
   cards = [],
   locationType,
   // Container has allow_stacking: every copy of a card shares one pocket instead
-  // of taking one each. See stackPocketCards in utils/binderLayout.
+  // of taking one each. See stackPocketCards in utils/stackTiles.
   allowStacking = false,
   // Binder's locations.page_columns: pockets per row on a binder page. null is
   // automatic, worked out from the page's capacity (see utils/binderLayout).

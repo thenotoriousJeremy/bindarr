@@ -1021,6 +1021,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         body: JSON.stringify({ location_id: locationId, compartment_id: compartmentId, position })
       });
       if (res.ok) {
+        // Filled up since the recommendation was made: the card stays unfiled.
+        const filed = await res.json().catch(() => ({}));
+        if (filed.container_full) showToast(t('loc.containerFull'));
         await refreshAll();
         advanceFiling();
       } else {

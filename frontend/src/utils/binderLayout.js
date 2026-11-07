@@ -1,3 +1,5 @@
+import { stackPocketCards } from './stackTiles.js';
+
 // How wide a binder page is drawn, in pockets.
 //
 // Pocket pages are sold in a handful of fixed layouts, and they are landscape
@@ -47,27 +49,6 @@ export function pageGrid(capacity, override) {
   const cap = Math.max(1, parseInt(capacity, 10) || 1);
   const columns = pageColumns(cap, override);
   return { columns, rows: Math.ceil(cap / columns) };
-}
-
-// Collapse copies of the same card into one pocket, keyed the way the server
-// counts occupancy on a stacking container (card, printing and language; not
-// condition). The first copy holds the slot and the rest ride along in its
-// quantity, so the page lays out from stacks rather than from rows.
-export function stackPocketCards(cards) {
-  const stacks = new Map();
-  for (const card of cards) {
-    const key = `${card.card_id}|${card.printing || 'Normal'}|${card.language || 'English'}`;
-    const held = stacks.get(key);
-    if (!held) {
-      stacks.set(key, { ...card, quantity: card.quantity || 1 });
-      continue;
-    }
-    held.quantity += card.quantity || 1;
-    // Whichever copy is actually filed decides where the stack sits; an unplaced
-    // one joining it must not drag the pocket back to "no position".
-    if (!(held.position > 0) && card.position > 0) held.position = card.position;
-  }
-  return Array.from(stacks.values());
 }
 
 // One page's cards in pocket order, null for an empty pocket. A card sits in the

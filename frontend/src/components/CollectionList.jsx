@@ -7,10 +7,13 @@ import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } fro
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { useMultiSelect } from '../utils/useMultiSelect';
+import { stackCollectionRows } from '../utils/stackTiles';
 import { defaultGameFilter, gameOptions, isGameEnabled, showGamePicker } from '../utils/games';
 import { useT } from '../utils/i18n';
 import CardInspectorModal from './CardInspectorModal';
 import AddToDeckSelect from './AddToDeckSelect';
+import AddToListSelect from './AddToListSelect';
+import ExportShownButton from './ExportShownButton';
 import PackPriceSplitter from './PackPriceSplitter';
 import CardImage from './CardImage';
 import MultiSelectDropdown from './MultiSelectDropdown';
@@ -338,23 +341,11 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     return result;
   }, [collection, searchFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter, sealedLinkFilter, favoriteOnly, graderFilter, minPriceFilter, maxPriceFilter, notCheckedOutOnly, sortBy, setsList]);
 
-  // Group duplicate cards if stack option is active
+  // Group duplicate cards if stack option is active. Each tile keeps the ids of
+  // the rows it stands for, which is what a quantity edit in the popup works on.
   const processedCollection = useMemo(() => {
     if (!stackCards) return filteredCollection;
-
-    const groups = {};
-    filteredCollection.forEach(item => {
-      let key = item.card_id;
-      if (stackByCondition) key += `-${item.condition}`;
-      if (stackByPrinting) key += `-${item.printing}`;
-
-      if (!groups[key]) {
-        groups[key] = { ...item };
-      } else {
-        groups[key].quantity += item.quantity;
-      }
-    });
-    return Object.values(groups);
+    return stackCollectionRows(filteredCollection, { byCondition: stackByCondition, byPrinting: stackByPrinting });
   }, [filteredCollection, stackCards, stackByCondition, stackByPrinting]);
 
   // In select mode, render the unstacked list so every entry is individually
@@ -673,6 +664,8 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', fontSize: '0.78rem', color: 'var(--text-secondary)', flexWrap: 'wrap', gap: '0.5rem' }}>
           <span><strong style={{ color: 'var(--text-strong)' }}>{displayCards.length}</strong> {t('collection.cardUnit', { count: displayCards.length })}</span>
           <span>{t('collection.totalValue')} <strong style={{ color: 'var(--accent-yellow)' }}>{priceText(totalValue)}</strong></span>
+          {/* Every copy behind the rows on screen, after search and filters. */}
+          <ExportShownButton entryIds={() => filteredCollection.map(i => i.entry_id)} showToast={showToast} />
         </div>
       )}
 
@@ -726,6 +719,13 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
           <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
           <AddToDeckSelect
             onAdd={(id) => runBulk('add_to_deck', id)}
+            disabled={!selectedIds.size}
+            style={{ fontSize: '0.72rem', maxWidth: '160px', padding: '0.3rem 0.4rem' }}
+          />
+          <AddToListSelect
+            cardIds={() => filteredCollection.filter(i => selectedIds.has(i.entry_id)).map(i => i.card_id)}
+            game={gameFilter || undefined}
+            showToast={showToast}
             disabled={!selectedIds.size}
             style={{ fontSize: '0.72rem', maxWidth: '160px', padding: '0.3rem 0.4rem' }}
           />

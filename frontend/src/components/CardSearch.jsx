@@ -11,6 +11,7 @@ import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
 import { langName, isEnglish, displayName, translatedName, setReference, setCode, getLanguagesForGame, isLanguageSupported } from '../utils/languages';
 import { defaultGame, gameOptions, showGamePicker, gameLabel } from '../utils/games';
 import CardImage from './CardImage';
+import AddToListSelect from './AddToListSelect';
 import { useT } from '../utils/i18n';
 
 // Search failures worth explaining in-page rather than only as a toast. `keyHint`
@@ -847,6 +848,13 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
           >
             {bulkAdding ? t('search.adding') : t('search.addN', { count: selectedIds.size })}
           </button>
+          <AddToListSelect
+            cardIds={() => filteredAndSortedCards.filter(c => selectedIds.has(c.id)).map(c => c.id)}
+            game={game}
+            showToast={showToast}
+            disabled={selectedIds.size === 0}
+            style={{ fontSize: '0.72rem', maxWidth: '160px', padding: '0.3rem 0.4rem' }}
+          />
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem', marginLeft: 'auto' }} onClick={exitSelectMode}>{t('bulk.done')}</button>
         </div>
       )}
@@ -1000,6 +1008,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
               <div className="quick-add-footer" style={{ marginTop: '1.25rem', paddingTop: '1rem' }}>
                 <div className="quick-add-footer-actions">
                   <button type="button" className="btn btn-secondary" onClick={closeDrawer}>{t('common.cancel')}</button>
+                  <AddToListSelect cardIds={[selectedCard.id]} game={selectedCard.game || game} showToast={showToast} />
                   <button type="submit" className="btn btn-primary">{t('search.addToCollection')}</button>
                 </div>
               </div>
