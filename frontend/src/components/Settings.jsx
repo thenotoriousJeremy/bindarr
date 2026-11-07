@@ -11,6 +11,7 @@ import NotificationSettings from './NotificationSettings';
 import { isDeviceMode } from '../apiBase';
 import InstanceSettings from './InstanceSettings';
 import PreconImportModal from './PreconImportModal';
+import NavTabsSettings from './NavTabsSettings';
 
 // Device mode only; a server-mode build never loads the download manager.
 const DeviceScanSetup = lazy(() => import('./DeviceScanSetup'));
@@ -1118,6 +1119,8 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
               </span>
             </div>
           </div>
+
+          <NavTabsSettings user={user} onUpdateUser={onUpdateUser} showToast={showToast} />
 
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label htmlFor="settings-theme">{t('prefs.theme')}</label>

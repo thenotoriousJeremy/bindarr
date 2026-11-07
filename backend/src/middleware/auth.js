@@ -21,7 +21,8 @@ async function authenticateToken(req, res, next) {
 
   try {
     const columns = `u.username, u.role, u.share_token, u.share_enabled, u.share_locations,
-                     u.tcg_api_key, u.psa_api_token, u.graded_price_api_key, u.api_key, u.oidc_sub`;
+                     u.tcg_api_key, u.psa_api_token, u.graded_price_api_key, u.api_key, u.oidc_sub,
+                     u.nav_tabs`;
     // Sessions are stored hashed (authHelpers.hashSessionToken), so it is the
     // hash that is looked up -- the stored value itself is not a credential.
     const tokenHash = hashSessionToken(token);
@@ -62,6 +63,7 @@ async function authenticateToken(req, res, next) {
       graded_price_api_key: session.graded_price_api_key || '',
       api_key: session.api_key || '',
       oidc_sub: session.oidc_sub || null,
+      nav_tabs: session.nav_tabs ?? null,
       via_api_key: viaApiKey
     };
     // Which session this is, for the routes that end it (logout) or keep it while

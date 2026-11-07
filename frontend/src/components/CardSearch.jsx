@@ -14,6 +14,7 @@ import { langName, isEnglish, displayName, translatedName, setReference, setCode
 import { defaultGame, gameOptions, showGamePicker, gameLabel } from '../utils/games';
 import CardImage from './CardImage';
 import AddToListSelect from './AddToListSelect';
+import WishlistHeart, { AddSelectedToWishlist } from './WishlistHeart';
 import { useT } from '../utils/i18n';
 import { onActivateKey, useEscape } from '../utils/a11y';
 import RiotNotice from './RiotNotice';
@@ -894,6 +895,12 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
           >
             {bulkAdding ? t('search.adding') : t('search.addN', { count: selectedIds.size })}
           </button>
+          <AddSelectedToWishlist
+            cardIds={() => filteredAndSortedCards.filter(c => selectedIds.has(c.id)).map(c => c.id)}
+            showToast={showToast}
+            disabled={selectedIds.size === 0}
+            style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }}
+          />
           <AddToListSelect
             cardIds={() => filteredAndSortedCards.filter(c => selectedIds.has(c.id)).map(c => c.id)}
             game={game}
@@ -936,6 +943,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                       <Check size={10} /> {card.owned_qty}
                     </div>
                   )}
+                  {!selectMode && <WishlistHeart card={card} showToast={showToast} />}
                   {!selectMode && (
                     <div style={{ position: 'absolute', bottom: '8px', right: '8px', background: 'rgba(0,0,0,0.85)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border-glass-hover)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <Plus size={10} style={{ color: 'var(--accent-red)' }} />
@@ -1063,6 +1071,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
               <div className="quick-add-footer" style={{ marginTop: '1.25rem', paddingTop: '1rem' }}>
                 <div className="quick-add-footer-actions">
                   <button type="button" className="btn btn-secondary" onClick={closeDrawer}>{t('common.cancel')}</button>
+                  <WishlistHeart card={selectedCard} showToast={showToast} variant="button" size={14} />
                   <AddToListSelect cardIds={[selectedCard.id]} game={selectedCard.game || game} showToast={showToast} />
                   <button type="submit" className="btn btn-primary">{t('search.addToCollection')}</button>
                 </div>

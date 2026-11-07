@@ -13,6 +13,7 @@ import CardEntryFields from './CardEntryFields';
 import PriceHistoryChart from './PriceHistoryChart';
 import AddToDeckSelect from './AddToDeckSelect';
 import AddToListSelect from './AddToListSelect';
+import WishlistHeart from './WishlistHeart';
 import UsedInDecks from './UsedInDecks';
 import CardArtEditor from './CardArtEditor';
 import Modal from './Modal';
@@ -958,6 +959,12 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                   onAdd={handleAddToDeck}
                   placeholder={t('inspector.addToDeck')}
                   style={{ fontSize: '0.8rem', padding: '0.45rem 0.5rem', maxWidth: '140px' }}
+                />
+                <WishlistHeart
+                  card={{ id: activeCard.card_id || activeCard.id, name: activeCard.name }}
+                  showToast={showToast}
+                  variant="button"
+                  size={14}
                 />
                 <AddToListSelect
                   cardIds={[activeCard.card_id || activeCard.id]}
