@@ -823,6 +823,71 @@ async function initDb() {
     )
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_card_lists_user ON card_lists(user_id)`);
+  // Notifications (notify.js). A channel is somewhere one user's notifications go.
+  // `url` and `token` are secrets — a Discord webhook URL IS its credential — so
+  // the API reports has_url/has_token and never the values (routes/notifications).
+  await run(`
+    CREATE TABLE IF NOT EXISTS notification_channels (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type TEXT NOT NULL CHECK(type IN ('discord', 'ntfy', 'webhook', 'apprise')),
+      name TEXT,
+      url TEXT NOT NULL,
+      topic TEXT,
+      token TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      events_price INTEGER NOT NULL DEFAULT 1,
+      events_admin INTEGER NOT NULL DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_notification_channels_user ON notification_channels(user_id)`);
+  // Per-user price-move thresholds. A move notifies when it clears EITHER bar;
+  // a NULL bar is off. min_price keeps a 5¢ card's 100% move out of the digest.
+  await run(`
+    CREATE TABLE IF NOT EXISTS notification_prefs (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      price_enabled INTEGER NOT NULL DEFAULT 1,
+      price_pct REAL DEFAULT 15,
+      price_abs REAL DEFAULT 5,
+      min_price REAL DEFAULT 1,
+      include_wishlist INTEGER NOT NULL DEFAULT 1
+    )
+  `);
+  // The price each user was last told about, per card: "moved more than X since
+  // the last notification" is measured from here, so a card drifting 2% a day is
+  // reported once it has drifted far enough, and not again until it moves again.
+  await run(`
+    CREATE TABLE IF NOT EXISTS notification_price_state (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      card_id TEXT NOT NULL,
+      price REAL NOT NULL,
+      currency TEXT,
+      notified_at DATETIME,
+      PRIMARY KEY (user_id, card_id)
+    )
+  `);
+  // Every delivery, one row per message per channel. Doubles as the outbound
+  // queue — status 'pending' rows survive a restart and are retried — and as the
+  // dedupe record for admin events (dedupe_key).
+  await run(`
+    CREATE TABLE IF NOT EXISTS notification_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      channel_id INTEGER REFERENCES notification_channels(id) ON DELETE SET NULL,
+      event_type TEXT NOT NULL,
+      dedupe_key TEXT,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed', 'dropped')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      sent_at DATETIME
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_notification_log_queue ON notification_log(status, next_attempt_at)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_notification_log_dedupe ON notification_log(user_id, dedupe_key, created_at)`);
 
   // Binder artwork: a picture one user uploaded, not a card. It never joins
   // collection, so it cannot reach counts, set completion or value. The bytes

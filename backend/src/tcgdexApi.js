@@ -571,6 +571,7 @@ async function updateCollectionPrices(force = false) {
     console.log(`TCGdex price update complete: ${fresh.length} priced.`);
   } catch (err) {
     console.error('Error during TCGdex price update:', err.message);
+    require('./notify').emit({ type: 'price_sweep_failed', source: 'tcgdex', error: err.message });
   }
 }
 

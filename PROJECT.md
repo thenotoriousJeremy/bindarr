@@ -196,6 +196,7 @@ collection/location/deck-adjacent route requires a valid session.
 | `/api/decks` | decks.js | Deck CRUD, `:id/cards`, `:id/checkout`, `:id/return`, `:id/locations` (checkout/check-in locator payload) |
 | `/api/sets` | sets.js | Set catalog for dividers and scan scoping; non-English Pokémon set lists come from TCGdex, whose ids differ per language |
 | `/api/settings` | settings.js | App-wide settings (read any; write requires admin) |
+| `/api/notifications` | notifications.js | Per-user notification channels (Discord/ntfy/webhook/Apprise; URL and token write-only, reported as `has_url`/`has_token`), `channels/:id/test`, price-move thresholds (`PUT /prefs`) |
 | `/api/shared` | shared.js | Public, read-only collection view by `share_token` (no auth) |
 | `/api` | backup.js | `GET /backup` (the whole account as one JSON file), `POST /backup/restore` (replace the account's contents from one; ids renumbered, card data only ever added) |
 | `/api/admin` | admin.js | User management, card cache seeding, `catalogs` (list / `build` / `stop` / `progress`), DB backups (admin) |
@@ -630,6 +631,30 @@ slabs. It is per-request and never swept: the only free provider meters at 100
 lookups a day. `frontend/src/utils/resolveCardPrice.js` mirrors the same order
 for cards not yet saved.
 
+### Notifications
+
+`notify.js` is the whole surface: `notify.emit({ type, ... })` returns at once
+and never throws. Price sweeps, the auto-backup and catalog builds call it from
+their failure paths (`price_sweep_failed`, `backup_failed`,
+`catalog_build_failed`, sent only to channels of current admins), and the
+scheduler's `price-sweeps` job emits `price_sweep_done` with the
+`utils/priceSweeps` summary once a run finishes (a sweep that threw is reported
+from that summary). That runs the price-move check: for each user with a price channel, every owned (and, if
+enabled, wishlisted — `collection.list_type = 'wishlist'` or `card_lists` when
+present) card's latest `price_history` point is compared with the price the user
+was last told about (`notification_price_state`). Over either per-user bar
+(`notification_prefs.price_pct` / `price_abs`, `min_price` floor) it joins one
+digest message; a card is reported at most once per 20 h.
+
+`notification_log` is both the record and the queue: messages are inserted
+`pending` and a single-flight worker POSTs them with backoff (30 s × 4ⁿ, five
+attempts), honouring Discord's `retry_after` and `X-RateLimit-*` headers.
+Pending rows survive a restart. Admin failures are deduped per job and source
+for 6 h. Every destination passes `utils/notifyGuard.js`: http(s) only, no
+redirects, and loopback/private ranges refused (checked on save and again in the
+socket's own DNS lookup) unless `NOTIFY_ALLOW_PRIVATE=true`; link-local is
+always refused.
+
 ### Storage & sorting engine
 
 `utils/compartmentSort.js` decides where a card physically files:
@@ -655,6 +680,9 @@ for cards not yet saved.
 | `decks` | `user_id`, `name`, `description`, `checked_out`, `checked_out_at`, `created_at` |
 | `deck_cards` | Deck contents: `deck_id`, `card_id`, `quantity` |
 | `price_history` | Per-card price points over time, powering trend charts |
+| `notification_channels` | Per-user destinations: `type`, `url`/`token` (secrets, never returned), ntfy `topic`, `enabled`, `events_price`, `events_admin` |
+| `notification_prefs` / `notification_price_state` | Per-user price-move thresholds; the last price each user was notified about, per card |
+| `notification_log` | Every delivery, and the outbound queue (`status`, `attempts`, `next_attempt_at`, `dedupe_key`) |
 | `sets` | Set catalog (names/ordering) for dividers and set-scoped scan |
 | `pokemontcgapi_cache` | Bounded persistent response cache: `request` (credential digest + path/query), `body`, `etag`, `fetched_at`; no API keys |
 | `app_settings` | App-wide key/value settings (e.g. registration toggle) |

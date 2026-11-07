@@ -348,6 +348,7 @@ async function updateCollectionPrices() {
     await markPricesSwept('pokemontcgapi');
   } catch (error) {
     console.warn('pokemontcgapi price refresh:', error.message);
+    require('./notify').emit({ type: 'price_sweep_failed', source: 'pokemontcgapi', error: error.message });
   }
 }
 

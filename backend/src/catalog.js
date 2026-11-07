@@ -567,6 +567,7 @@ function start(game, lang = 'English', opts = {}) {
       job.phase = 'error';
       job.message = e.message;
       console.error(`catalog: ${job.game}/${job.lang} failed:`, e.message);
+      require('./notify').emit({ type: 'catalog_build_failed', game: job.game, lang: job.lang, error: e.message });
     } finally {
       job.finishedAt = Date.now();
       last = state();

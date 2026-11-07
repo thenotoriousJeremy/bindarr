@@ -232,7 +232,13 @@ function lastBackupAt() {
 }
 
 async function runScheduledBackup() {
-  const b = await createBackup();
+  let b;
+  try {
+    b = await createBackup();
+  } catch (err) {
+    require('./notify').emit({ type: 'backup_failed', error: err.message });
+    throw err;   // the scheduler records it and retries
+  }
   console.log(`Auto-backup created: ${b.file} (${b.size} bytes).`);
   return b;
 }

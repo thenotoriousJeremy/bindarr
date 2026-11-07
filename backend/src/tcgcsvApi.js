@@ -824,6 +824,7 @@ async function updateCollectionPrices(force = false, scope = 'owned') {
       return;
     }
     console.error('Error during TCGCSV price update:', err.message);
+    require('./notify').emit({ type: 'price_sweep_failed', source: 'tcgcsv', error: err.message });
   }
 }
 
