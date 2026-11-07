@@ -323,7 +323,7 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
       </div>
 
       {/* pokemontcg.io card-id migration; hides itself when there is nothing to do. */}
-      <PokemonMigrationBanner showToast={showToast} onProviderChanged={fetchSettings} />
+      <PokemonMigrationBanner showToast={showToast} />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '1.5rem' }} className="admin-grid-layout">
         {/* Registration Panel */}
