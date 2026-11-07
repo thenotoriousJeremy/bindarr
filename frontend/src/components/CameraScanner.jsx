@@ -12,7 +12,7 @@ import { useMultiSelect } from '../utils/useMultiSelect';
 import { langName, langCode, getLanguagesForGame, isLanguageSupported } from '../utils/languages';
 import { requestDetect, stopDetect, smoothQuad, meanCornerDrift, DETECT_W } from '../utils/cardDetector';
 import { getPerspectiveTransform, warpPerspective } from '../../../shared/imgproc.mjs';
-import { shouldCapture, shouldRearm, autoStatusKey } from '../utils/autoCapture';
+import { shouldCapture, shouldRearm, nextChangedFrames, autoStatusKey } from '../utils/autoCapture';
 import { zoomRange, initialZoom } from '../utils/cameraZoom';
 import { pickPreferredCamera, nextCamera } from '../utils/cameraPick';
 import { defaultGame, gameOptions, showGamePicker, isGameEnabled } from '../utils/games';
@@ -198,7 +198,11 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const showSettingsRef = useRef(false); // the readout is only rendered while open
   const autoArmed = useRef(true);       // auto-capture is ready to fire
   const emptyFrames = useRef(0);        // consecutive "no card" detections
+  const lastSeenAt = useRef(0);         // when a detection last saw a card
   const capturedQuad = useRef(null);    // quad at the last auto-capture
+  const lastSig = useRef(null);         // previous detection's appearance signature
+  const capturedSig = useRef(null);     // signature at the last capture
+  const changedFrames = useRef(0);      // consecutive settled frames of a different card
   const lastCaptureAt = useRef(0);      // debounce floor, not a cadence
   const autoScanRef = useRef(false);    // autoScan for the detection callback
   const minFillRef = useRef(MIN_FILL);  // gates, read from the detection callback
@@ -739,9 +743,10 @@ function CameraScanner({ onAddSuccess, showToast }) {
   // set re-renders this whole component, and per-frame renders of a badge that
   // says the same thing are pure main-thread cost on a phone.
   const refreshAutoState = () => {
-    const b = AUTO_BADGE[autoStatusKey(autoArgs())];
+    const status = autoStatusKey(autoArgs());
+    const b = AUTO_BADGE[status];
     const label = t(b.key);
-    setAutoState(prev => (prev && prev.label === label && prev.color === b.color ? prev : { label, color: b.color }));
+    setAutoState(prev => (prev && prev.label === label && prev.color === b.color ? prev : { status, label, color: b.color }));
     // The numeric readout is only on screen while scan settings are open.
     if (!showSettingsRef.current) return;
     const r = bestFrame.current;
@@ -765,6 +770,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
     autoArmed.current = false;
     lastCaptureAt.current = Date.now();
     capturedQuad.current = lastRawQuad.current;
+    capturedSig.current = lastSig.current;
+    changedFrames.current = 0;
     handleCaptureRef.current?.();
   };
 
@@ -782,7 +789,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
   //   · no getImageData anywhere — each call is a GPU readback
   //   · self-pacing: the next request is scheduled after the last one lands, so a
   //     slow phone or a slow network stretches the interval instead of queueing
-  //   · paused entirely while a real scan is running; that result is what matters
+  //   · kept running while a real scan's request is in flight, so a card lifted
+  //     during it still re-arms auto-scan (see tick)
   // Roughly 1.5 requests/second of small JPEGs, and nothing synchronous.
   // Runs whenever the camera is on AND something needs it: the outline to draw,
   // or auto-scan to decide when to fire. Gating it on the outline alone meant
@@ -833,6 +841,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
         steadyFrames.current = 0;
         smoothed.current = null;
         lastRawQuad.current = null;
+        lastSig.current = null;
+        changedFrames.current = 0;
         // A DEFINITE "no card", not an absence of information. The old contour
         // detector always returned some quad and a bad one simply scored low, so
         // "no answer" and "no card" were the same state and nulling this was
@@ -844,7 +854,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
         // lifts it off the mat. Require a few consecutive empty frames so a
         // hand passing over the card does not re-arm mid-scan.
         emptyFrames.current += 1;
-        if (shouldRearm({ armed: autoArmed.current, emptyFrames: emptyFrames.current, quad: null, capturedQuad: capturedQuad.current })) {
+        const emptyMs = Date.now() - lastSeenAt.current;
+        if (shouldRearm({ armed: autoArmed.current, emptyFrames: emptyFrames.current, emptyMs, quad: null, capturedQuad: capturedQuad.current })) {
           autoArmed.current = true;
           capturedQuad.current = null;
           resolvedDupIdRef.current = null;
@@ -857,6 +868,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
         return;
       }
       emptyFrames.current = 0;
+      lastSeenAt.current = Date.now();
       // Drift is measured between RAW results; the smoothed quad is only what
       // gets drawn, and easing it would make everything look steady.
       const drift = meanCornerDrift(lastRawQuad.current, found.quad);
@@ -874,8 +886,15 @@ function CameraScanner({ onAddSuccess, showToast }) {
       };
       // Card swapped without the frame ever emptying — a different quad in the
       // same place counts as a new card, otherwise feeding cards edge-to-edge
-      // would only ever scan the first one.
-      if (shouldRearm({ armed: autoArmed.current, emptyFrames: 0, quad: found.quad, capturedQuad: capturedQuad.current })) {
+      // would only ever scan the first one. And a different PICTURE in the same
+      // quad counts too: the next card dropped onto the last one never empties
+      // the frame and never moves the quad, and with auto-add on nothing else
+      // re-arms (only the add drawer closing does, and auto-add skips it).
+      changedFrames.current = nextChangedFrames(changedFrames.current, {
+        sig: found.sig, prevSig: lastSig.current, capturedSig: capturedSig.current,
+      });
+      lastSig.current = found.sig || null;
+      if (shouldRearm({ armed: autoArmed.current, emptyFrames: 0, quad: found.quad, capturedQuad: capturedQuad.current, changedFrames: changedFrames.current })) {
         autoArmed.current = true;
         capturedQuad.current = null;
         resolvedDupIdRef.current = null;
@@ -891,11 +910,18 @@ function CameraScanner({ onAddSuccess, showToast }) {
       cancelFrame = null;
       try {
         const guideElement = document.querySelector('.scan-card-guide');
-        // Skip while a scan owns the pipeline, or before the video has a frame to
-        // copy: videoWidth is set at metadata, but there are no pixels until
-        // readyState reaches HAVE_CURRENT_DATA, and drawing early yields black.
+        // Skip before the video has a frame to copy: videoWidth is set at
+        // metadata, but there are no pixels until readyState reaches
+        // HAVE_CURRENT_DATA, and drawing early yields black.
+        //
+        // NOT skipped while a scan is in flight. The capture cue tells the user to
+        // move the card at once, so the swap usually happens during the request;
+        // a paused detector never saw the frame empty, the next card landed in the
+        // same guide box (well under REARM_DRIFT), and auto-scan sat on "Next
+        // card" for good. The capture has already copied its pixels by then, and
+        // shouldCapture's busy gate keeps this from firing a second scan.
         const v = videoRef.current;
-        if (!loadingRef.current && guideElement && v?.videoWidth && v.readyState >= 2) {
+        if (guideElement && v?.videoWidth && v.readyState >= 2) {
           if (!outlineCanvas.current) outlineCanvas.current = document.createElement('canvas');
           const c = buildFramedCanvas(v, guideElement, DETECT_W, outlineCanvas.current, true);
           // Fire-and-forget: the worker answers on its own schedule and a frame
@@ -1418,6 +1444,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
     autoArmed.current = false;
     lastCaptureAt.current = Date.now();
     capturedQuad.current = lastRawQuad.current;
+    capturedSig.current = lastSig.current;
+    changedFrames.current = 0;
 
     setLoading(true);
     const scanId = ++currentScanId.current;
@@ -1953,8 +1981,27 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 clock to show any more — what the user needs to know is whether the
                 scanner is waiting on them (no card / hold still) or on itself
                 (scanning / lift the card), because those need opposite reactions. */}
+            {/* "Next card" is also a button: the one state the scanner can sit in
+                with nothing left to wait for is a card swapped so fast that no
+                detection saw the mat empty and the new one landed where the old one
+                was. A tap re-arms on whatever is in frame now. */}
             {autoScan && autoState && (
-              <div style={{ position: 'absolute', top: '1rem', left: '1rem', zIndex: 20, display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.3rem 0.6rem', borderRadius: 999, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)', filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.6))' }}>
+              <div
+                role={autoState.status === 'lift' ? 'button' : undefined}
+                tabIndex={autoState.status === 'lift' ? 0 : undefined}
+                title={autoState.status === 'lift' ? t('scan.autoRearm') : undefined}
+                aria-label={autoState.status === 'lift' ? t('scan.autoRearm') : undefined}
+                onClick={autoState.status === 'lift' ? () => {
+                  autoArmed.current = true;
+                  capturedQuad.current = null;
+                  resolvedDupIdRef.current = null;
+                  refreshAutoState();
+                } : undefined}
+                onKeyDown={autoState.status === 'lift' ? (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.currentTarget.click(); }
+                } : undefined}
+                style={{ position: 'absolute', top: '1rem', left: '1rem', zIndex: 20, display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.3rem 0.6rem', borderRadius: 999, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)', filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.6))', cursor: autoState.status === 'lift' ? 'pointer' : undefined }}
+              >
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: autoState.color, flexShrink: 0 }} />
                 <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#fff', whiteSpace: 'nowrap' }}>{autoState.label}</span>
               </div>

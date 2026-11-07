@@ -251,6 +251,7 @@ async function initDb() {
       set_name TEXT,
       number TEXT,
       image_url TEXT,
+      image_url_back TEXT,
       price_trend REAL,
       price_normal REAL,
       price_holofoil REAL,
@@ -528,6 +529,55 @@ async function initDb() {
   if (!appSettingsCols.some(c => c.name === 'tcgcsv_prices_swept_at')) {
     await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_prices_swept_at DATETIME`);
   }
+  if (!appSettingsCols.some(c => c.name === 'tcgcsv_403_cooldown_until')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_403_cooldown_until DATETIME`);
+  }
+  if (!appSettingsCols.some(c => c.name === 'tcgcsv_data_version')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_data_version TEXT`);
+  }
+  if (!appSettingsCols.some(c => c.name === 'tcgcsv_pending_version')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_pending_version TEXT`);
+  }
+  if (!appSettingsCols.some(c => c.name === 'tcgcsv_last_checked_at')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_last_checked_at DATETIME`);
+  }
+  // TCGCSV responses, cut down to the fields Bindarr reads (utils/tcgcsvSlim.js).
+  await run(`
+    CREATE TABLE IF NOT EXISTS tcgcsv_cache (
+      path TEXT NOT NULL,
+      data_version TEXT NOT NULL,
+      results_json TEXT NOT NULL,
+      PRIMARY KEY (path, data_version)
+    )
+  `);
+  // An earlier build of the daily sync kept whole responses in
+  // tcgcsv_response_cache. Slim them into the new table rather than discarding
+  // them, so an upgrade does not cost a full re-download from TCGCSV, then drop it.
+  const legacyTcgcsv = await get(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tcgcsv_response_cache'`
+  );
+  if (legacyTcgcsv) {
+    const { slimResults, slimmerFor } = require('./utils/tcgcsvSlim');
+    const keys = await all(`SELECT path, data_version FROM tcgcsv_response_cache`);
+    let kept = 0;
+    for (const { path: cachePath, data_version: version } of keys) {
+      if (!slimmerFor(cachePath)) continue;
+      const row = await get(
+        `SELECT results_json FROM tcgcsv_response_cache WHERE path = ? AND data_version = ?`,
+        [cachePath, version]
+      );
+      let results;
+      try { results = JSON.parse(row.results_json); } catch { continue; }
+      if (!Array.isArray(results)) continue;
+      await run(
+        `INSERT OR REPLACE INTO tcgcsv_cache (path, data_version, results_json) VALUES (?, ?, ?)`,
+        [cachePath, version, JSON.stringify(slimResults(cachePath, results))]
+      );
+      kept++;
+    }
+    await run(`DROP TABLE tcgcsv_response_cache`);
+    console.log(`Migrated ${kept} TCGCSV cache entries to the slim cache table.`);
+  }
   // How many days between automatic price refreshes; 0 switches them off.
   // Daily is what every install did before this column existed, so that is the
   // default and nothing changes for anyone who never touches it. It exists for
@@ -725,6 +775,14 @@ async function initDb() {
         [needle, skip, needle, needle, skip]
       );
     }
+  }
+  // The back face of a double-faced Magic card (transform, modal DFC, reversible),
+  // which has no single image — `image_url` only ever held the front, so the back
+  // was unviewable (#103). Null for every single-faced card and every other game.
+  // Not backfilled: existing rows gain it the next time they are re-cached (the
+  // daily MTG price sweep re-fetches every owned and decked card).
+  if (!cardCacheCols.some(c => c.name === 'image_url_back')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN image_url_back TEXT`);
   }
 
   // tcgplayer_catalog originally held cards only (a product with no collector

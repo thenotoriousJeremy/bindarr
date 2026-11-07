@@ -39,16 +39,26 @@ let modelPromise = null;
 async function fetchModel() {
   const url = modelUrl(isNative, getServerUrl());
   // Native only: CapacitorHttp bypasses the WebView's HTTP cache, so without this
-  // every scanner open re-downloads ~4 MB. The web has the server's immutable
-  // Cache-Control header for that already.
-  // ponytail: never revalidated — a model swapped on the server is picked up
-  // when the server URL changes or the app's data is cleared.
+  // every scanner open re-downloads ~3 MB. The web revalidates through the
+  // server's no-cache + ETag headers instead.
+  //
+  // The cached copy is checked against the server with a HEAD first. It used to
+  // be trusted forever, which is how phones kept running the old cornelius model
+  // long after their server had switched to fastweb-single. Offline, or with a
+  // HEAD the server will not answer, the cached copy is still used.
   let cache = null;
   if (isNative) {
     try {
       cache = await caches.open('bindarr-models');
       const hit = await cache.match(url);
-      if (hit) return await hit.arrayBuffer();
+      if (hit) {
+        let serverTag = null;
+        try {
+          const head = await fetch(url, { method: 'HEAD' });
+          if (head.ok) serverTag = head.headers.get('etag') || head.headers.get('content-length');
+        } catch { /* unreachable: use the cached copy */ }
+        if (!serverTag || serverTag === hit.headers.get('x-model-tag')) return await hit.arrayBuffer();
+      }
     } catch { cache = null; }
   }
   const res = await fetch(url);
@@ -59,7 +69,13 @@ async function fetchModel() {
     throw new Error(`${url} not served (${res.status} ${type || 'no type'})`);
   }
   const buf = await res.arrayBuffer();
-  if (cache) cache.put(url, new Response(buf.slice(0))).catch(() => {});
+  if (cache) {
+    // Same tag the HEAD above reads: the ETag, or the size when a proxy strips it.
+    const tag = res.headers.get('etag') || String(buf.byteLength);
+    cache.put(url, new Response(buf.slice(0), { headers: { 'x-model-tag': tag } })).catch(() => {});
+    // Copies stored under the old, un-versioned URL are never read again.
+    cache.keys().then(keys => keys.filter(k => k.url !== url).forEach(k => cache.delete(k))).catch(() => {});
+  }
   return buf;
 }
 

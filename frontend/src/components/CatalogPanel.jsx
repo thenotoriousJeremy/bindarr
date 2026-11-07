@@ -79,14 +79,17 @@ function EngineCard({ engine, onDownload, busy }) {
   if (!engine) return null;
   const models = engine.models || [];
   const missing = models.filter(m => !m.present);
+  // Installed and working, but an older release's file with a faster replacement.
+  const outdated = models.filter(m => m.outdated);
 
   return (
     <Step
       n="1"
       icon={<Cpu size={16} style={{ color: 'var(--accent-red)' }} />}
       title={t('catalog.scanEngine')}
-      status={missing.length ? t('catalog.requiredNotInstalled') : t('catalog.installed')}
-      tone={missing.length ? 'var(--accent-yellow)' : 'var(--type-grass)'}
+      status={missing.length ? t('catalog.requiredNotInstalled')
+        : outdated.length ? t('catalog.updateAvailable') : t('catalog.installed')}
+      tone={missing.length || outdated.length ? 'var(--accent-yellow)' : 'var(--type-grass)'}
     >
       <div style={ROW}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', flex: '1 1 20rem' }}>
@@ -102,11 +105,18 @@ function EngineCard({ engine, onDownload, busy }) {
               </a>
             )).reduce((acc, el) => acc.length ? [...acc, ', ', el] : [el], [])}
           </p>
+          {!missing.length && !!outdated.length && <p style={NOTE}>{t('catalog.engineOutdated')}</p>}
         </div>
         {!!missing.length && (
           <button type="button" className="btn btn-primary btn-sm" disabled={busy}
             onClick={() => onDownload('models')} style={BTN}>
             <Download size={14} /> {t('catalog.download')}
+          </button>
+        )}
+        {!missing.length && !!outdated.length && (
+          <button type="button" className="btn btn-primary btn-sm" disabled={busy}
+            onClick={() => onDownload('models')} style={BTN}>
+            <Download size={14} /> {t('catalog.update')}
           </button>
         )}
       </div>
