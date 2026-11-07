@@ -36,25 +36,37 @@ async function createBackup() {
   return { file: path.basename(dest), size: st.size, created_at: st.mtime.toISOString() };
 }
 
-// Start a periodic auto-backup. Interval from BACKUP_INTERVAL_HOURS (default 24);
-// set to 0 to disable. Returns the timer, or null when disabled.
-function startAutoBackup() {
-  const hours = process.env.BACKUP_INTERVAL_HOURS === undefined
+// The automatic backup is a scheduler.js job: BACKUP_INTERVAL_HOURS (default 24;
+// 0 disables) is its period, counted from the last run recorded in job_runs, so
+// a restart no longer pushes the next backup a whole interval away.
+function intervalHours() {
+  return process.env.BACKUP_INTERVAL_HOURS === undefined
     ? 24
-    : parseFloat(process.env.BACKUP_INTERVAL_HOURS);
-  if (!hours || hours <= 0) {
-    console.log('Auto-backup disabled (BACKUP_INTERVAL_HOURS=0).');
-    return null;
-  }
-  console.log(`Auto-backup enabled: every ${hours}h, keeping newest ${KEEP_LAST}.`);
-  return setInterval(async () => {
-    try {
-      const b = await createBackup();
-      console.log(`Auto-backup created: ${b.file} (${b.size} bytes).`);
-    } catch (err) {
-      console.error('Auto-backup failed:', err);
-    }
-  }, hours * 60 * 60 * 1000);
+    : parseFloat(process.env.BACKUP_INTERVAL_HOURS) || 0;
+}
+const intervalMs = () => Math.max(0, intervalHours()) * 60 * 60 * 1000;
+
+// Where the schedule's clock starts the first time it sees this install: the
+// newest backup already on disk, or (null) now. An upgraded install that has
+// been restarting too often to ever reach its first backup has none, and is
+// backed up one interval after this boot instead of never; a database created
+// a moment ago is not backed up while it is still empty.
+function lastBackupAt() {
+  const newest = listBackups()[0];
+  return newest ? new Date(newest.created_at) : null;
 }
 
-module.exports = { BACKUP_DIR, listBackups, createBackup, startAutoBackup };
+async function runScheduledBackup() {
+  const b = await createBackup();
+  console.log(`Auto-backup created: ${b.file} (${b.size} bytes).`);
+  return b;
+}
+
+// Said once at boot, as startAutoBackup did when it owned the timer.
+function logPolicy() {
+  const hours = intervalHours();
+  if (!(hours > 0)) console.log('Auto-backup disabled (BACKUP_INTERVAL_HOURS=0).');
+  else console.log(`Auto-backup enabled: every ${hours}h, keeping newest ${KEEP_LAST}.`);
+}
+
+module.exports = { BACKUP_DIR, listBackups, createBackup, intervalMs, lastBackupAt, runScheduledBackup, logPolicy };

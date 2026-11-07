@@ -1203,6 +1203,21 @@ async function initDb() {
     await run(`ALTER TABLE locations ADD COLUMN page_columns INTEGER`);
   }
 
+  // When each background job last ran (scheduler.js). The weekly set refresh and
+  // the daily backup used to live on in-memory timers that every restart reset,
+  // so an install that updates weekly never refreshed its sets and one that
+  // restarts daily never backed up. One row per job name; last_run_at is when the
+  // most recent finished run started, last_status 'ok', 'error' or 'baseline'
+  // (a clock started without a run, see scheduler.js).
+  await run(`
+    CREATE TABLE IF NOT EXISTS job_runs (
+      name TEXT PRIMARY KEY,
+      last_run_at DATETIME,
+      last_status TEXT,
+      last_error TEXT
+    )
+  `);
+
   await splitStackedRows();
 
   // --- PERFORMANCE INDEXES ---
