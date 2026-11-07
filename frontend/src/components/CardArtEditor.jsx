@@ -37,6 +37,18 @@ const MAX_BYTES = 8 * 1024 * 1024; // matches backend/src/cardArt.js
 
 const btn = { fontSize: '0.7rem', padding: '0.3rem 0.6rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' };
 
+// Uploading and removing art is admin-only on the backend (the art is shown to
+// every user on the instance), so members never get a button that can only 403.
+// Read from the session App.jsx persists rather than threading `user` through
+// every CardInspectorModal call site; App rewrites it on login and profile edits.
+function isAdmin() {
+  try {
+    return JSON.parse(localStorage.getItem('bindarr_user') || 'null')?.role === 'admin';
+  } catch {
+    return false;
+  }
+}
+
 export default function CardArtEditor({ card, hasProviderArt, showToast, onChanged }) {
   const { t } = useT();
   const index = useCardArtIndex();
@@ -47,6 +59,10 @@ export default function CardArtEditor({ card, hasProviderArt, showToast, onChang
   if (!cardId) return null;
 
   const hasCustom = index.has(cardId);
+  const canEdit = isAdmin();
+  // Contributing only downloads the public art and opens an issue, so members
+  // keep it; with nothing to contribute and no edit rights there is nothing to show.
+  if (!canEdit && !hasCustom) return null;
 
   const pick = () => fileRef.current?.click();
 
@@ -146,15 +162,19 @@ export default function CardArtEditor({ card, hasProviderArt, showToast, onChang
 
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', justifyContent: 'center', marginTop: '0.6rem' }}>
-      <input ref={fileRef} type="file" accept="image/*" onChange={onFile} style={{ display: 'none' }} />
+      {canEdit && (
+        <>
+          <input ref={fileRef} type="file" accept="image/*" onChange={onFile} style={{ display: 'none' }} />
 
-      <button className="btn btn-secondary" style={btn} onClick={pick} disabled={busy}>
-        {hasCustom || hasProviderArt ? <Upload size={13} /> : <ImagePlus size={13} />}
-        {/* "Add" when the slot is showing a card back, "Replace" when there is
-            already art to look at — the same button, but the two cases read very
-            differently to somebody staring at a blank back. */}
-        {hasCustom || hasProviderArt ? t('art.replace') : t('art.add')}
-      </button>
+          <button className="btn btn-secondary" style={btn} onClick={pick} disabled={busy}>
+            {hasCustom || hasProviderArt ? <Upload size={13} /> : <ImagePlus size={13} />}
+            {/* "Add" when the slot is showing a card back, "Replace" when there is
+                already art to look at — the same button, but the two cases read very
+                differently to somebody staring at a blank back. */}
+            {hasCustom || hasProviderArt ? t('art.replace') : t('art.add')}
+          </button>
+        </>
+      )}
 
       {hasCustom && (
         <>
@@ -162,10 +182,12 @@ export default function CardArtEditor({ card, hasProviderArt, showToast, onChang
             <Share2 size={13} />
             {t('art.contribute')}
           </button>
-          <button className="btn btn-secondary" style={{ ...btn, color: 'var(--accent-red)' }} onClick={onRemove} disabled={busy}>
-            <Trash2 size={13} />
-            {t('art.remove')}
-          </button>
+          {canEdit && (
+            <button className="btn btn-secondary" style={{ ...btn, color: 'var(--accent-red)' }} onClick={onRemove} disabled={busy}>
+              <Trash2 size={13} />
+              {t('art.remove')}
+            </button>
+          )}
         </>
       )}
     </div>
