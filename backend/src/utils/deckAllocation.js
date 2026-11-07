@@ -26,18 +26,6 @@ class DeckAllocationError extends Error {
   }
 }
 
-// Allocation writes queue here, one at a time. withTransaction opens BEGIN on the
-// single shared connection, which does not make a second transaction wait: its
-// BEGIN fails, and the ROLLBACK that follows ends the first one's. Checkout,
-// return and re-allocation each read what is free and then claim it, and that has
-// to happen as one unit, so they take turns.
-let lockTail = Promise.resolve();
-function withDeckLock(fn) {
-  const result = lockTail.then(() => fn());
-  lockTail = result.then(() => {}, () => {});
-  return result;
-}
-
 async function loadDeckState(deck, userId) {
   const rules = await loadRules();
   const game = deck.game || 'pokemon';
@@ -203,11 +191,12 @@ const shortfall = (plan) => plan
   .filter(p => p.need > 0)
   .map(p => `Missing ${p.need}x ${p.card.printed_name || p.card.name} (Owned: ${p.owned}, In Use: ${p.locked})`);
 
-// Check a deck out: claim every copy it needs, or nothing. Runs as one transaction
-// in the allocation queue, so a second checkout racing for the same copies sees
-// them taken and fails cleanly instead of both decks counting the same cards.
+// Check a deck out: claim every copy it needs, or nothing. Runs as one transaction,
+// which holds the connection until it settles (db.withTransaction), so a second
+// checkout racing for the same copies sees them taken and fails cleanly instead of
+// both decks counting the same cards.
 function checkoutDeck(deckId, userId) {
-  return withDeckLock(() => db.withTransaction(async () => {
+  return db.withTransaction(async () => {
     const deck = await db.get(`SELECT * FROM decks WHERE id = ? AND user_id = ?`, [deckId, userId]);
     if (!deck) throw new DeckAllocationError(404, 'Deck not found or unauthorized');
     if (deck.checked_out) throw new DeckAllocationError(409, 'This deck is already checked out.');
@@ -227,28 +216,28 @@ function checkoutDeck(deckId, userId) {
       [deck.id, userId]
     );
     if (flipped.changes !== 1) throw new DeckAllocationError(409, 'This deck is already checked out.');
-  }));
+  });
 }
 
 // Return a deck: release everything it holds.
 function returnDeck(deckId, userId) {
-  return withDeckLock(() => db.withTransaction(async () => {
+  return db.withTransaction(async () => {
     const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [deckId, userId]);
     if (!deck) throw new DeckAllocationError(404, 'Deck not found or unauthorized');
     await db.run(`DELETE FROM deck_allocations WHERE deck_id = ?`, [deckId]);
     await db.run(`UPDATE decks SET checked_out = 0, checked_out_at = NULL WHERE id = ? AND user_id = ?`, [deckId, userId]);
-  }));
+  });
 }
 
 // Delete a deck along with its cards and whatever copies it holds.
 function deleteDeck(deckId, userId) {
-  return withDeckLock(() => db.withTransaction(async () => {
+  return db.withTransaction(async () => {
     const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [deckId, userId]);
     if (!deck) throw new DeckAllocationError(404, 'Deck not found or unauthorized');
     await db.run(`DELETE FROM deck_allocations WHERE deck_id = ?`, [deckId]);
     await db.run(`DELETE FROM deck_cards WHERE deck_id = ?`, [deckId]);
     await db.run(`DELETE FROM decks WHERE id = ? AND user_id = ?`, [deckId, userId]);
-  }));
+  });
 }
 
 // Bring a checked-out deck's holdings in line with its cards after they change: a
@@ -256,7 +245,7 @@ function deleteDeck(deckId, userId) {
 // are any. Copies already pulled stay with the card they were pulled for. A shortfall
 // is not an error here — the deck is already out, and its page shows what is missing.
 function syncDeckAllocation(deckId, userId) {
-  return withDeckLock(() => db.withTransaction(async () => {
+  return db.withTransaction(async () => {
     const deck = await db.get(`SELECT * FROM decks WHERE id = ? AND user_id = ?`, [deckId, userId]);
     if (!deck || !deck.checked_out) return;
     const state = await loadDeckState(deck, userId);
@@ -269,12 +258,11 @@ function syncDeckAllocation(deckId, userId) {
       await db.run(`DELETE FROM deck_allocations WHERE deck_id = ? AND entry_id IN (${chunk.map(() => '?').join(', ')})`, [deck.id, ...chunk]);
     }
     await claimCopies(deck.id, plan, { strict: false });
-  }));
+  });
 }
 
 module.exports = {
   DeckAllocationError,
-  withDeckLock,
   planDeck,
   deckAvailability,
   locationsFor,
