@@ -203,7 +203,9 @@ function start(game = 'pokemon') {
       }
       // A failed sync leaves the last complete version cached, which is enough to
       // build from; getGroups below throws only when nothing has ever synced.
-      await tcgcsv.syncIfUpdatedSafely('product map');
+      // `explicit`: an admin asked for this build (or downloaded the Pokémon scan
+      // catalog, which needs it), so it may sync before any card exists.
+      await tcgcsv.syncIfUpdatedSafely('product map', { explicit: true });
       const groupsByCategory = {};
       for (const categoryId of categoryIds) {
         groupsByCategory[categoryId] = await tcgcsv.getGroups(categoryId);
