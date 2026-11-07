@@ -18,6 +18,7 @@ Bindarr is a self-hosted, multi-user collection manager for Pokémon, Magic: The
 
 - `backend/src/` — Express service, database, provider clients, scan/catalog/backup logic.
 - `backend/src/routes/` — feature routers; mount/access order is defined in `backend/src/server.js`.
+- `backend/src/embedded/` — device mode: the composition root the mobile app runs instead of `server.js` (no server; on-device SQLite), and the stand-ins for Node modules a phone lacks (`aliases.js`). See MOBILE.md.
 - `backend/src/middleware/` — authentication, authorization, and rate limits.
 - `backend/src/utils/` — shared policy/domain helpers. Reuse these instead of duplicating provider, language, price, placement, or TLS logic.
 - `backend/test/` — standalone unit assertions; `backend/test/e2e/` boots real server processes with temporary SQLite state.
@@ -53,6 +54,7 @@ Use `npm ci` in each package scope for reproducible CI/container installs. Backe
 - **Modules:** backend is CommonJS (`require`, `module.exports`); frontend is ESM/JSX (`import`, `export`). Keep the boundary intact.
 - **Names:** camelCase for values/functions, PascalCase for React components, snake_case for SQLite/API fields. Use lower-case game values: `pokemon`, `mtg`, `lorcana`.
 - **Backend routes:** create `express.Router()`, validate early, use parameterized SQL (`?` with values), wrap async work in `try/catch`, log operational context, and return client-safe `{ error: '...' }` responses. Use `db.run/get/all`; do not use raw callback sqlite calls.
+- **Device mode:** the phone app bundles the route modules (`frontend/scripts/build-device-backend.mjs`), so route code must not depend on Node APIs outside `backend/src/embedded/aliases.js` on a path device mode reaches (no `Buffer`, streams or filesystem writes there), and a new bare `require` needs either an alias or a frontend dependency. A route mounted in `server.js` should be mounted in `embedded/index.js` too, or answer 501 there. `backend/test/embedded.test.js` loads the routes the way the bundle does.
 - **Auth:** preserve central auth/mount placement. Authenticated mutations must be user-scoped with `req.user.id`; do not rely on client-provided user IDs.
 - **Providers:** normalize and cache through the existing provider modules. For Pokémon search/set work use `pokemonProvider.apiFor(lang)`; for an existing card ID use `cardApi`. Do not add feature-local language/ID-prefix branching.
 - **Async/error handling:** non-critical startup warmups/background jobs may intentionally use fallbacks; mutations, auth, and ownership checks must fail explicitly. Do not turn deliberate non-blocking work into request-path blocking.

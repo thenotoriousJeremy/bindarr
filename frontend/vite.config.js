@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import basicSsl from '@vitejs/plugin-basic-ssl'
@@ -9,12 +9,30 @@ import basicSsl from '@vitejs/plugin-basic-ssl'
 // when filing a bug. The release workflow bumps this file, so it's the truth.
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
 
+// The device-mode browser harness (VITE_DEVICE_WEB=1 npm run dev, MOBILE.md) runs
+// with no backend: /api is answered in the page, and /ort has to come from
+// public/ort the way a built app serves it. Vite refuses import() of a public file
+// in dev, which is why the normal config proxies /ort to the backend instead.
+const deviceWeb = !!process.env.VITE_DEVICE_WEB
+const servePublicOrt = {
+  name: 'device-web-ort',
+  configureServer(server) {
+    server.middlewares.use((req, res, next) => {
+      const path = (req.url || '').split('?')[0]
+      const file = new URL(`./public${path}`, import.meta.url)
+      if (!path.startsWith('/ort/') || !existsSync(file)) return next()
+      res.setHeader('Content-Type', path.endsWith('.wasm') ? 'application/wasm' : 'text/javascript')
+      res.end(readFileSync(file))
+    })
+  },
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
   // Demo build is served from https://<user>.github.io/bindarr/, so assets need
   // that sub-path prefix. Every other build (web/mobile) stays root-relative.
   base: process.env.VITE_DEMO ? '/bindarr/' : '/',
-  plugins: [react(), basicSsl()],
+  plugins: [react(), basicSsl(), ...(deviceWeb ? [servePublicOrt] : [])],
   // Matches how the app already reads build-time config (VITE_DEMO), so this
   // needs no new global and no eslint exception.
   define: {
@@ -47,7 +65,7 @@ export default defineConfig({
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'credentialless',
     },
-    proxy: {
+    proxy: deviceWeb ? {} : {
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,

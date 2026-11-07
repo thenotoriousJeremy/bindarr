@@ -72,6 +72,13 @@ async function pokemonApiFor(lang) {
   return pokemonProvider.apiFor(lang);
 }
 
+// A client-supplied milo embedding, or null. 128 finite numbers is the only shape
+// milo produces; anything else is refused rather than swept.
+function toEmbedding(value) {
+  if (!Array.isArray(value) || value.length !== 128 || !value.every(Number.isFinite)) return null;
+  return Float32Array.from(value);
+}
+
 // Collector numbers as both providers can agree on. TCGdex zero-pads ('013')
 // where pokemontcg.io and TCGplayer do not ('13'), and letters have to survive
 // ('TG12', 'SWSH284') or every promo in a set collides into one key.
@@ -127,7 +134,7 @@ function normalizeSearchParams({ name = '', number = '', set = '', q = '' }) {
 
 router.all('/search', searchLimiter, async (req, res) => {
   const query = req.method === 'POST' ? { ...req.query, ...req.body } : req.query;
-  const { name: rawName, number: rawNumber, set: rawSet, scope = 'database', game = 'pokemon', lang, prints, q, image, cropped } = query;
+  const { name: rawName, number: rawNumber, set: rawSet, scope = 'database', game = 'pokemon', lang, prints, q, image, cropped, embedding } = query;
   const { name, number, set } = normalizeSearchParams({ name: rawName, number: rawNumber, set: rawSet, q });
   // 1-based page over `limit`-sized pages. 250 is the pokemontcg.io ceiling and
   // a sane cap on how much one Scryfall search will page through per request.
@@ -144,7 +151,15 @@ router.all('/search', searchLimiter, async (req, res) => {
 
     // When an image from a camera scan is attached, score each candidate card
     // against the scan's visual embedding and sort by similarity descending.
-    if (image && Array.isArray(cards) && cards.length > 0) {
+    // Or with the embedding itself, when the client ran milo on the photo (see
+    // scan-match below).
+    const scanEmbedding = toEmbedding(embedding);
+    if (scanEmbedding && Array.isArray(cards) && cards.length > 0) {
+      const langName = languages.toName(lang);
+      if (cvScan.isBuilt(game, langName)) {
+        cards = await cvScan.scoreCards(null, game, cards, { lang: langName, embedding: scanEmbedding });
+      }
+    } else if (image && Array.isArray(cards) && cards.length > 0) {
       const base64 = typeof image === 'string' ? image.replace(/^data:image\/\w+;base64,/, '') : '';
       if (base64) {
         const buf = Buffer.from(base64, 'base64');
@@ -291,12 +306,19 @@ async function pokemonBySetNumber(langName, number, setId, tcgApiKey) {
 
 router.post('/scan-match', searchLimiter, async (req, res) => {
   try {
-    const { game = 'pokemon', image, set = '', lang, cropped = false } = req.body || {};
+    const { game = 'pokemon', image, set = '', lang, cropped = false, embedding, thumb, detected } = req.body || {};
     if (game !== 'mtg' && game !== 'pokemon' && game !== 'lorcana') return res.status(400).json({ error: 'Invalid game' });
-    if (!image || typeof image !== 'string') return res.status(400).json({ error: 'Missing image' });
-    const base64 = image.includes(',') ? image.slice(image.indexOf(',') + 1) : image;
-    const buf = Buffer.from(base64, 'base64');
-    if (buf.length < 100) return res.status(400).json({ error: 'Invalid image data' });
+    // A photo, or the embedding of one. The phone app in device mode has no server
+    // to send pixels to, so it runs milo on its own crop and sends the 128 numbers;
+    // the sweep and everything after it is the same scan.
+    const scanEmbedding = toEmbedding(embedding);
+    let buf = null;
+    if (!scanEmbedding) {
+      if (!image || typeof image !== 'string') return res.status(400).json({ error: 'Missing image' });
+      const base64 = image.includes(',') ? image.slice(image.indexOf(',') + 1) : image;
+      buf = Buffer.from(base64, 'base64');
+      if (buf.length < 100) return res.status(400).json({ error: 'Invalid image data' });
+    }
 
     const langName = languages.toName(lang);
 
@@ -321,7 +343,14 @@ router.post('/scan-match', searchLimiter, async (req, res) => {
       });
     }
 
-    const result = await cvScan.match(buf, game, 8, { sets: parseSetList(set), lang: langName, cropped: !!cropped });
+    const result = await cvScan.match(buf, game, 8, {
+      sets: parseSetList(set), lang: langName, cropped: !!cropped,
+      ...(scanEmbedding ? {
+        embedding: scanEmbedding,
+        thumb: typeof thumb === 'string' && thumb.startsWith('data:image/') ? thumb : null,
+        detected: detected !== false,
+      } : {}),
+    });
 
     result.candidates = await Promise.all(result.candidates.map(async (cand, i) => {
       // MTG goes through getCardById because it can fetch and cache a printing

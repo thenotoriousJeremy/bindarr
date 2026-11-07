@@ -13,6 +13,12 @@ RUN npm ci
 COPY frontend/ ./
 # Shared JSON tables imported via ../../../shared/*.json (resolves to /app/shared)
 COPY shared/ /app/shared/
+# The mobile app's device mode runs the backend's own route modules, bundled into
+# the frontend by scripts/build-device-backend.mjs, so the build needs their
+# source (and package.json, for the version). Not their dependencies: the bundler
+# resolves those against frontend/node_modules.
+COPY backend/package.json /app/backend/package.json
+COPY backend/src/ /app/backend/src/
 # Build production bundles
 RUN npm run build
 

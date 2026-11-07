@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, lazy, Suspense } from 'react';
-import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords, StickyNote, Package, ListChecks } from 'lucide-react';
+import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords, StickyNote, Package, ListChecks, Smartphone } from 'lucide-react';
 import Login from './components/Login';
 import Logo from './components/Logo';
 import { App as CapacitorApp } from '@capacitor/app';
 import { pushBackGuard } from './utils/useBackGuard';
 import { useT } from './utils/i18n';
-import { isNative } from './apiBase';
+import { isNative, isDeviceMode, setDeviceMode } from './apiBase';
 import { parseOidcReturn, takeVerifier } from './utils/nativeOidc';
 
 // View components are code-split so heavy deps (recharts in the chart views)
@@ -354,9 +354,10 @@ function App() {
   // Offer first-run setup to an admin until it is finished or skipped. The flag
   // lives on the server, so closing the wizard halfway resumes it at the next
   // login on any device; everything it configures is also reachable from Settings
-  // and Admin.
+  // and Admin. Not in device mode: the wizard sets up a server's scan models and
+  // catalogs, and nothing it offers applies to a phone on its own.
   useEffect(() => {
-    if (!user || user.role !== 'admin') return;
+    if (!user || user.role !== 'admin' || isDeviceMode()) return;
     let cancelled = false;
     import('./components/SetupWizard')
       .then(m => m.setupNeeded())
@@ -408,8 +409,19 @@ function App() {
     setUser(newUser);
     localStorage.setItem('bindarr_token', newToken);
     localStorage.setItem('bindarr_user', JSON.stringify(newUser));
-    showToast(t('toast.welcomeBack', { name: newUser.username }));
+    showToast(isDeviceMode() ? t('toast.deviceReady') : t('toast.welcomeBack', { name: newUser.username }));
     setActiveTab('dashboard');
+  };
+
+  // Device mode → back to the login screen to pick a server. The collection stays
+  // in the on-device database, so choosing "This device" again finds it intact.
+  const handleLeaveDevice = () => {
+    setDeviceMode(false);
+    setToken(null);
+    setUser(null);
+    localStorage.removeItem('bindarr_token');
+    localStorage.removeItem('bindarr_user');
+    resetTabs();
   };
 
   const handleLogout = () => {
@@ -450,8 +462,14 @@ function App() {
     return <Login onLoginSuccess={handleLoginSuccess} />;
   }
 
+  // One account and no server: the Admin tab's account, backup and catalog
+  // management have nothing to manage, and its instance settings move into
+  // Settings (see InstanceSettings).
+  const deviceMode = isDeviceMode();
+  const showAdmin = user.role === 'admin' && !deviceMode;
+
   const renderTab = (tab) => {
-    switch (tab) {
+    switch (tab === 'admin' && !showAdmin ? 'dashboard' : tab) {
       case 'dashboard':
         return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
       case 'add-cards':
@@ -491,7 +509,7 @@ function App() {
       case 'sealed':
         return <SealedList showToast={showToast} />;
       case 'settings':
-        return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
+        return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} onLeaveDevice={handleLeaveDevice} />;
       case 'admin':
         return <AdminPanel user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
       default:
@@ -604,8 +622,8 @@ function App() {
             <SettingsIcon size={18} />
             <span className="nav-tab-label">{t('nav.settings')}</span>
           </button>
-          {user.role === 'admin' && (
-            <button 
+          {showAdmin && (
+            <button
               className={`nav-tab ${activeTab === 'admin' ? 'active' : ''}`}
               onClick={() => goTab('admin')}
               aria-label={t('nav.admin')}
@@ -618,19 +636,29 @@ function App() {
         </nav>
 
         <div className="header-actions" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div className="header-greeting" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-            <Sparkles size={14} style={{ color: 'var(--accent-yellow)' }} />
-            <span>{t('header.greeting')} <strong style={{ color: 'var(--text-strong)' }}>{user.username}</strong> ({t(`role.${user.role}`)})</span>
-          </div>
-          <button
-            onClick={handleLogout}
-            className="btn btn-secondary btn-icon-only"
-            title={t('header.logOut')}
-            aria-label={t('header.logOut')}
-            style={{ padding: '0.4rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
-          >
-            <LogOut size={14} />
-          </button>
+          {deviceMode ? (
+            // Nobody to greet and nothing to log out of; say where the data is.
+            <div className="header-greeting" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+              <Smartphone size={14} style={{ color: 'var(--accent-yellow)' }} />
+              <span>{t('header.onDevice')}</span>
+            </div>
+          ) : (
+            <>
+              <div className="header-greeting" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                <Sparkles size={14} style={{ color: 'var(--accent-yellow)' }} />
+                <span>{t('header.greeting')} <strong style={{ color: 'var(--text-strong)' }}>{user.username}</strong> ({t(`role.${user.role}`)})</span>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="btn btn-secondary btn-icon-only"
+                title={t('header.logOut')}
+                aria-label={t('header.logOut')}
+                style={{ padding: '0.4rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
+              >
+                <LogOut size={14} />
+              </button>
+            </>
+          )}
         </div>
       </header>
 

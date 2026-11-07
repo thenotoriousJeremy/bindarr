@@ -352,6 +352,8 @@ async function hasData() {
 }
 
 async function snapshotBeforeMigrating() {
+  // Device mode (embedded/index.js) sets this: a phone has no BACKUP_DIR.
+  if (process.env.BINDARR_SKIP_PRE_MIGRATION_SNAPSHOT === '1') return;
   const { user_version: stored } = await get(`PRAGMA user_version`);
   if (stored === releaseMarker(SCHEMA_RELEASE)) return;
   const from = markerRelease(stored);

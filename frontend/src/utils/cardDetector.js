@@ -14,7 +14,7 @@
 // Why a worker: detection is ~80ms on a desktop and ~300ms on a phone. On the
 // main thread that is a third of a second per frame with no rendering, no touch
 // handling and no animation, which is what made the camera freeze the app.
-import { isNative, getServerUrl } from '../apiBase';
+import { isNative, getServerUrl, isDeviceMode } from '../apiBase';
 import { modelUrl } from './detectorModel.js';
 
 // Matches cornelius's 384x384 input, so the preview frame is fed at the model's
@@ -37,6 +37,14 @@ let dead = false;
 let modelPromise = null;
 
 async function fetchModel() {
+  // Device mode has no server to fetch from: the model is the copy downloaded with
+  // the scan data (src/device/scanAssets.js). Missing, it throws like any failed
+  // fetch, and the worker falls back to the contour detector.
+  if (isDeviceMode()) {
+    const { readBytes } = await import('../device/scanAssets.js');
+    const bytes = await readBytes('cornelius.onnx');
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
   const url = modelUrl(isNative, getServerUrl());
   // Native only: CapacitorHttp bypasses the WebView's HTTP cache, so without this
   // every scanner open re-downloads ~3 MB. The web revalidates through the

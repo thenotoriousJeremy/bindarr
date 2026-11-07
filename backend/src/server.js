@@ -14,18 +14,11 @@ const compression = require('compression');
 const path = require('path');
 const db = require('./db');
 const scryfallApi = require('./scryfallApi');
-const lorcastApi = require('./lorcastApi');
 const backup = require('./backup');
 const { createScheduler } = require('./scheduler');
 const { runPriceSweeps, requestStop: stopPriceSweeps } = require('./utils/priceSweeps');
 const { createShutdown, whenTrue } = require('./utils/shutdown');
 const { serveFrontend } = require('./utils/staticCache');
-
-// Which module owns the Pokémon `sets` table. Asked per call rather than resolved
-// once: the provider is a setting an admin can change while the server is up, and
-// the weekly refresh has to follow it without a restart.
-const pokemonSetSource = async () =>
-  require('./utils/pokemonProvider').apiFor('English');
 
 // Say the provider deprecation out loud at boot, to the installs it applies to.
 //
@@ -58,6 +51,7 @@ const settingsRoutes = require('./routes/settings');
 const notesRoutes = require('./routes/notes');
 const cardArtRoutes = require('./routes/cardArt');
 const sealedRoutes = require('./routes/sealed');
+const backupRoutes = require('./routes/backup');
 const { authenticateToken } = require('./middleware/auth');
 const { startHttps, selfSignedTls } = require('./utils/tls');
 
@@ -223,7 +217,10 @@ app.use(cors({
 // unauthenticated request to those paths is refused before its body is read
 // rather than after 15 MB of it is buffered. Here they are only skipped.
 const BIG_BODY_PATHS = ['/api/import', '/api/scan-match', '/api/search'];
-const isBigBodyPath = (p) => BIG_BODY_PATHS.some(b => p === b || p.startsWith(`${b}/`));
+// A full backup restore (routes/backup.js) can be far larger still; it gets its own
+// limit below the gate, like the paths above.
+const BACKUP_BODY_PATH = '/api/backup';
+const isBigBodyPath = (p) => [...BIG_BODY_PATHS, BACKUP_BODY_PATH].some(b => p === b || p.startsWith(`${b}/`));
 const smallJson = express.json({ limit: '1mb' });
 app.use((req, res, next) => (isBigBodyPath(req.path) ? next() : smallJson(req, res, next)));
 
@@ -259,17 +256,8 @@ async function autoUpdateCatalogs() {
   }
 }
 
-// Every game's set list, in the order startup has always fetched them. Forced,
-// each provider refetches its list; unforced, a provider whose table already has
-// rows skips the request, which is all the boot fill needs. WHICH Pokémon
-// provider fills the `sets` table follows the same setting the cards do — this
-// used to be pokemontcg.io unconditionally, so a TCGdex install browsed a set
-// list numbered by a provider none of its cards came from.
-async function syncSets(force) {
-  await (await pokemonSetSource()).fetchAndCacheSets(force);
-  await scryfallApi.fetchAndCacheSets(force);
-  await lorcastApi.fetchAndCacheSets(force);
-}
+// Every game's set list (utils/syncJobs, shared with device mode's embedded/).
+const { syncSets } = require('./utils/syncJobs');
 
 const HOUR = 60 * 60 * 1000;
 
@@ -526,6 +514,7 @@ app.use('/api/card-art', cardArtRoutes);
 // SELECT — four times per request.
 app.use('/api', authenticateToken);
 app.use(BIG_BODY_PATHS, express.json({ limit: '15mb' }));
+app.use(BACKUP_BODY_PATH, express.json({ limit: '200mb' }));
 
 // --- AUTHENTICATED API ROUTES ---
 app.use('/api', collectionRoutes);
@@ -534,6 +523,7 @@ app.use('/api', statsRoutes);
 app.use('/api', importExportRoutes);
 app.use('/api', notesRoutes);
 app.use('/api', sealedRoutes);
+app.use('/api', backupRoutes);
 app.use('/api/sets', setsRoutes);
 app.use('/api/decks', decksRoutes);
 // Full paths inside (/lists, /decks/:id/missing-list, /cards/:id/decks), like collectionRoutes.

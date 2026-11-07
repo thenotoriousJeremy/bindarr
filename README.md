@@ -38,6 +38,7 @@ Try it without installing anything at **[thenotoriousjeremy.github.io/bindarr](h
 - **Cards in 11 languages** — search, scan and record Japanese, Korean, Chinese, German, French, Spanish, Italian, Portuguese and Russian printings. A copy references the printing it actually is, so it shows the name and artwork on the card while staying searchable by its English name.
 - **Exports and API** — CSV (TCGplayer-compatible) or JSON, plus a read-only API key for reading net worth from elsewhere.
 - **Multi-user** — session-token auth, admin panel for users and roles, optional public share links.
+- **Phone-only option** — the Android and iOS apps can run without any server, keeping the collection on the phone ([Mobile apps](#mobile-apps)).
 - **11 UI languages**, community-translated.
 
 Architecture, the scan pipeline, and the data model are in [PROJECT.md](PROJECT.md).
@@ -218,7 +219,12 @@ The first visit in a browser asks you to create the owner account. The SQLite fi
 
 ### Mobile apps
 
-`Bindarr-Android.apk` is attached to each release (allow "install from unknown sources"). iOS goes out through TestFlight. Both talk to a Bindarr server, so install one of the above first and point the app at it.
+`Bindarr-Android.apk` is attached to each release (allow "install from unknown sources"). iOS goes out through TestFlight.
+
+The sign-in screen asks where Bindarr should run:
+
+- **My server** connects the app to a Bindarr server you run (one of the options above).
+- **This device** needs no server at all. Bindarr runs inside the app and keeps your collection on the phone, with no account to create. Search, collection, storage, decks, notes, stats and prices all work, using the internet only to reach the card databases. Magic and Pokémon cards can be scanned after a one-time download of scan data (about 62 MB for Magic, 21 MB for Pokémon). Share links, multiple accounts and scanning Lorcana cards need a server. Export a full backup from Settings now and then, because the phone holds the only copy; importing that backup on a server later moves the whole collection there. Details are in [MOBILE.md](MOBILE.md#device-mode-no-server).
 
 If your server's certificate comes from your own (private) CA, install that CA certificate on the phone first:
 
@@ -423,7 +429,7 @@ For an off-box copy, stop the container first so the WAL is checkpointed:
 docker run --rm -v bindarr-data:/data -v "$PWD":/backup alpine cp /data/bindarr.db /backup/
 ```
 
-Restore by dropping the file back into the volume with the container stopped. Individual users can also export and re-import their own collection as CSV or JSON from the app.
+Restore by dropping the file back into the volume with the container stopped. Individual users can also export their own account from the app: **Export full backup** (Settings → Collection Backup) holds everything they own — storage and where each copy sits, decks, notes, and the card data behind them — and **Import Backup** restores it, here or on another Bindarr, replacing what the account has. CSV and JSON exports remain for spreadsheets and other apps.
 
 **Lost the admin password?** There's no self-service reset, and `DEFAULT_ADMIN_PASSWORD` will not change an existing account — it is only used when no accounts exist. Delete the database file to start fresh and create the owner account again.
 
