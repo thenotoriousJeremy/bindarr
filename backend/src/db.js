@@ -266,14 +266,23 @@ function hashPassword(password) {
 // quantity above 1 there is a mistake rather than more slabs, and copying it would
 // trip the (grader, cert_number) unique index. It collapses to one copy instead.
 //
-// Runs on every startup. After the first run nothing matches, so it costs one
-// indexed SELECT.
+// Runs on every startup, from initDb, after every column migration — which is
+// what makes copying "every column" mean grading, notes and market value too.
+// This is the only split. server.js used to run a second one straight after
+// initDb, written before those columns existed: it rebuilt each copy from a fixed
+// column list, so a copy came out ungraded, without its notes and value, stamped
+// as added today, and a graded row was duplicated into raw copies of one slab.
+// After the first run nothing matches, so it costs one SELECT.
+//
+// The read is inside the transaction: the server is already taking requests
+// while initDb runs, and a row edited between reading it and splitting it would
+// be split from a quantity it no longer has.
 async function splitStackedRows() {
-  const stacked = await all(`SELECT * FROM collection WHERE quantity > 1`);
-  if (stacked.length === 0) return 0;
-  const cols = (await all(`PRAGMA table_info(collection)`)).map(c => c.name).filter(n => n !== 'id');
-  const placeholders = cols.map(() => '?').join(', ');
-  await withTransaction(async () => {
+  const split = await withTransaction(async () => {
+    const stacked = await all(`SELECT * FROM collection WHERE quantity > 1`);
+    if (stacked.length === 0) return 0;
+    const cols = (await all(`PRAGMA table_info(collection)`)).map(c => c.name).filter(n => n !== 'id');
+    const placeholders = cols.map(() => '?').join(', ');
     for (const row of stacked) {
       if (!row.cert_number) {
         for (let i = 1; i < row.quantity; i++) {
@@ -283,9 +292,10 @@ async function splitStackedRows() {
       }
       await run(`UPDATE collection SET quantity = 1 WHERE id = ?`, [row.id]);
     }
+    return stacked.length;
   });
-  console.log(`Split ${stacked.length} stacked collection row(s) into single copies.`);
-  return stacked.length;
+  if (split) console.log(`Split ${split} stacked collection row(s) into single copies.`);
+  return split;
 }
 
 async function initDb() {
