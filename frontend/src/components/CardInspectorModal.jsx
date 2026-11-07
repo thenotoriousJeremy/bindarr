@@ -165,8 +165,10 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
           // absolute number of copies owned and adds or removes rows to match,
           // and some screens open this popup on a single row whose quantity is
           // not the whole stack — so an untouched field must not be able to
-          // trim copies the user never asked to lose.
-          ...(qNum !== (card.quantity ?? 1) ? { quantity: qNum } : {}),
+          // trim copies the user never asked to lose. With it go the rows the
+          // number on screen stands for (a stacked tile's member_ids, else this
+          // one row), so the server changes those and no others.
+          ...(qNum !== (card.quantity ?? 1) ? { quantity: qNum, stack_entry_ids: card.member_ids || [targetEntryId] } : {}),
           condition,
           printing,
           language,
@@ -205,9 +207,12 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         // The server resolves this per printing on the next fetch; mirror it here so
         // a screen still holding this object does not show the old printing's price.
         card.price_trend = resolveCardPrice(card, printing);
+        const saved = await res.json().catch(() => ({}));
+        // The rows the tile holds now, for a screen that keeps this object (the
+        // scanner's recent strip) and edits it again without a refetch.
+        if (Array.isArray(saved.stack_entry_ids)) card.member_ids = saved.stack_entry_ids;
         // A move into a full container saves everything else and leaves the card
         // where it was, so say that rather than a plain "updated".
-        const saved = await res.json().catch(() => ({}));
         showToast && showToast(t(saved.container_full ? 'inspector.savedContainerFull' : 'inspector.entryUpdated'));
         onUpdate && onUpdate();
         onClose();

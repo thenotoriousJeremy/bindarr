@@ -15,7 +15,7 @@ const { searchLimiter } = require('../middleware/auth');
 const { resolveCardPrice, parseCardRow, recordPrice } = require('../utils/priceHelpers');
 const { parseSetList } = require('../utils/setQuery');
 const { compartmentLabel, isBinderType, rebalanceCompartmentByScheme, stackKey, STACK_KEY_SQL } = require('../utils/compartmentSort');
-const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, setStackQuantity, ownedLocation, ownedCompartment } = require('../utils/collectionHelpers');
+const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, setStackQuantity, setTileQuantity, tileMembers, ownedLocation, ownedCompartment } = require('../utils/collectionHelpers');
 const { validateDeckAddition } = require('../utils/deckRules');
 const { splitPrice } = require('../utils/splitPrice');
 const { allocateSealedUnitCost } = require('../utils/sealedCostAllocation');
@@ -1064,12 +1064,16 @@ router.put('/collection/:id', async (req, res) => {
     const params = [];
 
     // Absolute, not additive: see the reconcile below. Deliberately NOT part of
-    // the UPDATE — setStackQuantity owns the quantity column so the two can
+    // the UPDATE — the reconcile owns the quantity column so the two can
     // never disagree about how many copies the row stands for. Checked before
     // anything below writes: a bad number is refused, not rounded into range.
     const qty = readQuantity(quantity, { fallback: null });
     if (qty.error) return res.status(400).json({ error: qty.error });
     const requestedQty = qty.value;
+    // The copies that number covers when it is a stacked tile's (see
+    // tileMembers), taken from the row as it is now, before the edit changes it.
+    const tile = requestedQty === null ? null : await tileMembers(db, req.user.id, entry, req.body.stack_entry_ids);
+    if (tile && tile.error) return res.status(400).json({ error: tile.error });
     if (condition !== undefined) { updates.push('condition = ?'); params.push(condition); }
     if (printing !== undefined) { updates.push('printing = ?'); params.push(printing); }
     if (language !== undefined) {
@@ -1197,12 +1201,22 @@ router.put('/collection/:id', async (req, res) => {
 
     // Quantity is absolute — it is how many copies the user says they own, and
     // in the stacked collection view the number in the form is the total across
-    // the identical rows, not this row alone. So reconcile the whole stack to
-    // it, up or down. It used to only ever insert (quantity - 1) extra rows,
+    // the rows of the tile, not this row alone. So reconcile the whole stack to
+    // it, up or down: the tile's rows when the popup named them, else the
+    // identical rows. It used to only ever insert (quantity - 1) extra rows,
     // which made lowering the number a no-op and made every save duplicate the
     // entry instead of editing it.
+    //
+    // One transaction, so two saves of the same stack at once cannot both count
+    // the copies before either has trimmed, and trim twice.
+    let tileIds;
     if (requestedQty !== null) {
-      const changed = await setStackQuantity(db, req.user.id, id, requestedQty);
+      const changed = await db.withTransaction(async () => {
+        if (!tile) return setStackQuantity(db, req.user.id, id, requestedQty);
+        const result = await setTileQuantity(db, req.user.id, id, requestedQty, tile.ids);
+        tileIds = result.ids;
+        return result.change;
+      });
       if (changed !== 0) {
         const row = await db.get(`SELECT compartment_id, location_id FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
         if (row && row.compartment_id && row.location_id) {
@@ -1213,7 +1227,7 @@ router.put('/collection/:id', async (req, res) => {
     }
 
     const finalPlacement = isMoving && finalCompartmentId ? await describePlacement(db, id, req.user.id) : null;
-    res.json({ message: 'Collection entry updated successfully', placement: finalPlacement, container_full: resolvedFull, rule_rejected: resolvedRejected });
+    res.json({ message: 'Collection entry updated successfully', placement: finalPlacement, container_full: resolvedFull, rule_rejected: resolvedRejected, stack_entry_ids: tileIds });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to update entry' });

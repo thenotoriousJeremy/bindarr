@@ -159,6 +159,21 @@ async function runTests() {
       assert.strictEqual(row.compartment_id, bobBox.compId);
       assert.strictEqual(row.location_id, bobBox.locId);
     });
+
+    // F9-TC6: a quantity edit on a stacked tile works on the rows the tile names,
+    // and naming someone else's copies there reaches none of them.
+    await step('F9-TC6', async () => {
+      let res = await put(bobCopy, { quantity: 1, stack_entry_ids: [bobCopy, bobLoose, aliceCopy] });
+      assert.strictEqual(res.status, 200, await res.text());
+      assert.deepStrictEqual(await rowOf(aliceCopy), aliceBefore, "Alice's copy was not trimmed from Bob's tile");
+      assert.strictEqual(await rowOf(bobLoose), undefined, "Bob's own tile shrank to the one copy");
+      res = await put(bobCopy, { quantity: 3, stack_entry_ids: [bobCopy, aliceCopy] });
+      assert.strictEqual(res.status, 200);
+      const body = await res.json();
+      assert.strictEqual(body.stack_entry_ids.length, 3);
+      assert.ok(!body.stack_entry_ids.includes(aliceCopy));
+      assert.strictEqual((await db.get(`SELECT COUNT(*) AS n FROM collection WHERE user_id = ?`, [aliceId])).n, 1);
+    });
   } finally {
     try { server.kill('SIGKILL'); } catch {}
     try {

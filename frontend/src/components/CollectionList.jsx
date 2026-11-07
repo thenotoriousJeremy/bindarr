@@ -7,6 +7,7 @@ import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } fro
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { useMultiSelect } from '../utils/useMultiSelect';
+import { stackCollectionRows } from '../utils/stackTiles';
 import { defaultGameFilter, gameOptions, isGameEnabled, showGamePicker } from '../utils/games';
 import { useT } from '../utils/i18n';
 import CardInspectorModal from './CardInspectorModal';
@@ -338,23 +339,11 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     return result;
   }, [collection, searchFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter, sealedLinkFilter, favoriteOnly, graderFilter, minPriceFilter, maxPriceFilter, notCheckedOutOnly, sortBy, setsList]);
 
-  // Group duplicate cards if stack option is active
+  // Group duplicate cards if stack option is active. Each tile keeps the ids of
+  // the rows it stands for, which is what a quantity edit in the popup works on.
   const processedCollection = useMemo(() => {
     if (!stackCards) return filteredCollection;
-
-    const groups = {};
-    filteredCollection.forEach(item => {
-      let key = item.card_id;
-      if (stackByCondition) key += `-${item.condition}`;
-      if (stackByPrinting) key += `-${item.printing}`;
-
-      if (!groups[key]) {
-        groups[key] = { ...item };
-      } else {
-        groups[key].quantity += item.quantity;
-      }
-    });
-    return Object.values(groups);
+    return stackCollectionRows(filteredCollection, { byCondition: stackByCondition, byPrinting: stackByPrinting });
   }, [filteredCollection, stackCards, stackByCondition, stackByPrinting]);
 
   // In select mode, render the unstacked list so every entry is individually
