@@ -27,7 +27,7 @@ const axios = require('axios');
 const db = require('./db');
 const { recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
 const { normId, normName, fold } = require('./utils/setCatalogueMatch');
-const { slimResults } = require('./utils/tcgcsvSlim');
+const { slimResults, SEALED_ONLY_CATEGORY } = require('./utils/tcgcsvSlim');
 
 const API_BASE_URL = (process.env.TCGCSV_BASE_URL || 'https://tcgcsv.com').replace(/\/+$/, '');
 const TCGCSV_403_COOLDOWN_HOURS = 24;
@@ -41,12 +41,17 @@ const TCGCSV_PENDING_MAX_AGE_HOURS = 24;
 // Verified against the live endpoint, not guessed.
 const CATEGORY = { english: 3, japanese: 85 };
 
-// The TCGplayer categories the daily sync mirrors. Only what something reads:
-// every reader today is Pokémon (3 and 85). This is the ONE place to extend —
-// a feature that needs Magic (1) or Lorcana (71) adds the category here, and
-// adds any fields it reads to utils/tcgcsvSlim.js. Each category costs
+// The TCGplayer categories the daily sync mirrors. Only what something reads.
+// This is the ONE place to extend: a feature that needs a new category adds it
+// here, and adds any fields it reads to utils/tcgcsvSlim.js. Each category costs
 // 1 + 2 x (its group count) requests per sync.
-const SYNC_CATEGORIES = Object.values(CATEGORY);
+//
+//   3, 85  Pokémon (English, Japanese): the price sweep, the scan product map,
+//          and sealed product.
+//   1, 71  Magic, Lorcana: sealed product only (the sealed inventory's catalog
+//          and market value). utils/tcgcsvSlim.js keeps only their sealed
+//          products and those products' prices, never their cards.
+const SYNC_CATEGORIES = [...Object.values(CATEGORY), ...Object.values(SEALED_ONLY_CATEGORY)];
 
 // TCGCSV rejects a request with no identifying User-Agent — a 401 with a note
 // asking you to say who you are. That is a reasonable ask of a free mirror, so the
@@ -231,7 +236,7 @@ async function cachedResults(path, dataVersion) {
 // as empty and the sync carries on — otherwise a single permanently broken group
 // would keep the version from ever completing. Anything else (network, 5xx, 403)
 // throws, and the next tick resumes from what is already stored.
-async function syncResults(path, dataVersion, { perGroup = false } = {}) {
+async function syncResults(path, dataVersion, { perGroup = false, keepProductIds = null } = {}) {
   const existing = await db.get(
     `SELECT results_json FROM tcgcsv_cache WHERE path = ? AND data_version = ?`,
     [path, dataVersion]
@@ -241,7 +246,7 @@ async function syncResults(path, dataVersion, { perGroup = false } = {}) {
   let results;
   try {
     const { data } = await pacedGet(path);
-    results = slimResults(path, parseResults(path, data));
+    results = slimResults(path, parseResults(path, data), { keepProductIds });
   } catch (error) {
     if (!perGroup || !isPermanentGroupFailure(error)) throw error;
     console.warn(`TCGCSV: recording ${path} as empty for ${dataVersion}: ${error.message}`);
@@ -334,8 +339,11 @@ async function runSync() {
 
   for (const categoryId of SYNC_CATEGORIES) {
     for (const group of groupsByCategory[categoryId]) {
-      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/products`, dataVersion, { perGroup: true });
-      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/prices`, dataVersion, { perGroup: true });
+      const products = await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/products`, dataVersion, { perGroup: true });
+      // A sealed-only category keeps the prices of the products it kept and no
+      // card prices (utils/tcgcsvSlim.js); elsewhere the set is ignored.
+      const keepProductIds = new Set(products.map(p => p.productId));
+      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/prices`, dataVersion, { perGroup: true, keepProductIds });
     }
   }
 
@@ -765,6 +773,7 @@ module.exports = {
   categoryFor,
   setsToPrice,
   SYNC_CATEGORIES,
+  SEALED_ONLY_CATEGORY,
   syncIfUpdated,
   syncIfUpdatedSafely,
   updateCollectionPrices,

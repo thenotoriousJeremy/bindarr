@@ -34,8 +34,8 @@ let last = null;
 // category already used for its TCGplayer product linkage in lorcastApi.js.
 const SEALED_CATEGORIES = {
   pokemon: Object.values(tcgcsv.CATEGORY),
-  mtg: [1],
-  lorcana: [71],
+  mtg: [tcgcsv.SEALED_ONLY_CATEGORY.mtg],
+  lorcana: [tcgcsv.SEALED_ONLY_CATEGORY.lorcana],
 };
 
 // Games whose carded (numbered) products are kept in the map, not just sealed.

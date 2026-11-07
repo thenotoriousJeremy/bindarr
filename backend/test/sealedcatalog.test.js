@@ -60,6 +60,17 @@ async function main() {
 
   const realGetGroups = tcgcsv.getGroups;
   const realGetProducts = tcgcsv.getProducts;
+  // start() runs the daily sync first. Stubbed so this test never contacts
+  // tcgcsv.com, and so the build is shown to read only the cached getters.
+  const realSync = tcgcsv.syncIfUpdated;
+  const realSyncSafely = tcgcsv.syncIfUpdatedSafely;
+  let syncCalls = 0;
+  tcgcsv.syncIfUpdated = async () => { syncCalls++; return { updated: false }; };
+  tcgcsv.syncIfUpdatedSafely = async () => { syncCalls++; return { updated: false }; };
+  const realAdapter = tcgcsv.client.defaults.adapter;
+  tcgcsv.client.defaults.adapter = async (config) => {
+    throw new Error(`sealedcatalog.test must not make a TCGCSV request (${config.url})`);
+  };
   // The Pokémon build asks TCGdex for its Japanese set list; offline, it is empty.
   const tcgdexApi = require('../src/tcgdexApi');
   const realListSets = tcgdexApi.listSets;
@@ -103,9 +114,13 @@ async function main() {
     // An unsupported game must fail loudly rather than silently building nothing.
     assert.throws(() => productMap.start('yugioh'), /no TCGplayer category known/);
     console.log('PASS: starting a build for an unmapped game is rejected, not silently ignored');
+    assert.ok(syncCalls >= 3, 'every build runs the (stubbed) daily sync before reading the cache');
   } finally {
     tcgcsv.getGroups = realGetGroups;
     tcgcsv.getProducts = realGetProducts;
+    tcgcsv.syncIfUpdated = realSync;
+    tcgcsv.syncIfUpdatedSafely = realSyncSafely;
+    tcgcsv.client.defaults.adapter = realAdapter;
     tcgdexApi.listSets = realListSets;
   }
 

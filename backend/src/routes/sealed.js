@@ -290,7 +290,18 @@ router.post('/sealed/purchases/:id/refresh-value', async (req, res) => {
     );
     if (!product) return res.status(404).json({ error: 'Sealed product is not in the mapped catalog' });
 
-    const prices = await tcgcsv.getPrices(product.category_id, product.group_id);
+    // The local TCGCSV cache only (filled by the daily sync, which keeps sealed
+    // product prices for every synced category). Never a live request, and never
+    // a sync from this request path.
+    let prices;
+    try {
+      prices = await tcgcsv.getPrices(product.category_id, product.group_id);
+    } catch (error) {
+      if (tcgcsv.isCacheMissError(error)) {
+        return res.status(503).json({ error: 'TCGCSV prices have not been synced yet' });
+      }
+      throw error;
+    }
     const rows = prices.filter(row => Number(row.productId) === Number(purchase.product_id));
     const market = rows.find(row => Number(row.marketPrice) > 0)?.marketPrice
       ?? rows.find(row => Number(row.midPrice) > 0)?.midPrice;
@@ -305,7 +316,7 @@ router.post('/sealed/purchases/:id/refresh-value', async (req, res) => {
     const updated = await db.get(`SELECT market_value, market_value_source, market_value_at FROM sealed_purchases WHERE id = ?`, [purchase.id]);
     res.json({ ...updated });
   } catch (error) {
-    fail(res, error, 502, 'Failed to refresh sealed product market value');
+    fail(res, error, 500, 'Failed to refresh sealed product market value');
   }
 });
 
