@@ -38,8 +38,8 @@ test('formatPrice: formats numbers and handles edge cases', () => {
 test('formatPrice: the reader\'s notation for the locale given', () => {
   assert.equal(formatPrice(1234.5, 'en'), '1,234.50');
   assert.equal(formatPrice(1234.5, 'de'), '1.234,50');
-  assert.equal(formatPrice(1234.5, 'fr'), '1 234,50');
-  assert.equal(formatPrice(1234.5, 'ru'), '1 234,50');
+  assert.equal(formatPrice(1234.5, 'fr'), '1\u202f234,50');
+  assert.equal(formatPrice(1234.5, 'ru'), '1\u00a0234,50');
   assert.equal(formatPrice(1234.5, 'pt-BR'), '1.234,50');
   assert.equal(formatPrice(1234.5, 'ja'), '1,234.50');
   assert.equal(formatPrice('4.5', 'de'), '4,50');
@@ -58,7 +58,7 @@ test('priceText: active interface locale for the number, row currency for the sy
     assert.equal(priceText(4.5, 'EUR'), '€4,50');
     assert.equal(formatPrice(4.5), '4,50', 'no locale passed: the interface language');
     setActiveLocale('fr');
-    assert.equal(priceText(1234.5, 'GBP'), '£1 234,50');
+    assert.equal(priceText(1234.5, 'GBP'), '£1\u202f234,50');
   } finally {
     setActiveLocale('en');
   }
