@@ -5,7 +5,7 @@ const { parseCardRow, recordPrice } = require('../utils/priceHelpers');
 const { compartmentLabel } = require('../utils/compartmentSort');
 const { validateDeckAddition } = require('../utils/deckRules');
 const scryfallApi = require('../scryfallApi');
-const { parseManaboxText } = require('../utils/csvMappers');
+const { parseManaboxText, parseDecklistLine } = require('../utils/csvMappers');
 
 const router = express.Router();
 
@@ -90,13 +90,17 @@ router.post('/', async (req, res) => {
       } else {
         const lines = decklist_text.split('\n');
         for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          const match = trimmed.match(/^(\d+)x?\s+(.+)$/i);
-          if (match) {
-            const qty = parseInt(match[1], 10);
-            const cardName = match[2].trim();
-            const card = await db.get(`SELECT id FROM card_cache WHERE LOWER(name) = LOWER(?) AND game = ? LIMIT 1`, [cardName, deckGame]);
+          // The name without the set code, collector number and *F* marker an
+          // MTG Arena or Moxfield line carries: with them it matched no card.
+          const parsed = parseDecklistLine(line);
+          if (parsed && parsed.quantity > 0) {
+            const qty = parsed.quantity;
+            // The printing the line names, when it is cached; else any by name.
+            const card = (parsed.set_code && parsed.collector_number && await db.get(
+              `SELECT id FROM card_cache WHERE game = ? AND LOWER(set_id) = LOWER(?) AND number = ?
+               ORDER BY language = 'English' DESC LIMIT 1`,
+              [deckGame, parsed.set_code, parsed.collector_number]
+            )) || await db.get(`SELECT id FROM card_cache WHERE LOWER(name) = LOWER(?) AND game = ? LIMIT 1`, [parsed.name, deckGame]);
             if (card) {
               await db.run(
                 `INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, ?, ?) ON CONFLICT(deck_id, card_id) DO UPDATE SET quantity = quantity + EXCLUDED.quantity`,
