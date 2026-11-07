@@ -1,3 +1,7 @@
+// Each server this suite starts gets a fresh database, which would otherwise run a
+// full TCGCSV sync (~800 requests) at boot.
+process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
+
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
