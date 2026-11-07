@@ -353,9 +353,10 @@ async function hasData() {
 
 async function snapshotBeforeMigrating() {
   const { user_version: stored } = await get(`PRAGMA user_version`);
-  if (stored === releaseMarker(SCHEMA_RELEASE) || !(await hasData())) return;
+  if (stored === releaseMarker(SCHEMA_RELEASE)) return;
   const from = markerRelease(stored);
   try {
+    if (!(await hasData())) return;
     const snap = await require('./backup').createPreMigrationBackup({ from, to: SCHEMA_RELEASE });
     console.log(snap.reused
       ? `Pre-migration snapshot for ${from || 'an unversioned database'} -> ${SCHEMA_RELEASE} already taken: ${snap.file}.`
