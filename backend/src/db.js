@@ -1342,6 +1342,25 @@ async function initDb() {
   }
   await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oidc_sub ON users(oidc_sub) WHERE oidc_sub IS NOT NULL`);
 
+  // Session tokens are stored as their SHA-256 (utils/authHelpers.hashSessionToken),
+  // so a copy of this file holds nothing that signs anyone in. Rows from before
+  // that hold the token itself; hash them in place so nobody is signed out by the
+  // upgrade. The 'sha256:' prefix is what marks a row as done, so this is a no-op
+  // after the first start -- and a row an older build writes after a downgrade is
+  // picked up on the next upgrade instead of silently never matching. Hashed here
+  // in JS because SQLite has no SHA-256; it must stay the same digest as
+  // hashSessionToken (sessions.test.js holds the two together).
+  const unhashedSessions = await all(`SELECT token FROM sessions WHERE token NOT LIKE 'sha256:%'`);
+  if (unhashedSessions.length) {
+    await withTransaction(async () => {
+      for (const { token } of unhashedSessions) {
+        const hashed = `sha256:${crypto.createHash('sha256').update(String(token)).digest('hex')}`;
+        await run(`UPDATE OR REPLACE sessions SET token = ? WHERE token = ?`, [hashed, token]);
+      }
+    });
+    console.log(`Hashed ${unhashedSessions.length} stored session token(s).`);
+  }
+
   const deckCardsCols = await all(`PRAGMA table_info(deck_cards)`);
   if (!deckCardsCols.some(c => c.name === 'checked_out')) {
     await run(`ALTER TABLE deck_cards ADD COLUMN checked_out INTEGER DEFAULT 0`);

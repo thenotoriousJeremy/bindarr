@@ -2,7 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
 const { authenticateToken, authLimiter } = require('../middleware/auth');
-const { verifyPassword, generateSession } = require('../utils/authHelpers');
+const { verifyPassword, generateSession, revokeSessions } = require('../utils/authHelpers');
 const oidc = require('../utils/oidc');
 
 const router = express.Router();
@@ -384,12 +384,11 @@ router.post('/login', authLimiter, async (req, res) => {
 
 // Logout user
 router.post('/logout', authenticateToken, async (req, res) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
   try {
-    if (token) {
-      await db.run(`DELETE FROM sessions WHERE token = ?`, [token]);
+    // The session this request came in on. Stored hashed, so it is the hash the
+    // middleware already computed that names the row.
+    if (req.sessionTokenHash) {
+      await db.run(`DELETE FROM sessions WHERE token = ?`, [req.sessionTokenHash]);
     }
     res.json({ message: 'Logged out successfully' });
   } catch (error) {
@@ -451,6 +450,10 @@ router.put('/settings', authenticateToken, async (req, res) => {
       }
       const newHash = db.hashPassword(password);
       await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, req.user.id]);
+      // A password change is often because the old one got out, and whoever had it
+      // may hold a session made with it. Sign out every other device; this one
+      // stays, since it has just proved it knows the password.
+      await revokeSessions(req.user.id, { exceptTokenHash: req.sessionTokenHash });
     }
 
     if (share_enabled !== undefined) {

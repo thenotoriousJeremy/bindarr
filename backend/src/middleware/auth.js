@@ -1,5 +1,6 @@
 const rateLimit = require('express-rate-limit');
 const db = require('../db');
+const { hashSessionToken } = require('../utils/authHelpers');
 
 async function authenticateToken(req, res, next) {
   let token = null;
@@ -15,12 +16,15 @@ async function authenticateToken(req, res, next) {
   try {
     const columns = `u.username, u.role, u.share_token, u.share_enabled, u.share_locations,
                      u.tcg_api_key, u.psa_api_token, u.graded_price_api_key, u.api_key, u.oidc_sub`;
+    // Sessions are stored hashed (authHelpers.hashSessionToken), so it is the
+    // hash that is looked up -- the stored value itself is not a credential.
+    const tokenHash = hashSessionToken(token);
     let session = await db.get(`
       SELECT s.user_id, ${columns}
       FROM sessions s
       JOIN users u ON s.user_id = u.id
       WHERE s.token = ? AND s.expires_at > DATETIME('now')
-    `, [token]);
+    `, [tokenHash]);
 
     // Not a session? It may be an API key — a long-lived credential for scripts
     // and dashboards (issue #33). What makes that safe to hand out is the GET-only
@@ -54,6 +58,10 @@ async function authenticateToken(req, res, next) {
       oidc_sub: session.oidc_sub || null,
       via_api_key: viaApiKey
     };
+    // Which session this is, for the routes that end it (logout) or keep it while
+    // ending the others (a password change). Beside req.user, not in it, because
+    // req.user is what GET /me serializes. Null for an API key, which has none.
+    req.sessionTokenHash = viaApiKey ? null : tokenHash;
     next();
   } catch (error) {
     console.error(error);

@@ -23,6 +23,7 @@ const db = require('../src/db');
 const { resolveCardPrice } = require('../src/utils/priceHelpers');
 const gradedPrices = require('../src/gradedPrices');
 const { authenticateToken } = require('../src/middleware/auth');
+const { hashSessionToken } = require('../src/utils/authHelpers');
 
 // Recorded from the live API. Two shapes matter and both appear here: an exact
 // `tcgPlayerId` lookup answers with `data` as a single OBJECT, a search answers
@@ -122,8 +123,8 @@ async function runAuth(token, method = 'GET') {
   // A session token still authenticates a write — the API-key branch must not have
   // swallowed the normal path.
   await db.run(
-    `INSERT INTO sessions (user_id, token, expires_at) VALUES (?, 'session-token', DATETIME('now', '+1 day'))`,
-    [user.id]
+    `INSERT INTO sessions (user_id, token, expires_at) VALUES (?, ?, DATETIME('now', '+1 day'))`,
+    [user.id, hashSessionToken('session-token')]
   );
   const sessionWrite = await runAuth('session-token', 'POST');
   assert.ok(sessionWrite.passed, 'a real session still writes');

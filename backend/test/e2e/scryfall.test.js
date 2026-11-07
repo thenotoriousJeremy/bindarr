@@ -32,6 +32,7 @@ function isPortFree(port) {
 
 const projectRoot = path.join(__dirname, '../../../');
 const db = require('../../src/db');
+const { hashSessionToken } = require('../../src/utils/authHelpers');
 
 async function waitForServer(port) {
   const url = `http://localhost:${port}/api/health`;
@@ -110,7 +111,7 @@ async function runTests() {
     expiresAt.setDate(expiresAt.getDate() + 1);
     await db.run(
       `INSERT OR REPLACE INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`,
-      [token, adminId, expiresAt.toISOString()]
+      [hashSessionToken(token), adminId, expiresAt.toISOString()]
     );
 
     const authHeaders = { 'Authorization': `Bearer ${token}` };

@@ -7,6 +7,7 @@ const catalog = require('../catalog');
 const { parseCardRow } = require('../utils/priceHelpers');
 const languages = require('../utils/languages');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { revokeSessions } = require('../utils/authHelpers');
 const { BACKUP_DIR, listBackups, createBackup, resolveBackupFile } = require('../backup');
 
 const router = express.Router();
@@ -231,11 +232,17 @@ router.put('/users/:id', async (req, res) => {
     }
 
     if (password !== undefined) {
-      if (password.length < 8) {
+      if (typeof password !== 'string' || password.length < 8) {
         return res.status(400).json({ error: 'Password must be at least 8 characters' });
       }
       const newHash = db.hashPassword(password);
       await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, id]);
+      // A reset happens because the old password was forgotten or got out, so
+      // every session made with it goes too. An admin resetting their OWN password
+      // here keeps the session doing it, the same as a change from Settings.
+      await revokeSessions(targetUser.id, {
+        exceptTokenHash: targetUser.id === req.user.id ? req.sessionTokenHash : null
+      });
     }
 
     if (role !== undefined) {

@@ -21,6 +21,7 @@ process.env.DB_PATH = tmpDb;
 const express = require('express');
 const db = require('../src/db');
 const oidc = require('../src/utils/oidc');
+const { hashSessionToken } = require('../src/utils/authHelpers');
 
 const servers = [];
 
@@ -206,7 +207,7 @@ async function testFlowThroughRouter() {
   assert(body.token, 'exchange must return a session token');
   assert.strictEqual(typeof body.user.username, 'string');
   assert('share_token' in body.user && 'api_key' in body.user, 'user payload must match POST /login');
-  const session = await db.get(`SELECT user_id FROM sessions WHERE token = ?`, [body.token]);
+  const session = await db.get(`SELECT user_id FROM sessions WHERE token = ?`, [hashSessionToken(body.token)]);
   const owner = await db.get(`SELECT id, username FROM users WHERE oidc_sub = ?`, ['native-user-1']);
   assert(session && owner && session.user_id === owner.id, 'the session must belong to the SSO user');
   assert.strictEqual(body.user.username, owner.username);

@@ -20,6 +20,7 @@ const base = `http://localhost:${port}`;
 
 const projectRoot = path.join(__dirname, '../../../');
 const db = require('../../src/db');
+const { hashSessionToken } = require('../../src/utils/authHelpers');
 
 async function waitForServer() {
   for (let i = 0; i < 150; i++) {
@@ -58,7 +59,7 @@ async function createMember(username) {
 async function sessionHeaders(userId) {
   const token = crypto.randomBytes(24).toString('hex');
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  await db.run(`INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`, [token, userId, expiresAt.toISOString()]);
+  await db.run(`INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`, [hashSessionToken(token), userId, expiresAt.toISOString()]);
   return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
 }
 
