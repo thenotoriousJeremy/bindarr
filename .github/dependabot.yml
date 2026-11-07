@@ -1,0 +1,78 @@
+# Weekly dependency updates for the three npm packages (root, backend, frontend
+# are separate lockfiles, not a workspace), the workflows' actions, and the
+# Docker base images.
+#
+# Minor and patch bumps arrive as ONE grouped pull request per package, so a
+# quiet week is one PR to review rather than twenty. Majors arrive one per PR,
+# because each can break something on its own.
+#
+# A new release waits a week before it is proposed: a compromised or broken
+# version is usually pulled within days, and nothing here needs a dependency on
+# its first day. Neither the grouping nor the wait applies to security updates,
+# which (once enabled in the repository's settings) open as soon as an advisory
+# lands.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+        # The native modules get a PR each, so the image smoke test in
+        # docker-build.yml judges each on its own. sharp is 0.x, where a
+        # "minor" bump is a breaking one.
+        exclude-patterns: [sharp, sqlite3, onnxruntime-node]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      # core, cli and the platforms are meant to move in lockstep (cap sync
+      # warns when they disagree), so they come as one PR of their own.
+      capacitor:
+        patterns: ['@capacitor/*']
+        update-types: [minor, patch]
+      minor-and-patch:
+        update-types: [minor, patch]
+        exclude-patterns: ['@capacitor/*']
+    ignore:
+      # A Capacitor major means migrating the committed native projects under
+      # frontend/android and frontend/ios, which a version bump cannot do. Those
+      # are done by hand.
+      - dependency-name: '@capacitor/*'
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  # node:<major>-slim / node:<major>-alpine float on the major, so every image
+  # build already picks up that line's patches; what this proposes is the next
+  # major. Accepting one means moving the workflows' node-version and the docs
+  # (AGENTS.md, README, PROJECT.md) in the same PR — the Dockerfile is only one of
+  # the places the version lives.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

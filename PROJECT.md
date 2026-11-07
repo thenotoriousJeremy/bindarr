@@ -76,7 +76,8 @@ frontend/
     device/                Device mode runtime; generated/ holds the bundled backend (build-device-backend.mjs)
     components/            One component per screen/widget (see Frontend section)
     utils/                 Pure helpers: sorting, pricing, printing/rarity styling, language, shuffle
-Dockerfile, docker-compose.yml, .github/workflows/docker-build.yml   Container build + CI publish to GHCR
+Dockerfile, docker-compose.yml, .github/workflows/docker-build.yml   Container build + smoke test + CI publish to GHCR
+.github/workflows/test.yml, audit.yml, .github/dependabot.yml        Test gate on every PR, dependency audit, weekly update PRs
 ```
 
 Regenerable/large artifacts live in `backend/data/models` (the two ONNX files and

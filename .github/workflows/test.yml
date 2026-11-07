@@ -1,0 +1,109 @@
+name: Tests
+
+# Every suite `npm test` runs locally, on every pull request and every push to
+# main. Before this, CI ran the backend tests and the frontend lint (inside the
+# Docker workflow) and the locale checker (only on locale-only pull requests);
+# the frontend utility tests and the frontend build ran nowhere before merge.
+#
+# Each job installs only its own package. No scan models or catalogs exist on a
+# runner, which is the state of a fresh install: model-dependent unit tests skip,
+# and /api/scan-match answers 503 notBuilt (asserted in test/e2e/malformed.test.js).
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the older run's answer irrelevant.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend unit + e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install
+        id: install
+        working-directory: backend
+        run: npm ci
+      - name: Unit tests
+        working-directory: backend
+        run: npm run test:unit
+      # Runs even when a unit test failed, so one failure does not hide the e2e
+      # verdict — the same rule `npm test` follows locally.
+      - name: E2E tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: backend
+        run: npm run test:e2e
+
+  frontend:
+    name: Frontend tests, lint, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        id: install
+        working-directory: frontend
+        run: npm ci
+      - name: Utility tests and locale check
+        working-directory: frontend
+        run: npm test
+      - name: Lint (warnings fail)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: frontend
+        run: npm run lint
+      - name: Build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: frontend
+        run: npm run build
+
+  # Translation pull requests touch only frontend/src/locales, and the translator
+  # should not wait on an install and a build to learn their file is fine (see
+  # docs/TRANSLATING.md). The checker needs nothing but Node, so it answers in
+  # seconds. This was its own workflow (locales.yml); the frontend job above runs
+  # the same check as part of `npm test`.
+  locales:
+    name: Translations
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check locale files against en.json
+        working-directory: frontend
+        run: npm run check:locales
+
+  # The TCGCSV mirror's sync script lives at the repo root and its workflow is
+  # dispatch-only, so nothing else tests it before merge. Offline and
+  # fixture-backed; needs no install.
+  mirror:
+    name: TCGCSV mirror script
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test sync script
+        run: npm run test:mirror
