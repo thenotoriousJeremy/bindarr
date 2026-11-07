@@ -117,7 +117,11 @@ async function resolveCompartmentAndPosition(arg1, locationId, cardId, userId) {
   }
 
   const recommended = await recommendSlot(dbClient, location, cardMetadata);
-  if (!recommended) return null;
+  // No room anywhere the card may go. An object, not null: every caller reads
+  // .compartment_id straight off the result, so null made a full binder a 500
+  // (this was { full: true } until d0ee430). The caller leaves the card unsorted
+  // and reports container_full.
+  if (!recommended) return { compartment_id: null, position: 0, full: true };
   return { compartment_id: recommended.compartment_id, position: recommended.position, location_id: recommended.location_id, label: recommended.label };
 }
 

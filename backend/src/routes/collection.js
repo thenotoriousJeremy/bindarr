@@ -1007,7 +1007,7 @@ router.put('/collection/:id', async (req, res) => {
     const entry = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!entry) return res.status(404).json({ error: 'Collection entry not found' });
 
-    const isMoving = location_id !== undefined && location_id !== entry.location_id;
+    let isMoving = location_id !== undefined && location_id !== entry.location_id;
     let finalCompartmentId = entry.compartment_id;
     let finalLocationId = entry.location_id;
     let finalPosition = entry.position;
@@ -1027,11 +1027,17 @@ router.put('/collection/:id', async (req, res) => {
           printing: printing !== undefined ? printing : entry.printing,
           language: language !== undefined ? language : entry.language
         });
-        finalCompartmentId = resolved.compartment_id;
-        finalLocationId = resolved.compartment_id ? (resolved.location_id ?? location_id) : null;
-        finalPosition = resolved.position;
-        resolvedFull = !!resolved.full;
-        resolvedRejected = !!resolved.rejected;
+        if (resolved.full) {
+          // No room there. The copy stays where it is rather than being pulled
+          // out of its slot into Unsorted; container_full says why it did not move.
+          resolvedFull = true;
+          isMoving = false;
+        } else {
+          finalCompartmentId = resolved.compartment_id;
+          finalLocationId = resolved.compartment_id ? (resolved.location_id ?? location_id) : null;
+          finalPosition = resolved.position;
+          resolvedRejected = !!resolved.rejected;
+        }
       }
     } else if (compartment_id !== undefined) {
       finalCompartmentId = compartment_id;
@@ -1548,6 +1554,7 @@ router.post('/collection/bulk', async (req, res) => {
       if (!loc) return res.status(400).json({ error: 'Invalid location ID' });
     }
     let moved = 0;
+    let noRoom = 0;
     const touched = new Map();
     for (const id of ids) {
       const entry = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
@@ -1560,6 +1567,8 @@ router.post('/collection/bulk', async (req, res) => {
       const resolved = await resolveCompartmentAndPosition({
         locationId, userId: req.user.id, cardId: entry.card_id, printing: entry.printing, language: entry.language
       });
+      // The container filled up part way through: the rest stay where they are.
+      if (resolved.full) { noRoom++; continue; }
       const finalLoc = resolved.compartment_id ? (resolved.location_id ?? locationId) : null;
       await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`, [finalLoc, resolved.compartment_id, resolved.position, id, req.user.id]);
       if (resolved.compartment_id) touched.set(resolved.compartment_id, finalLoc);
@@ -1569,7 +1578,11 @@ router.post('/collection/bulk', async (req, res) => {
       const rbLoc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [locId, req.user.id]);
       if (rbLoc) await rebalanceCompartmentByScheme(db, compId, rbLoc.sort_order, rbLoc.foil_sorting);
     }
-    return res.json({ message: `Moved ${moved} card(s)`, affected: moved });
+    return res.json({
+      message: noRoom ? `Moved ${moved} card(s); ${noRoom} did not fit because the container is full` : `Moved ${moved} card(s)`,
+      affected: moved,
+      container_full: noRoom > 0
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Bulk action failed' });

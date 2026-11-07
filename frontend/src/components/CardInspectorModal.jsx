@@ -205,7 +205,10 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         // The server resolves this per printing on the next fetch; mirror it here so
         // a screen still holding this object does not show the old printing's price.
         card.price_trend = resolveCardPrice(card, printing);
-        showToast && showToast(t('inspector.entryUpdated'));
+        // A move into a full container saves everything else and leaves the card
+        // where it was, so say that rather than a plain "updated".
+        const saved = await res.json().catch(() => ({}));
+        showToast && showToast(t(saved.container_full ? 'inspector.savedContainerFull' : 'inspector.entryUpdated'));
         onUpdate && onUpdate();
         onClose();
       } else {
