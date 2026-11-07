@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
+import { getNav } from './router';
 
 // Make the back gesture (browser edge-swipe, Android system back) mean
 // "close the topmost popup / go back a level" instead of leaving the page or
@@ -17,25 +18,17 @@ import { App as CapacitorApp } from '@capacitor/app';
 // so it would exit the app instead of firing popstate. We bridge that below via
 // @capacitor/app's backButton event, routing it through the same guard stack.
 
-const stack = []; // { close } entries, topmost last
-let ignorePops = 0; // pops we triggered ourselves (programmatic close)
-let listening = false;
+// The stack itself, and the history bookkeeping that keeps Forward from acting
+// like Back when guards are stacked, live in utils/navHistory.js, shared with the
+// app's URL routes (utils/router.js).
 
-function onPopState() {
-  if (ignorePops > 0) {
-    ignorePops--;
-    return;
-  }
-  const entry = stack.pop();
-  if (entry) entry.close(); // its guard state was just consumed by this back
-}
-
-// Capacitor Android: drive the hardware back button through the guard stack.
-// If anything is open, step back one history entry (fires popstate -> closes
-// the topmost overlay/tab); otherwise let the app exit.
+// Capacitor Android: drive the hardware back button through the same history.
+// If there is anywhere to go back to -- an open popup, or an earlier tab or deck
+// -- step back one entry (fires popstate -> closes the topmost popup / shows the
+// previous view); otherwise let the app exit.
 if (Capacitor.isNativePlatform()) {
   CapacitorApp.addListener('backButton', () => {
-    if (stack.length > 0) window.history.back();
+    if (getNav().canGoBack()) window.history.back();
     else CapacitorApp.exitApp();
   });
 }
@@ -44,21 +37,7 @@ if (Capacitor.isNativePlatform()) {
 // leaving the page / exiting the app. Returns a disposer that removes the
 // guard and consumes its history entry (for programmatic close via button).
 export function pushBackGuard(onClose) {
-  if (!listening) {
-    window.addEventListener('popstate', onPopState);
-    listening = true;
-  }
-  const entry = { close: onClose };
-  stack.push(entry);
-  window.history.pushState({ backGuard: true }, '');
-
-  return () => {
-    const i = stack.indexOf(entry);
-    if (i === -1) return; // already popped by a back gesture
-    stack.splice(i, 1);
-    ignorePops++;
-    window.history.back();
-  };
+  return getNav().pushGuard(onClose);
 }
 
 export function useBackGuard(isOpen, onClose) {

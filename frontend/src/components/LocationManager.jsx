@@ -22,6 +22,7 @@ import { isDeviceMode } from '../apiBase';
 import { artPocketsByPage } from '../utils/binderArtGeometry';
 import VirtualGrid from './VirtualGrid';
 import { useBackGuard } from '../utils/useBackGuard';
+import { useTabParam, setTabParam } from '../utils/router';
 import { useT } from '../utils/i18n';
 import { apiErrorText } from '../utils/apiError';
 
@@ -124,7 +125,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   useBackGuard(!!rulesComp, () => setRulesComp(null));
   useBackGuard(showRulesModal, () => setShowRulesModal(false));
   useBackGuard(!!capacityUpdatePending, () => setCapacityUpdatePending(null));
-  useBackGuard(!!selectedLocationId, () => setSelectedLocationId && setSelectedLocationId(null));
   const [compRuleDraft, setCompRuleDraft] = useState([]);
 
   const [unsortedSearch, setUnsortedSearch] = useState('');
@@ -403,6 +403,33 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLocationId]);
+
+  // The open container is mirrored in the URL (/storage/:id) so a reload or a
+  // link reopens it. Switching containers replaces the entry rather than
+  // stacking one per container: Back leaves Storage.
+  const routeLocationId = useTabParam('storage');
+  const routedLocationRef = useRef(null);
+  useEffect(() => {
+    if (routeLocationId == null || String(activeLocationId) === routeLocationId) return;
+    routedLocationRef.current = Number(routeLocationId);
+    setActiveLocationId(Number(routeLocationId));
+    setMobilePane('container');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeLocationId]);
+  useEffect(() => {
+    if (activeLocationId == null || String(activeLocationId) === routeLocationId) return;
+    setTabParam('storage', activeLocationId, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeLocationId]);
+  // A link to a container that is gone (or not yours) falls back to the first.
+  // Only for ids the URL supplied: one just created is set before the list
+  // reloads, and must not be taken for a dead link.
+  useEffect(() => {
+    if (activeLocationId != null && activeLocationId === routedLocationRef.current
+      && locations.length > 0 && !locations.some(l => l.id === activeLocationId)) {
+      setActiveLocationId(locations[0].id);
+    }
+  }, [locations, activeLocationId]);
 
   useEffect(() => {
     // App clears the request when you leave this tab (the tab stays mounted), so

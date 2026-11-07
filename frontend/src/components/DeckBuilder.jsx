@@ -7,6 +7,7 @@ import CheckoutWizardModal from './CheckoutWizardModal';
 import ScryfallSyntaxHelp from './ScryfallSyntaxHelp';
 import { syntaxErrorText } from '../utils/scryfallSyntax';
 import { useBackGuard } from '../utils/useBackGuard';
+import { useTabParam, setTabParam } from '../utils/router';
 import { buildDeckExport, parseDeckLine, pickDeckLineCard } from '../utils/deckText';
 import { buildMassEntry, massEntryPage } from '../utils/tcgMassEntryUrl';
 import { defaultGame, gameOptions, showGamePicker, LEGACY_GAME } from '../utils/games';
@@ -86,7 +87,12 @@ function DeckBuilder({ showToast }) {
   const [decks, setDecks] = useState([]);
   const [activeDeck, setActiveDeck] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [decksLoaded, setDecksLoaded] = useState(false);
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'detail'
+  // The open deck is in the URL (/decks/:id), so Back/Forward, a reload and a
+  // link all open it; the list's clicks and the close button only change the URL.
+  const deckParam = useTabParam('deckbuilder');
+  const openDeck = (id) => setTabParam('deckbuilder', id);
   
   // Deck View & Display Modes
   const [cardDisplayMode, setCardDisplayMode] = useState('list'); // 'list' | 'grid'
@@ -166,13 +172,31 @@ function DeckBuilder({ showToast }) {
 
   useBackGuard(showCreateModal, () => setShowCreateModal(false));
   useBackGuard(showSimulator, () => setShowSimulator(false));
-  useBackGuard(!!activeDeck, () => setActiveDeck(null));
   useBackGuard(!!deckDraft, () => setDeckDraft(null));
 
   useEffect(() => {
     fetchDecks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Waits for the deck list, which carries the checkout status loadDeckDetails
+  // merges in. A deck that will not load (deleted, someone else's) closes again.
+  useEffect(() => {
+    if (!decksLoaded) return;
+    if (deckParam == null) {
+      if (viewMode === 'detail') {
+        setViewMode('list');
+        setActiveDeck(null);
+        fetchDecks();
+      }
+      return;
+    }
+    if (viewMode === 'detail' && activeDeck && String(activeDeck.id) === deckParam) return;
+    loadDeckDetails(Number(deckParam)).then(ok => {
+      if (!ok) setTabParam('deckbuilder', null, { replace: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deckParam, decksLoaded]);
 
   const fetchDecks = async () => {
     try {
@@ -187,6 +211,7 @@ function DeckBuilder({ showToast }) {
       showToast(t('deck.errLoadDecks'));
     } finally {
       setLoading(false);
+      setDecksLoaded(true);
     }
   };
 
@@ -295,10 +320,13 @@ function DeckBuilder({ showToast }) {
         // Default the card search to this deck's game.
         setDeckSearchGame(data.game || 'pokemon');
         setViewMode('detail');
+        return true;
       }
+      return false;
     } catch (err) {
       console.error(err);
       showToast(t('deck.errLoadDetails'));
+      return false;
     } finally {
       setLoading(false);
     }
@@ -1155,7 +1183,7 @@ function DeckBuilder({ showToast }) {
                         ? 'linear-gradient(145deg, rgba(211,32,42,0.06), rgba(15,23,42,0.65))'
                         : 'linear-gradient(145deg, rgba(234,179,8,0.06), rgba(15,23,42,0.65))'
                     }}
-                    onClick={() => loadDeckDetails(deck.id)}
+                    onClick={() => openDeck(deck.id)}
                     onMouseEnter={e => {
                       e.currentTarget.style.transform = 'translateY(-3px)';
                       e.currentTarget.style.boxShadow = `0 12px 30px ${accentColor}25`;
@@ -1325,7 +1353,7 @@ function DeckBuilder({ showToast }) {
                         <button
                           className="btn btn-primary"
                           style={{ padding: '0.3rem 0.65rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
-                          onClick={(e) => { e.stopPropagation(); loadDeckDetails(deck.id); }}
+                          onClick={(e) => { e.stopPropagation(); openDeck(deck.id); }}
                         >
                           Open <ArrowRight size={12} />
                         </button>
@@ -1372,7 +1400,7 @@ function DeckBuilder({ showToast }) {
                       <tr
                         key={deck.id}
                         style={{ borderBottom: '1px solid var(--border-glass)', cursor: 'pointer', transition: 'background 0.15s' }}
-                        onClick={() => loadDeckDetails(deck.id)}
+                        onClick={() => openDeck(deck.id)}
                         onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
                         onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                       >
@@ -1455,7 +1483,7 @@ function DeckBuilder({ showToast }) {
                                 {t('deck.checkout')}
                               </button>
                             )}
-                            <button className="btn btn-primary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }} onClick={() => loadDeckDetails(deck.id)}>
+                            <button className="btn btn-primary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }} onClick={() => openDeck(deck.id)}>
                               {t('deck.open')}
                             </button>
                             <button className="btn btn-danger btn-icon-only" style={{ padding: '0.25rem' }} onClick={() => handleDeleteDeck(deck.id, deck.name)}>
@@ -1544,7 +1572,7 @@ function DeckBuilder({ showToast }) {
             ) : null}
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <button className="btn btn-secondary btn-icon-only" onClick={() => { setViewMode('list'); fetchDecks(); }} style={{ borderRadius: '50%' }}>
+              <button className="btn btn-secondary btn-icon-only" onClick={() => openDeck(null)} style={{ borderRadius: '50%' }}>
                 <ChevronLeft size={16} />
               </button>
               <div>

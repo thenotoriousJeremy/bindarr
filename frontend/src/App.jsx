@@ -3,7 +3,7 @@ import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, 
 import Login from './components/Login';
 import Logo from './components/Logo';
 import { App as CapacitorApp } from '@capacitor/app';
-import { pushBackGuard } from './utils/useBackGuard';
+import { useRouteSync, goToTab, initialTab } from './utils/router';
 import { useT } from './utils/i18n';
 import { useStableCallback } from './utils/useStableCallback';
 import { clearApiCache } from './utils/useApi';
@@ -143,7 +143,8 @@ function App() {
   // this copy.
   const [user, setUser] = useState(() => loadStoredUser());
 
-  const [activeTab, setActiveTab] = useState('dashboard');
+  // Follows the URL (utils/router.js); a reload lands back on the same tab.
+  const [activeTab, setActiveTab] = useState(initialTab);
   // First-run scanning setup. Asked once per session, only for an admin, and only
   // while it is genuinely incomplete — setupNeeded() reads the same endpoints the
   // wizard does so there is one definition of 'set up'.
@@ -157,8 +158,6 @@ function App() {
   // new object per click, so reopening the same set still reaches the tab.
   const [focusSet, setFocusSet] = useState(null);
   const [offline, setOffline] = useState(isOffline);
-
-  const tabGuardRef = useRef(null);
 
   // Every tab opened this session stays mounted (hidden when inactive), so its
   // filters, search, open deck/container and inner scroll boxes are still there
@@ -197,23 +196,13 @@ function App() {
     scrollByTabRef.current = {};
   };
 
-  // Navigate tabs through here so each change pushes a history entry: a back
-  // gesture then returns to the PREVIOUS tab (not always dashboard), and modals
-  // stack their own guards on top. We never dispose the old tab guard — each
-  // switch pushes a fresh entry so the back button walks through tab history.
-  // Disposing with history.back() would race during rapid switches and navigate
-  // the browser past the app origin into about:blank.
+  // Navigate tabs through here: it pushes the tab's URL, so Back and Forward walk
+  // tab history, and useRouteSync below then shows the tab.
   // Stable identity (as are showToast and triggerRefresh): the tabs are
   // memoized, and a toast appearing re-renders App, which must not re-render
   // a 20,000-card grid through a handler prop that merely looks new.
   const goTab = useStableCallback((tab) => {
-    if (tab === activeTab) return;
-    const prev = activeTab;
-    tabGuardRef.current = pushBackGuard(() => {
-      tabGuardRef.current = null;
-      showTab(prev);
-    });
-    showTab(tab);
+    if (tab !== activeTab) goToTab(tab);
   });
   const openSet = useCallback((target) => { setFocusSet({ ...target }); goTab('sets'); }, [goTab]);
 
@@ -227,6 +216,8 @@ function App() {
     const id = new URLSearchParams(window.location.search).get('container');
     return /^\d+$/.test(id || '') ? id : null;
   });
+
+  useRouteSync({ enabled: !shareToken, signedIn: !!(token && user), activeTab, showTab });
 
   // showToast(message) for a note; showToast(message, { onAction, actionLabel })
   // adds a button (Undo by default) and keeps the toast up long enough to use it.
