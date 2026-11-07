@@ -344,6 +344,18 @@ Owned and decked cards have their prices re-fetched automatically, and only wher
 
 Daily is what the free providers publish, so leave it there unless you have a reason. Turn it down if you are on a provider that charges per card refreshed, or if you have a very large collection and only look at its value occasionally. **Never** stops automatic refreshes entirely; prices already stored stay as they are.
 
+### TCGCSV mirror (not live yet)
+
+Pokémon TCGplayer prices come from [TCGCSV](https://tcgcsv.com), a free service run by one person. Every install syncing from it separately adds up, so the project is preparing a single shared copy instead: one scheduled job syncs TCGCSV's Pokémon data (categories 3 and 85) once a day, politely, and publishes it with TCGCSV's own path layout to the `tcgcsv-mirror` branch of this repository.
+
+**It is not switched on yet** — it waits on the TCGCSV maintainer's approval. Once it is live, an install on a release that supports `TCGCSV_BASE_URL` can read from it instead of tcgcsv.com:
+
+```sh
+TCGCSV_BASE_URL=https://raw.githubusercontent.com/thenotoriousJeremy/bindarr/tcgcsv-mirror
+```
+
+Set it in the server's environment or Docker Compose, not in the browser app. Until this section says the mirror is live, leave the variable unset. The sync script and workflow are `scripts/tcgcsv-mirror/sync.mjs` and `.github/workflows/tcgcsv-mirror.yml`.
+
 ## API access
 
 For reading your collection from somewhere else — a finance tracker, a dashboard widget, a script — generate a key under **Settings → API Keys** and send it as a Bearer token:
