@@ -10,6 +10,7 @@ import { parseOidcReturn, takeVerifier } from './utils/nativeOidc';
 import { isSessionExpired } from './utils/sessionExpiry';
 import { loadStoredUser, saveStoredUser } from './utils/storedUser';
 import { readOidcCode } from './utils/webOidc';
+import { clearOfflineData, isOffline, isWriteMethod, noteApiResponse, noteApiUnreachable, offlineWriteResponse, setWriteBlockedText, subscribeOffline } from './utils/offline';
 
 // View components are code-split so heavy deps (recharts in the chart views)
 // load on demand instead of in the initial bundle.
@@ -81,6 +82,15 @@ window.fetch = function (input, options = {}) {
   const url = typeof input === 'string' ? input : (input && input.url) || '';
   const isPublicOrAuthRoute = url.includes('/api/shared/') || url.includes('/api/auth/login') || url.includes('/api/auth/register') || url.includes('/api/auth/bootstrap') || url.includes('/api/auth/oidc/exchange');
 
+  const isApi = url.startsWith('/api/');
+  const write = isApi && isWriteMethod(options.method || (input && input.method));
+  // Read-only while offline (utils/offline.js): refuse the write up front with a
+  // message the view can show, rather than a network error it can only guess at.
+  if (write && isOffline()) {
+    window.dispatchEvent(new Event('bindarr_offline_write'));
+    return Promise.resolve(offlineWriteResponse());
+  }
+
   const token = localStorage.getItem('bindarr_token');
   const finalOptions = { ...options };
   if (token && url.startsWith('/api/') && !isPublicOrAuthRoute) {
@@ -90,6 +100,7 @@ window.fetch = function (input, options = {}) {
     };
   }
   return originalFetch(input, finalOptions).then(response => {
+    if (isApi) noteApiResponse(response);
     if (response.status === 401 && !isPublicOrAuthRoute) {
       // Only the auth gate's "this session is gone" signs out -- not every 401
       // (utils/sessionExpiry). Read off a clone, so the caller still gets the body.
@@ -98,6 +109,12 @@ window.fetch = function (input, options = {}) {
       });
     }
     return response;
+  }, err => {
+    if (!isApi) throw err;
+    noteApiUnreachable();
+    if (!write) throw err;
+    window.dispatchEvent(new Event('bindarr_offline_write'));
+    return offlineWriteResponse();
   });
 };
 
@@ -128,6 +145,7 @@ function App() {
   // The set the Sets tab should open, from the dashboard's set-progress list. A
   // new object per click, so reopening the same set still reaches the tab.
   const [focusSet, setFocusSet] = useState(null);
+  const [offline, setOffline] = useState(isOffline);
 
   const tabGuardRef = useRef(null);
 
@@ -376,6 +394,15 @@ function App() {
     return () => { cancelled = true; };
   }, [user]);
 
+  // Offline banner, and the message a refused write carries (utils/offline.js).
+  useEffect(() => subscribeOffline(setOffline), []);
+  useEffect(() => {
+    setWriteBlockedText(t('offline.writeBlocked'));
+    const onBlocked = () => setToast(t('offline.writeBlocked'));
+    window.addEventListener('bindarr_offline_write', onBlocked);
+    return () => window.removeEventListener('bindarr_offline_write', onBlocked);
+  }, [t]);
+
   // Handle automatic logout on 401
   useEffect(() => {
     const handleAutoLogout = () => {
@@ -383,6 +410,7 @@ function App() {
       setUser(null);
       localStorage.removeItem('bindarr_token');
       localStorage.removeItem('bindarr_user');
+      clearOfflineData();
       resetTabs();
       showToast(t('toast.sessionExpired'));
     };
@@ -460,6 +488,8 @@ function App() {
     setUser(null);
     localStorage.removeItem('bindarr_token');
     localStorage.removeItem('bindarr_user');
+    // The last account's collection must not stay readable offline.
+    clearOfflineData();
     resetTabs();
     showToast(t('toast.loggedOut'));
   };
@@ -707,6 +737,10 @@ function App() {
           )}
         </div>
       </header>
+
+      {offline && (
+        <div className="offline-banner" role="status">{t('offline.banner')}</div>
+      )}
 
       {/* Main Content Area */}
       <main style={{ flex: 1, marginTop: '1rem' }}>
