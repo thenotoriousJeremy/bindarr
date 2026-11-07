@@ -130,11 +130,12 @@ async function main() {
     ]
   });
   assert.strictEqual(res.status, 200, JSON.stringify(res.body));
-  assert.strictEqual(res.body.count, 9999 + 1 + 2);
-  assert.strictEqual(res.body.clamped, 2);
-  assert.match(res.body.message, /2 rows had a quantity outside 1–9999/);
+  assert.strictEqual(res.body.count, 9999 + 2);
+  assert.strictEqual(res.body.clamped, 1);
+  assert.match(res.body.message, /1 row had a quantity outside 1–9999/);
+  assert.match(res.body.message, /1 row with a quantity of 0 \(or none readable\) was skipped/);
   assert.strictEqual(await copiesOf('mtg-a'), 9999, 'a huge count is cut to the most one row may ask for');
-  assert.strictEqual(await copiesOf('mtg-b'), 1, 'a negative one is one copy');
+  assert.strictEqual(await copiesOf('mtg-b'), 0, 'a row with fewer than one copy names a card the file does not own, so it is skipped');
 
   await db.run(`DELETE FROM collection`);
   res = await call(base, 'POST', '/api/import', {

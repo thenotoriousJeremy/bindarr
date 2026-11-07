@@ -51,6 +51,34 @@ async function testManaBoxDeckCreation() {
     assert.strictEqual(imported.reduce((sum, card) => sum + card.quantity, 0), expected.reduce((sum, card) => sum + card.quantity, 0));
     assert.deepStrictEqual(imported.find(card => card.name === 'Zoraline, Cosmos Caller'), { name: 'Zoraline, Cosmos Caller', quantity: 1 });
     assert.deepStrictEqual(imported.find(card => card.name === 'Plains'), { name: 'Plains', quantity: 8 });
+
+    // A plain decklist pasted from MTG Arena, Moxfield or XMage. Its set codes,
+    // collector numbers and *F* markers used to be read as part of the name, so
+    // those lines matched nothing and the deck came up short without a word.
+    for (const [id, name, set, number] of [
+      ['mtg-sol-c21', 'Sol Ring', 'c21', '263'],
+      ['mtg-sol-ltc', 'Sol Ring', 'ltc', '3'],
+      ['mtg-transmuter', 'Master Transmuter', 'plst', 'CON-31'],
+      ['mtg-bolt', 'Lightning Bolt', 'm10', '146'],
+    ]) {
+      await db.run(`INSERT INTO card_cache (id, name, set_id, number, game, language) VALUES (?, ?, ?, ?, 'mtg', 'English')`,
+        [id, name, set, number]);
+    }
+    await createDeck({
+      body: {
+        name: 'Pasted', game: 'mtg', decklist_format: 'plain',
+        decklist_text: '1 Sol Ring (C21) 263 *F*\n1 Master Transmuter (PLST) CON-31\n4 [M10:146] Lightning Bolt\n2 Lightning Bolt\n0 Counterspell',
+      },
+      user: { id: 1 }
+    }, res);
+    assert.strictEqual(res.statusCode, 201);
+    assert.deepStrictEqual(await db.all(
+      `SELECT card_id, quantity FROM deck_cards WHERE deck_id = ? ORDER BY card_id`, [res.body.id]
+    ), [
+      { card_id: 'mtg-bolt', quantity: 6 },
+      { card_id: 'mtg-sol-c21', quantity: 1 },      // the printing the line names, not just any Sol Ring
+      { card_id: 'mtg-transmuter', quantity: 1 },
+    ]);
   } finally {
     scryfallApi.bulkFetchByIdentifier = originalBulkFetch;
     scryfallApi.cacheCards = originalCacheCards;

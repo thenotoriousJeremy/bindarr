@@ -22,6 +22,10 @@ const MTG_COLOR_FG = {
   White: '#3a3520', Blue: '#fff', Black: '#fff', Red: '#fff', Green: '#fff'
 };
 
+// "Change printing" renders this many printings at a time. Sol Ring and the basic
+// lands have hundreds, and every tile is an image request.
+const PRINTINGS_PAGE = 60;
+
 function getSlotNumber(c) {
   if (!c) return null;
   if (c.slot != null) return c.slot;
@@ -65,6 +69,11 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
   // Other printings of this card, for re-filing a copy saved under the wrong set.
   const [printings, setPrintings] = useState(null);
   const [findingPrintings, setFindingPrintings] = useState(false);
+  // How many of them are rendered, a set/number filter over them, and how many
+  // exist when the server stopped short of all of them.
+  const [printingsShown, setPrintingsShown] = useState(PRINTINGS_PAGE);
+  const [printingsFilter, setPrintingsFilter] = useState('');
+  const [printingsTotal, setPrintingsTotal] = useState(null);
   const hasToggledRef = useRef(false);
 
   useBackGuard(isFullScreen, () => setIsFullScreen(false));
@@ -335,8 +344,14 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         scope: 'internet',
       });
       const res = await fetch(`/api/search?${p.toString()}`);
-      const found = (res.ok ? await res.json() : [])
-        .filter(c => c.id !== activeCard.card_id && sameName(c, activeCard));
+      const all = res.ok ? await res.json() : [];
+      const found = all.filter(c => c.id !== activeCard.card_id && sameName(c, activeCard));
+      // The server pages through about a thousand printings at most; past that
+      // the list is not every printing, and it says so.
+      const total = parseInt(res.headers.get('X-Total-Count'), 10);
+      setPrintingsTotal(Number.isFinite(total) && total > all.length ? total : null);
+      setPrintingsShown(PRINTINGS_PAGE);
+      setPrintingsFilter('');
       if (found.length === 0) showToast && showToast(t('scan.noOtherPrintings'));
       setPrintings(found.length ? found : null);
     } catch {
@@ -394,6 +409,10 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
   // only caught up after a save and a refetch, which reads as "prices don't
   // respond to the foil type". Same resolution order as the server.
   const displayPrice = resolveCardPrice(activeCard, printing);
+
+  const printingsQuery = printingsFilter.trim().toLowerCase();
+  const visiblePrintings = (printings || []).filter(p => !printingsQuery
+    || [p.set_name, p.set_id, p.number].some(v => String(v || '').toLowerCase().includes(printingsQuery)));
 
   return (
     <div className="modal-overlay" style={{
@@ -800,13 +819,29 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               {printings ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                    {t('scan.allPrintings', { n: printings.length, name: activeCard.name })}
+                    {printingsTotal
+                      ? t('inspector.printingsCapped', { n: printings.length, total: printingsTotal, name: activeCard.name })
+                      : t('scan.allPrintings', { n: printings.length, name: activeCard.name })}
                   </div>
+                  {printings.length > PRINTINGS_PAGE && (
+                    <input
+                      type="search"
+                      className="input-control"
+                      value={printingsFilter}
+                      onChange={(e) => { setPrintingsFilter(e.target.value); setPrintingsShown(PRINTINGS_PAGE); }}
+                      placeholder={t('inspector.filterPrintings')}
+                      aria-label={t('inspector.filterPrintings')}
+                      style={{ fontSize: '0.75rem', padding: '0.35rem 0.5rem' }}
+                    />
+                  )}
+                  {visiblePrintings.length === 0 && (
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{t('scan.noSetMatches')}</div>
+                  )}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '0.6rem', maxHeight: '280px', overflowY: 'auto', padding: '0.25rem' }}>
-                    {printings.map(p => (
+                    {visiblePrintings.slice(0, printingsShown).map(p => (
                       <div key={p.id} className="tcg-card" onClick={() => handleChangePrinting(p)} style={{ cursor: 'pointer' }}>
                         <div className="tcg-card-inner" style={{ border: '1px solid var(--border-glass-hover)' }}>
-                          <CardImage card={p} className="tcg-card-image" />
+                          <CardImage card={p} className="tcg-card-image" loading="lazy" decoding="async" />
                         </div>
                         <div className="tcg-card-info" style={{ textAlign: 'center', marginTop: '0.35rem' }}>
                           <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>#{p.number}</div>
@@ -816,6 +851,11 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                       </div>
                     ))}
                   </div>
+                  {visiblePrintings.length > printingsShown && (
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPrintingsShown(n => n + PRINTINGS_PAGE)}>
+                      {t('scan.seeMoreMatches', { n: Math.min(PRINTINGS_PAGE, visiblePrintings.length - printingsShown) })}
+                    </button>
+                  )}
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPrintings(null)}>{t('common.cancel')}</button>
                 </div>
               ) : (

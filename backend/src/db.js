@@ -49,15 +49,36 @@ if (!fs.existsSync(dbDir)) {
 const dbPath = resolveDbPath(requestedDbPath);
 
 console.log(`Connecting to SQLite database at: ${dbPath}`);
+// Settles once the connection is open AND configured. initDb awaits it first.
+//
+// A connection that failed to open does not fail the queries queued on it —
+// sqlite3 drops them, so initDb's promise never settled and the server sat
+// listening, answering 503 forever. And the PRAGMAs are run one after another,
+// each waited for, before initDb's first statement: sqlite3 runs statements in
+// parallel, and a read still mid-step when the switch to WAL lands fails it with
+// "cannot change into wal mode from within a transaction" — fired without a
+// callback, that was an uncaught error event, which ends the process. The busy
+// timeout goes first so the switch waits out another connection's lock rather
+// than failing on it.
+let settleOpen;
+const opened = new Promise((resolve, reject) => { settleOpen = (err) => (err ? reject(err) : resolve()); });
+opened.catch(() => {});   // initDb reports it; never an unhandled rejection on its own
 const dbConnection = new sqlite3.Database(dbPath, (err) => {
   if (err) {
     console.error('Error opening database:', err.message);
-  } else {
-    console.log('Database connection established successfully.');
-    dbConnection.run('PRAGMA foreign_keys = ON');
-    dbConnection.run('PRAGMA journal_mode = WAL');
-    dbConnection.run('PRAGMA busy_timeout = 5000');
+    return settleOpen(err);
   }
+  console.log('Database connection established successfully.');
+  const pragmas = ['PRAGMA busy_timeout = 5000', 'PRAGMA foreign_keys = ON', 'PRAGMA journal_mode = WAL'];
+  const next = (i) => {
+    if (i === pragmas.length) return settleOpen();
+    dbConnection.run(pragmas[i], (pragmaErr) => {
+      if (!pragmaErr) return next(i + 1);
+      console.error(`Error configuring database (${pragmas[i]}):`, pragmaErr.message);
+      settleOpen(pragmaErr);
+    });
+  };
+  next(0);
 });
 
 // --- Connection lock --------------------------------------------------------
@@ -298,7 +319,65 @@ async function splitStackedRows() {
   return split;
 }
 
+// --- PRE-MIGRATION SNAPSHOT ---
+// initDb's migrations are idempotent and mostly additive, but they run against
+// the only copy of someone's collection, and one of them drops tables. So before
+// a DIFFERENT release migrates a database that holds data, it is snapshotted
+// (backup.createPreMigrationBackup: same atomic, verified write as every backup).
+//
+// "A different release" is one pragma read. PRAGMA user_version records the
+// release that last completed initDb on this file, as major*1e6 + minor*1e3 +
+// patch — it was unused (0) until now, so every existing install takes one
+// snapshot on its first boot of this code. Keyed to the release rather than to a
+// schema number someone has to remember to bump: every release that ships a
+// migration has a new version, and dev restarts on the same version cost nothing.
+const SCHEMA_RELEASE = require('../package.json').version;
+
+function releaseMarker(version) {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(version || ''));
+  return m ? Number(m[1]) * 1e6 + Number(m[2]) * 1e3 + Number(m[3]) : 0;
+}
+const markerRelease = (marker) => (marker > 0
+  ? `${Math.floor(marker / 1e6)}.${Math.floor(marker / 1e3) % 1e3}.${marker % 1e3}`
+  : null);
+
+// Anything worth keeping? A brand-new file has no tables, and a database whose
+// tables are all empty has nothing to lose.
+async function hasData() {
+  const tables = await all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`);
+  for (const { name } of tables) {
+    if (await get(`SELECT 1 AS present FROM "${name.replace(/"/g, '""')}" LIMIT 1`)) return true;
+  }
+  return false;
+}
+
+async function snapshotBeforeMigrating() {
+  const { user_version: stored } = await get(`PRAGMA user_version`);
+  if (stored === releaseMarker(SCHEMA_RELEASE)) return;
+  const from = markerRelease(stored);
+  try {
+    if (!(await hasData())) return;
+    const snap = await require('./backup').createPreMigrationBackup({ from, to: SCHEMA_RELEASE });
+    console.log(snap.reused
+      ? `Pre-migration snapshot for ${from || 'an unversioned database'} -> ${SCHEMA_RELEASE} already taken: ${snap.file}.`
+      : `Pre-migration snapshot taken before upgrading ${from || 'an unversioned database'} -> ${SCHEMA_RELEASE}: ${snap.file} (${snap.size} bytes).`);
+  } catch (err) {
+    // Carry on, loudly. Refusing to start would turn a full disk or an unwritable
+    // BACKUP_DIR into an outage, with a restart loop and no way into the admin
+    // page to download the backups that already exist; the migrations are
+    // additive and each statement is atomic. The rotating backups are untouched.
+    console.error('==================================================================');
+    console.error(`PRE-MIGRATION SNAPSHOT FAILED: ${err.message}`);
+    console.error(`Upgrading ${from || 'an unversioned database'} -> ${SCHEMA_RELEASE} WITHOUT a fresh snapshot.`);
+    console.error('Check BACKUP_DIR and free disk space. Existing backups are untouched.');
+    console.error('==================================================================');
+  }
+}
+
 async function initDb() {
+  await opened;
+  await snapshotBeforeMigrating();
+
   const existingCollectionCols = await all(`PRAGMA table_info(collection)`).catch(() => []);
   if (existingCollectionCols.some(c => c.name === 'sub_location_1')) {
     console.log('Resetting locations/collection tables for the new compartment-based storage schema...');
@@ -1203,6 +1282,21 @@ async function initDb() {
     await run(`ALTER TABLE locations ADD COLUMN page_columns INTEGER`);
   }
 
+  // When each background job last ran (scheduler.js). The weekly set refresh and
+  // the daily backup used to live on in-memory timers that every restart reset,
+  // so an install that updates weekly never refreshed its sets and one that
+  // restarts daily never backed up. One row per job name; last_run_at is when the
+  // most recent finished run started, last_status 'ok', 'error' or 'baseline'
+  // (a clock started without a run, see scheduler.js).
+  await run(`
+    CREATE TABLE IF NOT EXISTS job_runs (
+      name TEXT PRIMARY KEY,
+      last_run_at DATETIME,
+      last_status TEXT,
+      last_error TEXT
+    )
+  `);
+
   await splitStackedRows();
 
   // --- PERFORMANCE INDEXES ---
@@ -1262,6 +1356,10 @@ async function initDb() {
     await adoptOrphanRows(adminId);
     await seedStarterLocations(adminId);
   }
+
+  // Last: this release has now brought the file up to date. Not written when a
+  // step above throws, so the next boot still knows the migration is unfinished.
+  await run(`PRAGMA user_version = ${releaseMarker(SCHEMA_RELEASE)}`);
 }
 
 // Cards and locations from before multi-user carry `user_id IS NULL`. They belong

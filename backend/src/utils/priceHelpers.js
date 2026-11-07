@@ -208,6 +208,7 @@ module.exports = {
   parseSqliteUtc,
   shouldSweepPrices,
   markPricesSwept,
+  SWEEP_COLUMN,
   priceRefreshDays,
   DEFAULT_PRICE_REFRESH_DAYS,
   PRICE_SWEEP_INTERVAL_MS,
