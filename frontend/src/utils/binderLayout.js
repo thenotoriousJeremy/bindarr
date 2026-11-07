@@ -1,3 +1,5 @@
+import { stackPocketCards } from './stackTiles.js';
+
 // How wide a binder page is drawn, in pockets.
 //
 // Pocket pages are sold in a handful of fixed layouts, and they are landscape
@@ -47,4 +49,38 @@ export function pageGrid(capacity, override) {
   const cap = Math.max(1, parseInt(capacity, 10) || 1);
   const columns = pageColumns(cap, override);
   return { columns, rows: Math.ceil(cap / columns) };
+}
+
+// One page's cards in pocket order, null for an empty pocket. A card sits in the
+// pocket its position names (position = slot * 1000); one without a usable
+// position, or whose pocket is already taken, goes in the first free pocket. A
+// page holding more than its capacity grows past it rather than hiding cards.
+export function layoutPockets(cards, capacity, allowStacking = false) {
+  const pocketCards = allowStacking ? stackPocketCards(cards) : cards;
+  let maxSlotFromCards = capacity || 1;
+  pocketCards.forEach(c => {
+    if (c && c.position > 0) {
+      const s = Math.floor(c.position / 1000);
+      if (s > maxSlotFromCards) maxSlotFromCards = s;
+    }
+  });
+  const slotCount = Math.max(capacity || 1, maxSlotFromCards);
+  const pockets = new Array(slotCount).fill(null);
+  const unplaced = [];
+
+  pocketCards.forEach(c => {
+    const slot = (c && c.position > 0) ? Math.floor(c.position / 1000) : null;
+    if (slot && slot >= 1 && slot <= slotCount && !pockets[slot - 1]) {
+      pockets[slot - 1] = c;
+    } else {
+      unplaced.push(c);
+    }
+  });
+
+  unplaced.forEach(c => {
+    const freeIdx = pockets.findIndex(p => p === null);
+    if (freeIdx !== -1) pockets[freeIdx] = c;
+    else pockets.push(c);
+  });
+  return pockets;
 }

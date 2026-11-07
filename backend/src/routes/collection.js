@@ -17,6 +17,7 @@ const { parseSetList } = require('../utils/setQuery');
 const { compartmentLabel, isBinderType, rebalanceCompartmentByScheme, stackKey, STACK_KEY_SQL } = require('../utils/compartmentSort');
 const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, setStackQuantity, setTileQuantity, tileMembers, ownedLocation, ownedCompartment } = require('../utils/collectionHelpers');
 const { validateDeckAddition } = require('../utils/deckRules');
+const { syncDeckAllocation } = require('../utils/deckAllocation');
 const { splitPrice } = require('../utils/splitPrice');
 const { allocateSealedUnitCost } = require('../utils/sealedCostAllocation');
 const { readQuantity } = require('../utils/requestBounds');
@@ -1417,7 +1418,7 @@ router.post('/collection/bulk', async (req, res) => {
     if (action === 'add_to_deck') {
       const deckId = parseInt(value, 10);
       if (!deckId) return res.status(400).json({ error: 'Invalid deck_id' });
-      const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [deckId, req.user.id]);
+      const deck = await db.get(`SELECT id, checked_out FROM decks WHERE id = ? AND user_id = ?`, [deckId, req.user.id]);
       if (!deck) return res.status(404).json({ error: 'Deck not found' });
 
       const rows = await db.all(
@@ -1431,8 +1432,8 @@ router.post('/collection/bulk', async (req, res) => {
         const existing = await db.get(`SELECT quantity FROM deck_cards WHERE deck_id = ? AND card_id = ?`, [deckId, row.card_id]);
         const current = existing ? existing.quantity : 0;
         const newQty = current + row.total_qty;
-        // Enforce deck rules (owned cap + max 4 per name) so this path can't
-        // bypass the limits the deck builder enforces.
+        // Enforce deck rules (owned cap + the format's copy limit) so this path
+        // can't bypass the limits the deck builder enforces.
         const check = await validateDeckAddition({ deckId, userId: req.user.id, cardId: row.card_id, newQty });
         if (!check.ok) { rejected.push(check.error); continue; }
         await db.run(
@@ -1442,6 +1443,8 @@ router.post('/collection/bulk', async (req, res) => {
         );
         added += row.total_qty;
       }
+      // A deck that is out on the table takes free copies of what was just added.
+      if (added && deck.checked_out) await syncDeckAllocation(deckId, req.user.id);
       const msg = rejected.length
         ? (added ? `Added ${added} card(s). ${rejected[0]}` : rejected[0])
         : `Added ${added} card(s) to deck`;

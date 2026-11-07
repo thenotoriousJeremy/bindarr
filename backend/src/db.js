@@ -1375,6 +1375,80 @@ async function initDb() {
 
   await splitStackedRows();
 
+  // --- DECK FORMATS, ANY-PRINTING DECKS, CHECKOUT ALLOCATION ---
+  // What the deck rules (shared/deckRules.mjs) read off a Magic card beyond its type
+  // line and colour identity. `oracle_id` is what every printing of one card has in
+  // common, so a deck that accepts any printing can count a copy of another one;
+  // `oracle_text` is where a card says it can be a commander, partners with another,
+  // or may appear in any number. Written by scryfallApi.normalizeCard; null for the
+  // other games. Not backfilled: until a row is re-cached the rules fall back to the
+  // card's name and a short list, and the daily price sweep re-caches every owned and
+  // decked Magic card — the only rows a deck ever compares.
+  const deckRuleCols = await all(`PRAGMA table_info(card_cache)`);
+  if (!deckRuleCols.some(c => c.name === 'oracle_id')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN oracle_id TEXT`);
+  }
+  if (!deckRuleCols.some(c => c.name === 'oracle_text')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN oracle_text TEXT`);
+  }
+  // Whether a deck counts any printing of a card it lists. Only meaningful where a
+  // game has a reliable "same card" (Magic's oracle id, Lorcana's full name), and on
+  // for the Magic and Lorcana decks that already exist — that is the fix: owning a
+  // different printing of Sol Ring stops reading as not owning it.
+  const deckFormatCols = await all(`PRAGMA table_info(decks)`);
+  if (!deckFormatCols.some(c => c.name === 'any_printing')) {
+    await run(`ALTER TABLE decks ADD COLUMN any_printing INTEGER NOT NULL DEFAULT 0`);
+    await run(`UPDATE decks SET any_printing = 1 WHERE game IN ('mtg', 'lorcana')`);
+  }
+  // The card(s) leading a Commander-style deck, whose colour identity every other
+  // card is checked against.
+  const deckCardFormatCols = await all(`PRAGMA table_info(deck_cards)`);
+  if (!deckCardFormatCols.some(c => c.name === 'is_commander')) {
+    await run(`ALTER TABLE deck_cards ADD COLUMN is_commander INTEGER NOT NULL DEFAULT 0`);
+  }
+  // The copies a checked-out deck holds. The collection entry is the key, so one
+  // physical card can be in one deck at a time — two checkouts cannot both claim it
+  // (utils/deckAllocation.js). `card_id` is the deck card the copy fills, which for
+  // a deck accepting any printing may be another printing than the copy's own.
+  const hadAllocations = await get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'deck_allocations'`);
+  await run(`
+    CREATE TABLE IF NOT EXISTS deck_allocations (
+      entry_id INTEGER PRIMARY KEY REFERENCES collection(id) ON DELETE CASCADE,
+      deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+      card_id TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      allocated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_deck_allocations_deck ON deck_allocations(deck_id)`);
+  if (!hadAllocations) {
+    // Decks checked out before this table existed held their copies implicitly:
+    // availability was worked out per request. Give them the same copies the old
+    // storage view greyed out — exact printing, filed copies first, newest first —
+    // handed out in checkout order. Rows are single copies by now (splitStackedRows
+    // above), so the n-th copy of a card goes to the deck whose running total of
+    // that card first reaches n.
+    await run(`
+      INSERT OR IGNORE INTO deck_allocations (entry_id, deck_id, card_id, quantity)
+      SELECT e.entry_id, r.deck_id, r.card_id, 1
+      FROM (
+        SELECT d.user_id, dc.deck_id, dc.card_id, dc.quantity,
+               SUM(dc.quantity) OVER (PARTITION BY d.user_id, dc.card_id ORDER BY d.checked_out_at, d.id) AS upto
+        FROM deck_cards dc JOIN decks d ON d.id = dc.deck_id
+        WHERE d.checked_out = 1 AND dc.quantity > 0
+      ) r
+      JOIN (
+        SELECT c.id AS entry_id, c.user_id, c.card_id,
+               ROW_NUMBER() OVER (
+                 PARTITION BY c.user_id, c.card_id
+                 ORDER BY (c.location_id IS NOT NULL) DESC, c.added_at DESC, c.id DESC
+               ) AS rn
+        FROM collection c WHERE c.list_type = 'collection'
+      ) e ON e.user_id = r.user_id AND e.card_id = r.card_id
+         AND e.rn > r.upto - r.quantity AND e.rn <= r.upto
+    `);
+  }
+
   // --- PERFORMANCE INDEXES ---
   // `user_id` first, because it is the predicate on essentially every read in the
   // app — every collection query, every stats aggregate — and nothing indexed it.
