@@ -435,6 +435,7 @@
   "deck.copied": "Deck copied to clipboard!",
   "deck.buylistCopied": "Buylist copied — paste it into TCGplayer Mass Entry.",
   "deck.nothingToBuy": "Nothing to buy — you own every card in this deck.",
+  "deck.buylistOpened": "Opened TCGplayer Mass Entry with the cards you still need.",
   "deck.imported.one": "Imported {count} card species into deck!",
   "deck.imported.other": "Imported {count} card species into deck!",
   "deck.errLoadDecks": "Error loading decks.",
