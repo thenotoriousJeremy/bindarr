@@ -91,7 +91,7 @@ async function main() {
     const admin = await waitFor(() => db.get(`SELECT id FROM users WHERE username = 'admin'`), 'admin user');
     const token = 'riftbound-e2e-token';
     await db.run(`INSERT OR REPLACE INTO sessions (token, user_id, expires_at) VALUES (?, ?, datetime('now', '+1 day'))`,
-      [token, admin.id]);
+      [require('../../src/utils/authHelpers').hashSessionToken(token), admin.id]);
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
     const api = async (method, url, body) => {
       const res = await fetch(`${base}${url}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
