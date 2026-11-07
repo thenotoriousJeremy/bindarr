@@ -412,8 +412,8 @@ time. Match is by product id only; Normal → `price_normal`, Foil →
 `price_holofoil`, trend prefers Normal; a missing quote leaves the stored price.
 Own clock: `riftbound_prices_swept_at`.
 
-Deck rules (`utils/riftboundDeck.js`): per-zone copy limits enforced on add, the
-rest returned as `warnings` by `GET /api/decks/:id`. Scan: `cardSets` lists
+Deck rules are the `riftbound` entry in `shared/deckRules.mjs`: per-zone copy
+limits (enforced on add) and Riot's construction rules as deck warnings. Scan: `cardSets` lists
 cached sets, `catalog.embedUrl` embeds Riot's full-width art; landscape art is
 squashed into the square as printed, like the camera dewarp of a card held the way
 it is printed. Real-model accuracy is unmeasured.

@@ -1,10 +1,6 @@
-// Riftbound pieces the UI needs: the Riot notice, deck grouping, and the
-// per-card copy limit the deck builder checks before asking the server.
-//
-// The deck rules themselves live in backend/src/utils/riftboundDeck.js; the server
-// reports what a deck breaks as `warnings` on GET /api/decks/:id. copyLimit and
-// ruleName here mirror that file (as isBasicEnergyOrLand mirrors deckRules.js), so
-// the "+" button agrees with what the server will accept.
+// Riftbound pieces the UI needs: the Riot notice, landscape detection and deck
+// grouping. The deck rules themselves are the riftbound entry in
+// shared/deckRules.mjs, shared with the server.
 
 // Riot's Legal Jibber Jabber (section 6) and the Riftbound developer policy
 // require this exact statement wherever Riftbound content appears. It is NOT run
