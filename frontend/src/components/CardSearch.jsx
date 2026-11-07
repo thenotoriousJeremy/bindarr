@@ -5,6 +5,8 @@ import { priceText } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import CardEntryFields from './CardEntryFields';
 import CardImageZoom from './CardImageZoom';
+import ScryfallSyntaxHelp from './ScryfallSyntaxHelp';
+import { checkSearchSyntax, syntaxErrorText } from '../utils/scryfallSyntax';
 import { translateJapaneseName, POKEMON_EN_TO_JP, getCardDisplayName } from '../utils/langHelper';
 import { useMultiSelect } from '../utils/useMultiSelect';
 import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
@@ -38,6 +40,9 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState(null);
+  // A Magic query that cannot be read (an open quote, a stray parenthesis), shown
+  // under the box instead of being sent off to come back empty.
+  const [syntaxError, setSyntaxError] = useState(null);
 
   // Paging. A full page back means there is probably another one; `total` is the
   // provider's real match count when it reports one (cache hits don't).
@@ -190,6 +195,9 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         if (!append && data.length === 1 && !selectMode) openQuickAdd(data[0]);
       } else {
         const errData = await response.json().catch(() => ({}));
+        // The server read the query and refused it (or Scryfall did): that belongs
+        // under the box, like the check in handleSearch.
+        if (response.status === 400 && errData.code) { setSyntaxError(errData); return; }
         if (response.status === 403 || errData.error === 'Invalid API Key') {
           setSearchError('invalid-key');
         } else if (response.status === 429 || errData.error === 'Rate limit exceeded') {
@@ -211,6 +219,11 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   const handleSearch = (e) => {
     if (e) e.preventDefault();
     if (!query && !numberQuery && !setCodeQuery) return;
+    // Magic's name box also takes Scryfall syntax. Syntax that cannot be read is
+    // named here, before a request; anything that reads goes to Scryfall intact.
+    const problem = game === 'mtg' ? checkSearchSyntax(query) : null;
+    setSyntaxError(problem);
+    if (problem) return;
     runSearch(1);
   };
 
@@ -448,6 +461,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
 
   const handleGameChange = (newGame) => {
     setGame(newGame);
+    setSyntaxError(null);
     if (!isLanguageSupported(newGame, searchLang)) {
       setSearchLang('en');
       setLanguage(langName('en'));
@@ -570,11 +584,16 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                   className="input-control"
                   placeholder={t(game === 'mtg' ? 'search.namePlaceholderMtg' : 'search.namePlaceholderPokemon')}
                   value={query}
-                  onChange={(e) => setQuery(e.target.value)}
+                  onChange={(e) => { setQuery(e.target.value); setSyntaxError(null); }}
+                  aria-invalid={syntaxError ? true : undefined}
                   style={{ width: '100%', paddingLeft: '2.5rem' }}
                 />
                 <Search size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               </div>
+              {syntaxError && (
+                <div role="alert" style={{ fontSize: '0.75rem', color: 'var(--accent-red)' }}>{syntaxErrorText(t, syntaxError)}</div>
+              )}
+              {game === 'mtg' && <ScryfallSyntaxHelp context="search" />}
             </div>
           </div>
 

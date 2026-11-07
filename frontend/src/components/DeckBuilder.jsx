@@ -5,6 +5,8 @@ import { shuffleArray } from '../utils/shuffle';
 import { translateJapaneseName } from '../utils/langHelper';
 import { displayName } from '../utils/languages';
 import CheckoutWizardModal from './CheckoutWizardModal';
+import ScryfallSyntaxHelp from './ScryfallSyntaxHelp';
+import { syntaxErrorText } from '../utils/scryfallSyntax';
 import { useBackGuard } from '../utils/useBackGuard';
 import { buildDeckExport, parseDeckLine, pickDeckLineCard } from '../utils/deckText';
 import { defaultGame, gameOptions, showGamePicker, isGameEnabled } from '../utils/games';
@@ -463,7 +465,9 @@ function DeckBuilder({ showToast }) {
           const data = await response.json();
           setSearchResults(data);
         } else {
-          showToast(t(response.status === 429 ? 'deck.errRateLimit' : 'deck.errSearch'));
+          // Magic's box takes Scryfall syntax; a query it cannot use says why.
+          const body = response.status === 400 ? await response.json().catch(() => ({})) : {};
+          showToast(body.code ? syntaxErrorText(t, body) : t(response.status === 429 ? 'deck.errRateLimit' : 'deck.errSearch'));
         }
       }
     } catch (err) {
@@ -1681,6 +1685,9 @@ function DeckBuilder({ showToast }) {
                       {t('deck.browseCollection')}
                     </button>
                   </form>
+                  {deckSearchGame === 'mtg' && (
+                    <div style={{ marginTop: '0.5rem' }}><ScryfallSyntaxHelp context="collection" /></div>
+                  )}
 
                   {/* Search Results list */}
                   {searching ? (
