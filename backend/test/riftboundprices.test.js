@@ -65,7 +65,9 @@ const price = (id) => db.get(
 
     // --- 1. No Riftbound cards: category 89 is not asked for -----------------
     assert.deepStrictEqual(await tcgcsv.syncCategories(), [3, 85]);
-    await tcgcsv.syncIfUpdated();
+    // Explicit, as an admin action is: on-demand syncing would otherwise skip an
+    // install with no cards at all. It caches a version without category 89.
+    await tcgcsv.syncIfUpdated({ explicit: true });
     assert.ok(!requests.some(u => u.startsWith('/tcgplayer/89')), `nothing reads 89 yet (saw ${requests})`);
     assert.deepStrictEqual(await prices.updateCollectionPrices(true), { priced: 0, skipped: 'no Riftbound cards' });
 

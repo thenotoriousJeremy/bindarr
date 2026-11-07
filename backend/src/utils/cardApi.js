@@ -53,7 +53,9 @@ const isLorcanaId = (id) => String(id || '').startsWith('lorcana-');
 function gameOf(id, requestedGame) {
   const fromId = games.gameOfId(id);
   if (fromId) return fromId;
-  if (!id) return null;
+  // No id at all contradicts nothing: a row that names only its game (an
+  // import row with set and number) is that game, if the game is known.
+  if (!id) return games.isGame(requestedGame) ? requestedGame : null;
   if (requestedGame && requestedGame !== games.LEGACY_GAME && games.isGame(requestedGame)) return requestedGame;
   return null;
 }

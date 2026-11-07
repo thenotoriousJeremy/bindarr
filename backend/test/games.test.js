@@ -120,7 +120,8 @@ const LANGUAGES_JSON = require('../../shared/languages.json');
   assert.strictEqual(cardApi.gameOf('Black Lotus', 'pokemon'), null);
   assert.strictEqual(cardApi.gameOf('garbage'), null);
   assert.strictEqual(cardApi.gameOf('garbage', 'yugioh'), null, 'an unknown requested game is no help either');
-  assert.strictEqual(cardApi.gameOf('', 'mtg'), null, 'no id is no card');
+  assert.strictEqual(cardApi.gameOf('', 'mtg'), 'mtg', 'a row with no id is the game it names');
+  assert.strictEqual(cardApi.gameOf(''), null, 'and with neither, nothing');
 
   // --- 9. An unknown id is answered locally, never by pokemontcg.io ------------
   const db = require('../src/db');
