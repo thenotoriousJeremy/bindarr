@@ -693,11 +693,15 @@ async function fetchAndCacheSets(force = false) {
     const resp = await scryGet('/sets');
     const sets = (resp.data && resp.data.data) || [];
     for (const s of sets) {
+      // printed_total is what set completion counts to (routes/stats.js), so it is
+      // the size printed on the cards ("/303"), not card_count, which adds every
+      // showcase, borderless and promo variant numbered past it. Older sets print
+      // no total and fall back to the card count. `total` stays the card count.
       await db.run(
         `INSERT OR REPLACE INTO sets (id, name, series, printed_total, total, release_date, ptcgo_code, symbol_url, logo_url, game)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'mtg')`,
         [
-          `mtg-${s.code}`, s.name, s.set_type || '', s.card_count || 0, s.card_count || 0,
+          `mtg-${s.code}`, s.name, s.set_type || '', s.printed_size || s.card_count || 0, s.card_count || 0,
           s.released_at || '', s.code || '', s.icon_svg_uri || '', s.icon_svg_uri || ''
         ]
       );

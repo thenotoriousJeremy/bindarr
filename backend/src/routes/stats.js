@@ -172,20 +172,33 @@ router.get('/stats', async (req, res) => {
     // One query for the whole thing, rather than one per set inside a loop: this
     // ran a COUNT(DISTINCT) per set the user owns cards from, which on a broad
     // collection is dozens of round trips to answer a single panel.
+    //
+    // Magic is the one game whose two tables spell a set differently: card_cache
+    // holds Scryfall's bare code ("mh3", scryfallApi.normalizeCard) and `sets` the
+    // prefixed id ("mtg-mh3", fetchAndCacheSets), so this lookup never matched and
+    // no Magic set ever appeared here. Every other reader of both forms (the sets
+    // route, catalog's new-set count, compartmentSort.fixedSetKey, the scanner and
+    // search set pickers) already converts, so the id is mapped here rather than
+    // re-keying either table.
+    //
+    // Owned counts collector numbers, not card ids: each language of a Magic
+    // printing is its own card_cache row, and #12 in English and in Japanese is
+    // still one card of the set.
     const setIds = Object.keys(setCounts);
     const setProgress = [];
     if (setIds.length) {
       const holes = setIds.map(() => '?').join(',');
       const rows = await db.all(`
-        SELECT cc.set_id,
-               COUNT(DISTINCT c.card_id) AS owned,
+        SELECT cc.game, cc.set_id,
+               COUNT(DISTINCT COALESCE(NULLIF(cc.number, ''), cc.id)) AS owned,
                (SELECT COALESCE(NULLIF(s.printed_total, 0), NULLIF(s.total, 0))
-                  FROM sets s WHERE s.id = cc.set_id) AS size
+                  FROM sets s
+                 WHERE s.id = CASE WHEN cc.game = 'mtg' THEN 'mtg-' || LOWER(cc.set_id) ELSE cc.set_id END) AS size
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
-        WHERE c.user_id = ? AND cc.set_id IN (${holes})
-        GROUP BY cc.set_id
-      `, [req.user.id, ...setIds]);
+        WHERE c.user_id = ?${gameFilter} AND cc.set_id IN (${holes})
+        GROUP BY cc.game, cc.set_id
+      `, [...statsParams, ...setIds]);
 
       for (const row of rows) {
         // A set the sync has not reached yet has no size, so it has no completion
