@@ -441,12 +441,14 @@ router.put('/settings', authenticateToken, async (req, res) => {
 
   try {
     if (password !== undefined) {
-      if (password.length < 8) {
+      if (typeof password !== 'string' || password.length < 8) {
         return res.status(400).json({ error: 'Password must be at least 8 characters' });
       }
       const currentUser = await db.get(`SELECT password_hash FROM users WHERE id = ?`, [req.user.id]);
-      if (!current_password || !verifyPassword(current_password, currentUser.password_hash)) {
-        return res.status(401).json({ error: 'Current password is incorrect' });
+      // 400, never 401: a 401 here read as "your session has expired", and the app
+      // signed the user out for mistyping their current password.
+      if (typeof current_password !== 'string' || !current_password || !verifyPassword(current_password, currentUser.password_hash)) {
+        return res.status(400).json({ error: 'Current password is incorrect' });
       }
       const newHash = db.hashPassword(password);
       await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, req.user.id]);

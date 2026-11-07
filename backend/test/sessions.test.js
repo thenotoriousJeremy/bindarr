@@ -9,7 +9,9 @@
 //      that made the change.
 //   4. An admin resetting someone's password signs out all of that user's
 //      sessions (and only theirs).
-//   5. Logging out ends this session, not the others.
+//   5. Only the auth gate answers 401 with the "session expired" marker the app
+//      signs out on; a wrong current password is a 400.
+//   6. Logging out ends this session, not the others.
 //
 // The real auth and admin routers and the real auth middleware, mounted in this
 // process over a throwaway database. The two card APIs the admin router pulls in
@@ -162,6 +164,44 @@ async function testAdminResetRevokesUserSessions() {
   console.log("PASS: an admin password reset signs out all of that user's sessions");
 }
 
+// The app signs out on a 401 only when the gate marks it as the session ending
+// (frontend/src/utils/sessionExpiry.js). Every other refusal has to be something
+// else, or it logs the user out -- a mistyped current password used to.
+async function testStatusCodesNeverFakeAnExpiredSession() {
+  const token = await generateSession(trainerId);
+  const before = (await db.get(`SELECT password_hash FROM users WHERE id = ?`, [trainerId])).password_hash;
+
+  const wrong = await api('PUT', '/api/auth/settings', {
+    token,
+    body: { current_password: 'not-my-password', password: 'whatever-new-1' }
+  });
+  assert.strictEqual(wrong.status, 400, `a wrong current password is a bad request, not a lost session (got ${wrong.status})`);
+  assert.match(wrong.body.error, /current password/i);
+  assert.strictEqual(wrong.body.code, undefined, 'and it must not carry the session marker');
+  assert.strictEqual((await probe(token)).status, 200, 'the session survives the typo');
+  assert.strictEqual((await db.get(`SELECT password_hash FROM users WHERE id = ?`, [trainerId])).password_hash, before,
+    'and the password is unchanged');
+
+  // Not strings: refused as bad input, where they used to throw into a 500.
+  for (const body of [{ current_password: 12345678, password: 'whatever-new-1' }, { current_password: 'x', password: 12345678 }]) {
+    assert.strictEqual((await api('PUT', '/api/auth/settings', { token, body })).status, 400);
+  }
+
+  // The gate's own answers carry the marker...
+  const none = await api('GET', '/api/probe');
+  assert.strictEqual(none.status, 401);
+  assert.strictEqual(none.body.code, 'session_expired');
+  const stale = await probe('not-a-session');
+  assert.strictEqual(stale.status, 401);
+  assert.strictEqual(stale.body.code, 'session_expired');
+
+  // ...and a failed sign-in, which is a 401 too, does not: nobody was signed in.
+  const badLogin = await api('POST', '/api/auth/login', { body: { username: 'trainer', password: 'nope-nope-1' } });
+  assert.strictEqual(badLogin.status, 401);
+  assert.strictEqual(badLogin.body.code, undefined);
+  console.log('PASS: only the auth gate answers 401 with the session-expired marker');
+}
+
 async function testLogoutEndsOnlyThisSession() {
   const a = await generateSession(trainerId);
   const b = await generateSession(trainerId);
@@ -185,6 +225,7 @@ async function main() {
   await testLegacyRowsMigrate();
   await testPasswordChangeRevokesOtherSessions();
   await testAdminResetRevokesUserSessions();
+  await testStatusCodesNeverFakeAnExpiredSession();
   await testLogoutEndsOnlyThisSession();
   console.log('PASS: sessions.test.js');
 }

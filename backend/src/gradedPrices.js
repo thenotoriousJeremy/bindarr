@@ -86,8 +86,10 @@ function pickCard(cards, number) {
 function providerError(err) {
   const status = err.response?.status;
   const detail = err.response?.data?.message || err.response?.data?.error;
+  // 403, not the provider's 401: a 401 from Bindarr means the caller's own
+  // session is gone, and the app signs out on it. This is a key in Settings.
   if (status === 401 || status === 403) {
-    return new GradedPriceError(401, 'The graded-price API key was rejected. Check it in Settings.');
+    return new GradedPriceError(403, 'The graded-price API key was rejected. Check it in Settings.');
   }
   if (status === 429) {
     return new GradedPriceError(429, detail || 'Graded-price API limit reached. Enter the value by hand, or try again tomorrow.');

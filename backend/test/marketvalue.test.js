@@ -196,6 +196,14 @@ async function runAuth(token, method = 'GET') {
       () => gradedPrices.fetchGradedPrice({ ...base, grader: 'PSA', grade: 2, apiKey: 'testkey' }),
       (e) => { assert.ok(/PSA10/.test(e.message.replace(/\s/g, '')), `expected recorded grades in: ${e.message}`); return true; }
     );
+
+    // A key the provider rejects comes back as 403, never 401: a 401 from Bindarr
+    // means the caller's own session is gone, and the app signs out on that.
+    gradedPrices.client.get = async () => { const e = new Error('x'); e.response = { status: 401 }; throw e; };
+    await assert.rejects(
+      () => gradedPrices.fetchGradedPrice({ ...base, apiKey: 'revoked' }),
+      (e) => e.status === 403 && /rejected/.test(e.message)
+    );
   } finally {
     gradedPrices.client.get = realGet;
   }

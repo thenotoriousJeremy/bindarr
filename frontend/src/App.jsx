@@ -7,6 +7,7 @@ import { pushBackGuard } from './utils/useBackGuard';
 import { useT } from './utils/i18n';
 import { isNative, isDeviceMode, setDeviceMode } from './apiBase';
 import { parseOidcReturn, takeVerifier } from './utils/nativeOidc';
+import { isSessionExpired } from './utils/sessionExpiry';
 
 // View components are code-split so heavy deps (recharts in the chart views)
 // load on demand instead of in the initial bundle.
@@ -87,8 +88,11 @@ window.fetch = function (input, options = {}) {
   }
   return originalFetch(input, finalOptions).then(response => {
     if (response.status === 401 && !isPublicOrAuthRoute) {
-      // Dispatch custom event to trigger logout without page refresh
-      window.dispatchEvent(new Event('bindarr_logout'));
+      // Only the auth gate's "this session is gone" signs out -- not every 401
+      // (utils/sessionExpiry). Read off a clone, so the caller still gets the body.
+      isSessionExpired(response).then(expired => {
+        if (expired) window.dispatchEvent(new Event('bindarr_logout'));
+      });
     }
     return response;
   });
@@ -459,9 +463,16 @@ function App() {
     );
   }
 
-  // Render login screen if unauthenticated
+  // Render login screen if unauthenticated. The toast too: "your session expired"
+  // and a failed SSO hand-off are said exactly when this screen is showing, and
+  // without it here they were never seen.
   if (!token || !user) {
-    return <Login onLoginSuccess={handleLoginSuccess} />;
+    return (
+      <>
+        <Login onLoginSuccess={handleLoginSuccess} />
+        {toast && <div className="toast">{toast}</div>}
+      </>
+    );
   }
 
   // One account and no server: the Admin tab's account, backup and catalog

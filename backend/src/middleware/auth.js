@@ -2,6 +2,12 @@ const rateLimit = require('express-rate-limit');
 const db = require('../db');
 const { hashSessionToken } = require('../utils/authHelpers');
 
+// The marker on a 401 that means "this request carries no usable session". The
+// SPA signs out on this and nothing else (frontend/src/utils/sessionExpiry.js), so
+// a route answering 401 for some other reason can never log anyone out. Only this
+// gate sends it.
+const SESSION_EXPIRED = 'session_expired';
+
 async function authenticateToken(req, res, next) {
   let token = null;
   const authHeader = req.headers['authorization'];
@@ -10,7 +16,7 @@ async function authenticateToken(req, res, next) {
   }
 
   if (!token) {
-    return res.status(401).json({ error: 'Access denied. No token provided.' });
+    return res.status(401).json({ error: 'Access denied. No token provided.', code: SESSION_EXPIRED });
   }
 
   try {
@@ -41,7 +47,7 @@ async function authenticateToken(req, res, next) {
     }
 
     if (!session) {
-      return res.status(401).json({ error: 'Invalid or expired session token.' });
+      return res.status(401).json({ error: 'Invalid or expired session token.', code: SESSION_EXPIRED });
     }
 
     req.user = {
