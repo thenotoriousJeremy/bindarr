@@ -1,6 +1,7 @@
 // Set here as well as in run.js: a suite run on its own boots a server on a fresh
 // database, which would otherwise run a full TCGCSV sync (~800 requests) at boot.
 process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
+process.env.BINDARR_DISABLE_FX_SYNC = '1';
 
 const path = require('path');
 const os = require('os');

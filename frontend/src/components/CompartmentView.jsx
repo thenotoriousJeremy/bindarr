@@ -5,6 +5,7 @@ import { getPrintingBadgeStyle, getPrintingBadgeLabel, getFoilOverlayClass } fro
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { priceText } from '../utils/formatPrice';
 import { getSortCategories, changedCategories } from '../utils/sortCategories';
+import { useFx } from '../utils/useFx';
 import { isBinderType } from '../utils/cardOptions';
 import { displayName } from '../utils/languages';
 import { useLongPress } from '../utils/useLongPress';
@@ -91,6 +92,7 @@ function PrintingBadge({ printing }) {
 // the binder grid so both surfaces describe a selection the same way.
 export function FocusedCardInfo({ card, slotNumber, moveSelect = null }) {
   const { t } = useT();
+  const { show } = useFx();
   if (!card) return null;
   const isEmpty = !!card.__empty;
   const isDivider = !!card.__divider;
@@ -132,7 +134,7 @@ export function FocusedCardInfo({ card, slotNumber, moveSelect = null }) {
             {card.quantity > 1 && <span style={{ ...infoChipStyle, color: 'var(--text-strong)' }}>x{card.quantity}</span>}
             {card.price_trend > 0 && (
               <span style={{ ...infoChipStyle, color: 'var(--accent-yellow)', marginLeft: 'auto' }}>
-                {t('compartment.value', { price: priceText(card.price_trend, card.price_currency) })}
+                {t('compartment.value', { price: show(card.price_trend, card.price_currency).text })}
               </span>
             )}
             {card.purchase_price > 0 && <span style={infoChipStyle}>{t('compartment.paid', { price: priceText(card.purchase_price) })}</span>}

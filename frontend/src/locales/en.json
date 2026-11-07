@@ -1571,7 +1571,7 @@
   "prefs.themeHint": "Changes the app's color scheme instantly.",
   "prefs.themeSet": "Theme set to {theme}.",
   "prefs.currency": "Currency",
-  "prefs.currencyHint": "Changes the currency displayed for all prices across the app.",
+  "prefs.currencyHint": "Prices are converted to this currency at the European Central Bank's daily reference rate. Hover a converted price to see the original. Purchase prices are not converted.",
   "prefs.currencySet": "Currency set to {currency}.",
   "theme.dark": "Dark",
   "theme.light": "Light",
@@ -2065,5 +2065,10 @@
   "binderArt.errSave": "Could not save the artwork.",
   "binderArt.errType": "Choose a JPEG, PNG or WebP image.",
   "binderArt.errSize": "That image is over 12 MB.",
-  "binderArt.layoutChanged": "The page layout changed, so pockets that no longer exist were dropped from the artwork."
+  "binderArt.layoutChanged": "The page layout changed, so pockets that no longer exist were dropped from the artwork.",
+  "fx.convertedFrom": "Converted from {price} at the ECB reference rate of {date}",
+  "fx.convertedTotal": "Converted to {currency} at ECB rates of {date}",
+  "fx.subtotals": "As quoted: {list}",
+  "fx.noRatesTotal": "No exchange rates yet, so these are not added together.",
+  "fx.gainNeedsRate": "Needs an exchange rate to compare with what you paid"
 }

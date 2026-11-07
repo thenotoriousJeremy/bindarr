@@ -2,6 +2,9 @@ import { useState, useEffect, useMemo } from 'react';
 import { Search, Trash2, Edit2, LayoutGrid, List, SlidersHorizontal, X, MousePointerClick, Library } from 'lucide-react';
 import { getCardDisplayName, translateJapaneseName } from '../utils/langHelper';
 import { priceText } from '../utils/formatPrice';
+import Price from './Price';
+import { useFx } from '../utils/useFx';
+import { totalPrices } from '../utils/convertPrice';
 import { CONDITIONS, PRINTINGS, GRADERS, getLanguageNamesForGame } from '../utils/cardOptions';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
@@ -370,9 +373,15 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   // selectable and bulk actions hit real entry_ids (stacking merges rows).
   const displayCards = selectMode ? filteredCollection : processedCollection;
 
+  // Summed per currency and converted into the display currency; a Cardmarket
+  // euro and a TCGplayer dollar are never added as they stand.
+  const { fx, currency: displayCurrency } = useFx();
   const totalValue = useMemo(
-    () => displayCards.reduce((sum, item) => sum + (item.price_trend || 0) * (item.quantity || 1), 0),
-    [displayCards]
+    () => totalPrices(
+      displayCards.map(item => ({ amount: (item.price_trend || 0) * (item.quantity || 1), currency: item.price_currency })),
+      displayCurrency, fx
+    ),
+    [displayCards, displayCurrency, fx]
   );
 
   return (
@@ -711,7 +720,16 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       {!loading && !selectMode && (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', fontSize: '0.78rem', color: 'var(--text-secondary)', flexWrap: 'wrap', gap: '0.5rem' }}>
           <span><strong style={{ color: 'var(--text-strong)' }}>{displayCards.length}</strong> {t('collection.cardUnit', { count: displayCards.length })}</span>
-          <span>{t('collection.totalValue')} <strong style={{ color: 'var(--accent-yellow)' }}>{priceText(totalValue)}</strong></span>
+          <span>{t('collection.totalValue')} <strong
+            style={{ color: 'var(--accent-yellow)' }}
+            title={totalValue.converted
+              ? `${t('fx.convertedTotal', { currency: totalValue.currency, date: totalValue.date })} · ${t('fx.subtotals', { list: totalValue.subtotals.map(x => priceText(x.amount, x.currency)).join(' · ') })}`
+              : undefined}
+          >
+            {totalValue.total != null
+              ? priceText(totalValue.total, totalValue.currency)
+              : totalValue.subtotals.map(x => priceText(x.amount, x.currency)).join(' + ')}
+          </strong></span>
           {/* Every copy behind the rows on screen, after search and filters. */}
           <ExportShownButton entryIds={() => filteredCollection.map(i => i.entry_id)} showToast={showToast} />
         </div>
@@ -896,7 +914,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                   <div className="tcg-card-name">{getCardDisplayName(item.name, item.language, item.printed_name)}</div>
                   <div className="tcg-card-meta">
                     <span style={{ fontSize: '0.7rem' }}>{item.set_name} • #{item.number}</span>
-                    <span className="tcg-card-price">{priceText(item.price_trend, item.price_currency)}</span>
+                    <span className="tcg-card-price"><Price value={item.price_trend} currency={item.price_currency} /></span>
                   </div>
                 </div>
               </div>
@@ -967,7 +985,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                       {item.quantity > 1 && (
                         <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.85rem' }}>x{item.quantity}</div>
                       )}
-                      <div style={{ fontSize: '0.7rem', color: 'var(--accent-yellow)', fontWeight: 600 }}>{priceText(item.price_trend, item.price_currency)}</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--accent-yellow)', fontWeight: 600 }}><Price value={item.price_trend} currency={item.price_currency} /></div>
                     </td>
                   </tr>
                   );

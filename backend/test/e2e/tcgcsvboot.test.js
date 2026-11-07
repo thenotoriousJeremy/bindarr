@@ -52,7 +52,7 @@ async function runTests() {
   const fakeUrl = `http://127.0.0.1:${fake.address().port}`;
 
   const port = '3013';
-  const env = { ...process.env, PORT: port, DB_PATH: tmpDb, HTTPS_PORT: '', TCGCSV_BASE_URL: fakeUrl };
+  const env = { ...process.env, PORT: port, DB_PATH: tmpDb, HTTPS_PORT: '', TCGCSV_BASE_URL: fakeUrl, BINDARR_DISABLE_FX_SYNC: '1' };
   delete env.BINDARR_DISABLE_TCGCSV_SYNC;   // the point: the real boot path, sync on
   // The Scryfall fixtures, as the other suites use: the scheduler only starts after
   // startup's set refresh, which would otherwise page live through Scryfall.

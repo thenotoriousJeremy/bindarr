@@ -1,6 +1,9 @@
 const express = require('express');
 const db = require('../db');
 const { resolveCardPrice, isVintageSet, parseSqliteUtc } = require('../utils/priceHelpers');
+const { convert, pickUnit, roundMoney, parseCurrencyParam } = require('../utils/fx');
+const fxRates = require('../fxRates');
+
 const games = require('../utils/games');
 
 // A ?game= the registry does not know matched no rows and read as an empty
@@ -8,6 +11,37 @@ const games = require('../utils/games');
 const badGame = (game) => !!game && !games.isGame(game);
 
 const router = express.Router();
+
+const rowCurrency = (row) => row.price_currency || 'USD';
+
+// Cardmarket's rolling averages are quoted in euros. The one provider that can
+// fill those columns from TCGplayer instead says so in price_source.
+const avgCurrency = (row) => (row.price_source === 'pokemontcgapi-tcgplayer' ? 'USD' : 'EUR');
+
+// Which currency this response's money is reported in (review item 9).
+//
+// Prices are stored as each marketplace quoted them (Scryfall and TCGplayer in
+// USD, Cardmarket and TCGdex in EUR), and the totals here used to add them up as
+// they stood, so one $10 card and one 10 EUR card were "worth 20" of nothing in
+// particular. Now every amount is converted to `?currency=` (the owner's display
+// currency, default USD) through the ECB rates first. Without rates, a
+// collection quoted in one currency is reported in that currency, and a mixed
+// one has no single total at all: `unit` is null, and the per-currency subtotals
+// are the only honest answer.
+async function reportingUnit(rows, requested) {
+  const target = parseCurrencyParam(requested) || 'USD';
+  const fx = await fxRates.latestRates();
+  const currencies = new Set(rows.filter(r => resolveCardPrice(r) > 0).map(rowCurrency));
+  const unit = pickUnit(currencies, target, fx);
+  // A zero is zero in every currency, so it never needs a rate.
+  const toUnit = (amount, from) => (!amount ? 0 : (unit ? convert(amount, from, unit, fx) : null));
+  const converted = unit != null && [...currencies].some(c => c !== unit);
+  return { target, fx, unit, currencies, toUnit, converted, fxDate: converted ? fx.date : null };
+}
+
+const roundByCurrency = (byCurrency) => Object.fromEntries(
+  Object.entries(byCurrency).sort(([a], [b]) => a.localeCompare(b)).map(([c, v]) => [c, roundMoney(v, c)])
+);
 
 // 7. Get Collection Statistics & Analytics
 router.get('/stats', async (req, res) => {
@@ -23,7 +57,7 @@ router.get('/stats', async (req, res) => {
       SELECT
         c.quantity, c.purchase_price, c.added_at, c.printing, c.condition, c.card_id, c.market_value,
         cc.types, cc.subtypes, cc.supertype, cc.game, cc.rarity, cc.set_name, cc.set_id, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition,
-        cc.price_avg1, cc.price_avg7, cc.price_avg30,
+        cc.price_avg1, cc.price_avg7, cc.price_avg30, cc.price_currency, cc.price_source,
         l.name as location_name
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
@@ -31,6 +65,9 @@ router.get('/stats', async (req, res) => {
       WHERE c.user_id = ?${gameFilter}
     `;
     const rows = await db.all(query, statsParams);
+    const money = await reportingUnit(rows, req.query.currency);
+    const { unit, toUnit } = money;
+    const valueByCurrency = {};
 
     let totalCards = 0;
     let uniqueCards = rows.length;
@@ -62,9 +99,14 @@ router.get('/stats', async (req, res) => {
       const qty = row.quantity || 1;
       const price = resolveCardPrice(row);
       const addedTime = row.added_at ? parseSqliteUtc(row.added_at).getTime() : now;
+      const cur = rowCurrency(row);
+      // In `unit`, or 0 for a row that cannot be, which only happens when unit
+      // is null, and then nothing summed in unit is reported.
+      const value = toUnit(qty * price, cur) || 0;
 
       totalCards += qty;
-      totalValue += qty * price;
+      if (price > 0) valueByCurrency[cur] = (valueByCurrency[cur] || 0) + qty * price;
+      totalValue += value;
       totalSpent += qty * (row.purchase_price || 0);
       if (!row.location_name) unsortedCount += qty;
 
@@ -83,13 +125,20 @@ router.get('/stats', async (req, res) => {
       // would mix two different marketplaces' pricing and produce a "change"
       // that's really just the static US/EU price gap, not real movement —
       // avg1 keeps both sides of the comparison on Cardmarket.
-      if (addedTime <= now - sevenDaysMs && row.price_avg7 > 0 && row.price_avg1 > 0) {
-        value7dAgo += qty * row.price_avg7;
-        valueNowFor7d += qty * row.price_avg1;
+      //
+      // Converted like everything else: averages from both marketplaces can sit
+      // in one collection. A row whose average cannot be converted drops out of
+      // both ends, which keeps the subset the same on each side.
+      const avgCur = avgCurrency(row);
+      const then7 = toUnit(qty * row.price_avg7, avgCur), then30 = toUnit(qty * row.price_avg30, avgCur);
+      const nowAvg = toUnit(qty * row.price_avg1, avgCur);
+      if (addedTime <= now - sevenDaysMs && row.price_avg7 > 0 && row.price_avg1 > 0 && then7 != null && nowAvg != null) {
+        value7dAgo += then7;
+        valueNowFor7d += nowAvg;
       }
-      if (addedTime <= now - thirtyDaysMs && row.price_avg30 > 0 && row.price_avg1 > 0) {
-        value30dAgo += qty * row.price_avg30;
-        valueNowFor30d += qty * row.price_avg1;
+      if (addedTime <= now - thirtyDaysMs && row.price_avg30 > 0 && row.price_avg1 > 0 && then30 != null && nowAvg != null) {
+        value30dAgo += then30;
+        valueNowFor30d += nowAvg;
       }
 
       // Parse types
@@ -127,14 +176,23 @@ router.get('/stats', async (req, res) => {
         setCounts[row.set_id] = { name: set, count: 0, value: 0 };
       }
       setCounts[row.set_id].count += qty;
-      setCounts[row.set_id].value += qty * price;
+      setCounts[row.set_id].value += value;
 
       // Location
       const loc = row.location_name || 'Unassigned';
       locationCounts[loc] = (locationCounts[loc] || 0) + qty;
     });
 
-    // Get top most valuable cards (scoped to user)
+    // Get top most valuable cards (scoped to user). Ranked in `unit`, so a 40 EUR
+    // card is compared with a $45 one at the day's rate rather than as 40 vs 45.
+    const rankFactor = { sql: '1', params: [] };
+    if (unit && money.converted) {
+      const whens = [...money.currencies].map(c => {
+        rankFactor.params.push(c, convert(1, c, unit, money.fx));
+        return 'WHEN ? THEN ?';
+      });
+      rankFactor.sql = `(CASE COALESCE(cc.price_currency, 'USD') ${whens.join(' ')} ELSE 1 END)`;
+    }
     const topValuableQuery = `
       SELECT
         c.id AS entry_id, c.location_id, (SELECT name FROM locations WHERE id = c.location_id) AS location_name,
@@ -157,10 +215,10 @@ router.get('/stats', async (req, res) => {
         WHEN c.printing = 'Normal' AND cc.price_normal IS NOT NULL AND cc.price_normal > 0 THEN cc.price_normal
         WHEN c.printing = '1st Edition' AND cc.price_1st_edition IS NOT NULL AND cc.price_1st_edition > 0 THEN cc.price_1st_edition
         ELSE cc.price_trend
-      END DESC
+      END * ${rankFactor.sql} DESC
       LIMIT 6
     `;
-    const topValuableRows = await db.all(topValuableQuery, statsParams);
+    const topValuableRows = await db.all(topValuableQuery, [...statsParams, ...rankFactor.params]);
     const topValuable = topValuableRows.map(row => ({
       ...row,
       price_trend: resolveCardPrice(row)
@@ -246,18 +304,27 @@ router.get('/stats', async (req, res) => {
     `, statsParams);
     const recentAdditions = recentRows.map(row => ({ ...row, price_trend: resolveCardPrice(row) }));
 
+    // Purchase prices carry no currency: they are whatever the owner typed, in
+    // the currency their display was set to. So a gain is only computed when the
+    // value is reported in that same currency.
     const gainAbs = totalValue - totalSpent;
-    const roi = {
-      abs: parseFloat(gainAbs.toFixed(2)),
+    const roi = unit === money.target ? {
+      abs: roundMoney(gainAbs, unit),
       pct: totalSpent > 0 ? parseFloat(((gainAbs / totalSpent) * 100).toFixed(1)) : null
-    };
-    const avgCardValue = totalCards > 0 ? parseFloat((totalValue / totalCards).toFixed(2)) : 0.0;
+    } : { abs: null, pct: null };
+    const avgCardValue = !unit ? null : totalCards > 0 ? roundMoney(totalValue / totalCards, unit) : 0.0;
 
     res.json({
       summary: {
         totalCards,
         uniqueCards,
-        totalValue: parseFloat(totalValue.toFixed(2)),
+        // Null when the collection mixes currencies and no rate is known to
+        // convert them; valueByCurrency always has the subtotals as quoted.
+        totalValue: unit ? roundMoney(totalValue, unit) : null,
+        valueCurrency: unit,
+        valueByCurrency: roundByCurrency(valueByCurrency),
+        converted: money.converted,
+        fxDate: money.fxDate,
         totalSpent: parseFloat(totalSpent.toFixed(2)),
         roi,
         avgCardValue,
@@ -272,12 +339,12 @@ router.get('/stats', async (req, res) => {
         // marked unavailable instead of faked.
         change7d: value7dAgo > 0 ? {
           available: true,
-          abs: parseFloat((valueNowFor7d - value7dAgo).toFixed(2)),
+          abs: roundMoney(valueNowFor7d - value7dAgo, unit),
           pct: parseFloat((((valueNowFor7d - value7dAgo) / value7dAgo) * 100).toFixed(1))
         } : { available: false, abs: null, pct: null },
         change30d: value30dAgo > 0 ? {
           available: true,
-          abs: parseFloat((valueNowFor30d - value30dAgo).toFixed(2)),
+          abs: roundMoney(valueNowFor30d - value30dAgo, unit),
           pct: parseFloat((((valueNowFor30d - value30dAgo) / value30dAgo) * 100).toFixed(1))
         } : { available: false, abs: null, pct: null },
         change1y: { available: false, abs: null, pct: null },
@@ -289,8 +356,8 @@ router.get('/stats', async (req, res) => {
         id,
         name: setCounts[id].name,
         count: setCounts[id].count,
-        value: parseFloat(setCounts[id].value.toFixed(2))
-      })).sort((a, b) => b.value - a.value).slice(0, 8),
+        value: unit ? roundMoney(setCounts[id].value, unit) : null
+      })).sort((a, b) => (b.value || 0) - (a.value || 0) || b.count - a.count).slice(0, 8),
       locations: Object.keys(locationCounts).map(name => ({ name, value: locationCounts[name] })),
       topValuable,
       recentAdditions,
@@ -312,12 +379,17 @@ router.get('/stats/history', async (req, res) => {
 
     // Retrieve all collection items to compute history
     const query = `
-      SELECT c.quantity, c.added_at, c.printing, c.market_value, cc.id as card_id, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition
+      SELECT c.quantity, c.added_at, c.printing, c.market_value, cc.id as card_id, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition,
+             cc.price_currency
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       WHERE c.user_id = ?${gameFilter}
     `;
     const items = await db.all(query, params);
+    // Same unit as /stats reports for the same rows, so the chart and the total
+    // above it agree. Each item's history is in its card's current currency (the
+    // filter below), so one conversion per point covers it.
+    const { unit, toUnit } = await reportingUnit(items, req.query.currency);
 
     // Real recorded price snapshots for every card this user owns, oldest
     // first, so each item's price at any past point can be looked up without
@@ -406,13 +478,14 @@ router.get('/stats/history', async (req, res) => {
       items.forEach(item => {
         const addedTime = parseSqliteUtc(item.added_at).getTime();
         if (addedTime <= targetTime) {
-          totalValue += item.quantity * realPriceAt(item, targetTime);
+          totalValue += toUnit(item.quantity * realPriceAt(item, targetTime), rowCurrency(item)) || 0;
         }
       });
 
       historyData.push({
         date: formatLabel(targetDate),
-        value: parseFloat(totalValue.toFixed(2))
+        // Null for a mixed collection with no rates: no single line is honest.
+        value: unit ? roundMoney(totalValue, unit) : null
       });
     }
 
@@ -447,16 +520,20 @@ router.get('/stats/networth', async (req, res) => {
       WHERE c.user_id = ? AND c.list_type = 'collection'${gameFilter}
     `, params);
 
+    const money = await reportingUnit(rows, req.query.currency);
+    const { unit, toUnit } = money;
     let totalCards = 0, totalValue = 0, totalSpent = 0;
     const byGame = {};
-    const currencies = new Set();
+    const valueByCurrency = {};
     for (const row of rows) {
       const qty = row.quantity || 1;
-      const value = qty * resolveCardPrice(row);
+      const quoted = qty * resolveCardPrice(row);
+      const cur = rowCurrency(row);
+      const value = toUnit(quoted, cur) || 0;
       totalCards += qty;
       totalValue += value;
       totalSpent += qty * (row.purchase_price || 0);
-      if (value > 0) currencies.add(row.price_currency || 'USD');
+      if (quoted > 0) valueByCurrency[cur] = (valueByCurrency[cur] || 0) + quoted;
       const g = row.game || 'unknown';
       if (!byGame[g]) byGame[g] = { cards: 0, value: 0 };
       byGame[g].cards += qty;
@@ -464,22 +541,30 @@ router.get('/stats/networth', async (req, res) => {
     }
 
     const round = (n) => parseFloat(n.toFixed(2));
+    const gain = unit === money.target ? totalValue - totalSpent : null;
     res.json({
-      totalValue: round(totalValue),
+      // In `currency`: ?currency= (default USD) when the ECB rates cover every
+      // currency present, else the one currency the collection is quoted in, else
+      // null with only valueByCurrency to go on. It used to sum USD and EUR as
+      // they stood.
+      totalValue: unit ? roundMoney(totalValue, unit) : null,
+      currency: unit,
+      valueByCurrency: roundByCurrency(valueByCurrency),
+      converted: money.converted,
+      fxDate: money.fxDate,
       totalSpent: round(totalSpent),
       // The unrealized gain, which is the number a finance tracker actually wants
       // next to the total: value minus what it cost. Null percentage rather than
       // zero when nothing has a purchase price, because "0% return" is a claim.
-      gain: round(totalValue - totalSpent),
-      gainPct: totalSpent > 0 ? parseFloat((((totalValue - totalSpent) / totalSpent) * 100).toFixed(1)) : null,
+      // Purchase prices have no currency of their own, so a gain is only offered
+      // when the value is in the currency that was asked for.
+      gain: gain == null ? null : round(gain),
+      gainPct: gain != null && totalSpent > 0 ? parseFloat(((gain / totalSpent) * 100).toFixed(1)) : null,
       totalCards,
       uniqueEntries: rows.length,
-      byGame: Object.fromEntries(Object.entries(byGame).map(([g, v]) => [g, { cards: v.cards, value: round(v.value) }])),
-      // Plural and honest: providers quote in different currencies (Scryfall and
-      // TCGplayer in USD, TCGdex in EUR), and the totals above sum them as-is —
-      // the same arithmetic the dashboard has always done. More than one entry
-      // here means the total is mixed, which a consumer converting it needs to know.
-      currencies: [...currencies].sort(),
+      byGame: Object.fromEntries(Object.entries(byGame).map(([g, v]) => [g, { cards: v.cards, value: unit ? roundMoney(v.value, unit) : null }])),
+      // Every currency the prices were quoted in, before conversion.
+      currencies: [...money.currencies].sort(),
       asOf: new Date().toISOString(),
     });
   } catch (error) {

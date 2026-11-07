@@ -3,6 +3,7 @@ import { X, MapPin, Trash2, Star, Maximize2, ExternalLink, Search, Layers, Refre
 import { getCardDisplayName } from '../utils/langHelper';
 import { translatedName, setCode, isEnglish, langCode } from '../utils/languages';
 import { formatPrice, priceText } from '../utils/formatPrice';
+import Price from './Price';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import { tcgplayerUrl, cardmarketUrl, searchUrl, priceSource, noLinkReason } from '../utils/marketplaceLinks';
 import CardImage from './CardImage';
@@ -684,7 +685,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 <div>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>{t('inspector.marketPrice')}</div>
                   <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--accent-yellow)', marginTop: '0.15rem' }}>
-                    {priceText(displayPrice, activeCard.price_currency)}
+                    <Price value={displayPrice} currency={activeCard.price_currency} />
                   </div>
                   {/* Say where a non-English price came from and in what currency —
                       it is Cardmarket's EUR figure rendered with the app's $. */}
@@ -879,7 +880,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                         <div className="tcg-card-info" style={{ textAlign: 'center', marginTop: '0.35rem' }}>
                           <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>#{p.number}</div>
                           <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{p.set_name}</div>
-                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-yellow)' }}>{priceText(p.price_trend, p.price_currency)}</div>
+                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-yellow)' }}><Price value={p.price_trend} currency={p.price_currency} /></div>
                         </div>
                       </div>
                     ))}

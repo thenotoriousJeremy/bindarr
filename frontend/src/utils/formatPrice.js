@@ -46,8 +46,10 @@ export const activeCurrencySymbol = () => SYMBOLS[getCurrency()] || '$';
 
 export const formatPrice = (p) => (parseFloat(p) || 0).toFixed(2);
 
-// Prices are stored in the currency the marketplace quoted (card_cache.price_currency)
-// and are NOT converted, so a row's own currency wins: a Cardmarket price is €4.50
-// whatever the active setting is. Callers showing what the owner typed or paid
-// (purchase_price, totals) pass nothing and get the active currency.
+// Prices are stored in the currency the marketplace quoted (card_cache.price_currency),
+// and priceText shows a number in exactly the currency it is given: a Cardmarket
+// price is €4.50 here whatever the active setting is. Converting into the display
+// currency is convertPrice.js (and the <Price> component), which falls back to this.
+// Callers showing what the owner typed or paid (purchase_price) pass nothing and
+// get the active currency.
 export const priceText = (p, currency) => `${currencySymbol(currency)}${formatPrice(p)}`;

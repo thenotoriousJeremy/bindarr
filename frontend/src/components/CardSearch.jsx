@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, Plus, X, ShieldAlert, Check, MousePointerClick, Zap, Undo2, Maximize2 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { priceText } from '../utils/formatPrice';
+import Price from './Price';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import CardEntryFields from './CardEntryFields';
 import CardImageZoom from './CardImageZoom';
@@ -933,7 +933,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                   ) : null}
                   <div className="tcg-card-meta">
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>{card.set_name}</span>
-                    <span className="tcg-card-price">{priceText(card.price_trend, card.price_currency)}</span>
+                    <span className="tcg-card-price"><Price value={card.price_trend} currency={card.price_currency} /></span>
                   </div>
                 </div>
               </div>
@@ -1014,7 +1014,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
               </div>
               <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('search.tcgMarketPrice', { printing })}</div>
-                <div style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--accent-yellow)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{priceText(resolveCardPrice(selectedCard, printing), selectedCard.price_currency)}</div>
+                <div style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--accent-yellow)', overflow: 'hidden', textOverflow: 'ellipsis' }}><Price value={resolveCardPrice(selectedCard, printing)} currency={selectedCard.price_currency} /></div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{t('search.rarityLabel')} <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{selectedCard.rarity}</span></div>
               </div>
             </div>
