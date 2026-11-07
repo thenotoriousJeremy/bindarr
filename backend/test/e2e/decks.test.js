@@ -233,6 +233,24 @@ async function runTests() {
       assert.strictEqual(deleted.status, 200);
       assert.deepStrictEqual(await holdings(deckId), [], 'deleting a deck releases its copies');
     });
+
+    // F9-TC7: a deck card's quantity is a whole number from 1 to 999. A fraction is
+    // refused rather than rounded, and 0 is not a delete (DELETE is); nothing is
+    // written either way.
+    await runCase('F9-TC7', async () => {
+      const deckId = (await api('POST', '/decks', { name: 'Counts', game: 'mtg', format: 'Modern' })).body.id;
+      const rows = () => db.all(`SELECT quantity FROM deck_cards WHERE deck_id = ?`, [deckId]);
+      for (const quantity of [2.5, '2.5', 0, '0', -1, 1000, 'two', true, null, '1e1']) {
+        const res = await api('POST', `/decks/${deckId}/cards`, { card_id: 'mtg-counterspell', quantity });
+        assert.strictEqual(res.status, 400, `quantity ${JSON.stringify(quantity)} must be refused`);
+        assert.match(res.body.error, /whole number from 1 to 999/);
+        assert.deepStrictEqual(await rows(), [], `quantity ${JSON.stringify(quantity)} wrote nothing`);
+      }
+      assert.strictEqual((await api('POST', `/decks/${deckId}/cards`, { card_id: 'mtg-counterspell' })).status, 200, 'omitted means one');
+      assert.deepStrictEqual(await rows(), [{ quantity: 1 }]);
+      assert.strictEqual((await api('POST', `/decks/${deckId}/cards`, { card_id: 'mtg-counterspell', quantity: '2' })).status, 200, 'a whole number as text');
+      assert.deepStrictEqual(await rows(), [{ quantity: 2 }]);
+    });
   } finally {
     // SIGKILL immediately to avoid sqlite3 teardown crashes on Windows
     server.kill('SIGKILL');

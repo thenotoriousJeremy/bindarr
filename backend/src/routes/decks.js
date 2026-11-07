@@ -11,6 +11,15 @@ const { parseManaboxText, parseDecklistLine } = require('../utils/csvMappers');
 
 const router = express.Router();
 
+// A deck card's copy count, or null. Whole numbers only, from 1: parseInt turned
+// 2.5 into 2 and let 0 through as a row nobody could see, and removing a card is
+// DELETE /:id/cards/:card_id, which is what the deck builder sends for zero.
+const MAX_DECK_QUANTITY = 999;
+function deckQuantity(raw) {
+  const n = typeof raw === 'string' && /^\s*\d+\s*$/.test(raw) ? Number(raw) : raw;
+  return Number.isInteger(n) && n >= 1 && n <= MAX_DECK_QUANTITY ? n : null;
+}
+
 // An allocation refusal carries its own status (and, for a short checkout, the
 // cards missing); anything else is a genuine 500.
 function sendAllocationError(res, error, fallback) {
@@ -277,10 +286,14 @@ router.delete('/:id', async (req, res) => {
 // Add/Update Card in Deck
 router.post('/:id/cards', async (req, res) => {
   const { id } = req.params;
-  const { card_id, quantity = 1 } = req.body;
+  const { card_id } = req.body;
+  const quantity = deckQuantity(req.body.quantity === undefined ? 1 : req.body.quantity);
 
   if (!card_id) {
     return res.status(400).json({ error: 'card_id is required' });
+  }
+  if (quantity === null) {
+    return res.status(400).json({ error: `quantity must be a whole number from 1 to ${MAX_DECK_QUANTITY}` });
   }
 
   try {
@@ -315,7 +328,7 @@ router.post('/:id/cards', async (req, res) => {
       INSERT INTO deck_cards (deck_id, card_id, quantity)
       VALUES (?, ?, ?)
       ON CONFLICT(deck_id, card_id) DO UPDATE SET quantity = ?
-    `, [id, card_id, parseInt(quantity, 10), parseInt(quantity, 10)]);
+    `, [id, card_id, quantity, quantity]);
     if (deck.checked_out) await syncDeckAllocation(deck.id, req.user.id);
 
     // Record initial price history trend if card is added
