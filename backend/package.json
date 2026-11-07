@@ -19,7 +19,7 @@
     "helmet": "^8.2.0",
     "onnxruntime-node": "^1.27.0",
     "selfsigned": "^5.5.0",
-    "sharp": "^0.33.5",
+    "sharp": "^0.35.5",
     "sqlite3": "^6.0.1"
   },
   "devDependencies": {
