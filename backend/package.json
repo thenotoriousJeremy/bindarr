@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "node test/run.js && node test/e2e/run.js",
+    "test": "node test/all.js",
+    "test:unit": "node test/run.js",
     "test:e2e": "node test/e2e/run.js"
   },
   "dependencies": {

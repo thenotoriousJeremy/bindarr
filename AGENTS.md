@@ -36,7 +36,7 @@ npm run dev                         # backend nodemon + HTTPS Vite dev server
 npm run dev:backend                 # backend only
 npm run dev:frontend                # frontend only
 npm run build:frontend              # build frontend/dist
-npm test                            # backend unit/e2e, then frontend utilities/locales
+npm test                            # every suite (backend unit/e2e, frontend utils/locales, mirror), one summary
 npm start                           # production backend start
 
 cd backend && npm run test:e2e      # E2E only
@@ -89,7 +89,8 @@ Use `npm ci` in each package scope for reproducible CI/container installs. Backe
 
 ## Testing & QA
 
-- `npm test` runs `backend/test/run.js`, `backend/test/e2e/run.js`, then `frontend` utility tests and locale validation.
+- `npm test` (`scripts/test-all.mjs`) runs backend unit (`test/run.js`), backend e2e (`test/e2e/run.js`), frontend utility tests, locale validation and the TCGCSV mirror test, each regardless of the others, then prints a summary and fails if any failed. `node scripts/test-all.mjs <name>` runs a subset; `cd backend && npm test` runs both backend runners the same way.
+- E2E servers bind a free port from `backend/test/freePort.js`, never a fixed number, so runs can overlap. New suites should do the same and blank `HTTPS_PORT`.
 - Backend tests are plain Node/assert scripts, not Jest/Vitest. Unit suites live in `backend/test/*.test.js`; E2E suites in `backend/test/e2e/*.test.js` run serially against real Express processes.
 - Set `DB_PATH` **before** importing DB-dependent backend modules. Use a per-PID temporary SQLite path and clean its `.db`, `-wal`, and `-shm` files. Prefer real temporary SQLite state over DB mocks.
 - Keep provider tests deterministic/offline with checked-in fixtures and existing Axios interception. `backend/test/live/*.live.js` requires credentials and may consume provider credits; it is intentionally outside normal test discovery.
