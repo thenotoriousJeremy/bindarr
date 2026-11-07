@@ -324,6 +324,50 @@ Offline contract and HTTP integration tests live in
 search/add, regions, cursor/UI pagination, persisted ETag revalidation, price
 currencies, quota backoff and cache fallback. No live key is needed by the tests.
 
+#### Migrating pokemontcg.io card ids
+
+pokemontcg.io shuts down on `pokemonProvider.POKEMONTCG_SUNSET` (1 March 2027),
+and `cardApi` cannot translate its ids: a provider switch leaves every owned row
+on them. `pokemonMigration.js` is the one-off, admin-triggered move
+(`/api/admin/pokemon-migration/{status,preview,apply,revert}`, mounted inside
+`routes/admin.js`). The target is `pokemonProvider.migrationTarget(setting)`:
+pokemontcgapi.com when configured, otherwise TCGdex English.
+
+- **Mapping** (`utils/pokemonIdMap.js`, pure). Sets via `setCatalogueMatch`
+  (id, unpadded id, `pt5`→`.5`, then name), falling back to a subset's parent
+  (TG/GG/SV/Classic Collection sets the target folds in). Numbers via `numKey`
+  (padding, `/total`, separators and case dropped; letter suffixes kept). Card
+  names must be compatible, and TCGplayer product ids (card_cache,
+  `tcgplayer_product`, the `tcgplayer_catalog` product map) must agree where
+  both sides have one. Classes: `mapped`, `product` (product id only),
+  `ambiguous`, `unmapped`. Ties, mismatches and two old ids on one new id are
+  never moved.
+- **Preview** lists target sets through the provider clients
+  (`tcgdexApi.getSetCards` / `pokemontcgapi.getSetCards`, four at a time,
+  cached an hour), never per card, and caches the plan for apply.
+- **Apply** calls `backup.createBackup()`, then one `withTransaction`: card-id
+  columns are found from the schema (`card_id`, or a foreign key to
+  `card_cache`), so tables added later are re-keyed generically by rowid.
+  Collection rows are copies and just re-point; a deck listing both ids sums
+  (the primary key leaves no other choice); a price point at the same instant
+  keeps the target's; the old `card_cache` row is deleted. Every change is
+  journaled in `pokemon_id_migration_undo`, the old→new log in
+  `pokemon_id_migration_log`, the run in `pokemon_id_migration_runs`. Missing
+  target rows are inserted from the listing carrying the old row's
+  rarity/types/price, stamped stale. After commit: the local scan catalog's id
+  list is re-keyed, cards are hydrated through `cardApi.hydrate`
+  (pokemontcgapi.com in one batched priced listing), TCGCSV re-prices, and a
+  provider switch gets the same follow-up as Settings.
+- **Revert** plays the newest run's journal back, skipping rows changed since.
+- Apply refuses to run during a catalog or product-map build (the latter opens
+  raw `BEGIN`/`COMMIT` on the shared connection). Re-running apply is a no-op
+  for data and resumes unfinished hydration.
+
+Tests: `test/pokemonidmap.test.js` (the mapping table, from
+`test/fixtures/pokemonmigration`), `test/pokemonmigration.test.js` (preview,
+apply, re-run, revert over a temp DB through the admin router),
+`test/pokemonmigrationapi.test.js` (pokemontcgapi.com target).
+
 #### Two names per card, and which is which
 
 `card_cache.name` is the **searchable** name and `printed_name` is the name **on the

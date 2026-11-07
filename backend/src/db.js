@@ -934,6 +934,24 @@ async function initDb() {
           OR (SELECT COUNT(*) FROM card_cache WHERE game = 'pokemon') > 0
     `);
   }
+  // The way off that pin before pokemontcg.io shuts down: the admin-run card-id
+  // migration (pokemonMigration.js). A run, the old -> new id log it can be
+  // reported and reversed from, and the before-images an exact undo needs.
+  await run(`CREATE TABLE IF NOT EXISTS pokemon_id_migration_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, target_provider TEXT NOT NULL, previous_provider TEXT,
+    backup_file TEXT, summary TEXT, started_at TEXT NOT NULL, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    reverted_at DATETIME, revert_summary TEXT
+  )`);
+  await run(`CREATE TABLE IF NOT EXISTS pokemon_id_migration_log (
+    run_id INTEGER NOT NULL REFERENCES pokemon_id_migration_runs(id), old_id TEXT NOT NULL, new_id TEXT NOT NULL,
+    method TEXT NOT NULL, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (run_id, old_id)
+  )`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_pokemon_id_migration_log_new ON pokemon_id_migration_log(new_id)`);
+  await run(`CREATE TABLE IF NOT EXISTS pokemon_id_migration_undo (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, tbl TEXT NOT NULL, action TEXT NOT NULL,
+    ref TEXT, old_id TEXT, new_id TEXT, data TEXT
+  )`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_pokemon_id_migration_undo_run ON pokemon_id_migration_undo(run_id, tbl, action)`);
   if (!appSettingsCols.some(c => c.name === 'scan_exclude_tokens')) {
     await run(`ALTER TABLE app_settings ADD COLUMN scan_exclude_tokens INTEGER NOT NULL DEFAULT 0`);
   }

@@ -408,6 +408,9 @@ router.post('/backups', async (req, res) => {
   }
 });
 
+// pokemontcg.io → TCGdex / pokemontcgapi.com card ids, before the 2027 shutdown.
+router.use('/pokemon-migration', require('./pokemonMigration'));
+
 router.get('/backups/:file/download', (req, res) => {
   // Only a file listed in BACKUP_DIR; backup.resolveBackupFile refuses anything
   // that names a path rather than a file there.

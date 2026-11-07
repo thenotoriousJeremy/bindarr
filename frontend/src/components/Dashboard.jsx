@@ -8,6 +8,7 @@ import { defaultGameFilter, gameOptions, showGamePicker, gameLabel } from '../ut
 import { useT } from '../utils/i18n';
 import CardInspectorModal from './CardInspectorModal';
 import CardImage from './CardImage';
+import { PokemonMigrationNotice } from './PokemonMigrationBanner';
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
@@ -180,6 +181,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
   return (
     <div>
       {renderGameTabs()}
+      <PokemonMigrationNotice onNavigate={onNavigate} />
 
       {/* Metrics Summary Grid */}
       <div className="metrics-grid">

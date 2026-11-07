@@ -1,0 +1,71 @@
+{
+  "sets": [
+    { "id": "base1", "name": "Base Set", "cardCount": { "official": 102, "total": 102 } },
+    { "id": "sv01", "name": "Scarlet & Violet", "cardCount": { "official": 198, "total": 258 } },
+    { "id": "sv02", "name": "Paldea Evolved", "cardCount": { "official": 193, "total": 279 } },
+    { "id": "sv03.5", "name": "151", "cardCount": { "official": 165, "total": 207 } },
+    { "id": "sv04", "name": "Paradox Rift", "cardCount": { "official": 182, "total": 266 } },
+    { "id": "swshp", "name": "SWSH Black Star Promos", "cardCount": { "official": 307, "total": 307 } },
+    { "id": "swsh9tg", "name": "Brilliant Stars Trainer Gallery", "cardCount": { "official": 30, "total": 30 } },
+    { "id": "swsh10.5", "name": "Pokémon GO", "cardCount": { "official": 78, "total": 88 } },
+    { "id": "swsh12.5", "name": "Crown Zenith", "cardCount": { "official": 159, "total": 230 } },
+    { "id": "xyp", "name": "XY Black Star Promos", "cardCount": { "official": 216, "total": 216 } },
+    { "id": "sma", "name": "Hidden Fates Shiny Vault", "cardCount": { "official": 94, "total": 94 } },
+    { "id": "sm11.5", "name": "Hidden Fates", "cardCount": { "official": 68, "total": 163 } },
+    { "id": "fut2020", "name": "Pokémon Futsal 2020", "cardCount": { "official": 5, "total": 5 } }
+  ],
+  "details": {
+    "base1": { "id": "base1", "name": "Base Set", "releaseDate": "1999-01-09", "cards": [
+      { "id": "base1-4", "localId": "4", "name": "Charizard", "image": "https://assets.tcgdex.net/en/base/base1/4" },
+      { "id": "base1-58", "localId": "58", "name": "Pikachu", "image": "https://assets.tcgdex.net/en/base/base1/58" }
+    ] },
+    "sv01": { "id": "sv01", "name": "Scarlet & Violet", "releaseDate": "2023-03-31", "cards": [
+      { "id": "sv01-001", "localId": "001", "name": "Pineco", "image": "https://assets.tcgdex.net/en/sv/sv01/001" },
+      { "id": "sv01-002", "localId": "002", "name": "Forretress ex", "image": "https://assets.tcgdex.net/en/sv/sv01/002" },
+      { "id": "sv01-003", "localId": "003", "name": "Pinsir", "image": "https://assets.tcgdex.net/en/sv/sv01/003" }
+    ] },
+    "sv02": { "id": "sv02", "name": "Paldea Evolved", "releaseDate": "2023-06-09", "cards": [
+      { "id": "sv02-011", "localId": "011", "name": "Charmander", "image": "https://assets.tcgdex.net/en/sv/sv02/011" }
+    ] },
+    "sv03.5": { "id": "sv03.5", "name": "151", "releaseDate": "2023-09-22", "cards": [
+      { "id": "sv03.5-006", "localId": "006", "name": "Charizard ex", "image": "https://assets.tcgdex.net/en/sv/sv03.5/006" },
+      { "id": "sv03.5-025", "localId": "025", "name": "Pikachu", "image": "https://assets.tcgdex.net/en/sv/sv03.5/025" }
+    ] },
+    "swshp": { "id": "swshp", "name": "SWSH Black Star Promos", "releaseDate": "2019-11-15", "cards": [
+      { "id": "swshp-SWSH050", "localId": "SWSH050", "name": "Charizard V", "image": "https://assets.tcgdex.net/en/swsh/swshp/SWSH050" }
+    ] },
+    "swsh9tg": { "id": "swsh9tg", "name": "Brilliant Stars Trainer Gallery", "releaseDate": "2022-02-25", "cards": [
+      { "id": "swsh9tg-TG01", "localId": "TG01", "name": "Flareon", "image": "https://assets.tcgdex.net/en/swsh/swsh9tg/TG01" }
+    ] },
+    "swsh10.5": { "id": "swsh10.5", "name": "Pokémon GO", "releaseDate": "2022-07-01", "cards": [
+      { "id": "swsh10.5-011", "localId": "011", "name": "Radiant Charizard", "image": "https://assets.tcgdex.net/en/swsh/swsh10.5/011" }
+    ] },
+    "swsh12.5": { "id": "swsh12.5", "name": "Crown Zenith", "releaseDate": "2023-01-20", "cards": [
+      { "id": "swsh12.5-001", "localId": "001", "name": "Venonat", "image": "https://assets.tcgdex.net/en/swsh/swsh12.5/001" },
+      { "id": "swsh12.5-GG01", "localId": "GG01", "name": "Simisage", "image": "https://assets.tcgdex.net/en/swsh/swsh12.5/GG01" }
+    ] },
+    "xyp": { "id": "xyp", "name": "XY Black Star Promos", "releaseDate": "2013-10-12", "cards": [
+      { "id": "xyp-XY121", "localId": "XY121", "name": "Pikachu", "image": "https://assets.tcgdex.net/en/xy/xyp/XY121" },
+      { "id": "xyp-XY121a", "localId": "XY121a", "name": "Pikachu", "image": "https://assets.tcgdex.net/en/xy/xyp/XY121a" }
+    ] },
+    "sma": { "id": "sma", "name": "Hidden Fates Shiny Vault", "releaseDate": "2019-08-23", "cards": [
+      { "id": "sma-SV1", "localId": "SV1", "name": "Bulbasaur", "image": "https://assets.tcgdex.net/en/sm/sma/SV1" },
+      { "id": "sma-SV02", "localId": "SV02", "name": "Ivysaur", "image": "https://assets.tcgdex.net/en/sm/sma/SV02" }
+    ] },
+    "sm11.5": { "id": "sm11.5", "name": "Hidden Fates", "releaseDate": "2019-08-23", "cards": [
+      { "id": "sm11.5-SV1", "localId": "SV1", "name": "Bulbasaur", "image": "https://assets.tcgdex.net/en/sm/sm11.5/SV1" },
+      { "id": "sm11.5-SV02", "localId": "SV02", "name": "Ivysaur", "image": "https://assets.tcgdex.net/en/sm/sm11.5/SV02" }
+    ] },
+    "fut2020": { "id": "fut2020", "name": "Pokémon Futsal 2020", "releaseDate": "2020-09-11", "cards": [
+      { "id": "fut2020-5", "localId": "5", "name": "Pikachu on the Ball", "image": "https://assets.tcgdex.net/en/misc/fut2020/5" }
+    ] }
+  },
+  "cards": {
+    "sv03.5-025": {
+      "id": "sv03.5-025", "localId": "025", "name": "Pikachu", "category": "Pokemon", "rarity": "Common",
+      "types": ["Lightning"], "stage": "Basic", "image": "https://assets.tcgdex.net/en/sv/sv03.5/025",
+      "set": { "id": "sv03.5", "name": "151" },
+      "pricing": { "cardmarket": { "avg": 0.31, "trend": 0.29, "avg7": 0.3, "avg30": 0.33, "idProduct": 732123 } }
+    }
+  }
+}
