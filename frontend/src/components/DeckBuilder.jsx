@@ -15,6 +15,7 @@ import {
   rulesFor, formatNames, defaultFormat, defaultTargetSize, supportsAnyPrinting, defaultAnyPrinting,
   copyLimit, isBasicEnergyOrLand, deckWarnings, ruleWarningText,
 } from '../utils/deckRules';
+import { deckCardUndo, undoToast } from '../utils/undo';
 
 // Total copies of a card (matched by name) already in a deck's card list.
 const deckCountByName = (deckCards, name) =>
@@ -378,6 +379,8 @@ function DeckBuilder({ showToast }) {
 
   const handleRemoveCard = async (cardId) => {
     if (!activeDeck) return;
+    const deckId = activeDeck.id;
+    const undo = deckCardUndo(deckId, activeDeck.cards.find(c => c.id === cardId));
 
     try {
       const response = await fetch(`/api/decks/${activeDeck.id}/cards/${cardId}`, {
@@ -385,7 +388,7 @@ function DeckBuilder({ showToast }) {
       });
 
       if (response.ok) {
-        showToast(t('deck.cardRemoved'));
+        showToast(t('deck.cardRemoved'), undoToast(undo, { showToast, t, onDone: () => loadDeckDetails(deckId) }));
         loadDeckDetails(activeDeck.id);
       } else {
         showToast(t('loc.errRemoveCard'));

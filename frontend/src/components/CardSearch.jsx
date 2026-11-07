@@ -412,7 +412,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   const undoRapidAdd = async (entry) => {
     try {
       const results = await Promise.all(entry.entryIds.map(id =>
-        fetch(`/api/collection/${id}`, { method: 'DELETE' })
+        // Undoing an add: the copy goes away for good, not to the trash.
+        fetch(`/api/collection/${id}?trash=0`, { method: 'DELETE' })
       ));
       if (results.some(res => !res.ok)) { showToast(t('search.errUndo')); return; }
       setRapidLog(prev => prev.filter(e => e !== entry));

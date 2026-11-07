@@ -188,8 +188,10 @@ function App() {
     return /^\d+$/.test(id || '') ? id : null;
   });
 
-  const showToast = (message) => {
-    setToast(message);
+  // showToast(message) for a note; showToast(message, { onAction, actionLabel })
+  // adds a button (Undo by default) and keeps the toast up long enough to use it.
+  const showToast = (message, options) => {
+    setToast({ message, ...(options || {}), id: Date.now() + Math.random() });
   };
 
   // Handle OIDC / SSO token in URL redirect
@@ -292,7 +294,7 @@ function App() {
     if (toast) {
       const timer = setTimeout(() => {
         setToast(null);
-      }, 2500);
+      }, toast.onAction ? 6000 : 2500);
       return () => clearTimeout(timer);
     }
   }, [toast]);
@@ -684,8 +686,17 @@ function App() {
 
       {/* Toast Notification */}
       {toast && (
-        <div className="toast">
-          {toast}
+        <div key={toast.id} className={toast.onAction ? 'toast toast-action' : 'toast'} role="status">
+          <span>{toast.message}</span>
+          {toast.onAction && (
+            <button
+              type="button"
+              className="toast-action-btn"
+              onClick={() => { const run = toast.onAction; setToast(null); run(); }}
+            >
+              {toast.actionLabel || t('toast.undo')}
+            </button>
+          )}
         </div>
       )}
     </div>

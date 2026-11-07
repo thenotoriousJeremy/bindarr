@@ -6,6 +6,7 @@ import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } fro
 import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
 import CardInspectorModal from './CardInspectorModal';
 import { useMultiSelect } from '../utils/useMultiSelect';
+import { undoToast, placementUndo } from '../utils/undo';
 import { isBinderType as computeIsBinder, binderSpread } from '../utils/cardOptions';
 import { displayName } from '../utils/languages';
 import CompartmentView, { FocusedCardInfo } from './CompartmentView';
@@ -843,7 +844,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         showToast(body?.error || t('loc.errPlace'));
         return;
       }
-      showToast(t('loc.movedToUnsorted'));
+      showToast(t('loc.movedToUnsorted'), undoToast(placementUndo(allCards.find(c => c.entry_id === entryId)), {
+        showToast, t, onDone: async () => { await refreshAll(); onUpdate(); }
+      }));
       setPickedEntryId(null);
       await refreshAll(); onUpdate();
     } catch (err) { console.error(err); showToast(t('loc.errPlace')); }
@@ -870,7 +873,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     if (!window.confirm(t('loc.confirmRemoveCard'))) return;
     try {
       const res = await fetch(`/api/collection/${entryId}`, { method: 'DELETE' });
-      if (res.ok) { showToast(t('loc.cardRemoved')); await refreshAll(); onUpdate(); }
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(t('loc.cardRemoved'), undoToast(data.trash_batch && { kind: 'trash', batch: data.trash_batch }, {
+          showToast, t, onDone: async () => { await refreshAll(); onUpdate(); }
+        }));
+        await refreshAll(); onUpdate();
+      }
       else showToast(t('loc.errRemoveCard'));
     } catch (err) { console.error(err); showToast(t('loc.errRemoveCardGeneric')); }
   };
@@ -1080,6 +1089,21 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     if (isBinderType) fields.page_columns = columnsDraft === '' ? null : parseInt(columnsDraft, 10);
     const trimmedName = (nameDraft || '').trim();
     if (trimmedName && trimmedName !== selectedLoc.name) fields.name = trimmedName;
+
+    // Fewer pages/rows sends whatever the cut ones hold to Unsorted: say how many
+    // before anything is saved, so backing out leaves the container untouched.
+    const shrinkTo = parseInt(countDraft, 10);
+    if (shrinkTo > 0 && shrinkTo < compartments.length) {
+      let message = t('loc.confirmShrinkUnknown');
+      try {
+        const res = await fetch(`/api/locations/${selectedLoc.id}/shrink-preview?count=${shrinkTo}`);
+        if (res.ok) {
+          const { wouldMove } = await res.json();
+          message = wouldMove > 0 ? t('loc.confirmShrink', { count: wouldMove }) : null;
+        }
+      } catch (err) { console.error(err); }
+      if (message && !window.confirm(message)) return;
+    }
 
     await handleUpdateLocationFields(fields);
 
