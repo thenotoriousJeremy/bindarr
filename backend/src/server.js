@@ -19,6 +19,7 @@ const backup = require('./backup');
 const { createScheduler } = require('./scheduler');
 const { runPriceSweeps, requestStop: stopPriceSweeps } = require('./utils/priceSweeps');
 const { createShutdown, whenTrue } = require('./utils/shutdown');
+const { serveFrontend } = require('./utils/staticCache');
 
 // Which module owns the Pokémon `sets` table. Asked per call rather than resolved
 // once: the provider is a setting an admin can change while the server is up, and
@@ -559,22 +560,12 @@ app.get('/models/cornelius.onnx', (req, res) => {
   });
 });
 
+// The built SPA, and index.html for every client-side route. Vite's hashed
+// /assets/ are cached for a year, immutable; everything with a fixed name —
+// /ort/'s wasm, the manifest, index.html — is revalidated, so an upgrade is
+// picked up on the next load. utils/staticCache.js has the reasons.
 const frontendBuildPath = path.join(__dirname, '../../frontend/dist');
-// A year, immutable. Vite content-hashes every asset filename, so a changed file
-// is a changed URL and a stale cache cannot happen. Without this the browser
-// revalidated the entire bundle on every reload — the megabyte-scale wasm
-// included — which on a phone is the difference between an instant open and a
-// wait. index.html is served by the catch-all below and stays uncached, so a
-// deploy is still picked up immediately.
-app.use(express.static(frontendBuildPath, { maxAge: '1y', immutable: true, index: false }));
-
-// Catch-all route to serve Index.html in production
-app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/api')) {
-    return next();
-  }
-  res.sendFile(path.join(frontendBuildPath, 'index.html'));
-});
+app.use(serveFrontend(frontendBuildPath));
 
 // Generic error handler (e.g. rejected CORS origins) — never leak stack traces to clients
 app.use((err, req, res, next) => {
