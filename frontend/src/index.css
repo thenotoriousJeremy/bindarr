@@ -3733,3 +3733,106 @@ button, input, select, textarea {
   color: var(--text-strong) !important;
 }
 
+
+/* --- Binder artwork (issue #104) --- */
+/* One pocket's share of the picture: the whole image, clipped by the pocket. */
+.binder-art-piece {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 4px;
+  pointer-events: none;
+}
+.binder-pocket .binder-art-piece img,
+.binder-art-piece img {
+  position: absolute;
+  max-width: none;
+  height: auto;
+  object-fit: fill;
+  border-radius: 0;
+}
+.binder-pocket.has-art {
+  border-style: solid;
+}
+
+.binder-art-stage {
+  position: relative;
+  margin: 0 auto;
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+.binder-art-stage > .binder-art-ghost {
+  position: absolute;
+  opacity: 0.3;
+  pointer-events: none;
+  max-width: none;
+}
+.binder-art-pocket {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed var(--border-glass-hover);
+  border-radius: 3px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6rem;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  cursor: pointer;
+}
+.binder-art-pocket.is-art {
+  border: 1px solid var(--accent-blue);
+  background: transparent;
+}
+.binder-art-pocket img.binder-art-card {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.85;
+}
+.binder-art-sheets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  zoom: 0.42;
+}
+
+/* The print sheets. Paper is white whatever the theme, so the colors here are
+   the paper's, not tokens. Hidden on screen; while printing, everything else on
+   the page is hidden instead. Sizes are millimetres throughout so the browser
+   prints them at actual size. */
+.binder-print-sheet {
+  position: relative;
+  background: #fff;
+  color: #000;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+.binder-print-sheet img {
+  position: absolute;
+  display: block;
+}
+.binder-print-root {
+  display: none;
+}
+@media print {
+  body.binder-art-printing > *:not(.binder-print-root) {
+    display: none !important;
+  }
+  body.binder-art-printing {
+    background: #fff !important;
+  }
+  body.binder-art-printing .binder-print-root {
+    display: block;
+  }
+  body.binder-art-printing .binder-print-sheet {
+    box-shadow: none;
+    break-after: page;
+    page-break-after: always;
+  }
+}

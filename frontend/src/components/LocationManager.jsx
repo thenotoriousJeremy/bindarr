@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { DndContext, DragOverlay, MouseSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
-import { Plus, Minus, Trash2, X, MoreVertical, Settings, RefreshCw, Lock, LayoutGrid, List, MousePointerClick, ChevronDown, ChevronUp, Edit3, Upload, BookOpen, GalleryHorizontal } from 'lucide-react';
+import { Plus, Minus, Trash2, X, MoreVertical, Settings, RefreshCw, Lock, LayoutGrid, List, MousePointerClick, ChevronDown, ChevronUp, Edit3, Upload, BookOpen, GalleryHorizontal, Image as ImageIcon } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
@@ -16,6 +16,10 @@ import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
 import CreateContainerModal from './CreateContainerModal';
 import PageColumnsSelect from './PageColumnsSelect';
 import CardImage from './CardImage';
+import BinderArtworkEditor from './BinderArtworkEditor';
+import { useBinderArt } from '../utils/useBinderArt';
+import { isDeviceMode } from '../apiBase';
+import { artPocketsByPage } from '../utils/binderArtGeometry';
 import { useBackGuard } from '../utils/useBackGuard';
 import { useT } from '../utils/i18n';
 
@@ -480,6 +484,22 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       printing: uniq(c => [c.printing]),
     };
   }, [allCards]);
+
+  // Binder artwork (issue #104): decoration over empty pockets, never a card.
+  // Server-only: the embedded phone backend has no sharp and no image store.
+  const artworkAvailable = isBinderType && !isDeviceMode();
+  const [artworkOpen, setArtworkOpen] = useState(false);
+  const binderArt = useBinderArt(selectedLoc?.id, artworkAvailable);
+  const artByPage = useMemo(() => {
+    const byPage = artPocketsByPage({ layers: binderArt.layers, compartments, pageColumns: selectedLoc?.page_columns });
+    for (const pockets of byPage.values()) {
+      for (const [slot, piece] of pockets) {
+        if (binderArt.srcs[piece.artworkId]) pockets.set(slot, { ...piece, src: binderArt.srcs[piece.artworkId] });
+        else pockets.delete(slot);
+      }
+    }
+    return byPage;
+  }, [binderArt.layers, binderArt.srcs, compartments, selectedLoc?.page_columns]);
 
   const cardsByCompartment = useMemo(() => {
     const map = new Map();
@@ -1687,6 +1707,15 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 >
                   {t('loc.next')}
                 </button>
+                {artworkAvailable && <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setArtworkOpen(true)}
+                  title={t('binderArt.title')}
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                >
+                  <ImageIcon size={14} /> {t('binderArt.open')}
+                </button>}
               </div>
             )}
 
@@ -1749,7 +1778,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   dropEnabled: dndEnabled,
                   activeEntryId: binderActiveEntryId,
                   onActiveEntryIdChange: setBinderActiveEntryId,
-                  hideFocusedCardInfo: true
+                  hideFocusedCardInfo: true,
+                  artPockets: artByPage.get(c.id) || null
                 });
 
                 let binderPages = null;
@@ -2446,6 +2476,19 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             )}
           </div>
         </div>
+      )}
+
+      {artworkOpen && selectedLoc && artworkAvailable && compartments.length > 0 && (
+        <BinderArtworkEditor
+          location={selectedLoc}
+          compartments={compartments}
+          pageIndex={activePageIndex}
+          cardsByCompartment={cardsByCompartment}
+          layers={binderArt.layers}
+          onClose={() => setArtworkOpen(false)}
+          onSaved={binderArt.reload}
+          showToast={showToast}
+        />
       )}
 
       <CardInspectorModal

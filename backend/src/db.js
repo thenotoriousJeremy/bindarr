@@ -824,6 +824,53 @@ async function initDb() {
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_card_lists_user ON card_lists(user_id)`);
 
+  // Binder artwork: a picture one user uploaded, not a card. It never joins
+  // collection, so it cannot reach counts, set completion or value. The bytes
+  // live on disk beside the database (utils/binderArtStore.js); this row is the
+  // ownership record every read checks.
+  await run(`
+    CREATE TABLE IF NOT EXISTS binder_artwork (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      mime TEXT NOT NULL,
+      width INTEGER NOT NULL,
+      height INTEGER NOT NULL,
+      bytes INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_binder_artwork_user ON binder_artwork(user_id)`);
+
+  // Where one picture sits on a binder page, in millimetres, and which pockets
+  // show it (mask: [{ side, row, col }]). One layer per page; `spread` carries it
+  // onto the next page as the right half of a two-page spread. No location_id:
+  // a page can move to another binder, and the compartment already knows where
+  // it lives. Pocket size and spacing are per layer because they describe the
+  // physical page the inserts are cut for.
+  await run(`
+    CREATE TABLE IF NOT EXISTS binder_art_layers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      compartment_id INTEGER NOT NULL UNIQUE,
+      artwork_id INTEGER NOT NULL,
+      x_mm REAL NOT NULL,
+      y_mm REAL NOT NULL,
+      width_mm REAL NOT NULL,
+      rotation_deg REAL NOT NULL DEFAULT 0,
+      spread INTEGER NOT NULL DEFAULT 0,
+      mask TEXT NOT NULL DEFAULT '[]',
+      pocket_w_mm REAL NOT NULL DEFAULT 63,
+      pocket_h_mm REAL NOT NULL DEFAULT 88,
+      gap_mm REAL NOT NULL DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(compartment_id) REFERENCES compartments(id) ON DELETE CASCADE,
+      FOREIGN KEY(artwork_id) REFERENCES binder_artwork(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_binder_art_layers_user ON binder_art_layers(user_id)`);
+
   // --- MIGRATIONS ---
   // When each game's price sweep last ran. Scryfall updates prices once a day,
   // so a sweep more often than that cannot return anything new — and the boot

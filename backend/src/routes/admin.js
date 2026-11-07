@@ -9,6 +9,7 @@ const languages = require('../utils/languages');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { revokeSessions } = require('../utils/authHelpers');
 const { BACKUP_DIR, listBackups, createBackup, resolveBackupFile } = require('../backup');
+const binderArtStore = require('../utils/binderArtStore');
 
 const router = express.Router();
 
@@ -281,6 +282,8 @@ router.delete('/users/:id', async (req, res) => {
     await db.run(`DELETE FROM collection WHERE user_id = ?`, [id]);
     await db.run(`DELETE FROM locations WHERE user_id = ?`, [id]);
     await db.run(`DELETE FROM users WHERE id = ?`, [id]);
+    // Their binder artwork rows cascade with the user; the files do not.
+    binderArtStore.removeUser(targetUser.id);
 
     res.json({ message: `User "${targetUser.username}" and all their card collections/locations have been permanently deleted.` });
   } catch (error) {

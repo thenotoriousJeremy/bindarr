@@ -659,6 +659,8 @@ for cards not yet saved.
 | `pokemontcgapi_cache` | Bounded persistent response cache: `request` (credential digest + path/query), `body`, `etag`, `fetched_at`; no API keys |
 | `app_settings` | App-wide key/value settings (e.g. registration toggle) |
 | `job_runs` | Background job clocks (`scheduler.js`): `name`, `last_run_at`, `last_status` (`ok`/`error`/`baseline`), `last_error` |
+| `binder_artwork` | A user's uploaded binder picture: `user_id`, `mime`, `width`, `height`, `bytes`. The re-encoded file is `<db dir>/binder-art/<user_id>/<id>` |
+| `binder_art_layers` | One per binder page: `compartment_id` (unique), `artwork_id`, placement in mm (`x_mm`, `y_mm`, `width_mm`, `rotation_deg`), `spread` (continues onto the next page), `mask` (JSON `[{side,row,col}]` of artwork pockets), `pocket_w_mm`/`pocket_h_mm`/`gap_mm`. Never joined to `collection` |
 
 **Entry identity**: a `collection.id` (`entry_id`) uniquely identifies one
 physical stack. Features that track individual copies (checkout locator, storage
@@ -688,6 +690,7 @@ code-split view components. `/share/:token` renders the public view without auth
 | `BoxMap` | Every row of a box as a strip of card colors and rarities with divider tabs; seeks the row's coverflow (`seekTo`) and follows it (`onActiveSlotChange`) |
 | `ContainerOverview` | "All cards": a container's cards in physical order, box rows split at dividers, binder pages with their pockets |
 | `CreateContainerModal` | New-container wizard |
+| `BinderArtworkEditor` | Binder artwork: upload, place over a page or spread, choose artwork pockets, print actual-size inserts (canvas pieces + `window.print()`) |
 | `DeckBuilder` | Deck CRUD, composition charts, draw simulator, checkout/return |
 | `CheckoutWizardModal` | Checkout **and** check-in locator (mode prop): grouped by container→page, grid highlight, select-all per page/container/all |
 | `SortFilterBuilder` | Drag-and-drop sort scheme + filter rule builders |
@@ -696,7 +699,7 @@ code-split view components. `/share/:token` renders the public view without auth
 
 Client utils (`utils/`): `cardSort` (shared sort comparators + `sortCardsByOrder`),
 `sortCategories` (divider categories and where they change, shared by every
-storage view), `binderLayout` (page widths, pocket placement), `boxStrip` +
+storage view), `binderLayout` (page widths, pocket placement), `binderArtGeometry` (artwork placement, pocket crops, print packing), `boxStrip` +
 `cardColors` (the box map's runs, gradient and tabs),
 `resolveCardPrice`/`formatPrice` (pricing display), `cardPrinting`/`cardRarity`
 (badge styling), `langHelper` (Japanese name handling), `cardOptions`
