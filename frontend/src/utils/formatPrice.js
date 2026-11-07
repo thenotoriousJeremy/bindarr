@@ -46,6 +46,8 @@ export const activeCurrencySymbol = () => SYMBOLS[getCurrency()] || '$';
 
 export const formatPrice = (p) => (parseFloat(p) || 0).toFixed(2);
 
-// Formats a price using the app's single active currency setting.
-// Enforces one uniform currency across the entire application.
-export const priceText = (p) => `${activeCurrencySymbol()}${formatPrice(p)}`;
+// Prices are stored in the currency the marketplace quoted (card_cache.price_currency)
+// and are NOT converted, so a row's own currency wins: a Cardmarket price is €4.50
+// whatever the active setting is. Callers showing what the owner typed or paid
+// (purchase_price, totals) pass nothing and get the active currency.
+export const priceText = (p, currency) => `${currencySymbol(currency)}${formatPrice(p)}`;

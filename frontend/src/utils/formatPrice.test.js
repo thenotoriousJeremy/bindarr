@@ -41,8 +41,9 @@ test('currency configuration and defaults', () => {
   assert.equal(currencySymbol(), '$');
   assert.equal(activeCurrencySymbol(), '$');
   assert.equal(priceText(5), '$5.00');
-  // Even if an old row had EUR currency, priceText uses the active currency (USD)
-  assert.equal(priceText(5, 'EUR'), '$5.00');
+  // A row's own currency wins over the active one; stored prices are never converted
+  assert.equal(priceText(5, 'EUR'), '€5.00');
+  assert.equal(priceText(5, 'USD'), '$5.00');
 });
 
 test('currency selection and priceText formatting', () => {
@@ -54,7 +55,8 @@ test('currency selection and priceText formatting', () => {
   assert.equal(currencySymbol(), '€');
   assert.equal(activeCurrencySymbol(), '€');
   assert.equal(priceText(19.99), '€19.99');
-  assert.equal(priceText(19.99, 'USD'), '€19.99'); // Enforces single active currency
+  assert.equal(priceText(19.99, 'USD'), '$19.99'); // Row currency, not the active one
+  assert.equal(priceText(19.99, 'EUR'), '€19.99');
 
   // Test GBP
   setCurrency('GBP');
@@ -86,6 +88,18 @@ test('currency selection and priceText formatting', () => {
   assert.equal(currencySymbol(), '$');
   assert.equal(priceText(10), '$10.00');
 
+  localStorage.clear();
+});
+
+test('priceText falls back to the active currency when the row has none or an unknown one', () => {
+  localStorage.clear();
+  setCurrency('GBP');
+  assert.equal(priceText(3), '£3.00');
+  assert.equal(priceText(3, null), '£3.00');
+  assert.equal(priceText(3, undefined), '£3.00');
+  assert.equal(priceText(3, ''), '£3.00');
+  assert.equal(priceText(3, 'XYZ'), '£3.00');
+  assert.equal(priceText(3, 'JPY'), '¥3.00');
   localStorage.clear();
 });
 
