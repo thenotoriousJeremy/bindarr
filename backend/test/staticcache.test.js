@@ -85,7 +85,8 @@ async function main() {
     assert.strictEqual(upgraded.status, 200, 'a replaced wasm is served again, not a 304 for the old one');
     assert.strictEqual(upgraded.body.length, 11);
 
-    for (const p of ['/', '/collection', '/decks/12/edit']) {
+    // Every client-side route, nested ones included (utils/routes.js in the frontend).
+    for (const p of ['/', '/collection', '/decks/12', '/storage/3', '/lists/7', '/settings/', '/decks/12/edit']) {
       const res = await get(p);
       assert.strictEqual(res.status, 200, p);
       assert.match(res.body.toString(), /<!doctype html>/, `${p}: the SPA's index.html`);
