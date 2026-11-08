@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, RefreshCw, ShoppingCart, Heart } from 'lucide-react';
 import CardImage from './CardImage';
 import CardImageZoom from './CardImageZoom';
+import AddToListSelect from './AddToListSelect';
+import WishlistHeart, { AddSelectedToWishlist } from './WishlistHeart';
 import { useT } from '../utils/i18n';
 import { onActivateKey } from '../utils/a11y';
 import { priceText } from '../utils/formatPrice';
@@ -16,10 +18,13 @@ import { buildMassEntry, massEntryPage } from '../utils/tcgMassEntryUrl';
 import { useTabParam, setTabParam } from '../utils/router';
 import { setParam, parseSetParam } from '../utils/routes';
 
-// Every card in one set, owned or not (GET /api/set-completion).
+// Every card in one set, owned or not (GET /api/set-completion). Shown as
+// Collection's Browse view: pick a game and a set, see every card in it.
 //
 // Owned cards are in full colour with the number of copies; missing ones are
 // greyed out with their price, so the gaps in a binder can be read at a glance.
+// The heart on each card puts it on the default Wishlist; Select picks several
+// (or every missing one) for the Wishlist or any other list.
 // The counting is the server's: this view only switches between its two answers
 // (cards, or every printing of every card for a Pokémon master set) and filters.
 //
@@ -41,7 +46,23 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
   const [show, setShow] = useState('all');
   const [variants, setVariants] = useState(false);
   const [zoom, setZoom] = useState(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
   const seq = useRef(0);
+
+  // A selection belongs to the set it was made in.
+  const setKey = target ? `${target.game}/${target.set}/${target.lang}` : '';
+  const [selectionKey, setSelectionKey] = useState(setKey);
+  if (setKey !== selectionKey) {
+    setSelectionKey(setKey);
+    setSelected(new Set());
+  }
+  const exitSelect = () => { setSelectMode(false); setSelected(new Set()); };
+  const toggleSelected = (id) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   useEffect(() => {
     if (focusSet && focusSet.setId) {
@@ -388,13 +409,33 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
                   {t('sets.variants')}
                 </label>
               )}
+              <button type="button" className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
+                style={{ marginLeft: 'auto', fontSize: '0.8rem', padding: '0.45rem 0.9rem' }}>
+                {t(selectMode ? 'bulk.done' : 'collection.select')}
+              </button>
               <button type="button" className="btn btn-primary" onClick={buyMissing} disabled={summary.missing === 0}
-                style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', padding: '0.45rem 0.9rem' }}>
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', padding: '0.45rem 0.9rem' }}>
                 <ShoppingCart size={14} />
                 {t('sets.buyMissing')}
               </button>
             </div>
           </div>
+
+          {selectMode && (
+            <div className="glass-panel" style={{ marginBottom: '1rem', padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', position: 'sticky', top: '0.5rem', zIndex: 30 }}>
+              <span style={{ fontWeight: 800, color: 'var(--text-strong)', fontSize: '0.85rem' }}>{t('bulk.selected', { count: selected.size })}</span>
+              <button type="button" className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={() => setSelected(new Set(shown.map(c => c.id)))}>{t('bulk.selectAll', { count: shown.length })}</button>
+              <button type="button" className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={summary.missing === 0}
+                onClick={() => setSelected(new Set(data.cards.filter(c => !isComplete(c, variantView)).map(c => c.id)))}>{t('sets.selectMissing')}</button>
+              <button type="button" className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={() => setSelected(new Set())}>{t('bulk.clear')}</button>
+              <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
+              <AddSelectedToWishlist cardIds={() => [...selected]} showToast={showToast} disabled={selected.size === 0}
+                onDone={exitSelect} style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} />
+              <AddToListSelect cardIds={() => [...selected]} game={data.game} showToast={showToast} disabled={selected.size === 0}
+                style={{ fontSize: '0.72rem', maxWidth: '160px', padding: '0.3rem 0.4rem' }} />
+            </div>
+          )}
 
           {shown.length === 0 ? (
             <div className="glass-panel" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem 1rem' }}>{t('sets.noCardsShown')}</div>
@@ -403,15 +444,24 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
               {shown.map(card => {
                 const done = isComplete(card, variantView);
                 const have = card.owned > 0;
+                const isSelected = selectMode && selected.has(card.id);
+                const activate = () => (selectMode ? toggleSelected(card.id) : setZoom(card));
                 return (
-                  <div key={card.id} className="tcg-card" role="button" tabIndex={0} onClick={() => setZoom(card)} onKeyDown={onActivateKey(() => setZoom(card))} title={`${displayName(card)} #${card.number}`}>
-                    <div className="tcg-card-inner" style={done ? undefined : { borderStyle: 'dashed' }}>
+                  <div key={card.id} className="tcg-card" role="button" tabIndex={0} onClick={activate} onKeyDown={onActivateKey(activate)}
+                    aria-pressed={selectMode ? isSelected : undefined} title={`${displayName(card)} #${card.number}`}>
+                    <div className="tcg-card-inner" style={{ ...(done ? {} : { borderStyle: 'dashed' }), ...(isSelected ? { outline: '3px solid var(--accent-red)', outlineOffset: '2px' } : {}) }}>
                       <CardImage card={card} game={data.game} className="tcg-card-image" loading="lazy" draggable={false}
                         style={have ? undefined : { filter: 'grayscale(1)', opacity: 0.4 }} />
                       {have && <div className="tcg-card-quantity-tag">x{card.owned}</div>}
+                      {selectMode ? (
+                        <div aria-hidden="true" className={`select-check${isSelected ? ' on' : ''}`}>{isSelected ? '✓' : ''}</div>
+                      ) : (
+                        <WishlistHeart card={{ ...card, name: displayName(card) }} showToast={showToast} corner="bottom" />
+                      )}
+                      {/* On the collection's own wishlist (Collection > Cards > Wishlist). */}
                       {!have && card.wishlisted && (
                         <span title={t('sets.wishlisted')} aria-label={t('sets.wishlisted')}
-                          style={{ position: 'absolute', top: '6px', right: '6px', zIndex: 10, display: 'flex', padding: '3px', borderRadius: '50%', background: 'rgba(0,0,0,0.6)', color: 'var(--accent-red)' }}>
+                          style={{ position: 'absolute', top: '6px', left: '6px', zIndex: 10, display: 'flex', padding: '3px', borderRadius: '50%', background: 'rgba(0,0,0,0.6)', color: 'var(--accent-red)' }}>
                           <Heart size={12} fill="currentColor" />
                         </span>
                       )}

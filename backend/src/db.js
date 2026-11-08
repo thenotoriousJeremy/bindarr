@@ -837,6 +837,14 @@ async function initDb() {
     )
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_card_lists_user ON card_lists(user_id)`);
+  // Each user's default Wishlist: the list the heart on a card adds to. Made on
+  // first use (routes/lists.js), at most one per user -- enforced here, so two
+  // hearts tapped at once cannot make two.
+  const listCols = await all(`PRAGMA table_info(card_lists)`);
+  if (!listCols.some(c => c.name === 'is_default')) {
+    await run(`ALTER TABLE card_lists ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0`);
+  }
+  await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_card_lists_default ON card_lists(user_id) WHERE is_default = 1`);
   // Notifications (notify.js). A channel is somewhere one user's notifications go.
   // `url` and `token` are secrets — a Discord webhook URL IS its credential — so
   // the API reports has_url/has_token and never the values (routes/notifications).
@@ -1520,6 +1528,13 @@ async function initDb() {
     await run(`ALTER TABLE users ADD COLUMN oidc_sub TEXT`);
   }
   await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oidc_sub ON users(oidc_sub) WHERE oidc_sub IS NOT NULL`);
+
+  // Which optional tabs the nav bar shows (utils/navTabs.js), as a JSON array.
+  // NULL means the default set, so a tab added later reaches everyone who never
+  // chose.
+  if (!usersCols.some(c => c.name === 'nav_tabs')) {
+    await run(`ALTER TABLE users ADD COLUMN nav_tabs TEXT`);
+  }
 
   // Session tokens are stored as their SHA-256 (utils/authHelpers.hashSessionToken),
   // so a copy of this file holds nothing that signs anyone in. Rows from before

@@ -15,6 +15,9 @@ import { readOidcCode } from './utils/webOidc';
 import { clearOfflineData, isOffline, isWriteMethod, noteApiResponse, noteApiUnreachable, offlineWriteResponse, setWriteBlockedText, subscribeOffline } from './utils/offline';
 import { lazyWithReload } from './utils/lazyWithReload';
 import { useNameDictionaries } from './utils/useNameDictionaries';
+import { navBarTabs, litNavTab, collectionTarget, isCollectionView } from './utils/navTabs';
+import { wishlist } from './utils/wishlist';
+import CollectionViews from './components/CollectionViews';
 
 // View components are code-split so heavy deps (recharts in the chart views)
 // load on demand instead of in the initial bundle. A view whose chunk an upgrade
@@ -33,6 +36,22 @@ const Lists = lazyWithReload(() => import('./components/Lists'));
 const Notes = lazyWithReload(() => import('./components/Notes'));
 const SealedList = lazyWithReload(() => import('./components/SealedList'));
 const SetCompletion = lazyWithReload(() => import('./components/SetCompletion'));
+
+// Each nav-bar tab's label and icon. Which of them the bar shows is the user's
+// choice (utils/navTabs.js, Settings).
+const NAV_TAB_META = {
+  dashboard: ['nav.dashboard', LayoutDashboard],
+  'add-cards': ['nav.addCards', Plus],
+  collection: ['nav.collection', Database],
+  sets: ['nav.browse', Library],
+  storage: ['nav.storage', MapPin],
+  deckbuilder: ['nav.deckBuilder', Swords],
+  lists: ['nav.lists', ListChecks],
+  notes: ['nav.notes', StickyNote],
+  sealed: ['nav.sealed', Package],
+  settings: ['nav.settings', SettingsIcon],
+  admin: ['nav.admin', ShieldAlert],
+};
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -158,6 +177,10 @@ function App() {
   // new object per click, so reopening the same set still reaches the tab.
   const [focusSet, setFocusSet] = useState(null);
   const [offline, setOffline] = useState(isOffline);
+  // The Collection sub-view last open (CollectionViews), where the Collection
+  // tab takes you back to from elsewhere. Adjusted during render, like mountedTabs.
+  const [lastCollectionView, setLastCollectionView] = useState(isCollectionView(activeTab) ? activeTab : 'collection');
+  if (isCollectionView(activeTab) && activeTab !== lastCollectionView) setLastCollectionView(activeTab);
 
   // Every tab opened this session stays mounted (hidden when inactive), so its
   // filters, search, open deck/container and inner scroll boxes are still there
@@ -193,6 +216,8 @@ function App() {
     setActiveTab('dashboard');
     setMountedTabs(['dashboard']);
     setFocusSet(null);
+    setLastCollectionView('collection');
+    wishlist.reset();
     scrollByTabRef.current = {};
   };
 
@@ -539,6 +564,8 @@ function App() {
   // Settings (see InstanceSettings).
   const deviceMode = isDeviceMode();
   const showAdmin = user.role === 'admin' && !deviceMode;
+  const barTabs = navBarTabs(user.nav_tabs, { showAdmin, activeTab });
+  const litTab = litNavTab(activeTab, barTabs);
 
   const renderTab = (tab) => {
     switch (tab === 'admin' && !showAdmin ? 'dashboard' : tab) {
@@ -612,110 +639,23 @@ function App() {
             labels don't fit (navRef check above), the label span is hidden for
             all but the active tab (index.css). */}
         <nav ref={navRef} className="nav-tabs" style={{ margin: 0 }}>
-          <button 
-            className={`nav-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => goTab('dashboard')}
-            aria-label={t('nav.dashboard')}
-            title={t('nav.dashboard')}
-          >
-            <LayoutDashboard size={18} />
-            <span className="nav-tab-label">{t('nav.dashboard')}</span>
-          </button>
-          <button
-            className={`nav-tab ${activeTab === 'add-cards' ? 'active' : ''}`}
-            onClick={() => goTab('add-cards')}
-            aria-label={t('nav.addCards')}
-            title={t('nav.addCards')}
-          >
-            <Plus size={18} />
-            <span className="nav-tab-label">{t('nav.addCards')}</span>
-          </button>
-          <button
-            className={`nav-tab ${activeTab === 'collection' ? 'active' : ''}`}
-            onClick={() => goTab('collection')}
-            aria-label={t('nav.collection')}
-            title={t('nav.collection')}
-          >
-            <Database size={18} />
-            <span className="nav-tab-label">{t('nav.collection')}</span>
-          </button>
-          <button
-            className={`nav-tab ${activeTab === 'sets' ? 'active' : ''}`}
-            onClick={() => goTab('sets')}
-            aria-label={t('nav.sets')}
-            title={t('nav.sets')}
-          >
-            <Library size={18} />
-            <span className="nav-tab-label">{t('nav.sets')}</span>
-          </button>
-          <button
-            className={`nav-tab ${activeTab === 'storage' ? 'active' : ''}`}
-            onClick={() => goTab('storage')}
-            aria-label={t('nav.storage')}
-            title={t('nav.storage')}
-          >
-            <MapPin size={18} />
-            <span className="nav-tab-label">{t('nav.storage')}</span>
-          </button>
-          <button
-            className={`nav-tab ${activeTab === 'deckbuilder' ? 'active' : ''}`}
-            onClick={() => goTab('deckbuilder')}
-            aria-label={t('nav.deckBuilder')}
-            title={t('nav.deckBuilder')}
-          >
-            <Swords size={18} />
-            <span className="nav-tab-label">{t('nav.deckBuilder')}</span>
-          </button>
-          <button
-            className={`nav-tab ${activeTab === 'lists' ? 'active' : ''}`}
-            onClick={() => goTab('lists')}
-            aria-label={t('nav.lists')}
-            title={t('nav.lists')}
-          >
-            <ListChecks size={18} />
-            <span className="nav-tab-label">{t('nav.lists')}</span>
-          </button>
-
-          <button
-            className={`nav-tab ${activeTab === 'notes' ? 'active' : ''}`}
-            onClick={() => goTab('notes')}
-            aria-label={t('nav.notes')}
-            title={t('nav.notes')}
-          >
-            <StickyNote size={18} />
-            <span className="nav-tab-label">{t('nav.notes')}</span>
-          </button>
-
-          <button
-            className={`nav-tab ${activeTab === 'sealed' ? 'active' : ''}`}
-            onClick={() => goTab('sealed')}
-            aria-label={t('nav.sealed')}
-            title={t('nav.sealed')}
-          >
-            <Package size={18} />
-            <span className="nav-tab-label">{t('nav.sealed')}</span>
-          </button>
-
-          <button
-            className={`nav-tab ${activeTab === 'settings' ? 'active' : ''}`}
-            onClick={() => goTab('settings')}
-            aria-label={t('nav.settings')}
-            title={t('nav.settings')}
-          >
-            <SettingsIcon size={18} />
-            <span className="nav-tab-label">{t('nav.settings')}</span>
-          </button>
-          {showAdmin && (
-            <button
-              className={`nav-tab ${activeTab === 'admin' ? 'active' : ''}`}
-              onClick={() => goTab('admin')}
-              aria-label={t('nav.admin')}
-              title={t('nav.admin')}
-            >
-              <ShieldAlert size={18} style={{ color: 'var(--accent-red)' }} />
-              <span className="nav-tab-label">{t('nav.admin')}</span>
-            </button>
-          )}
+          {barTabs.map(tab => {
+            const [labelKey, Icon] = NAV_TAB_META[tab];
+            const label = t(labelKey);
+            return (
+              <button
+                key={tab}
+                className={`nav-tab ${litTab === tab ? 'active' : ''}`}
+                onClick={() => goTab(tab === 'collection' ? collectionTarget(activeTab, lastCollectionView, barTabs) : tab)}
+                aria-label={label}
+                title={label}
+                aria-current={litTab === tab ? 'page' : undefined}
+              >
+                <Icon size={18} style={tab === 'admin' ? { color: 'var(--accent-red)' } : undefined} />
+                <span className="nav-tab-label">{label}</span>
+              </button>
+            );
+          })}
         </nav>
 
         <div className="header-actions" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -751,6 +691,8 @@ function App() {
 
       {/* Main Content Area */}
       <main style={{ flex: 1, marginTop: '1rem' }}>
+        {/* Browse, Lists and Sealed live under Collection (utils/navTabs.js). */}
+        {isCollectionView(activeTab) && <CollectionViews active={activeTab} onSelect={goTab} />}
         {/* One pane per tab opened so far (see mountedTabs). Inactive panes are
             hidden, not unmounted; the active one carries .view-transition, so
             the fade replays on every switch. Each has its own boundary, so a

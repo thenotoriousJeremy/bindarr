@@ -72,11 +72,13 @@ async function sealedExtraEnabled() {
 // User-Agent and then a developer's IP flagged by TCGCSV. So the automatic paths
 // (boot, the daily schedule, the price sweep) sync a category only on demand:
 //
-//   3, 85  a Pokémon card in any collection or wishlist, or a Pokémon sealed
+//   3, 85  a Pokémon card in any collection or wishlist -- the collection's
+//          own wishlist rows and any card list (routes/lists.js), the
+//          default Wishlist the hearts fill included -- or a Pokémon sealed
 //          purchase.
 //   1, 71  the Magic/Lorcana sealed gate is on AND a Magic or Lorcana sealed
 //          purchase exists.
-//   89     a Riftbound card in any collection (riftboundPrices.js).
+//   89     a Riftbound card in any collection or card list (riftboundPrices.js).
 //
 // `explicit` is an admin acting on purpose: building a product map (which the
 // first Pokémon scan-catalog download does, before any card exists) or turning
@@ -89,9 +91,13 @@ async function demandedCategories({ explicit = false } = {}) {
     SELECT
       EXISTS (SELECT 1 FROM collection c JOIN card_cache cc ON cc.id = c.card_id
                WHERE cc.game = 'pokemon')
+      OR EXISTS (SELECT 1 FROM card_list_items i JOIN card_cache cc ON cc.id = i.card_id
+                  WHERE cc.game = 'pokemon')
       OR EXISTS (SELECT 1 FROM sealed_purchases WHERE game = 'pokemon') AS pokemon,
       EXISTS (SELECT 1 FROM sealed_purchases WHERE game IN ('mtg', 'lorcana')) AS extra,
-      EXISTS (SELECT 1 FROM collection WHERE game = 'riftbound') AS riftbound
+      EXISTS (SELECT 1 FROM collection WHERE game = 'riftbound')
+      OR EXISTS (SELECT 1 FROM card_list_items i JOIN card_cache cc ON cc.id = i.card_id
+                  WHERE cc.game = 'riftbound') AS riftbound
   `);
   const wanted = (c) => {
     if (BASE_SYNC_CATEGORIES.includes(c)) return !!row.pokemon;

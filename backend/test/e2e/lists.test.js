@@ -272,6 +272,80 @@ async function runTests() {
       assert.strictEqual((await alice('DELETE', `/api/lists/${list.id}`)).status, 200);
       assert.strictEqual((await db.get(`SELECT COUNT(*) AS n FROM card_list_items WHERE list_id = ?`, [list.id])).n, 0);
     });
+
+    await check('F9-TC9', async () => {
+      // The default Wishlist: none until the first heart, then exactly one,
+      // listed first, scoped to its owner.
+      const empty = await alice('GET', '/api/lists/default');
+      assert.strictEqual(empty.status, 200);
+      assert.deepStrictEqual(empty.json, { list: null, card_ids: [] }, 'reading does not create it');
+      assert.strictEqual((await db.get(`SELECT COUNT(*) AS n FROM card_lists WHERE user_id = ? AND is_default = 1`, [aliceId])).n, 0);
+
+      for (const bad of [undefined, [], 'mtg-counter', [1], ['']]) {
+        assert.strictEqual((await alice('POST', '/api/lists/default/items', { card_ids: bad })).status, 400, `card_ids ${JSON.stringify(bad)}`);
+      }
+      assert.strictEqual((await alice('POST', '/api/lists/default/items', { card_ids: Array(501).fill('mtg-counter') })).status, 400);
+
+      // Two hearts at once make one list, not two.
+      const [first, second] = await Promise.all([
+        alice('POST', '/api/lists/default/items', { card_ids: ['mtg-counter'] }),
+        alice('POST', '/api/lists/default/items', { card_ids: ['tcgdex-de-glurak', 'mtg-counter'] }),
+      ]);
+      assert.ok([first.status, second.status].every(s => s === 200 || s === 201));
+      const defaults = await db.all(`SELECT * FROM card_lists WHERE user_id = ? AND is_default = 1`, [aliceId]);
+      assert.strictEqual(defaults.length, 1, 'one default wishlist per user');
+      assert.strictEqual(defaults[0].name, 'Wishlist');
+      assert.strictEqual(defaults[0].kind, 'wishlist');
+      assert.strictEqual(defaults[0].game, null, 'takes any game');
+
+      // Hearting a card already there is not one more copy.
+      const again = await alice('POST', '/api/lists/default/items', { card_ids: ['mtg-counter', 'no-such-card-anywhere'] });
+      assert.strictEqual(again.status, 200);
+      assert.strictEqual(again.json.added, 0);
+      assert.strictEqual(again.json.already, 1);
+      assert.deepStrictEqual(again.json.failed, ['no-such-card-anywhere']);
+      assert.deepStrictEqual([...again.json.card_ids].sort(), ['mtg-counter', 'tcgdex-de-glurak']);
+      assert.strictEqual((await db.get(`SELECT quantity_wanted q FROM card_list_items WHERE list_id = ? AND card_id = 'mtg-counter'`, [defaults[0].id])).q, 1);
+
+      // Listed first, with owned/missing like any list: Alice owns no Counterspell.
+      const all = (await alice('GET', '/api/lists')).json;
+      assert.strictEqual(all[0].id, defaults[0].id, 'the default Wishlist leads the Lists view');
+      assert.strictEqual(all[0].is_default, 1);
+      assert.strictEqual(all[0].summary.missing > 0, true);
+
+      // Bob sees none of it, and cannot take cards off it.
+      assert.deepStrictEqual((await bob('GET', '/api/lists/default')).json, { list: null, card_ids: [] });
+      assert.strictEqual((await bob('DELETE', '/api/lists/default/items/mtg-counter')).json.removed, 0);
+      assert.strictEqual((await bob('GET', `/api/lists/${defaults[0].id}`)).status, 404);
+
+      // The heart again takes it off.
+      const off = await alice('DELETE', '/api/lists/default/items/mtg-counter');
+      assert.strictEqual(off.json.removed, 1);
+      assert.deepStrictEqual(off.json.card_ids, ['tcgdex-de-glurak']);
+      assert.strictEqual((await alice('DELETE', '/api/lists/default/items/mtg-counter')).json.removed, 0);
+
+      // Deleted, it comes back on the next heart.
+      assert.strictEqual((await alice('DELETE', `/api/lists/${defaults[0].id}`)).status, 200);
+      assert.strictEqual((await alice('GET', '/api/lists/default')).json.list, null);
+      const back = await alice('POST', '/api/lists/default/items', { card_ids: ['mtg-bolt-b'] });
+      assert.strictEqual(back.status, 201);
+      assert.notStrictEqual(back.json.list.id, defaults[0].id);
+    });
+
+    await check('F9-TC10', async () => {
+      // The nav-bar tabs: stored per user, unknown names dropped, null resets.
+      assert.strictEqual((await alice('GET', '/api/auth/me')).json.user.nav_tabs, null, 'default set until chosen');
+      for (const bad of ['lists', [1], { lists: true }]) {
+        assert.strictEqual((await alice('PUT', '/api/auth/settings', { nav_tabs: bad })).status, 400);
+      }
+      const saved = await alice('PUT', '/api/auth/settings', { nav_tabs: ['notes', 'lists', 'admin', 'bogus', 'lists'] });
+      assert.strictEqual(saved.status, 200);
+      assert.deepStrictEqual(saved.json.user.nav_tabs, ['lists', 'notes'], 'known tabs once each, in bar order');
+      assert.deepStrictEqual((await alice('GET', '/api/auth/me')).json.user.nav_tabs, ['lists', 'notes']);
+      assert.strictEqual((await bob('GET', '/api/auth/me')).json.user.nav_tabs, null, 'per user');
+      assert.deepStrictEqual((await alice('PUT', '/api/auth/settings', { nav_tabs: [] })).json.user.nav_tabs, [], 'nothing pinned is a choice');
+      assert.strictEqual((await alice('PUT', '/api/auth/settings', { nav_tabs: null })).json.user.nav_tabs, null);
+    });
   } finally {
     try { server.kill('SIGKILL'); } catch { /* gone */ }
     try { await new Promise(resolve => db.dbConnection.close(() => resolve())); } catch { /* closed */ }
