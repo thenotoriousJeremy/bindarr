@@ -476,7 +476,12 @@ square using the shared `shared/imgproc.mjs` and uploads only that. Two reasons:
 the previous version posted a JPEG per preview frame (~2.7 MB per minute of
 pointing the camera at a card), and the outline on screen is now *by
 construction* the crop that gets matched. Detection is ~80 ms per frame on the
-wasm EP — name the EP explicitly, WebGPU measured 1075 ms for this model.
+wasm EP — name the EP explicitly, WebGPU measured 1075 ms for this model. Since
+1.8.3 the detector is fastweb-single (still served as `cornelius.onnx`), ~22 ms
+on one wasm thread on a desktop. In the native app the outline instead comes from
+the `bindarr-native-detector` plugin (native ONNX Runtime on all cores; see
+MOBILE.md "Native card detection"), with the worker as its fallback. Both share
+`utils/detectResult.js` for everything after inference.
 
 Server side, `cvScan.match(buffer, game, topK, opts)`:
 
@@ -829,7 +834,8 @@ storage view), `binderLayout` (page widths, pocket placement), `binderArtGeometr
 (badge styling), `langHelper` (Japanese name handling), `cardOptions`
 (condition/printing/language enums), `shuffle` (draw sim), `i18n`/`translate` (UI
 language, React context rather than a library). Scanning adds
-`cardDetector`/`detectWorker` (cornelius on a worker thread), `sharpness` (is the
+`cardDetector`/`detectWorker` (cornelius on a worker thread, or `nativeDetector`
+in the app), `detectResult` (turning corner outputs into a detection), `sharpness` (is the
 frame worth capturing) and `autoCapture` (the steady-hand cadence); the geometry
 they share with the server lives in `shared/imgproc.mjs`, with the detector itself
 in `shared/cardDetectPure.mjs`.

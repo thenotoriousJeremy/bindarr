@@ -5,8 +5,11 @@
 FROM node:24-alpine AS frontend-builder
 WORKDIR /app/frontend
 
-# Copy frontend packages and lockfiles
+# Copy frontend packages and lockfiles. The native detector is a local
+# `file:` dependency (the app's Capacitor plugin), so npm ci needs its manifest;
+# it has no JavaScript, and its native code only matters to the mobile builds.
 COPY frontend/package*.json ./
+COPY frontend/native-detector/package.json ./native-detector/package.json
 RUN npm ci
 
 # Copy frontend source files

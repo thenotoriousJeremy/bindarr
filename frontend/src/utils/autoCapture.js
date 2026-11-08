@@ -35,13 +35,15 @@ export const REARM_DRIFT = 0.09;
 // still being assembled. NOT a cadence: nothing fires just because it elapses.
 export const MIN_RECAPTURE_MS = 600;
 // Appearance change (cardSignature distance, 1 - correlation) that counts as a
-// different card. Measured on synthetic cards sharing one frame layout (see
-// cardSignature.test.js): the same card under corner jitter, an exposure shift
-// and sensor noise stays at or under 0.03; different cards ran 0.13 to 0.48. A
-// shared layout pulls different cards much closer than unrelated pictures, so
-// this sits low in that gap: a false re-arm only re-scans the card and the
-// repeat-card prompt catches it, a missed one leaves auto-scan stuck.
-export const REARM_SIG_DIST = 0.1;
+// different card. Measured on real card images (16 Pokémon from one set, 16 MTG
+// from one set) laid into detect frames: the same card under corner jitter,
+// exposure drift, sensor noise and a focus hunt stayed at or under 0.056;
+// different cards of one set came no closer than 0.070 (MTG, whose frames are the
+// most alike), most pairs 0.3 and up. A shared layout pulls different cards much
+// closer than unrelated pictures, so this sits low in that gap: a false re-arm
+// only re-scans the card and the repeat-card prompt catches it, a missed one
+// leaves auto-scan stuck.
+export const REARM_SIG_DIST = 0.06;
 // Frame-to-frame appearance change still small enough to call the scene settled.
 // A hand sweeping across the card moves it far more than this.
 export const REARM_SIG_STABLE = 0.08;

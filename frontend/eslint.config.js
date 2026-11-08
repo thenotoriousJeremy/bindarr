@@ -6,7 +6,9 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import jsxA11y from 'eslint-plugin-jsx-a11y';
 
 export default [
-  { ignores: ['dist/', 'android/', 'ios/', 'src/device/generated/'] },
+  // public/ort/ is ONNX Runtime's own minified wasm glue, copied in by
+  // scripts/copy-ort.mjs (gitignored). The old --ext js,jsx never reached .mjs.
+  { ignores: ['dist/', 'android/', 'ios/', 'src/device/generated/', 'public/ort/'] },
   js.configs.recommended,
   react.configs.flat.recommended,
   react.configs.flat['jsx-runtime'],
