@@ -133,7 +133,7 @@ export default function BinderViewPanel({
     artPockets: artByPage.get(c.id) || null
   });
 
-  let binderPages = null;
+  let binderPages;
   if (isMobile) {
     const targetIdx = Math.min(activePageIndex, compartments.length - 1);
     const activePage = compartments[targetIdx];

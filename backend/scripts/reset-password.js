@@ -19,8 +19,9 @@ const crypto = require('crypto');
 
 // The server's own .env lookup (see the top of src/server.js), so DB_PATH means
 // the same file here as it does to the server started from the same directory.
-require('dotenv').config();
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+const DOTENV = { override: false, quiet: true };
+require('dotenv').config(DOTENV);
+require('dotenv').config({ ...DOTENV, path: path.join(__dirname, '..', '.env') });
 
 const MIN_LENGTH = 8; // the app's own minimum (routes/auth.js, routes/admin.js)
 

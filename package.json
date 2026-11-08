@@ -13,6 +13,6 @@
     "start": "npm start --prefix backend"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^10.0.6"
   }
 }

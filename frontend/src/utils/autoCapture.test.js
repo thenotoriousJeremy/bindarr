@@ -60,7 +60,7 @@ assert.strictEqual(
 
 // Drift is measured against the CAPTURED quad, so creeping frame-by-frame never
 // accumulates into a false re-arm.
-let creeping = held;
+let creeping;
 for (let i = 0; i < 20; i++) {
   creeping = quad(0.2, 0.1 + i * 0.002);
   if (worstCornerDrift(held, creeping) > REARM_DRIFT) break;

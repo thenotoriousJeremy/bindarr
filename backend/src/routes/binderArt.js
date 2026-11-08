@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const store = require('../utils/binderArtStore');
+const { sendFileAt } = require('../utils/sendFileAt');
 
 const router = express.Router();
 
@@ -142,7 +143,7 @@ router.get('/binder-art/:id/image', async (req, res) => {
     if (!file) return res.status(404).json({ error: 'Artwork not found' });
     res.set('Content-Type', row.mime);
     res.set('Cache-Control', 'private, max-age=3600');
-    res.sendFile(file);
+    sendFileAt(res, file);
   } catch (error) {
     console.error('Binder artwork read failed:', error.message);
     res.status(500).json({ error: 'Could not read that image.' });

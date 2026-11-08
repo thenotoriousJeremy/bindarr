@@ -910,7 +910,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       try {
         const p = typeof cfg === 'string' ? JSON.parse(cfg) : cfg;
         draft = Array.isArray(p) ? p : (p.rules || []);
-      } catch (e) { draft = []; }
+      } catch { draft = []; }
     }
     setCompRuleDraft(draft);
     setRulesComp(comp);

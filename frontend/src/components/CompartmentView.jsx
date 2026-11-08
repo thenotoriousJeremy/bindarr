@@ -258,7 +258,7 @@ export default function CompartmentView({
       const p = typeof cfg === 'string' ? JSON.parse(cfg) : cfg;
       const rules = Array.isArray(p) ? p : (p.rules || []);
       return rules.length;
-    } catch (e) { return 0; }
+    } catch { return 0; }
   })();
   const acceptsLabel = compRuleCount > 0 ? t('compartment.acceptsCount', { count: compRuleCount }) : t('compartment.accepts');
 
@@ -904,9 +904,9 @@ export default function CompartmentView({
               {renderedCards.map((card, i) => {
                 const offset = i - activeCardIndex;
                 const absOffset = Math.abs(offset);
-                let transform = '';
+                let transform;
                 let zIndex = 10 - absOffset;
-                let opacity = 1;
+                let opacity;
                 let filter = 'none';
 
                 if (offset === 0) {
