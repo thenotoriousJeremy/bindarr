@@ -71,6 +71,45 @@ for (let i = 0; i < deck.length; i++) {
   }
 }
 
+// Fine detail under detector jitter. The blocky art above hides the failure that
+// left a card slinger on "Next card": real art has detail far finer than a cell,
+// and a signature built from a few POINTS per cell moved whenever the corners
+// jittered by the ~0.012 a card lying still shows, so the same card failed
+// REARM_SIG_STABLE between detections and the re-arm count kept resetting. Here
+// the detail is a 9 px pattern (texture, holo, print) over coarse art; the old
+// three points per cell side read it at 0.22, this at 0.045. Each frame jitters
+// every corner independently, as the detector does.
+function fineFrame(seed, quad) {
+  const r = rng(seed);
+  const art = Array.from({ length: 64 }, () => 40 + r() * 100);
+  const rgba = new Uint8ClampedArray(W * H * 4);
+  const [tl, tr, , bl] = Q;   // where the card really is
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const u = ((x + 0.5) / W - tl.x) / (tr.x - tl.x);
+      const v = ((y + 0.5) / H - tl.y) / (bl.y - tl.y);
+      const fine = 45 * Math.sin(2 * Math.PI * x / 9) * Math.sin(2 * Math.PI * y / 9);
+      const lum = u < 0 || u >= 1 || v < 0 || v >= 1 ? 60
+        : art[Math.min(7, (v * 8) | 0) * 8 + Math.min(7, (u * 8) | 0)] + 50 + fine;
+      const i = (y * W + x) * 4;
+      rgba[i] = rgba[i + 1] = rgba[i + 2] = lum;
+      rgba[i + 3] = 255;
+    }
+  }
+  return quadSignature(rgba, W, H, quad);
+}
+const jr = rng(99);
+const jittered = () => Q.map(p => ({ x: p.x + (jr() - 0.5) * 0.024, y: p.y + (jr() - 0.5) * 0.024 }));
+for (let seed = 1; seed <= 6; seed++) {
+  let prev = fineFrame(seed, jittered());
+  for (let k = 0; k < 4; k++) {
+    const next = fineFrame(seed, jittered());
+    const d = signatureDistance(prev, next);
+    assert.ok(d < REARM_SIG_STABLE, `fine-detail card ${seed} stays settled under corner jitter (${d.toFixed(3)})`);
+    prev = next;
+  }
+}
+
 // No contrast, nothing to compare: say so rather than call every flat frame equal.
 const flat = new Uint8ClampedArray(W * H * 4).fill(128);
 assert.strictEqual(quadSignature(flat, W, H, Q), null, 'a featureless quad has no signature');
