@@ -3,6 +3,7 @@ const db = require('../db');
 const { resolveCardPrice, parseCardRow } = require('../utils/priceHelpers');
 const { compartmentLabel } = require('../utils/compartmentSort');
 const binderArt = require('../utils/binderArtStore');
+const { sendFileAt } = require('../utils/sendFileAt');
 
 const router = express.Router();
 
@@ -95,7 +96,7 @@ router.get('/:share_token/containers/:id/art/:artworkId', async (req, res) => {
     res.set('Content-Type', row.mime);
     // Revalidated, so turning sharing off takes effect on the next view.
     res.set('Cache-Control', 'public, max-age=0, must-revalidate');
-    res.sendFile(file);
+    sendFileAt(res, file);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to retrieve artwork' });

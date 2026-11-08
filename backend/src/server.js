@@ -22,6 +22,7 @@ const { createScheduler } = require('./scheduler');
 const { runPriceSweeps, requestStop: stopPriceSweeps } = require('./utils/priceSweeps');
 const { createShutdown, whenTrue } = require('./utils/shutdown');
 const { serveFrontend } = require('./utils/staticCache');
+const { sendFileAt } = require('./utils/sendFileAt');
 
 // Say the provider deprecation out loud at boot, to the installs it applies to.
 //
@@ -262,6 +263,14 @@ const BACKUP_BODY_PATH = '/api/backup';
 const isBigBodyPath = (p) => [...BIG_BODY_PATHS, BACKUP_BODY_PATH].some(b => p === b || p.startsWith(`${b}/`));
 const smallJson = express.json({ limit: '1mb' });
 app.use((req, res, next) => (isBigBodyPath(req.path) ? next() : smallJson(req, res, next)));
+// Express 5's parsers leave req.body undefined when a request has no JSON body;
+// Express 4 left {}. Routes destructure req.body, so keep the 4 default: a missing
+// body then fails validation with a 400 instead of a TypeError's 500. The big-body
+// parsers below the gate still replace it with what they parse.
+app.use((req, res, next) => {
+  if (req.body === undefined) req.body = {};
+  next();
+});
 
 // Rebuild any catalog that has fallen behind, right after the weekly set refresh
 // discovers new releases.
@@ -608,7 +617,7 @@ app.use('/api/notifications', notificationRoutes);
 // catch-all like any other unknown path.
 app.get(PWA_FILES, (req, res, next) => {
   setPwaHeaders(req, res);
-  res.sendFile(path.join(__dirname, '../../frontend/dist', req.path), (err) => {
+  sendFileAt(res, path.join(__dirname, '../../frontend/dist', req.path), (err) => {
     if (err && !res.headersSent) next();
   });
 });
@@ -631,7 +640,7 @@ app.get('/models/cornelius.onnx', (req, res) => {
   // the persisted volume (CV_MODEL_DIR=/app/database/models). Hardcoded, this
   // 404'd in every Docker install, the worker fell back to the pure-JS contour
   // detector, and detection went from ~80ms to 200ms+ with the CPU pegged.
-  res.sendFile(path.join(require('./utils/modelAssets').MODEL_DIR, 'cornelius.onnx'), (err) => {
+  sendFileAt(res, path.join(require('./utils/modelAssets').MODEL_DIR, 'cornelius.onnx'), (err) => {
     if (err && !res.headersSent) res.status(404).end();
   });
 });

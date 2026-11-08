@@ -34,7 +34,9 @@ function request(url, headers = {}) {
   });
 }
 
-const dist = fs.mkdtempSync(path.join(os.tmpdir(), 'bindarr-staticcache-'));
+// Under a dot-directory on purpose: Express 5's send ignores a path with any dot
+// segment unless given a root, and an install under ~/.local/... served no UI.
+const dist = fs.mkdtempSync(path.join(os.tmpdir(), '.bindarr-staticcache-'));
 const files = {
   'index.html': '<!doctype html><script type="module" src="/assets/index-Ab12Cd.js"></script>',
   'assets/index-Ab12Cd.js': 'console.log("bundle")',
