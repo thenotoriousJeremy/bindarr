@@ -11,6 +11,7 @@ import {
   formatPrice,
   priceText,
 } from './formatPrice.js';
+import { setActiveLocale } from './translate.js';
 
 // Polyfill minimal localStorage & window for node test environment
 if (typeof globalThis.localStorage === 'undefined') {
@@ -34,6 +35,36 @@ test('formatPrice: formats numbers and handles edge cases', () => {
   assert.equal(formatPrice('invalid'), '0.00');
 });
 
+test('formatPrice: the reader\'s notation for the locale given', () => {
+  assert.equal(formatPrice(1234.5, 'en'), '1,234.50');
+  assert.equal(formatPrice(1234.5, 'de'), '1.234,50');
+  assert.equal(formatPrice(1234.5, 'fr'), '1\u202f234,50');
+  assert.equal(formatPrice(1234.5, 'ru'), '1\u00a0234,50');
+  assert.equal(formatPrice(1234.5, 'pt-BR'), '1.234,50');
+  assert.equal(formatPrice(1234.5, 'ja'), '1,234.50');
+  assert.equal(formatPrice('4.5', 'de'), '4,50');
+  assert.equal(formatPrice('12.50 USD', 'de'), '12,50');
+  assert.equal(formatPrice(null, 'de'), '0,00');
+  assert.equal(formatPrice(0.125, 'de'), '0,13');
+  // Not a language tag at all: still a number, in English notation.
+  assert.equal(formatPrice(12.5, 'not a locale!'), '12.50');
+});
+
+test('priceText: active interface locale for the number, row currency for the symbol', () => {
+  localStorage.clear();
+  try {
+    setActiveLocale('de');
+    assert.equal(priceText(1234.5), '$1.234,50');
+    assert.equal(priceText(4.5, 'EUR'), '€4,50');
+    assert.equal(formatPrice(4.5), '4,50', 'no locale passed: the interface language');
+    setActiveLocale('fr');
+    assert.equal(priceText(1234.5, 'GBP'), '£1\u202f234,50');
+  } finally {
+    setActiveLocale('en');
+  }
+  assert.equal(priceText(1234.5), '$1,234.50');
+});
+
 test('currency configuration and defaults', () => {
   localStorage.clear();
   assert.equal(DEFAULT_CURRENCY, 'USD');
@@ -41,8 +72,9 @@ test('currency configuration and defaults', () => {
   assert.equal(currencySymbol(), '$');
   assert.equal(activeCurrencySymbol(), '$');
   assert.equal(priceText(5), '$5.00');
-  // Even if an old row had EUR currency, priceText uses the active currency (USD)
-  assert.equal(priceText(5, 'EUR'), '$5.00');
+  // A row's own currency wins over the active one; stored prices are never converted
+  assert.equal(priceText(5, 'EUR'), '€5.00');
+  assert.equal(priceText(5, 'USD'), '$5.00');
 });
 
 test('currency selection and priceText formatting', () => {
@@ -54,7 +86,8 @@ test('currency selection and priceText formatting', () => {
   assert.equal(currencySymbol(), '€');
   assert.equal(activeCurrencySymbol(), '€');
   assert.equal(priceText(19.99), '€19.99');
-  assert.equal(priceText(19.99, 'USD'), '€19.99'); // Enforces single active currency
+  assert.equal(priceText(19.99, 'USD'), '$19.99'); // Row currency, not the active one
+  assert.equal(priceText(19.99, 'EUR'), '€19.99');
 
   // Test GBP
   setCurrency('GBP');
@@ -86,6 +119,18 @@ test('currency selection and priceText formatting', () => {
   assert.equal(currencySymbol(), '$');
   assert.equal(priceText(10), '$10.00');
 
+  localStorage.clear();
+});
+
+test('priceText falls back to the active currency when the row has none or an unknown one', () => {
+  localStorage.clear();
+  setCurrency('GBP');
+  assert.equal(priceText(3), '£3.00');
+  assert.equal(priceText(3, null), '£3.00');
+  assert.equal(priceText(3, undefined), '£3.00');
+  assert.equal(priceText(3, ''), '£3.00');
+  assert.equal(priceText(3, 'XYZ'), '£3.00');
+  assert.equal(priceText(3, 'JPY'), '¥3.00');
   localStorage.clear();
 });
 

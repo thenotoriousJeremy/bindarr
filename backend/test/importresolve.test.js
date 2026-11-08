@@ -69,7 +69,7 @@ lorcastApi.client.defaults.adapter = async (config) => {
   return { data: { results }, status: 200, statusText: 'OK', headers: {}, config };
 };
 
-const handler = importRouter.stack.find(layer => layer.route?.path === '/import').route.stack[0].handle;
+const handler = importRouter.stack.find(layer => layer.route?.path === '/import').route.stack.at(-1).handle;
 async function importCsv(data) {
   const res = {
     statusCode: 200,

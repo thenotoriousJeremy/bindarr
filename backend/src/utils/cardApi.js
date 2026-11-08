@@ -6,7 +6,13 @@
 //   mtg-<uuid>          Scryfall
 //   tcgdex-<lang>-<id>  TCGdex
 //   pokemontcgapi-<id>  pokemontcgapi.com
-//   <anything else>     pokemontcg.io
+//   lorcana-<id>        Lorcast
+//   riftbound-<code>    RiftCodex (riftcodexApi has the encoding)
+//   <set>-<number>      pokemontcg.io, and only in that shape (utils/games)
+//   <anything else>     nobody: null, and the caller answers 404
+//
+// The prefixes themselves live in shared/games.json, so a new game registers
+// its prefix there instead of adding a branch here.
 //
 // NOT the same question as utils/pokemonProvider. That one decides which provider
 // should SERVE a language when searching or building — a policy that follows a
@@ -26,17 +32,53 @@ const tcgApi = require('../tcgApi');
 const tcgdexApi = require('../tcgdexApi');
 const lorcastApi = require('../lorcastApi');
 const languages = require('./languages');
+const games = require('./games');
 
 const isMtgId = (id) => String(id || '').startsWith('mtg-');
 const isTcgdexId = (id) => String(id || '').startsWith('tcgdex-');
 const isPokemontcgapiId = id => String(id || '').startsWith('pokemontcgapi-');
 const isLorcanaId = (id) => String(id || '').startsWith('lorcana-');
 
-// The game an ID implies. `game` from the request wins when explicit; otherwise inferred from prefix.
+// The game an ID implies, or null when nothing can say.
+//
+// The ID's own prefix wins over the request. It is a fact about which provider
+// minted the card, and asking for 'mtg' with a TCGdex id used to answer 'mtg'.
+// An unprefixed id is pokemontcg.io's when it has that id's shape
+// (games.gameOfId). Failing both, an EXPLICITLY requested game other than the
+// legacy one may try its provider's raw id — Scryfall resolves a bare uuid,
+// Lorcast a bare crd_ id — but a request that merely defaulted to Pokémon may
+// not. That is the point of the null: an id nothing recognises used to be
+// "Pokémon", so it went off to pokemontcg.io, which could only answer 404, and
+// the route then blamed that API for a card it was never going to have.
 function gameOf(id, requestedGame) {
-  if (requestedGame === 'mtg' || isMtgId(id)) return 'mtg';
-  if (requestedGame === 'lorcana' || isLorcanaId(id)) return 'lorcana';
-  return 'pokemon';
+  const fromId = games.gameOfId(id);
+  if (fromId) return fromId;
+  // No id at all contradicts nothing: a row that names only its game (an
+  // import row with set and number) is that game, if the game is known.
+  if (!id) return games.isGame(requestedGame) ? requestedGame : null;
+  if (requestedGame && requestedGame !== games.LEGACY_GAME && games.isGame(requestedGame)) return requestedGame;
+  return null;
+}
+
+// The provider module behind each registry `provider` name. Pokémon is not
+// here: it has three providers, and which one owns a card is read off the id
+// (getCardById) or decided by utils/pokemonProvider (apiForGame).
+const PROVIDERS = {
+  scryfall: () => scryfallApi,
+  lorcast: () => lorcastApi,
+  riftcodex: () => require('../riftcodexApi'),
+};
+const providerOf = (game) => {
+  const entry = games.get(game);
+  const load = entry && PROVIDERS[entry.provider];
+  return load ? load() : null;
+};
+
+// The module that SEARCHES a game, in `lang`. Null for an unknown game, which
+// the routes turn into a 400 rather than a Pokémon search.
+async function apiForGame(game, lang) {
+  if (game === 'pokemon') return require('./pokemonProvider').apiFor(lang);
+  return providerOf(game);
 }
 
 // Fill in a row that was cached from a partial source before it is relied on.
@@ -58,14 +100,17 @@ async function hydrate(id) {
 }
 
 // Fetch a card from whichever provider minted its ID. Returns null when that
-// provider does not have it.
+// provider does not have it, or when no provider could have minted it.
 async function getCardById(id, { game, tcgApiKey = '' } = {}) {
   const g = gameOf(id, game);
-  if (g === 'mtg') return await scryfallApi.getCardById(id);
-  if (g === 'lorcana') return await lorcastApi.getCardById(id);
-  if (isPokemontcgapiId(id)) return await require('../pokemontcgapi').getCardById(id);
-  if (isTcgdexId(id)) return await tcgdexApi.getCardById(id);
-  return await tcgApi.getCardById(id, tcgApiKey);
+  if (!g) return null;
+  if (g === 'pokemon') {
+    if (isPokemontcgapiId(id)) return await require('../pokemontcgapi').getCardById(id);
+    if (isTcgdexId(id)) return await tcgdexApi.getCardById(id);
+    return await tcgApi.getCardById(id, tcgApiKey);
+  }
+  const provider = providerOf(g);
+  return provider ? await provider.getCardById(id) : null;
 }
 
 // The same card as printed in `language`, or null when there is no such printing.
@@ -136,4 +181,7 @@ async function printingInLanguage(card, language) {
   return null;
 }
 
-module.exports = { isPokemontcgapiId, isMtgId, isTcgdexId, isLorcanaId, gameOf, hydrate, getCardById, printingInLanguage };
+module.exports = {
+  isPokemontcgapiId, isMtgId, isTcgdexId, isLorcanaId, gameOf, apiForGame,
+  hydrate, getCardById, printingInLanguage,
+};

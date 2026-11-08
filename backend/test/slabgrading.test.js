@@ -108,8 +108,10 @@ const CHARIZARD = {
   const realGet = psaApi.client.get;
   const failWith = (status) => { psaApi.client.get = async () => { const e = new Error('x'); e.response = { status }; throw e; }; };
   try {
+    // PSA's 401 goes out as 403: a 401 from Bindarr would read as the user's own
+    // session ending, and the app signs out on that.
     failWith(401);
-    await assert.rejects(() => psaApi.lookupCert('11111111', 'bad'), (e) => e.status === 401);
+    await assert.rejects(() => psaApi.lookupCert('11111111', 'bad'), (e) => e.status === 403);
     failWith(404);
     await assert.rejects(() => psaApi.lookupCert('22222222', 'tok'), (e) => e.status === 404);
     failWith(429);

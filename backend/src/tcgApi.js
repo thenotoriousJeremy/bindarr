@@ -669,6 +669,7 @@ async function updateCollectionPrices(force = false) {
     console.log('Background price update complete.');
   } catch (err) {
     console.error('Error during background price update:', err);
+    require('./notify').emit({ type: 'price_sweep_failed', source: 'pokemontcg.io', error: err.message });
   }
 }
 

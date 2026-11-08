@@ -2,6 +2,7 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 
 // The app began life as "PokeKeep", a Pokémon-only tracker, so its database was
 // called pokemon_cards.db. It has handled Magic since v1.4.x, and the file name
@@ -48,62 +49,242 @@ if (!fs.existsSync(dbDir)) {
 const dbPath = resolveDbPath(requestedDbPath);
 
 console.log(`Connecting to SQLite database at: ${dbPath}`);
+// Settles once the connection is open AND configured. initDb awaits it first.
+//
+// A connection that failed to open does not fail the queries queued on it —
+// sqlite3 drops them, so initDb's promise never settled and the server sat
+// listening, answering 503 forever. And the PRAGMAs are run one after another,
+// each waited for, before initDb's first statement: sqlite3 runs statements in
+// parallel, and a read still mid-step when the switch to WAL lands fails it with
+// "cannot change into wal mode from within a transaction" — fired without a
+// callback, that was an uncaught error event, which ends the process. The busy
+// timeout goes first so the switch waits out another connection's lock rather
+// than failing on it.
+let settleOpen;
+const opened = new Promise((resolve, reject) => { settleOpen = (err) => (err ? reject(err) : resolve()); });
+opened.catch(() => {});   // initDb reports it; never an unhandled rejection on its own
 const dbConnection = new sqlite3.Database(dbPath, (err) => {
   if (err) {
     console.error('Error opening database:', err.message);
-  } else {
-    console.log('Database connection established successfully.');
-    dbConnection.run('PRAGMA foreign_keys = ON');
-    dbConnection.run('PRAGMA journal_mode = WAL');
-    dbConnection.run('PRAGMA busy_timeout = 5000');
+    return settleOpen(err);
   }
+  console.log('Database connection established successfully.');
+  const pragmas = ['PRAGMA busy_timeout = 5000', 'PRAGMA foreign_keys = ON', 'PRAGMA journal_mode = WAL'];
+  const next = (i) => {
+    if (i === pragmas.length) return settleOpen();
+    dbConnection.run(pragmas[i], (pragmaErr) => {
+      if (!pragmaErr) return next(i + 1);
+      console.error(`Error configuring database (${pragmas[i]}):`, pragmaErr.message);
+      settleOpen(pragmaErr);
+    });
+  };
+  next(0);
 });
+
+// --- Connection lock --------------------------------------------------------
+// There is ONE sqlite3 connection, so an open transaction belongs to the
+// connection, not to the code that opened it. Before this lock, a write any
+// other request made while a transaction was open landed inside it — and its
+// ROLLBACK threw that write away — and every reader saw rows nobody had
+// committed.
+//
+// So the connection has an owner. While a transaction is open, statements from
+// outside it queue until its COMMIT or ROLLBACK. Statements issued from inside
+// it, in the callback itself or in any helper the callback awaits, run at once.
+// "Inside" is tracked with AsyncLocalStorage, so helpers keep calling
+// db.run/get/all and need no transaction handle passed down to them.
+//
+// Transactions run one at a time, and each waits for the statements already
+// running to finish before its BEGIN: node-sqlite3 can reorder statements that
+// are in flight together, so "issued before the BEGIN" does not mean "executed
+// before it". The queue is first come, first served. A statement that arrives
+// while a transaction is waiting goes behind it, so a steady stream of reads
+// cannot starve a write.
+//
+// The lock is held for the whole callback. A transaction must never await a
+// network request: every other request in the process would wait with it.
+//
+// A statement from a transaction that has already finished (work the callback
+// started and did not await) is treated as coming from outside: it waits its
+// turn and runs on its own, rather than slipping into whichever transaction
+// holds the connection next.
+const txScope = new AsyncLocalStorage();
+let owner = null;     // the open transaction, if any
+let inFlight = 0;     // statements handed to sqlite3 and not yet answered
+const waiting = [];   // first come, first served: { tx, start }
+
+function dispatch(method, sql, params) {
+  inFlight++;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (err, result) => {
+      if (settled) return;
+      settled = true;
+      inFlight--;
+      if (err) reject(err);
+      else resolve(result);
+      pump();
+    };
+    try {
+      if (method === 'run') {
+        dbConnection.run(sql, params, function (err) {
+          done(err, err ? undefined : { lastID: this.lastID, changes: this.changes });
+        });
+      } else {
+        dbConnection[method](sql, params, done);
+      }
+    } catch (err) {
+      done(err);
+    }
+  });
+}
+
+// Start whatever the free connection can take: queued statements, until the next
+// transaction in line, which then waits for the connection to go quiet.
+function pump() {
+  while (!owner && waiting.length) {
+    if (waiting[0].tx && inFlight > 0) return;
+    waiting.shift().start();
+  }
+}
+
+function schedule(method, sql, params) {
+  if (!owner) {
+    if (waiting.length === 0) return dispatch(method, sql, params);
+  } else {
+    const scope = txScope.getStore();
+    if (scope && scope.tx === owner) return dispatch(method, sql, params);
+  }
+  return new Promise((resolve, reject) => {
+    waiting.push({ tx: false, start: () => dispatch(method, sql, params).then(resolve, reject) });
+  });
+}
+
+function acquire(tx) {
+  return new Promise(resolve => {
+    const start = () => { owner = tx; resolve(); };
+    if (!owner && waiting.length === 0 && inFlight === 0) start();
+    else waiting.push({ tx: true, start });
+  });
+}
+
+function release() {
+  owner = null;
+  pump();
+}
+
+// BEGIN/COMMIT/SAVEPOINT and friends, which only make sense while `tx` still
+// owns the connection. Run after it has gone, a SAVEPOINT would quietly open a
+// brand-new transaction nobody commits.
+function control(tx, sql) {
+  if (owner !== tx) return Promise.reject(new Error(`${sql}: the transaction it belongs to has already finished`));
+  return dispatch('run', sql, []);
+}
+
+// Roll back without letting a failed ROLLBACK replace the error that caused it.
+async function undo(tx, sql) {
+  try {
+    await control(tx, sql);
+  } catch (err) {
+    console.error(`${sql} failed:`, err.message);
+  }
+}
 
 // Helper wrappers for Promise-based SQL operations
 function run(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    dbConnection.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve({ lastID: this.lastID, changes: this.changes });
-    });
-  });
+  return schedule('run', sql, params);
 }
 
 function get(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    dbConnection.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
+  return schedule('get', sql, params);
 }
 
 function all(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    dbConnection.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
+  return schedule('all', sql, params);
 }
 
-// Run fn inside BEGIN IMMEDIATE / COMMIT, rolling back if it throws.
+// One statement with the connection to itself, outside any transaction: VACUUM
+// INTO. SQLite refuses it with "cannot VACUUM - SQL statements in progress"
+// while any other statement on the connection is still running, and an ordinary
+// run() only waits for the open transaction, not for reads and writes already in
+// flight. So it queues like a transaction (waits for the connection to go quiet,
+// then owns it) and issues no BEGIN; everything that arrives meanwhile waits.
+async function runExclusive(sql, params = []) {
+  const scope = txScope.getStore();
+  if (owner && scope && scope.tx === owner) {
+    throw new Error(`${sql}: cannot run exclusively from inside a transaction`);
+  }
+  const tx = { exclusive: true };
+  await acquire(tx);
+  try {
+    return await dispatch('run', sql, params);
+  } finally {
+    release();
+  }
+}
+
+// Run fn inside BEGIN IMMEDIATE / COMMIT, rolling back if it throws. fn has the
+// connection to itself until it settles (see the connection lock above).
+//
+// Called from inside another transaction, it becomes a SAVEPOINT in that one
+// rather than a second BEGIN (which SQLite refuses): its writes commit or roll
+// back with the outer transaction, but if fn throws, only fn's own writes are
+// undone. That is what lets a caller catch one failed step and carry on.
+// Savepoints under the same parent take turns, because they nest as a stack and
+// two open side by side would release or roll back each other.
 //
 // fn takes no argument on purpose. It used to be handed a `tx` object, but that
 // object was `{ run, get, all, withTransaction }` — the module's own exports under
-// a different name. Callers gained nothing from it, and it read as statement-level
-// isolation this does not provide: there is ONE sqlite3 connection here, so every
-// query in the process is already inside whatever transaction is open. Use `db`
-// directly and the scope is honest.
+// a different name. Use `db` directly: the lock knows which statements are fn's.
 async function withTransaction(fn) {
-  await run('BEGIN IMMEDIATE TRANSACTION');
+  const scope = txScope.getStore();
+  if (owner && scope && scope.tx === owner) return withSavepoint(scope, fn);
+
+  const tx = { savepoints: 0 };
+  await acquire(tx);
   try {
-    const result = await fn();
-    await run('COMMIT');
-    return result;
-  } catch (error) {
-    await run('ROLLBACK');
-    throw error;
+    return await txScope.run({ tx, turn: Promise.resolve() }, async () => {
+      await control(tx, 'BEGIN IMMEDIATE TRANSACTION');
+      try {
+        const result = await fn();
+        await control(tx, 'COMMIT');
+        return result;
+      } catch (error) {
+        await undo(tx, 'ROLLBACK');
+        throw error;
+      }
+    });
+  } finally {
+    release();
+  }
+}
+
+async function withSavepoint(parent, fn) {
+  const previous = parent.turn;
+  let finished;
+  parent.turn = new Promise(resolve => { finished = resolve; });
+  try {
+    await previous;
+    // The transaction this was meant to join ended while it waited for its turn
+    // (its caller did not await it). Run on its own instead.
+    if (owner !== parent.tx) return await txScope.exit(() => withTransaction(fn));
+
+    const { tx } = parent;
+    const name = `sp_${++tx.savepoints}`;
+    return await txScope.run({ tx, turn: Promise.resolve() }, async () => {
+      await control(tx, `SAVEPOINT ${name}`);
+      try {
+        const result = await fn();
+        await control(tx, `RELEASE ${name}`);
+        return result;
+      } catch (error) {
+        await undo(tx, `ROLLBACK TO ${name}`);
+        await undo(tx, `RELEASE ${name}`);
+        throw error;
+      }
+    });
+  } finally {
+    finished();
   }
 }
 
@@ -126,14 +307,23 @@ function hashPassword(password) {
 // quantity above 1 there is a mistake rather than more slabs, and copying it would
 // trip the (grader, cert_number) unique index. It collapses to one copy instead.
 //
-// Runs on every startup. After the first run nothing matches, so it costs one
-// indexed SELECT.
+// Runs on every startup, from initDb, after every column migration — which is
+// what makes copying "every column" mean grading, notes and market value too.
+// This is the only split. server.js used to run a second one straight after
+// initDb, written before those columns existed: it rebuilt each copy from a fixed
+// column list, so a copy came out ungraded, without its notes and value, stamped
+// as added today, and a graded row was duplicated into raw copies of one slab.
+// After the first run nothing matches, so it costs one SELECT.
+//
+// The read is inside the transaction: the server is already taking requests
+// while initDb runs, and a row edited between reading it and splitting it would
+// be split from a quantity it no longer has.
 async function splitStackedRows() {
-  const stacked = await all(`SELECT * FROM collection WHERE quantity > 1`);
-  if (stacked.length === 0) return 0;
-  const cols = (await all(`PRAGMA table_info(collection)`)).map(c => c.name).filter(n => n !== 'id');
-  const placeholders = cols.map(() => '?').join(', ');
-  await withTransaction(async () => {
+  const split = await withTransaction(async () => {
+    const stacked = await all(`SELECT * FROM collection WHERE quantity > 1`);
+    if (stacked.length === 0) return 0;
+    const cols = (await all(`PRAGMA table_info(collection)`)).map(c => c.name).filter(n => n !== 'id');
+    const placeholders = cols.map(() => '?').join(', ');
     for (const row of stacked) {
       if (!row.cert_number) {
         for (let i = 1; i < row.quantity; i++) {
@@ -143,19 +333,87 @@ async function splitStackedRows() {
       }
       await run(`UPDATE collection SET quantity = 1 WHERE id = ?`, [row.id]);
     }
+    return stacked.length;
   });
-  console.log(`Split ${stacked.length} stacked collection row(s) into single copies.`);
-  return stacked.length;
+  if (split) console.log(`Split ${split} stacked collection row(s) into single copies.`);
+  return split;
+}
+
+// --- PRE-MIGRATION SNAPSHOT ---
+// initDb's migrations are idempotent and mostly additive, but they run against
+// the only copy of someone's collection, and one of them drops tables. So before
+// a DIFFERENT release migrates a database that holds data, it is snapshotted
+// (backup.createPreMigrationBackup: same atomic, verified write as every backup).
+//
+// "A different release" is one pragma read. PRAGMA user_version records the
+// release that last completed initDb on this file, as major*1e6 + minor*1e3 +
+// patch — it was unused (0) until now, so every existing install takes one
+// snapshot on its first boot of this code. Keyed to the release rather than to a
+// schema number someone has to remember to bump: every release that ships a
+// migration has a new version, and dev restarts on the same version cost nothing.
+const SCHEMA_RELEASE = require('../package.json').version;
+
+function releaseMarker(version) {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(version || ''));
+  return m ? Number(m[1]) * 1e6 + Number(m[2]) * 1e3 + Number(m[3]) : 0;
+}
+const markerRelease = (marker) => (marker > 0
+  ? `${Math.floor(marker / 1e6)}.${Math.floor(marker / 1e3) % 1e3}.${marker % 1e3}`
+  : null);
+
+// Anything worth keeping? A brand-new file has no tables, and a database whose
+// tables are all empty has nothing to lose.
+async function hasData() {
+  const tables = await all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`);
+  for (const { name } of tables) {
+    if (await get(`SELECT 1 AS present FROM "${name.replace(/"/g, '""')}" LIMIT 1`)) return true;
+  }
+  return false;
+}
+
+async function snapshotBeforeMigrating() {
+  // Device mode (embedded/index.js) sets this: a phone has no BACKUP_DIR.
+  if (process.env.BINDARR_SKIP_PRE_MIGRATION_SNAPSHOT === '1') return;
+  const { user_version: stored } = await get(`PRAGMA user_version`);
+  if (stored === releaseMarker(SCHEMA_RELEASE)) return;
+  const from = markerRelease(stored);
+  try {
+    if (!(await hasData())) return;
+    const snap = await require('./backup').createPreMigrationBackup({ from, to: SCHEMA_RELEASE });
+    console.log(snap.reused
+      ? `Pre-migration snapshot for ${from || 'an unversioned database'} -> ${SCHEMA_RELEASE} already taken: ${snap.file}.`
+      : `Pre-migration snapshot taken before upgrading ${from || 'an unversioned database'} -> ${SCHEMA_RELEASE}: ${snap.file} (${snap.size} bytes).`);
+  } catch (err) {
+    // Carry on, loudly. Refusing to start would turn a full disk or an unwritable
+    // BACKUP_DIR into an outage, with a restart loop and no way into the admin
+    // page to download the backups that already exist; the migrations are
+    // additive and each statement is atomic. The rotating backups are untouched.
+    console.error('==================================================================');
+    console.error(`PRE-MIGRATION SNAPSHOT FAILED: ${err.message}`);
+    console.error(`Upgrading ${from || 'an unversioned database'} -> ${SCHEMA_RELEASE} WITHOUT a fresh snapshot.`);
+    console.error('Check BACKUP_DIR and free disk space. Existing backups are untouched.');
+    console.error('==================================================================');
+  }
 }
 
 async function initDb() {
+  await opened;
+  await snapshotBeforeMigrating();
+
   const existingCollectionCols = await all(`PRAGMA table_info(collection)`).catch(() => []);
   if (existingCollectionCols.some(c => c.name === 'sub_location_1')) {
-    console.log('Resetting locations/collection tables for the new compartment-based storage schema...');
-    await run(`PRAGMA foreign_keys = OFF`);
-    await run(`DROP TABLE IF EXISTS collection`);
-    await run(`DROP TABLE IF EXISTS locations`);
-    await run(`PRAGMA foreign_keys = ON`);
+    // A database from before compartments (sub_location_1/2 on collection, shape
+    // columns on locations). These two tables used to be DROPPED here, which
+    // emptied the collection of anyone upgrading from that release. Move them
+    // aside instead, so the statements below create the current tables, and
+    // finishPreCompartmentUpgrade() copies the cards across once those tables
+    // have every column. The _pending names mark the copy as not yet done: a
+    // crash in between resumes on the next boot instead of losing the cards.
+    console.log('Pre-compartment storage schema found: setting collection/locations aside for migration...');
+    await withTransaction(async () => {
+      await run(`ALTER TABLE collection RENAME TO ${LEGACY_COLLECTION}_pending`);
+      await run(`ALTER TABLE locations RENAME TO ${LEGACY_LOCATIONS}_pending`);
+    });
   }
 
   // Create users table
@@ -251,6 +509,7 @@ async function initDb() {
       set_name TEXT,
       number TEXT,
       image_url TEXT,
+      image_url_back TEXT,
       price_trend REAL,
       price_normal REAL,
       price_holofoil REAL,
@@ -300,6 +559,20 @@ async function initDb() {
       price REAL NOT NULL,
       recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY(card_id, recorded_at)
+    )
+  `);
+
+  // The ECB's daily euro reference rates (fxRates.js), one row per currency per
+  // publication date. Prices stay stored in the currency the marketplace quoted;
+  // these only convert them for display, and the date travels with every
+  // conversion so a total can say how old its rate is.
+  await run(`
+    CREATE TABLE IF NOT EXISTS fx_rates (
+      rate_date TEXT NOT NULL,
+      currency TEXT NOT NULL,
+      rate REAL NOT NULL,
+      fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(rate_date, currency)
     )
   `);
 
@@ -369,6 +642,24 @@ async function initDb() {
     )
   `);
 
+  // Which cards a set holds, as its provider listed them (setListing.js). The
+  // cards themselves are in card_cache; this records that the list is COMPLETE,
+  // which card_cache cannot say — a set's rows arrive there one search at a time.
+  // `source` is the provider that listed it, so a Pokémon provider switch (a
+  // different numbering of the same set) reads as stale rather than as current.
+  await run(`
+    CREATE TABLE IF NOT EXISTS set_listings (
+      game TEXT NOT NULL,
+      language TEXT NOT NULL,
+      set_id TEXT NOT NULL,
+      source TEXT,
+      card_ids TEXT NOT NULL,
+      meta TEXT,
+      fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (game, language, set_id)
+    )
+  `);
+
   // Cached PSA cert lookups. Cached forever, with no staleness check anywhere —
   // deliberate, and the only table in this schema like that: a cert describes a
   // slab that was sealed once and graded once. The grade cannot change, so a
@@ -424,6 +715,249 @@ async function initDb() {
     )
   `);
 
+  // One purchase event: N identical sealed units bought together (store, date,
+  // unit price). Product/set/type/image fields are a snapshot at purchase time so
+  // a later catalog rebuild can't rewrite purchase history out from under a user.
+  await run(`
+    CREATE TABLE IF NOT EXISTS sealed_purchases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      product_id INTEGER,
+      product_name TEXT NOT NULL,
+      set_name TEXT,
+      sealed_type TEXT,
+      game TEXT NOT NULL DEFAULT 'pokemon',
+      image_url TEXT,
+      store TEXT,
+      purchase_date TEXT,
+      unit_price REAL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_purchases_user ON sealed_purchases(user_id)`);
+
+  // One row per physical unit in a purchase, so a box of 2 can have one opened and
+  // one still sealed. opened_at NULL means still sealed.
+  await run(`
+    CREATE TABLE IF NOT EXISTS sealed_units (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      purchase_id INTEGER NOT NULL,
+      opened_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(purchase_id) REFERENCES sealed_purchases(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_units_purchase ON sealed_units(purchase_id)`);
+
+  // A reusable "recipe" for what a product actually contains (TCGCSV publishes no
+  // contents data, so this is typed in once by the user and matched to every
+  // future purchase of the same product — by product_id when known, else by an
+  // exact product_name match; see the match query in routes/sealed.js).
+  await run(`
+    CREATE TABLE IF NOT EXISTS sealed_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      product_id INTEGER,
+      product_name TEXT NOT NULL,
+      game TEXT NOT NULL DEFAULT 'pokemon',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_templates_user ON sealed_templates(user_id)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_templates_product ON sealed_templates(user_id, product_id)`);
+
+  // One row per guaranteed thing inside a template. A 'card' component is a
+  // specific guaranteed pull (an alt-art promo, an oversized card) — not a whole
+  // decklist, since quantity multiplies ONE card_id. A 40-card precon deck is
+  // instead a 'product' component (its own sealed sub-item, opened and linked
+  // later like any other box) rather than 40 enumerated cards.
+  await run(`
+    CREATE TABLE IF NOT EXISTS sealed_template_components (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      template_id INTEGER NOT NULL,
+      component_type TEXT CHECK(component_type IN ('card', 'product')) NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      card_id TEXT,
+      product_name TEXT,
+      sealed_type TEXT,
+      product_id INTEGER,
+      game TEXT,
+      expected_cards INTEGER,
+      FOREIGN KEY(template_id) REFERENCES sealed_templates(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_template_components_template ON sealed_template_components(template_id)`);
+
+  // Named card lists: wishlists, buylists, "what this deck still needs" lists.
+  // Cards wanted, not cards owned — so neither the collection table (rows there
+  // are physical copies with a slot) nor a deck (format rules, checkout). Owned
+  // and missing counts are computed against the collection on read
+  // (utils/listOwnership.js), never stored, so they cannot go stale.
+  //
+  // `game` NULL means the list takes cards of any game. `deck_id` links a
+  // 'missing' list to the deck it was built from, so rebuilding it updates the
+  // same list; SET NULL keeps the shopping list when the deck is deleted.
+  await run(`
+    CREATE TABLE IF NOT EXISTS card_lists (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'wishlist' CHECK(kind IN ('wishlist', 'buylist', 'missing', 'custom')),
+      game TEXT,
+      notes TEXT DEFAULT '',
+      deck_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(deck_id) REFERENCES decks(id) ON DELETE SET NULL
+    )
+  `);
+  // One row per wanted card: adding a card already on the list merges into its
+  // quantity rather than listing it twice. `any_printing` counts every printing
+  // of the same card (same game, same name) as owned; condition_min and language
+  // narrow which owned copies count.
+  await run(`
+    CREATE TABLE IF NOT EXISTS card_list_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      list_id INTEGER NOT NULL,
+      card_id TEXT NOT NULL,
+      quantity_wanted INTEGER NOT NULL DEFAULT 1 CHECK(quantity_wanted BETWEEN 1 AND 9999),
+      any_printing INTEGER NOT NULL DEFAULT 0,
+      condition_min TEXT CHECK(condition_min IS NULL OR condition_min IN ('Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged')),
+      language TEXT,
+      notes TEXT DEFAULT '',
+      added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(list_id, card_id),
+      FOREIGN KEY(list_id) REFERENCES card_lists(id) ON DELETE CASCADE,
+      FOREIGN KEY(card_id) REFERENCES card_cache(id)
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_card_lists_user ON card_lists(user_id)`);
+  // Each user's default Wishlist: the list the heart on a card adds to. Made on
+  // first use (routes/lists.js), at most one per user -- enforced here, so two
+  // hearts tapped at once cannot make two.
+  const listCols = await all(`PRAGMA table_info(card_lists)`);
+  if (!listCols.some(c => c.name === 'is_default')) {
+    await run(`ALTER TABLE card_lists ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0`);
+  }
+  await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_card_lists_default ON card_lists(user_id) WHERE is_default = 1`);
+  // Notifications (notify.js). A channel is somewhere one user's notifications go.
+  // `url` and `token` are secrets — a Discord webhook URL IS its credential — so
+  // the API reports has_url/has_token and never the values (routes/notifications).
+  await run(`
+    CREATE TABLE IF NOT EXISTS notification_channels (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type TEXT NOT NULL CHECK(type IN ('discord', 'ntfy', 'webhook', 'apprise')),
+      name TEXT,
+      url TEXT NOT NULL,
+      topic TEXT,
+      token TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      events_price INTEGER NOT NULL DEFAULT 1,
+      events_admin INTEGER NOT NULL DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_notification_channels_user ON notification_channels(user_id)`);
+  // Per-user price-move thresholds. A move notifies when it clears EITHER bar;
+  // a NULL bar is off. min_price keeps a 5¢ card's 100% move out of the digest.
+  await run(`
+    CREATE TABLE IF NOT EXISTS notification_prefs (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      price_enabled INTEGER NOT NULL DEFAULT 1,
+      price_pct REAL DEFAULT 15,
+      price_abs REAL DEFAULT 5,
+      min_price REAL DEFAULT 1,
+      include_wishlist INTEGER NOT NULL DEFAULT 1
+    )
+  `);
+  // The price each user was last told about, per card: "moved more than X since
+  // the last notification" is measured from here, so a card drifting 2% a day is
+  // reported once it has drifted far enough, and not again until it moves again.
+  await run(`
+    CREATE TABLE IF NOT EXISTS notification_price_state (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      card_id TEXT NOT NULL,
+      price REAL NOT NULL,
+      currency TEXT,
+      notified_at DATETIME,
+      PRIMARY KEY (user_id, card_id)
+    )
+  `);
+  // Every delivery, one row per message per channel. Doubles as the outbound
+  // queue — status 'pending' rows survive a restart and are retried — and as the
+  // dedupe record for admin events (dedupe_key).
+  await run(`
+    CREATE TABLE IF NOT EXISTS notification_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      channel_id INTEGER REFERENCES notification_channels(id) ON DELETE SET NULL,
+      event_type TEXT NOT NULL,
+      dedupe_key TEXT,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed', 'dropped')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      sent_at DATETIME
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_notification_log_queue ON notification_log(status, next_attempt_at)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_notification_log_dedupe ON notification_log(user_id, dedupe_key, created_at)`);
+
+  // Binder artwork: a picture one user uploaded, not a card. It never joins
+  // collection, so it cannot reach counts, set completion or value. The bytes
+  // live on disk beside the database (utils/binderArtStore.js); this row is the
+  // ownership record every read checks.
+  await run(`
+    CREATE TABLE IF NOT EXISTS binder_artwork (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      mime TEXT NOT NULL,
+      width INTEGER NOT NULL,
+      height INTEGER NOT NULL,
+      bytes INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_binder_artwork_user ON binder_artwork(user_id)`);
+
+  // Where one picture sits on a binder page, in millimetres, and which pockets
+  // show it (mask: [{ side, row, col }]). One layer per page; `spread` carries it
+  // onto the next page as the right half of a two-page spread. No location_id:
+  // a page can move to another binder, and the compartment already knows where
+  // it lives. Pocket size and spacing are per layer because they describe the
+  // physical page the inserts are cut for.
+  await run(`
+    CREATE TABLE IF NOT EXISTS binder_art_layers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      compartment_id INTEGER NOT NULL UNIQUE,
+      artwork_id INTEGER NOT NULL,
+      x_mm REAL NOT NULL,
+      y_mm REAL NOT NULL,
+      width_mm REAL NOT NULL,
+      rotation_deg REAL NOT NULL DEFAULT 0,
+      spread INTEGER NOT NULL DEFAULT 0,
+      mask TEXT NOT NULL DEFAULT '[]',
+      pocket_w_mm REAL NOT NULL DEFAULT 63,
+      pocket_h_mm REAL NOT NULL DEFAULT 88,
+      gap_mm REAL NOT NULL DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(compartment_id) REFERENCES compartments(id) ON DELETE CASCADE,
+      FOREIGN KEY(artwork_id) REFERENCES binder_artwork(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_binder_art_layers_user ON binder_art_layers(user_id)`);
+
   // --- MIGRATIONS ---
   // When each game's price sweep last ran. Scryfall updates prices once a day,
   // so a sweep more often than that cannot return anything new — and the boot
@@ -460,17 +994,51 @@ async function initDb() {
   if (!appSettingsCols.some(c => c.name === 'tcgcsv_pending_version')) {
     await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_pending_version TEXT`);
   }
+  // Magic/Lorcana sealed tracking (TCGCSV categories 1 and 71). Off by default:
+  // syncing them fetches every MTG and Lorcana group daily. See tcgcsvApi.syncCategories.
+  if (!appSettingsCols.some(c => c.name === 'sealed_tcg_extra_enabled')) {
+    await run(`ALTER TABLE app_settings ADD COLUMN sealed_tcg_extra_enabled INTEGER DEFAULT 0`);
+  }
   if (!appSettingsCols.some(c => c.name === 'tcgcsv_last_checked_at')) {
     await run(`ALTER TABLE app_settings ADD COLUMN tcgcsv_last_checked_at DATETIME`);
   }
+  // TCGCSV responses, cut down to the fields Bindarr reads (utils/tcgcsvSlim.js).
   await run(`
-    CREATE TABLE IF NOT EXISTS tcgcsv_response_cache (
+    CREATE TABLE IF NOT EXISTS tcgcsv_cache (
       path TEXT NOT NULL,
       data_version TEXT NOT NULL,
       results_json TEXT NOT NULL,
       PRIMARY KEY (path, data_version)
     )
   `);
+  // An earlier build of the daily sync kept whole responses in
+  // tcgcsv_response_cache. Slim them into the new table rather than discarding
+  // them, so an upgrade does not cost a full re-download from TCGCSV, then drop it.
+  const legacyTcgcsv = await get(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tcgcsv_response_cache'`
+  );
+  if (legacyTcgcsv) {
+    const { slimResults, slimmerFor } = require('./utils/tcgcsvSlim');
+    const keys = await all(`SELECT path, data_version FROM tcgcsv_response_cache`);
+    let kept = 0;
+    for (const { path: cachePath, data_version: version } of keys) {
+      if (!slimmerFor(cachePath)) continue;
+      const row = await get(
+        `SELECT results_json FROM tcgcsv_response_cache WHERE path = ? AND data_version = ?`,
+        [cachePath, version]
+      );
+      let results;
+      try { results = JSON.parse(row.results_json); } catch { continue; }
+      if (!Array.isArray(results)) continue;
+      await run(
+        `INSERT OR REPLACE INTO tcgcsv_cache (path, data_version, results_json) VALUES (?, ?, ?)`,
+        [cachePath, version, JSON.stringify(slimResults(cachePath, results))]
+      );
+      kept++;
+    }
+    await run(`DROP TABLE tcgcsv_response_cache`);
+    console.log(`Migrated ${kept} TCGCSV cache entries to the slim cache table.`);
+  }
   // How many days between automatic price refreshes; 0 switches them off.
   // Daily is what every install did before this column existed, so that is the
   // default and nothing changes for anyone who never touches it. It exists for
@@ -491,6 +1059,24 @@ async function initDb() {
   // dropping it would mean a table rebuild for no gain.
   if (!appSettingsCols.some(c => c.name === 'allow_member_set_builds')) {
     await run(`ALTER TABLE app_settings ADD COLUMN allow_member_set_builds INTEGER NOT NULL DEFAULT 0`);
+  }
+  // Columns that reached card_cache and decks through their CREATE TABLE only.
+  // A database from the Pokémon-only releases has neither, and the provider
+  // migration below reads card_cache.game, so without these that upgrade could
+  // not get past initDb at all. Placed before the first statement that reads them.
+  const earlyCardCacheCols = await all(`PRAGMA table_info(card_cache)`);
+  if (!earlyCardCacheCols.some(c => c.name === 'game')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN game TEXT DEFAULT 'pokemon'`);
+  }
+  if (!earlyCardCacheCols.some(c => c.name === 'cmc')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN cmc REAL`);
+  }
+  if (!earlyCardCacheCols.some(c => c.name === 'color_identity')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN color_identity TEXT`);
+  }
+  const earlyDecksCols = await all(`PRAGMA table_info(decks)`);
+  if (!earlyDecksCols.some(c => c.name === 'game')) {
+    await run(`ALTER TABLE decks ADD COLUMN game TEXT DEFAULT 'pokemon'`);
   }
   // Which API English Pokémon cards and sets come from.
   //
@@ -520,6 +1106,24 @@ async function initDb() {
           OR (SELECT COUNT(*) FROM card_cache WHERE game = 'pokemon') > 0
     `);
   }
+  // The way off that pin before pokemontcg.io shuts down: the admin-run card-id
+  // migration (pokemonMigration.js). A run, the old -> new id log it can be
+  // reported and reversed from, and the before-images an exact undo needs.
+  await run(`CREATE TABLE IF NOT EXISTS pokemon_id_migration_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, target_provider TEXT NOT NULL, previous_provider TEXT,
+    backup_file TEXT, summary TEXT, started_at TEXT NOT NULL, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    reverted_at DATETIME, revert_summary TEXT
+  )`);
+  await run(`CREATE TABLE IF NOT EXISTS pokemon_id_migration_log (
+    run_id INTEGER NOT NULL REFERENCES pokemon_id_migration_runs(id), old_id TEXT NOT NULL, new_id TEXT NOT NULL,
+    method TEXT NOT NULL, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (run_id, old_id)
+  )`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_pokemon_id_migration_log_new ON pokemon_id_migration_log(new_id)`);
+  await run(`CREATE TABLE IF NOT EXISTS pokemon_id_migration_undo (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, tbl TEXT NOT NULL, action TEXT NOT NULL,
+    ref TEXT, old_id TEXT, new_id TEXT, data TEXT
+  )`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_pokemon_id_migration_undo_run ON pokemon_id_migration_undo(run_id, tbl, action)`);
   if (!appSettingsCols.some(c => c.name === 'scan_exclude_tokens')) {
     await run(`ALTER TABLE app_settings ADD COLUMN scan_exclude_tokens INTEGER NOT NULL DEFAULT 0`);
   }
@@ -603,6 +1207,24 @@ async function initDb() {
   if (!cardCacheCols.some(c => c.name === 'price_1st_edition')) {
     await run(`ALTER TABLE card_cache ADD COLUMN price_1st_edition REAL`);
   }
+  // Magic's rules text — full type line, mana cost, power, toughness, loyalty
+  // and keyword abilities — which filtering a collection in Scryfall syntax reads
+  // (t:, m:, pow>=, kw:; see shared/scryfallQuery.mjs; oracle_text is #131's). Written by
+  // utils/mtgRulesText.js through cardCache.js; NULL for every other game.
+  //
+  // Existing rows gain it when they are next re-cached, and the MTG price sweep
+  // re-fetches every owned and decked card. Clearing the sweep's stamp as the
+  // columns are added makes the catch-up sweep shortly after this boot do it, so a
+  // collection can be filtered by rules text straight after the upgrade instead of
+  // up to a day later.
+  const rulesTextCols = ['type_line', 'mana_cost', 'power', 'toughness', 'loyalty', 'keywords'];
+  const missingRulesText = rulesTextCols.filter(col => !cardCacheCols.some(c => c.name === col));
+  for (const col of missingRulesText) {
+    await run(`ALTER TABLE card_cache ADD COLUMN ${col} TEXT`);
+  }
+  if (missingRulesText.length) {
+    await run(`UPDATE app_settings SET mtg_prices_swept_at = NULL`);
+  }
 
   // Which marketplace a row's prices came from, and in what currency.
   //
@@ -669,10 +1291,118 @@ async function initDb() {
       );
     }
   }
+  // The back face of a double-faced Magic card (transform, modal DFC, reversible),
+  // which has no single image — `image_url` only ever held the front, so the back
+  // was unviewable (#103). Null for every single-faced card and every other game.
+  // Not backfilled: existing rows gain it the next time they are re-cached (the
+  // daily MTG price sweep re-fetches every owned and decked card).
+  if (!cardCacheCols.some(c => c.name === 'image_url_back')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN image_url_back TEXT`);
+  }
+
+  // tcgplayer_catalog originally held cards only (a product with no collector
+  // number was skipped as sealed product). Sealed rows now get a row too, so the
+  // build needs somewhere to put the game they belong to, their artwork, and a
+  // rough product type (Booster Box, ETB, ...) since none of that was needed
+  // while every row was a card matched to a card_cache row already carrying it.
+  const tcgplayerCatalogCols = await all(`PRAGMA table_info(tcgplayer_catalog)`);
+  if (!tcgplayerCatalogCols.some(c => c.name === 'game')) {
+    await run(`ALTER TABLE tcgplayer_catalog ADD COLUMN game TEXT`);
+  }
+  if (!tcgplayerCatalogCols.some(c => c.name === 'image_url')) {
+    await run(`ALTER TABLE tcgplayer_catalog ADD COLUMN image_url TEXT`);
+  }
+  if (!tcgplayerCatalogCols.some(c => c.name === 'sealed_type')) {
+    await run(`ALTER TABLE tcgplayer_catalog ADD COLUMN sealed_type TEXT`);
+  }
+  // Rows written before `game` existed were all Pokémon (categories 3 and 85 are
+  // the only ones the old build walked), and summary() counts by game, so an
+  // upgraded install reported a 0-row product map until it was rebuilt.
+  // Idempotent: only NULLs are touched.
+  await run(
+    `UPDATE tcgplayer_catalog SET game = 'pokemon' WHERE game IS NULL AND category_id IN (3, 85)`
+  );
+
+  // What's actually inside a sealed unit (a Build & Battle Box is 4 boosters plus
+  // a 40-card preconstructed deck), so opening one can show "how many of the
+  // expected cards have I linked so far" instead of leaving that to memory.
+  // TCGCSV/TCGplayer publishes no contents data, so these are typed in by whoever
+  // adds the purchase; all three are optional, per the manual-entry choice made
+  // for this feature.
+  const sealedPurchaseCols = await all(`PRAGMA table_info(sealed_purchases)`);
+  if (!sealedPurchaseCols.some(c => c.name === 'expected_packs')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN expected_packs INTEGER`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'expected_cards')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN expected_cards INTEGER`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'contents_note')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN contents_note TEXT`);
+  }
+  // Which recipe this purchase follows (auto-attached at create time by matching
+  // product_id/product_name against the user's sealed_templates), and, for a
+  // purchase that was itself auto-created by unboxing a parent unit, which unit
+  // that was — so "this pack came from that box" is traceable.
+  if (!sealedPurchaseCols.some(c => c.name === 'template_id')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN template_id INTEGER REFERENCES sealed_templates(id) ON DELETE SET NULL`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'market_value')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN market_value REAL`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'market_value_source')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN market_value_source TEXT`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'market_value_at')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN market_value_at DATETIME`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'source_unit_id')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN source_unit_id INTEGER REFERENCES sealed_units(id) ON DELETE SET NULL`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'source_unit_price_original')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN source_unit_price_original REAL`);
+  }
+  if (!sealedPurchaseCols.some(c => c.name === 'source_unit_price_saved')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN source_unit_price_saved INTEGER NOT NULL DEFAULT 0`);
+  }
+  const sealedTemplateComponentCols = await all(`PRAGMA table_info(sealed_template_components)`);
+  if (!sealedTemplateComponentCols.some(c => c.name === 'expected_cards')) {
+    await run(`ALTER TABLE sealed_template_components ADD COLUMN expected_cards INTEGER`);
+  }
+
+  // Idempotency guard: a template's components are created once per unit, the
+  // first time it's marked opened. Without this, toggling opened -> closed ->
+  // opened again would create a second copy of every card and sub-pack.
+  const sealedUnitCols = await all(`PRAGMA table_info(sealed_units)`);
+  if (!sealedUnitCols.some(c => c.name === 'components_applied_at')) {
+    await run(`ALTER TABLE sealed_units ADD COLUMN components_applied_at DATETIME`);
+  }
+
+  // Riftbound (riftcodexApi.js). Four card fields no provider stored before —
+  // which way the card is printed (Riftbound battlefields are landscape), its
+  // artist, its rules text, and its numeric stats as JSON ({"energy":2,"might":3})
+  // — generic rather than Riftbound-only so another provider can fill them, and
+  // null everywhere else. Plus the Riftbound price sweep's own clock
+  // (utils/priceHelpers SWEEP_COLUMN: an unknown key means the sweep never runs).
+  {
+    const have = new Set((await all(`PRAGMA table_info(card_cache)`)).map(c => c.name));
+    for (const col of ['orientation', 'artist', 'card_text', 'attributes']) {
+      if (!have.has(col)) await run(`ALTER TABLE card_cache ADD COLUMN ${col} TEXT`);
+    }
+    const settings = new Set((await all(`PRAGMA table_info(app_settings)`)).map(c => c.name));
+    if (!settings.has('riftbound_prices_swept_at')) {
+      await run(`ALTER TABLE app_settings ADD COLUMN riftbound_prices_swept_at DATETIME`);
+    }
+  }
 
   const collectionCols = await all(`PRAGMA table_info(collection)`);
   if (!collectionCols.some(c => c.name === 'user_id')) {
     await run(`ALTER TABLE collection ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`);
+  }
+  // Which sealed unit (if any) this copy was pulled from, for cost-basis and
+  // where-did-this-come-from lookups. SET NULL on delete: removing the purchase
+  // record must not delete cards the user still owns.
+  if (!collectionCols.some(c => c.name === 'sealed_unit_id')) {
+    await run(`ALTER TABLE collection ADD COLUMN sealed_unit_id INTEGER REFERENCES sealed_units(id) ON DELETE SET NULL`);
   }
   if (!collectionCols.some(c => c.name === 'is_trade')) {
     await run(`ALTER TABLE collection ADD COLUMN is_trade INTEGER DEFAULT 0`);
@@ -762,6 +1492,9 @@ async function initDb() {
     await run(`ALTER TABLE locations ADD COLUMN game TEXT DEFAULT 'any'`);
   }
 
+  // collection and locations now have every column a copied row needs.
+  await finishPreCompartmentUpgrade();
+
   const usersCols = await all(`PRAGMA table_info(users)`);
   if (!usersCols.some(c => c.name === 'tcg_api_key')) {
     await run(`ALTER TABLE users ADD COLUMN tcg_api_key TEXT DEFAULT ''`);
@@ -795,6 +1528,32 @@ async function initDb() {
     await run(`ALTER TABLE users ADD COLUMN oidc_sub TEXT`);
   }
   await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oidc_sub ON users(oidc_sub) WHERE oidc_sub IS NOT NULL`);
+
+  // Which optional tabs the nav bar shows (utils/navTabs.js), as a JSON array.
+  // NULL means the default set, so a tab added later reaches everyone who never
+  // chose.
+  if (!usersCols.some(c => c.name === 'nav_tabs')) {
+    await run(`ALTER TABLE users ADD COLUMN nav_tabs TEXT`);
+  }
+
+  // Session tokens are stored as their SHA-256 (utils/authHelpers.hashSessionToken),
+  // so a copy of this file holds nothing that signs anyone in. Rows from before
+  // that hold the token itself; hash them in place so nobody is signed out by the
+  // upgrade. The 'sha256:' prefix is what marks a row as done, so this is a no-op
+  // after the first start -- and a row an older build writes after a downgrade is
+  // picked up on the next upgrade instead of silently never matching. Hashed here
+  // in JS because SQLite has no SHA-256; it must stay the same digest as
+  // hashSessionToken (sessions.test.js holds the two together).
+  const unhashedSessions = await all(`SELECT token FROM sessions WHERE token NOT LIKE 'sha256:%'`);
+  if (unhashedSessions.length) {
+    await withTransaction(async () => {
+      for (const { token } of unhashedSessions) {
+        const hashed = `sha256:${crypto.createHash('sha256').update(String(token)).digest('hex')}`;
+        await run(`UPDATE OR REPLACE sessions SET token = ? WHERE token = ?`, [hashed, token]);
+      }
+    });
+    console.log(`Hashed ${unhashedSessions.length} stored session token(s).`);
+  }
 
   const deckCardsCols = await all(`PRAGMA table_info(deck_cards)`);
   if (!deckCardsCols.some(c => c.name === 'checked_out')) {
@@ -850,7 +1609,96 @@ async function initDb() {
     await run(`ALTER TABLE locations ADD COLUMN page_columns INTEGER`);
   }
 
+  // When each background job last ran (scheduler.js). The weekly set refresh and
+  // the daily backup used to live on in-memory timers that every restart reset,
+  // so an install that updates weekly never refreshed its sets and one that
+  // restarts daily never backed up. One row per job name; last_run_at is when the
+  // most recent finished run started, last_status 'ok', 'error' or 'baseline'
+  // (a clock started without a run, see scheduler.js).
+  await run(`
+    CREATE TABLE IF NOT EXISTS job_runs (
+      name TEXT PRIMARY KEY,
+      last_run_at DATETIME,
+      last_status TEXT,
+      last_error TEXT
+    )
+  `);
+
   await splitStackedRows();
+
+  // --- DECK FORMATS, ANY-PRINTING DECKS, CHECKOUT ALLOCATION ---
+  // What the deck rules (shared/deckRules.mjs) read off a Magic card beyond its type
+  // line and colour identity. `oracle_id` is what every printing of one card has in
+  // common, so a deck that accepts any printing can count a copy of another one;
+  // `oracle_text` is where a card says it can be a commander, partners with another,
+  // or may appear in any number. Written by scryfallApi.normalizeCard; null for the
+  // other games. Not backfilled: until a row is re-cached the rules fall back to the
+  // card's name and a short list, and the daily price sweep re-caches every owned and
+  // decked Magic card — the only rows a deck ever compares.
+  const deckRuleCols = await all(`PRAGMA table_info(card_cache)`);
+  if (!deckRuleCols.some(c => c.name === 'oracle_id')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN oracle_id TEXT`);
+  }
+  if (!deckRuleCols.some(c => c.name === 'oracle_text')) {
+    await run(`ALTER TABLE card_cache ADD COLUMN oracle_text TEXT`);
+  }
+  // Whether a deck counts any printing of a card it lists. Only meaningful where a
+  // game has a reliable "same card" (Magic's oracle id, Lorcana's full name), and on
+  // for the Magic and Lorcana decks that already exist — that is the fix: owning a
+  // different printing of Sol Ring stops reading as not owning it.
+  const deckFormatCols = await all(`PRAGMA table_info(decks)`);
+  if (!deckFormatCols.some(c => c.name === 'any_printing')) {
+    await run(`ALTER TABLE decks ADD COLUMN any_printing INTEGER NOT NULL DEFAULT 0`);
+    await run(`UPDATE decks SET any_printing = 1 WHERE game IN ('mtg', 'lorcana')`);
+  }
+  // The card(s) leading a Commander-style deck, whose colour identity every other
+  // card is checked against.
+  const deckCardFormatCols = await all(`PRAGMA table_info(deck_cards)`);
+  if (!deckCardFormatCols.some(c => c.name === 'is_commander')) {
+    await run(`ALTER TABLE deck_cards ADD COLUMN is_commander INTEGER NOT NULL DEFAULT 0`);
+  }
+  // The copies a checked-out deck holds. The collection entry is the key, so one
+  // physical card can be in one deck at a time — two checkouts cannot both claim it
+  // (utils/deckAllocation.js). `card_id` is the deck card the copy fills, which for
+  // a deck accepting any printing may be another printing than the copy's own.
+  const hadAllocations = await get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'deck_allocations'`);
+  await run(`
+    CREATE TABLE IF NOT EXISTS deck_allocations (
+      entry_id INTEGER PRIMARY KEY REFERENCES collection(id) ON DELETE CASCADE,
+      deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+      card_id TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      allocated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_deck_allocations_deck ON deck_allocations(deck_id)`);
+  if (!hadAllocations) {
+    // Decks checked out before this table existed held their copies implicitly:
+    // availability was worked out per request. Give them the same copies the old
+    // storage view greyed out — exact printing, filed copies first, newest first —
+    // handed out in checkout order. Rows are single copies by now (splitStackedRows
+    // above), so the n-th copy of a card goes to the deck whose running total of
+    // that card first reaches n.
+    await run(`
+      INSERT OR IGNORE INTO deck_allocations (entry_id, deck_id, card_id, quantity)
+      SELECT e.entry_id, r.deck_id, r.card_id, 1
+      FROM (
+        SELECT d.user_id, dc.deck_id, dc.card_id, dc.quantity,
+               SUM(dc.quantity) OVER (PARTITION BY d.user_id, dc.card_id ORDER BY d.checked_out_at, d.id) AS upto
+        FROM deck_cards dc JOIN decks d ON d.id = dc.deck_id
+        WHERE d.checked_out = 1 AND dc.quantity > 0
+      ) r
+      JOIN (
+        SELECT c.id AS entry_id, c.user_id, c.card_id,
+               ROW_NUMBER() OVER (
+                 PARTITION BY c.user_id, c.card_id
+                 ORDER BY (c.location_id IS NOT NULL) DESC, c.added_at DESC, c.id DESC
+               ) AS rn
+        FROM collection c WHERE c.list_type = 'collection'
+      ) e ON e.user_id = r.user_id AND e.card_id = r.card_id
+         AND e.rn > r.upto - r.quantity AND e.rn <= r.upto
+    `);
+  }
 
   // --- PERFORMANCE INDEXES ---
   // `user_id` first, because it is the predicate on essentially every read in the
@@ -858,6 +1706,11 @@ async function initDb() {
   // idx_collection_comp_user_qty below cannot serve it: a composite index is only
   // usable from its leading column, and that one leads with compartment_id.
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_user_game ON collection(user_id, game)`);
+  // "This user's copies of this card": owned counts on search results, deck
+  // availability, the copies a quantity edit adds or trims, and the cards behind
+  // the value timeline (routes/stats.js). user_id alone narrows to the whole
+  // collection and leaves every lookup a scan of it.
+  await run(`CREATE INDEX IF NOT EXISTS idx_collection_user_card ON collection(user_id, card_id)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_comp_user_qty ON collection(compartment_id, user_id, quantity)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_loc_pos ON collection(location_id, position)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_card_cache_set_num ON card_cache(set_id, number)`);
@@ -868,6 +1721,25 @@ async function initDb() {
   // them, so the indexes are pure write cost.
   await run(`DROP INDEX IF EXISTS idx_collection_tags_tag_id`);
   await run(`DROP INDEX IF EXISTS idx_audit_logs_user_date`);
+
+  // Deleted copies, kept 30 days so a delete can be undone (utils/collectionTrash.js).
+  // The whole collection row is kept as JSON rather than as mirrored columns, so a
+  // column added to collection later is carried through a delete and restore
+  // without this table having to learn about it. entry_id is the row's original
+  // id: AUTOINCREMENT never hands it out again, so it can come back under it.
+  await run(`
+    CREATE TABLE IF NOT EXISTS collection_trash (
+      entry_id INTEGER PRIMARY KEY,
+      batch_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      card_id TEXT,
+      deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      row_json TEXT NOT NULL,
+      links_json TEXT
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_collection_trash_user_batch ON collection_trash(user_id, batch_id)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_collection_trash_deleted ON collection_trash(deleted_at)`);
 
   // --- SEED DATA & MIGRATION TO DEFAULT ADMIN ---
   const userCount = await get(`SELECT COUNT(*) as count FROM users`);
@@ -903,6 +1775,91 @@ async function initDb() {
   if (adminId) {
     await adoptOrphanRows(adminId);
     await seedStarterLocations(adminId);
+  }
+
+  // Last: this release has now brought the file up to date. Not written when a
+  // step above throws, so the next boot still knows the migration is unfinished.
+  await run(`PRAGMA user_version = ${releaseMarker(SCHEMA_RELEASE)}`);
+}
+
+// The rest of the pre-compartment upgrade started at the top of initDb: copy the
+// set-aside rows into the current tables, then rename the originals to their
+// final legacy_* names, all in one transaction. Those names existing is what
+// says it is done, so this never runs twice, and the originals stay as a
+// recovery copy: nothing in them is deleted.
+//
+// Cards come across unplaced (no location, no compartment), so they show up in
+// Unsorted. Their old places were page/slot strings in containers whose shape no
+// longer exists, and guessing a compartment would file cards where they are not.
+// Locations come across as plain containers with no compartments, if their type,
+// sort order and foil setting still mean something; the rest are listed in the
+// log to be recreated.
+const LEGACY_COLLECTION = 'legacy_collection_pre_compartments';
+const LEGACY_LOCATIONS = 'legacy_locations_pre_compartments';
+const LOCATION_TYPES = ['Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other'];
+
+async function finishPreCompartmentUpgrade() {
+  const pendingCollection = `${LEGACY_COLLECTION}_pending`;
+  const pendingLocations = `${LEGACY_LOCATIONS}_pending`;
+  const pending = await get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [pendingCollection]);
+  if (!pending) return;
+
+  const sortSchemes = require('../../shared/sortSchemes.json');
+  const sortOrderKnown = (v) => v == null || v === 'custom' || Object.prototype.hasOwnProperty.call(sortSchemes, v) ||
+    (typeof v === 'string' && v.startsWith('[') && (() => { try { return Array.isArray(JSON.parse(v)); } catch { return false; } })());
+  const columnsOf = async (table) => (await all(`PRAGMA table_info(${table})`)).map(c => c.name);
+
+  // Off for the copy, so a card whose card_cache row went missing years ago is
+  // carried over as it was instead of failing the whole upgrade. The pragma is a
+  // no-op inside a transaction, hence out here.
+  await run(`PRAGMA foreign_keys = OFF`);
+  try {
+    const result = await withTransaction(async () => {
+      const hasLocations = await get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [pendingLocations]);
+      const migratedLocations = [];
+      const skippedLocations = [];
+      if (hasLocations) {
+        const legacyLocCols = await columnsOf(pendingLocations);
+        const legacyLocs = await all(`SELECT * FROM ${pendingLocations} ORDER BY id`);
+        for (const loc of legacyLocs) {
+          const clean = LOCATION_TYPES.includes(loc.type) && sortOrderKnown(loc.sort_order) &&
+            (loc.foil_sorting == null || ['normals_first', 'foils_first'].includes(loc.foil_sorting));
+          if (!clean) { skippedLocations.push(loc); continue; }
+          // Same id, so the legacy rows' location_id still names the container.
+          const row = { id: loc.id, name: loc.name, type: loc.type, user_id: legacyLocCols.includes('user_id') ? loc.user_id : null };
+          if (loc.sort_order != null) row.sort_order = loc.sort_order;
+          if (loc.foil_sorting != null) row.foil_sorting = loc.foil_sorting;
+          const cols = Object.keys(row);
+          await run(`INSERT INTO locations (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`, cols.map(c => row[c]));
+          migratedLocations.push(loc);
+        }
+      }
+
+      // Every column both tables share, id included so a new row can be matched
+      // to its legacy original. Placement is left to the new table's defaults.
+      const newCols = await columnsOf('collection');
+      const unplaced = new Set(['location_id', 'compartment_id', 'position']);
+      const shared = (await columnsOf(pendingCollection)).filter(c => newCols.includes(c) && !unplaced.has(c));
+      const copied = await run(
+        `INSERT INTO collection (${shared.join(', ')}) SELECT ${shared.join(', ')} FROM ${pendingCollection} ORDER BY id`
+      );
+
+      await run(`ALTER TABLE ${pendingCollection} RENAME TO ${LEGACY_COLLECTION}`);
+      if (hasLocations) await run(`ALTER TABLE ${pendingLocations} RENAME TO ${LEGACY_LOCATIONS}`);
+      return { cards: copied.changes, migratedLocations, skippedLocations, hasLocations };
+    });
+
+    console.log(`Pre-compartment upgrade: copied ${result.cards} collection row(s) into Unsorted and ` +
+      `${result.migratedLocations.length} location(s) as containers without pages/rows (add them in Storage).`);
+    if (result.migratedLocations.some(l => l.description)) {
+      console.log('Location descriptions are not part of the current schema; they remain in the legacy table.');
+    }
+    for (const loc of result.skippedLocations) {
+      console.log(`  Not migrated, recreate by hand: location #${loc.id} "${loc.name}" (type ${loc.type}, sort ${loc.sort_order}, user ${loc.user_id}).`);
+    }
+    console.log(`The original rows are kept in ${LEGACY_COLLECTION}${result.hasLocations ? ` and ${LEGACY_LOCATIONS}` : ''}.`);
+  } finally {
+    await run(`PRAGMA foreign_keys = ON`);
   }
 }
 
@@ -949,6 +1906,7 @@ module.exports = {
   get,
   all,
   withTransaction,
+  runExclusive,
   initDb,
   splitStackedRows,
   createCompartments,

@@ -5,7 +5,7 @@ features, see [README.md](README.md); this document explains **how the system is
 built and why**.
 
 Bindarr is a self-hosted trading-card collection manager for **Pokémon**,
-**Magic: The Gathering**, and **Disney Lorcana**. It identifies cards from a phone photo (no typing),
+**Magic: The Gathering**, **Disney Lorcana** and **Riftbound**. It identifies cards from a phone photo (no typing),
 tracks their real-world physical location (which binder page / box row slot),
 values the collection over time, and helps you pull and re-file the cards for a
 deck.
@@ -28,8 +28,9 @@ to ship.
 ```
 backend/
   src/
-    server.js              Express app: middleware, route mounts, static SPA, health, admin bootstrap
+    server.js              Express app: middleware, route mounts, static SPA, health, job list, startup/shutdown
     db.js                  SQLite connection (promisified run/get/all), schema init, password hashing
+    scheduler.js           Background jobs on clocks kept in job_runs, checked every 15 minutes
     middleware/auth.js     authenticateToken (session lookup), requireAdmin, rate limiters
     routes/
       auth.js              register / login / logout / me / per-user settings
@@ -58,16 +59,25 @@ backend/
       npz.js               Minimal .npz reader, for the published (not locally built) catalogs
       pokemonProvider.js   The single Pokémon provider decision for this language
       languages.js         Language code/name resolution
-    backup.js              DB backup helpers
+      priceSweeps.js       The ordered price-sweep list and its sequential, single-flight runner
+      shutdown.js          SIGTERM/SIGINT: close listeners, stop jobs, bounded wait, close SQLite
+      staticCache.js       Cache headers for frontend/dist (hashed assets/ immutable, the rest revalidated)
+      syncJobs.js          Set sync and the price-sweep entry point, shared by server.js and embedded/
+    embedded/              Device mode: the composition root the phone app runs instead of server.js,
+                           plus stand-ins for the Node modules a phone lacks (see "Device mode" below)
+    backup.js              Atomic, verified VACUUM INTO snapshots in BACKUP_DIR; pre-migration snapshots
   scripts/                 fetch-models.mjs, catalog builders, the scan-gate measurement harness
   data/models/             cornelius.onnx, milo.onnx and the built catalogs (CV_MODEL_DIR)
   test/                    Node test suites and an e2e runner under test/e2e/
 frontend/
   src/
     main.jsx, App.jsx      Entry + root: auth state, fetch wrapper (injects Bearer), tab routing, code-split views
+    apiBase.js             Where /api goes in the native app: the user's server, or the device backend
+    device/                Device mode runtime; generated/ holds the bundled backend (build-device-backend.mjs)
     components/            One component per screen/widget (see Frontend section)
     utils/                 Pure helpers: sorting, pricing, printing/rarity styling, language, shuffle
-Dockerfile, docker-compose.yml, .github/workflows/docker-build.yml   Container build + CI publish to GHCR
+Dockerfile, docker-compose.yml, .github/workflows/docker-build.yml   Container build + smoke test + CI publish to GHCR
+.github/workflows/test.yml, audit.yml, .github/dependabot.yml        Test gate on every PR, dependency audit, weekly update PRs
 ```
 
 Regenerable/large artifacts live in `backend/data/models` (the two ONNX files and
@@ -91,7 +101,7 @@ failing obscurely at session creation.
 
 ### Request lifecycle
 
-`server.js` wires Helmet (with a Report-Only CSP that allow-lists the card-image
+`server.js` wires Helmet (with an enforced CSP, or Report-Only under `CSP_REPORT_ONLY=true`, that allow-lists the card-image
 hosts), JSON body limits, the API routers, then serves the
 built SPA and a SPA fallback. `GET /api/health` is unauthenticated and backs the
 Docker `HEALTHCHECK`. An empty `users` table stays empty unless
@@ -108,18 +118,81 @@ accept a file — and warms the two ONNX sessions and the default catalog, so th
 first scan of a session does not pay for the load. An unwritable model directory
 is reported and survived: everything except catalog builds still works.
 
+The listener starts at once and never waits on network work; `/api/health`
+answers 503 until `initDb` finishes. A database that cannot be opened or
+migrated is fatal: the error is logged and the process exits 1, so a
+supervisor restarts it instead of a live process answering 503 forever.
+Before a different release migrates a database that holds data, `initDb`
+writes a `pre-migration-…` snapshot (see Backups below).
+
+### Background jobs
+
+`scheduler.js` runs the periodic work from `server.js`'s job list, on clocks kept
+in the `job_runs` table rather than in timers, so a restart neither resets a
+period nor skips a run: one 15-minute check compares each job's period against
+its stored last run, and whatever fell due while the server was down runs at the
+first check after boot. Each job is single-flight but independent of the others,
+and a failure is recorded and retried after an hour.
+
+| Job | Every | Notes |
+|-----|-------|-------|
+| `sets-refresh` | 7 days | Forced set refresh for all three games, set-cache reload, catalog auto-update. Run (forced) during startup when overdue; otherwise startup only fills empty set tables. |
+| `tcgcsv-sync` | 1 hour | `tcgcsvApi.syncIfUpdated`, whose own gate reads `last-updated.txt` at most daily. A 403 cooldown is not an error. Off with `BINDARR_DISABLE_TCGCSV_SYNC=1`. |
+| `price-sweeps` | 1 hour | `utils/priceSweeps.runPriceSweeps`: one ordered list, sequential, TCGCSV last, single-flight, failures isolated. Each provider's `shouldSweepPrices` gate decides whether it is actually due. |
+| `session-purge` | 1 day | Deletes expired sessions. |
+| `backup` | `BACKUP_INTERVAL_HOURS` | First period counted from the newest existing backup, or from first boot on a new database. |
+
+### Backups
+
+`backup.js` snapshots with `VACUUM INTO` a temporary file in `BACKUP_DIR`
+(default `backups/` beside the database), verifies it with `PRAGMA quick_check`
+and a table count on a separate read-only connection, then renames it to `.bak`;
+on failure the temporary file is removed and older backups are untouched.
+Snapshots are serialised. Regular ones rotate to `BACKUP_KEEP_LAST`;
+`pre-migration-<db>-<from>-to-<to>-<time>.bak` keep their own last three, and at
+most one is taken per upgrade, so a restart loop on a failing migration cannot
+rotate the real pre-upgrade copy out. `PRAGMA user_version` holds the release
+that last completed `initDb` (`major*1e6 + minor*1e3 + patch`), which is how a
+pending upgrade is detected. A pre-migration snapshot that fails is logged loudly
+and startup continues. The admin list, create and download routes use the same
+directory, and a download resolves only a plain `.bak` file directly inside it.
+
+### Shutdown
+
+SIGTERM (`docker stop`) and SIGINT run `utils/shutdown.js`: close the HTTP and
+HTTPS listeners (requests in progress finish), stop the scheduler, ask the price
+sweeps to stop between sweeps and a catalog build to stop and write what it has,
+wait at most 8 s for running work, close SQLite (which checkpoints the WAL) and
+exit 0. A second signal exits immediately. In Docker, node is PID 1 —
+`entrypoint.sh` execs gosu, which execs node — so the signal reaches it.
+
+### Static files
+
+`utils/staticCache.js` serves `frontend/dist`: Vite's content-hashed `assets/`
+with `max-age=1y, immutable`; every file with a fixed name (`/ort/`'s
+onnxruntime wasm, the manifest, the logo, `index.html` and the SPA fallback)
+with `Cache-Control: no-cache` and an ETag, so it revalidates to a 304 and an
+upgrade is picked up on the next load. `/models/cornelius.onnx` is revalidated
+the same way by its own route.
+
 ### Auth
 
 Authentication is DB-backed session tokens, not JWTs:
 
 - `POST /api/auth/login` verifies a PBKDF2 password hash and inserts a row into `sessions` (`user_id`, `token`, `expires_at`).
-- `authenticateToken` (`middleware/auth.js`) reads the `Bearer` token, looks it up in `sessions` where `expires_at > now`, and sets `req.user = { id, username, role, tcg_api_key, ... }`.
+- `authenticateToken` (`middleware/auth.js`) reads the `Bearer` token, looks up its SHA-256 (`authHelpers.hashSessionToken`; the table never holds the token itself) in `sessions` where `expires_at > now`, and sets `req.user = { id, username, role, tcg_api_key, ... }`.
 - `requireAdmin` gates admin-only routes on `req.user.role === 'admin'`.
-- A bearer token that matches no session is then checked against `users.api_key` — a long-lived read-only credential for external scripts (issue #33). It sets `req.user.via_api_key`, which makes `authenticateToken` refuse any non-GET (403) and `requireAdmin` refuse it outright, and makes `/auth/me` strip the account's other provider keys. Read-only is the whole reason a non-expiring credential is acceptable here; anything that weakens it has to replace it with something scoped.
+- A bearer token that matches no session is then checked against `users.api_key` — a long-lived read-only credential for external scripts (issue #33). It sets `req.user.via_api_key`, which makes `authenticateToken` refuse any non-GET (403) and `requireAdmin` refuse it outright. No user object the server returns (`/auth/me`, login, settings) carries a key: they report `has_*` flags, provider keys are write-only, and the API key is read on demand from `GET /auth/api-key` (login session only). The gate's 401s carry `code: 'session_expired'`; a password change revokes the user's other sessions, an admin reset all of them. Read-only is the whole reason a non-expiring credential is acceptable here; anything that weakens it has to replace it with something scoped.
 - Rate limiters (`authLimiter`, `searchLimiter`, `importLimiter`) protect login and expensive endpoints.
 
-`collection.js` applies `router.use(authenticateToken)` up front, so every
-collection/location/deck-adjacent route requires a valid session.
+`server.js` mounts ONE `app.use('/api', authenticateToken)` gate, and every
+router below it requires a valid session. Only the deliberate public mounts sit
+above it — `/api/health`, `/api/auth` (whose non-public routes carry
+`authenticateToken` themselves), `/api/shared` (GET-only), `/api/admin` (opens with
+`authenticateToken` + `requireAdmin`) and `/api/card-art` (public reads, admin-gated
+writes). `backend/test/invariants.test.js` inspects the composed app and fails if
+anything else appears above the gate, if an exported rate limiter is not mounted, or
+if `card_cache` gains a writer other than `cacheNormalizedCards`.
 
 ### Route map
 
@@ -130,7 +203,9 @@ collection/location/deck-adjacent route requires a valid session.
 | `/api/decks` | decks.js | Deck CRUD, `:id/cards`, `:id/checkout`, `:id/return`, `:id/locations` (checkout/check-in locator payload) |
 | `/api/sets` | sets.js | Set catalog for dividers and scan scoping; non-English Pokémon set lists come from TCGdex, whose ids differ per language |
 | `/api/settings` | settings.js | App-wide settings (read any; write requires admin) |
+| `/api/notifications` | notifications.js | Per-user notification channels (Discord/ntfy/webhook/Apprise; URL and token write-only, reported as `has_url`/`has_token`), `channels/:id/test`, price-move thresholds (`PUT /prefs`) |
 | `/api/shared` | shared.js | Public, read-only collection view by `share_token` (no auth) |
+| `/api` | backup.js | `GET /backup` (the whole account as one JSON file), `POST /backup/restore` (replace the account's contents from one; ids renumbered, card data only ever added) |
 | `/api/admin` | admin.js | User management, admin-only collection and runtime metrics, card cache seeding, `catalogs` (list / `build` / `stop` / `progress`), DB backups |
 
 `METRICS_ENABLED=true` enables the admin-only `/api/admin/metrics` panel and
@@ -147,6 +222,55 @@ catalog card-image downloads; retries count as separate attempts. Prometheus als
 exports `bindarr_upstream_requests_by_operation_total` with `operation="api"` or
 `operation="card_image"` for the breakdown.
 
+### Device mode (the app without a server)
+
+The Android/iOS app can run with no server ([MOBILE.md](MOBILE.md#device-mode-no-server)).
+It does that by running these same route modules inside its WebView, rather than
+by reimplementing them:
+
+- `embedded/index.js` is the composition root, the device's `server.js`. It mounts
+  the routers in the same order behind the same `authenticateToken` gate, and
+  answers `501 { deviceMode: true }` for `/api/shared`, `/api/admin` and
+  `/api/card-art`. It also answers `/api/scan-match` with the route's own
+  `503 notBuilt` shape before the route reaches for Node's `Buffer`.
+- `frontend/scripts/build-device-backend.mjs` bundles it with Vite (Rolldown, CJS
+  in, one ESM file out) before every dev/build run. `embedded/aliases.js` is the
+  single table of swapped modules: `express` becomes `embedded/router.js` (the
+  slice of Express 4's Router the routes use), `sqlite3` becomes an adapter over
+  an injected async driver, `fs` reports no files (so scanning stays `notBuilt`),
+  `crypto` keeps only `randomBytes`, and native modules (`sharp`,
+  `onnxruntime-node`, ...) become a stub that throws if called. Bare imports
+  resolve against the frontend's `node_modules`, so the backend's native
+  dependencies are never needed to build the app.
+- `embedded/dispatch.js` turns `{ method, url, headers, body }` into the req/res
+  surface the routes use and back. `frontend/src/device/runtime.js` wraps that
+  in `fetch()`: `apiBase.js` sends every `/api` call there in device mode, with
+  the device's own session token.
+- On first launch `start()` runs `initDb()` (schema and migrations unchanged), then
+  creates the `admin` owner with no password and a never-expiring session. It then
+  runs the server's startup jobs from `utils/syncJobs.js`. Set lists get a forced
+  refresh whenever a launch finds the last one a week old, tracked in a
+  device-only `device_state` table, because a weekly timer never fires in an app
+  that is opened and closed all day.
+- The SQLite driver (`frontend/src/utils/deviceSqlite.js`) maps db.js's statements
+  onto `@capacitor-community/sqlite`. It sends BEGIN/COMMIT/ROLLBACK through the
+  plugin's transaction calls, passes `transaction: false` on every run (so
+  `withTransaction` owns the transaction), routes PRAGMAs through `query` (Android
+  rejects row-returning statements on its update path), and strips iOS's
+  `ios_columns` header row. The sqlite3 adapter runs statements one at a time in
+  issue order, which is what node-sqlite3's single connection guarantees db.js.
+
+- Scanning: `/api/scan-match` and `/api/search` take `embedding` (milo's 128 numbers)
+  in place of `image`. In device mode the app computes it (`frontend/src/device/
+  scanEngine.js`, onnxruntime-web) and swaps it into the body, and
+  `cvScan.setSource()` supplies the published catalogs the phone downloaded
+  (`device/scanAssets.js`), so `cvScan.match` skips only the decode and the
+  forward pass. Lorcana has no published catalog and answers `503 notBuilt`.
+
+`backend/test/embedded.test.js` loads the real routes through the same alias table
+and drives them through `handle()`, against node-sqlite3 as the driver; it also
+covers a backup round trip and a scan through `setScanSource`.
+
 ### Card data sources
 
 `tcgApi.js` (Pokémon), `tcgdexApi.js` (non-English Pokémon) and `scryfallApi.js`
@@ -154,6 +278,25 @@ exports `bindarr_upstream_requests_by_operation_total` with `operation="api"` or
 the rest of the app is game-agnostic. Every card carries a `game` field
 (`pokemon` | `mtg`) and a `language`. A user's Pokémon TCG API key (stored
 per-user) is passed through where available.
+
+#### The game registry
+
+Which games exist is one table, `shared/games.json` (with an ESM twin,
+`shared/games.js`, for the frontend and bare-Node tests; `test/games.test.js`
+fails if they differ). Each entry carries the game's value and labels, card-id
+prefixes, provider, printed languages, printing scheme, feature flags (prices,
+scan, grading, graded prices, decks), default deck format and size, card-back
+key, marketplace link kinds and how a published scan catalog keys its rows.
+`backend/src/utils/games.js` and `frontend/src/utils/games.js` wrap it. Lists of
+games (validation, pickers, catalog builds, container restrictions, the
+languages each game is printed in) read it; genuinely game-specific behaviour
+stays in the provider that owns it.
+
+`games.gameOfId` is explicit about card ids: a registered prefix names its game;
+an unprefixed id is pokemontcg.io's only in that API's `<set>-<number>` shape;
+anything else is unknown, and `cardApi.getCardById` answers null (the routes,
+404) instead of asking pokemontcg.io about it. A new game must register a prefix
+— the shape check cannot tell a foreign `abc-1` from a Pokémon one.
 
 `utils/pokemonProvider.js` owns the Pokémon provider decision. It is asked,
 never re-derived from the language: four call sites once derived it themselves and
@@ -188,7 +331,7 @@ by `cardApi.hydrate` when a card enters the collection, fetches that one card
 with prices (2 credits); and the automatic sweep prices owned/decked cards in
 batches, only those whose stored price has aged past three days, as often as
 `app_settings.price_refresh_days` allows (`shouldSweepPrices` is the single gate;
-the timer in server.js is unforced). `cacheListedCards` also puts a kept row's
+the hourly `price-sweeps` job is unforced). `cacheListedCards` also puts a kept row's
 `last_updated` back, so a listing cannot make an old price look fresh to the sweep.
 User-entered names are quoted as literal query phrases; set IDs go through the
 separate `set` parameter.
@@ -221,6 +364,81 @@ Offline contract and HTTP integration tests live in
 `backend/test/fixtures/pokemontcgapi/`. They cover ID routing, admin activation,
 search/add, regions, cursor/UI pagination, persisted ETag revalidation, price
 currencies, quota backoff and cache fallback. No live key is needed by the tests.
+
+#### Migrating pokemontcg.io card ids
+
+pokemontcg.io shuts down on `pokemonProvider.POKEMONTCG_SUNSET` (1 March 2027),
+and `cardApi` cannot translate its ids: a provider switch leaves every owned row
+on them. `pokemonMigration.js` is the one-off, admin-triggered move
+(`/api/admin/pokemon-migration/{status,preview,apply,revert}`, mounted inside
+`routes/admin.js`). The target is `pokemonProvider.migrationTarget(setting)`:
+pokemontcgapi.com when configured, otherwise TCGdex English.
+
+- **Mapping** (`utils/pokemonIdMap.js`, pure). Sets via `setCatalogueMatch`
+  (id, unpadded id, `pt5`→`.5`, then name), falling back to a subset's parent
+  (TG/GG/SV/Classic Collection sets the target folds in). Numbers via `numKey`
+  (padding, `/total`, separators and case dropped; letter suffixes kept). Card
+  names must be compatible, and TCGplayer product ids (card_cache,
+  `tcgplayer_product`, the `tcgplayer_catalog` product map) must agree where
+  both sides have one. Classes: `mapped`, `product` (product id only),
+  `ambiguous`, `unmapped`. Ties, mismatches and two old ids on one new id are
+  never moved.
+- **Preview** lists target sets through the provider clients
+  (`tcgdexApi.getSetCards` / `pokemontcgapi.getSetCards`, four at a time,
+  cached an hour), never per card, and caches the plan for apply.
+- **Apply** calls `backup.createBackup()`, then one `withTransaction`: card-id
+  columns are found from the schema (`card_id`, or a foreign key to
+  `card_cache`), so tables added later are re-keyed generically by rowid.
+  Collection rows are copies and just re-point; a deck listing both ids sums
+  (the primary key leaves no other choice); a price point at the same instant
+  keeps the target's; the old `card_cache` row is deleted. Every change is
+  journaled in `pokemon_id_migration_undo`, the old→new log in
+  `pokemon_id_migration_log`, the run in `pokemon_id_migration_runs`. Missing
+  target rows are inserted from the listing carrying the old row's
+  rarity/types/price, stamped stale. After commit: the local scan catalog's id
+  list is re-keyed, cards are hydrated through `cardApi.hydrate`
+  (pokemontcgapi.com in one batched priced listing), TCGCSV re-prices, and a
+  provider switch gets the same follow-up as Settings.
+- **Revert** plays the newest run's journal back, skipping rows changed since.
+- Apply refuses to run during a catalog or product-map build (the latter opens
+  raw `BEGIN`/`COMMIT` on the shared connection). Re-running apply is a no-op
+  for data and resumes unfinished hydration.
+
+Tests: `test/pokemonidmap.test.js` (the mapping table, from
+`test/fixtures/pokemonmigration`), `test/pokemonmigration.test.js` (preview,
+apply, re-run, revert over a temp DB through the admin router),
+`test/pokemonmigrationapi.test.js` (pokemontcgapi.com target).
+
+#### Riftbound
+
+`riftcodexApi.js` reads RiftCodex (free, no key, `RIFTCODEX_BASE_URL`). The
+catalogue is fetched whole (pages of 100) on first use — a search, the set list, an
+id, a catalog build — cached through `cacheNormalizedCards` with `keepPrices` (it
+carries no prices, so its re-cache must not null the swept ones), and refreshed by
+the weekly set refresh only on installs that hold Riftbound cards. Search reads the
+cache, with domain/type/rarity/supertype filters.
+
+Ids are `riftbound-` + the lowercased `riftbound_id` with every character outside
+`[a-z0-9-]` written as `.` + hex (`unl-229*-219` → `riftbound-unl-229.2a-219`),
+which round-trips and needs no escaping in URLs, SQL or CSV. Records sharing a
+`riftbound_id` are either one printing listed twice (identical faces; the record
+with a TCGplayer product is kept) or distinct printings (OPP promo and Metal): the
+canonical one keeps the plain id, the others get `~<RiftCodex id>`. Names never
+merge printings. New card columns: `orientation` (battlefields are landscape),
+`artist`, `card_text`, `attributes` (energy/might/power JSON; energy is also `cmc`).
+
+Prices: `riftboundPrices.js` reads TCGCSV category 89 from `tcgcsvApi`'s cache
+(same pacing, 403 cooldown and base URL). Category 89 is synced only once the
+install has a Riftbound card, and backfilled into the current version the first
+time. Match is by product id only; Normal → `price_normal`, Foil →
+`price_holofoil`, trend prefers Normal; a missing quote leaves the stored price.
+Own clock: `riftbound_prices_swept_at`.
+
+Deck rules are the `riftbound` entry in `shared/deckRules.mjs`: per-zone copy
+limits (enforced on add) and Riot's construction rules as deck warnings. Scan: `cardSets` lists
+cached sets, `catalog.embedUrl` embeds Riot's full-width art; landscape art is
+squashed into the square as printed, like the camera dewarp of a card held the way
+it is printed. Real-model accuracy is unmeasured.
 
 #### Two names per card, and which is which
 
@@ -484,6 +702,30 @@ slabs. It is per-request and never swept: the only free provider meters at 100
 lookups a day. `frontend/src/utils/resolveCardPrice.js` mirrors the same order
 for cards not yet saved.
 
+### Notifications
+
+`notify.js` is the whole surface: `notify.emit({ type, ... })` returns at once
+and never throws. Price sweeps, the auto-backup and catalog builds call it from
+their failure paths (`price_sweep_failed`, `backup_failed`,
+`catalog_build_failed`, sent only to channels of current admins), and the
+scheduler's `price-sweeps` job emits `price_sweep_done` with the
+`utils/priceSweeps` summary once a run finishes (a sweep that threw is reported
+from that summary). That runs the price-move check: for each user with a price channel, every owned (and, if
+enabled, wishlisted — `collection.list_type = 'wishlist'` or `card_lists` when
+present) card's latest `price_history` point is compared with the price the user
+was last told about (`notification_price_state`). Over either per-user bar
+(`notification_prefs.price_pct` / `price_abs`, `min_price` floor) it joins one
+digest message; a card is reported at most once per 20 h.
+
+`notification_log` is both the record and the queue: messages are inserted
+`pending` and a single-flight worker POSTs them with backoff (30 s × 4ⁿ, five
+attempts), honouring Discord's `retry_after` and `X-RateLimit-*` headers.
+Pending rows survive a restart. Admin failures are deduped per job and source
+for 6 h. Every destination passes `utils/notifyGuard.js`: http(s) only, no
+redirects, and loopback/private ranges refused (checked on save and again in the
+socket's own DNS lookup) unless `NOTIFY_ALLOW_PRIVATE=true`; link-local is
+always refused.
+
 ### Storage & sorting engine
 
 `utils/compartmentSort.js` decides where a card physically files:
@@ -500,7 +742,7 @@ for cards not yet saved.
 | Table | Purpose / key columns |
 |-------|-----------------------|
 | `users` | `id`, `username`, `password_hash` (PBKDF2, iterations embedded), `role`, `share_token`, `share_enabled`, `tcg_api_key`, `psa_api_token`, `graded_price_api_key`, `api_key` (read-only external credential) |
-| `sessions` | `user_id`, `token`, `expires_at` — Bearer-token auth |
+| `sessions` | `user_id`, `token` (`sha256:` + hash of the bearer token), `expires_at` — Bearer-token auth |
 | `card_cache` | Normalized card metadata keyed by provider `id`: `name` (searchable) and `printed_name` (as printed), `language`, `set_id`/`set_name`, `number`, `image_url`, `types`/`subtypes`/`supertype`, `rarity`, `cmc`, `color_identity`, `price_*` with `price_source`/`price_currency`, `tcgplayer_product_id`, `tcgplayer_url`/`cardmarket_url`, `game`, `last_updated`. Written only through `utils/cardCache.cacheNormalizedCards`, which upserts — `INSERT OR REPLACE` re-created the row and reset every column outside the provider's own list |
 | `collection` | One row per owned stack: `id` (entry_id), `user_id`, `card_id`→card_cache, `quantity`, `condition`, `printing`, `language`, `purchase_price`, `location_id`, `compartment_id`, `position`, `list_type` (`collection`/`trade`), `is_trade`, `game`, `added_at`; per-copy grading (`grader`, `grade`, `cert_number`) and per-copy value (`market_value`, `market_value_source`, `market_value_at`) |
 | `locations` | Physical containers: `user_id`, `name`, `type`, `sort_order`, `foil_sorting`, `rule_type`, `rule_config`, `game` |
@@ -509,9 +751,15 @@ for cards not yet saved.
 | `decks` | `user_id`, `name`, `description`, `checked_out`, `checked_out_at`, `created_at` |
 | `deck_cards` | Deck contents: `deck_id`, `card_id`, `quantity` |
 | `price_history` | Per-card price points over time, powering trend charts |
+| `notification_channels` | Per-user destinations: `type`, `url`/`token` (secrets, never returned), ntfy `topic`, `enabled`, `events_price`, `events_admin` |
+| `notification_prefs` / `notification_price_state` | Per-user price-move thresholds; the last price each user was notified about, per card |
+| `notification_log` | Every delivery, and the outbound queue (`status`, `attempts`, `next_attempt_at`, `dedupe_key`) |
 | `sets` | Set catalog (names/ordering) for dividers and set-scoped scan |
 | `pokemontcgapi_cache` | Bounded persistent response cache: `request` (credential digest + path/query), `body`, `etag`, `fetched_at`; no API keys |
 | `app_settings` | App-wide key/value settings (e.g. registration toggle) |
+| `job_runs` | Background job clocks (`scheduler.js`): `name`, `last_run_at`, `last_status` (`ok`/`error`/`baseline`), `last_error` |
+| `binder_artwork` | A user's uploaded binder picture: `user_id`, `mime`, `width`, `height`, `bytes`. The re-encoded file is `<db dir>/binder-art/<user_id>/<id>` |
+| `binder_art_layers` | One per binder page: `compartment_id` (unique), `artwork_id`, placement in mm (`x_mm`, `y_mm`, `width_mm`, `rotation_deg`), `spread` (continues onto the next page), `mask` (JSON `[{side,row,col}]` of artwork pockets), `pocket_w_mm`/`pocket_h_mm`/`gap_mm`. Never joined to `collection` |
 
 **Entry identity**: a `collection.id` (`entry_id`) uniquely identifies one
 physical stack. Features that track individual copies (checkout locator, storage
@@ -524,8 +772,33 @@ across compartments).
 
 `App.jsx` holds auth state (`token`/`user` in `localStorage` under
 `bindarr_*`), installs a `fetch` wrapper that injects the `Bearer` header on
-`/api/*` calls and dispatches a logout event on `401`, and tab-routes between
+`/api/*` calls and dispatches a logout event only on a `401` marked `session_expired` (`utils/sessionExpiry`), and tab-routes between
 code-split view components. `/share/:token` renders the public view without auth.
+
+### URL routing
+
+Each tab has a path, and the deck, list and storage tabs carry what is open in
+them: `/`, `/add`, `/collection`, `/sets/:game/:set[/:lang]`,
+`/storage/:locationId`, `/decks/:id`, `/lists/:id`, `/notes`, `/sealed`,
+`/settings`, `/admin` (`utils/routes.js`). The trash stays a modal.
+The URL is the source of truth: `utils/router.js` is a small store over the
+History API (no react-router), `useRouteSync` in `App.jsx` shows the tab the URL
+names, and the components read their sub-view with `useTabParam`. A reload or a
+link reopens the view; a link opened while signed out is kept in
+`sessionStorage` through the login screen (and an SSO round trip) and opened
+after sign-in, and a session lost to a 401 comes back to where it was. Hidden
+tabs stay mounted and remember their last path, so returning to Decks lands on
+the deck that was open. Switching storage containers replaces the entry rather
+than stacking one per container.
+
+Popups close on Back through `useBackGuard`, which pushes a guard entry.
+`utils/navHistory.js` owns both kinds of entry and stamps each with its
+position, so popstate knows the direction: Back closes the guards above where it
+lands, Forward never closes anything and skips the entries of popups already
+closed, and writes made while a silent step back is in flight wait for it. The
+Android back button steps back while there is an entry to go to and exits the
+app otherwise. The server's SPA fallback (`utils/staticCache.js`) serves
+`index.html` for any non-`/api`, non-`/assets/` path, so nested routes reload.
 
 | Component | Role |
 |-----------|------|
@@ -538,7 +811,10 @@ code-split view components. `/share/:token` renders the public view without auth
 | `CollectionList` | Browse/filter/sort the collection; bulk actions |
 | `LocationManager` | Manage containers; binder/box views; filing mode; storage select |
 | `CompartmentView` | Renders one compartment (binder pocket grid or box coverflow); highlights cards by `entry_id`; greys checked-out cards |
+| `BoxMap` | Every row of a box as a strip of card colors and rarities with divider tabs; seeks the row's coverflow (`seekTo`) and follows it (`onActiveSlotChange`) |
+| `ContainerOverview` | "All cards": a container's cards in physical order, box rows split at dividers, binder pages with their pockets |
 | `CreateContainerModal` | New-container wizard |
+| `BinderArtworkEditor` | Binder artwork: upload, place over a page or spread, choose artwork pockets, print actual-size inserts (canvas pieces + `window.print()`) |
 | `DeckBuilder` | Deck CRUD, composition charts, draw simulator, checkout/return |
 | `CheckoutWizardModal` | Checkout **and** check-in locator (mode prop): grouped by container→page, grid highlight, select-all per page/container/all |
 | `SortFilterBuilder` | Drag-and-drop sort scheme + filter rule builders |
@@ -546,6 +822,9 @@ code-split view components. `/share/:token` renders the public view without auth
 | `Settings`, `AdminPanel`, `SharedCollection`, `PriceHistoryChart` | Preferences, user admin, public view, price charts |
 
 Client utils (`utils/`): `cardSort` (shared sort comparators + `sortCardsByOrder`),
+`sortCategories` (divider categories and where they change, shared by every
+storage view), `binderLayout` (page widths, pocket placement), `binderArtGeometry` (artwork placement, pocket crops, print packing), `boxStrip` +
+`cardColors` (the box map's runs, gradient and tabs),
 `resolveCardPrice`/`formatPrice` (pricing display), `cardPrinting`/`cardRarity`
 (badge styling), `langHelper` (Japanese name handling), `cardOptions`
 (condition/printing/language enums), `shuffle` (draw sim), `i18n`/`translate` (UI
@@ -573,8 +852,9 @@ only `decks.checked_out` changes.
 ## Conventions & gotchas
 
 - **Backend has no auto-reload** in production/local `node src/server.js`; restart it after backend changes so new routes/data load. Frontend uses Vite HMR.
-- **SQLite runs in WAL mode** — checkpoint/stop before file-level backups so `-wal`/`-shm` are flushed.
-- **Everything is game-scoped** (`pokemon` | `mtg`); new card fields must be threaded through both `tcgApi.js` and `scryfallApi.js` normalization.
+- **SQLite runs in WAL mode** — checkpoint/stop before file-level backups so `-wal`/`-shm` are flushed. A clean stop (SIGTERM/SIGINT) closes the connection, which does the checkpoint.
+- **Background work goes in `server.js`'s scheduler job list**, not a new `setInterval`: an in-memory timer resets on every restart. A new price provider is one `utils/priceSweeps.js` entry plus its `SWEEP_COLUMN` key (`test/pricesweeplist.test.js` holds the two together).
+- **Everything is game-scoped** (the values in `shared/games.json`); new card fields must be threaded through every provider's normalization, and a new game is a registry entry first.
 - **`position = slot * 1000`** is the single source of truth for slot order; never assume packed array index equals slot.
 - **Scanning needs a catalog**: the two ONNX models identify nothing on their own, and there is no second matcher to fall back to. `/api/scan-match` answers `503 notBuilt` with the fix in the message rather than an empty candidate list, which reads to the user as "your card could not be identified". A catalog is per (game, language) and only as complete as the provider's data for that language.
 - **Frontend lint is strict**: CI runs `eslint --max-warnings 0`, so unused vars/imports and empty blocks fail the Docker build.
@@ -585,7 +865,8 @@ only `decks.checked_out` changes.
 
 Setup and Docker deployment: see [README.md](README.md). Quick reference:
 
+- Runtime: Node 24 in the image (`node:24-slim`, Debian/glibc) and in every workflow; Node 22.12+ works locally. Bump the Dockerfile, the workflows and these docs together.
 - Backend: `cd backend && npm run dev` (nodemon) or `npm start`; port `3001`.
 - Frontend: `cd frontend && npm run dev` (Vite, port `5173`, proxies `/api` → `3001`).
-- Tests: `npm test` from the root (or `cd backend && npm test`) runs every unit suite in `backend/test/` plus the e2e suites under `backend/test/e2e/`. `npm run test:e2e` runs only the latter. No framework — each file is a plain `node` script.
+- Tests: `npm test` from the root runs every suite — the unit suites in `backend/test/`, the e2e suites under `backend/test/e2e/`, the frontend utility tests, the locale check and the TCGCSV mirror test — each whether or not an earlier one failed, then prints one summary (`scripts/test-all.mjs`). `cd backend && npm test` runs both backend runners the same way; `npm run test:unit` / `npm run test:e2e` run one. No framework — each file is a plain `node` script, and each e2e server takes a free port (`backend/test/freePort.js`), so two runs can overlap.
 - Lint (matches CI): `cd frontend && npm run lint`.

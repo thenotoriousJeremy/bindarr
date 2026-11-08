@@ -30,7 +30,7 @@ async function loadEntries(entryIds, userId) {
   const holes = entryIds.map(() => '?').join(',');
   const rows = await db.all(`
     SELECT c.id, c.id AS entry_id, c.card_id, c.printing, c.language, c.favorite, c.is_trade, c.list_type,
-           cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.supertype, cc.rarity, cc.image_url,
+           cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.supertype, cc.rarity, cc.image_url, cc.orientation,
            cc.game, cc.cmc, cc.color_identity,
            cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
     FROM collection c
@@ -115,7 +115,11 @@ router.get('/locations', async (req, res) => {
 });
 
 const RULE_TYPES = ['any', 'alphabetical_range', 'specific_sets', 'compound'];
-const GAME_RESTRICTIONS = ['any', 'pokemon', 'mtg'];
+// Every game in the registry. This list once named only Pokémon and Magic, so a
+// container could not be restricted to Lorcana even though the picker offered it.
+const GAME_RESTRICTIONS = ['any', ...require('../utils/games').VALUES];
+// Mirrors the locations.type CHECK constraint in db.js.
+const LOCATION_TYPES = ['Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other'];
 
 // Binder page width in pockets. null (or '') means automatic: the client lays the
 // page out from its capacity. Capped at 12, wider than any common pocket page, so
@@ -123,6 +127,9 @@ const GAME_RESTRICTIONS = ['any', 'pokemon', 'mtg'];
 // anything else so the route answers 400 instead of storing it. The client's
 // picker (frontend/src/utils/binderLayout.js) offers the same range.
 const MAX_PAGE_COLUMNS = 12;
+// Pages (or rows) a new container may be created with. Far past any real binder
+// or box, and small enough that creating one cannot hold the database for long.
+const MAX_COMPARTMENTS = 1000;
 function normalizePageColumns(value) {
   if (value === undefined) return undefined;
   if (value === null || value === '') return null;
@@ -139,6 +146,9 @@ router.post('/locations', async (req, res) => {
 
   if (!name || !type) {
     return res.status(400).json({ error: 'name and type are required' });
+  }
+  if (typeof name !== 'string' || !LOCATION_TYPES.includes(type)) {
+    return res.status(400).json({ error: `name must be text and type one of: ${LOCATION_TYPES.join(', ')}` });
   }
   if (!RULE_TYPES.includes(rule_type)) {
     return res.status(400).json({ error: 'Invalid rule_type' });
@@ -164,21 +174,33 @@ router.post('/locations', async (req, res) => {
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
+  const plan = compartmentPlan || defaultCompartmentPlan(type);
+  const compartmentCount = Math.max(1, parseInt(plan.count, 10) || 1);
+  // Every page or row is a row inserted while the transaction below holds the
+  // database, so the plan is bounded the way a request body is.
+  if (compartmentCount > MAX_COMPARTMENTS) {
+    return res.status(400).json({ error: `A container can have at most ${MAX_COMPARTMENTS} pages or rows` });
+  }
   try {
-    const existing = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [name, req.user.id]);
-    if (existing) {
-      return res.status(400).json({ error: 'A location with this name already exists' });
+    // The container and its compartments land together or not at all: a failure
+    // between the two INSERTs used to leave a container with no pages, which
+    // nothing could file into and the name check then refused to recreate.
+    const locationId = await db.withTransaction(async () => {
+      const existing = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [name, req.user.id]);
+      if (existing) return null;
+
+      const result = await db.run(`
+        INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, rule_config, game, fixed_slots, page_columns, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [name, type, sort_order, foil_sorting || 'normals_first', rule_type, ruleConfigJson, game, fixedSlotsJson, pageColumns, req.user.id]);
+      await db.createCompartments(result.lastID, compartmentCount, Math.max(1, parseInt(plan.capacity, 10) || 40));
+      return result.lastID;
+    });
+    if (!locationId) {
+      return res.status(400).json({ error: 'A location with this name already exists', code: 'location_name_taken' });
     }
 
-    const result = await db.run(`
-      INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, rule_config, game, fixed_slots, page_columns, user_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [name, type, sort_order, foil_sorting || 'normals_first', rule_type, ruleConfigJson, game, fixedSlotsJson, pageColumns, req.user.id]);
-
-    const plan = compartmentPlan || defaultCompartmentPlan(type);
-    await db.createCompartments(result.lastID, Math.max(1, parseInt(plan.count, 10) || 1), Math.max(1, parseInt(plan.capacity, 10) || 40));
-
-    res.status(200).json({ message: 'Location created', id: result.lastID });
+    res.status(200).json({ message: 'Location created', id: locationId });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to create location' });
@@ -200,6 +222,9 @@ router.get('/locations/:id', async (req, res) => {
 router.put('/locations/:id', async (req, res) => {
   const { id } = req.params;
   const { name, type, sort_order, foil_sorting, rule_type, rule_config, game, locked, allow_stacking, fixed_slots, page_columns } = req.body;
+  if (type !== undefined && !LOCATION_TYPES.includes(type)) {
+    return res.status(400).json({ error: 'Invalid location type' });
+  }
   if (rule_type !== undefined && !RULE_TYPES.includes(rule_type)) {
     return res.status(400).json({ error: 'Invalid rule_type' });
   }
@@ -233,7 +258,7 @@ router.put('/locations/:id', async (req, res) => {
     if (name) {
       const dup = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ? AND id != ?`, [name, req.user.id, id]);
       if (dup) {
-        return res.status(400).json({ error: 'A location with this name already exists' });
+        return res.status(400).json({ error: 'A location with this name already exists', code: 'location_name_taken' });
       }
     }
 
@@ -334,6 +359,32 @@ router.get('/locations/:id/compartments', async (req, res) => {
   }
 });
 
+// Dry run of cutting a container down to `count` pages/rows: how many copies the
+// pages past the cut hold, all of which would go to Unsorted. The client asks
+// before saving so the user can see that number and back out.
+router.get('/locations/:id/shrink-preview', async (req, res) => {
+  const { id } = req.params;
+  const count = parseInt(req.query.count, 10);
+  if (!Number.isInteger(count) || count < 1) return res.status(400).json({ error: 'count must be a positive integer' });
+  try {
+    const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!loc) return res.status(404).json({ error: 'Location not found' });
+    const removed = (await loadCompartmentOrder(id)).slice(count).map(c => c.id);
+    let wouldMove = 0;
+    if (removed.length > 0) {
+      const row = await db.get(
+        `SELECT COUNT(*) AS n FROM collection WHERE user_id = ? AND compartment_id IN (${removed.map(() => '?').join(',')})`,
+        [req.user.id, ...removed]
+      );
+      wouldMove = row.n;
+    }
+    res.json({ wouldMove, pagesRemoved: removed.length });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to preview the change' });
+  }
+});
+
 router.post('/locations/:id/compartments', async (req, res) => {
   const { id } = req.params;
   const { before_id, after_id, idx, capacity } = req.body || {};
@@ -379,14 +430,14 @@ router.patch('/compartments/:id/reorder', async (req, res) => {
     `, [id, req.user.id]);
     if (!current) return res.status(404).json({ error: 'Compartment not found' });
     if (current.compartment_locked || current.container_locked) {
-      return res.status(400).json({ error: 'This page is locked. Unlock it before moving or reordering.' });
+      return res.status(400).json({ error: 'This page is locked. Unlock it before moving or reordering.', code: 'page_locked' });
     }
 
     const targetLocationId = Number(location_id || current.location_id);
     const targetLocation = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [targetLocationId, req.user.id]);
     if (!targetLocation) return res.status(404).json({ error: 'Target location not found' });
     if (targetLocation.locked) {
-      return res.status(400).json({ error: 'The destination binder is locked. Unlock it before moving a page there.' });
+      return res.status(400).json({ error: 'The destination binder is locked. Unlock it before moving a page there.', code: 'binder_locked' });
     }
 
     if (current.location_id !== targetLocationId) {
@@ -474,6 +525,11 @@ router.put('/locations/:id/compartments/:comp_id', async (req, res) => {
   try {
     const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) return res.status(404).json({ error: 'Location not found' });
+    // The location check alone does not cover comp_id: the assignment rewrite
+    // below keys on comp_id only, so a caller pairing their own location with
+    // someone else's compartment id would rewrite that compartment's filters.
+    const comp = await db.get(`SELECT id FROM compartments WHERE id = ? AND location_id = ?`, [comp_id, id]);
+    if (!comp) return res.status(404).json({ error: 'Compartment not found' });
 
     let ruleConfigJson;
     if (rule_config !== undefined) {
@@ -517,10 +573,15 @@ router.delete('/locations/:id/compartments/:comp_id', async (req, res) => {
   try {
     const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) return res.status(404).json({ error: 'Location not found' });
+    // Same pairing as the PUT above: the deletes below are scoped to this
+    // location, so a compartment id from anywhere else deleted nothing — and was
+    // answered "deleted successfully" all the same.
+    const comp = await db.get(`SELECT id FROM compartments WHERE id = ? AND location_id = ?`, [comp_id, id]);
+    if (!comp) return res.status(404).json({ error: 'Compartment not found' });
 
     const totalComps = await db.get(`SELECT COUNT(*) as count FROM compartments WHERE location_id = ?`, [id]);
     if (totalComps.count <= 1) {
-      return res.status(400).json({ error: 'Cannot delete the last compartment of a location' });
+      return res.status(400).json({ error: 'Cannot delete the last compartment of a location', code: 'last_compartment' });
     }
 
     await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE compartment_id = ? AND user_id = ?`, [comp_id, req.user.id]);
@@ -597,7 +658,7 @@ router.delete('/compartments/:id', async (req, res) => {
     const comp = await getOwnedCompartment(id, req.user.id);
     if (!comp) return res.status(404).json({ error: 'Compartment not found' });
     const total = await db.get(`SELECT COUNT(*) AS count FROM compartments WHERE location_id = ?`, [comp.loc_id]);
-    if (total.count <= 1) return res.status(400).json({ error: 'Cannot delete the last compartment of a location' });
+    if (total.count <= 1) return res.status(400).json({ error: 'Cannot delete the last compartment of a location', code: 'last_compartment' });
     await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE compartment_id = ? AND user_id = ?`, [id, req.user.id]);
     await db.run(`DELETE FROM compartments WHERE id = ?`, [id]);
     res.json({ message: 'Compartment deleted (cards inside moved to Unsorted)' });
@@ -768,44 +829,51 @@ router.post('/locations/:id/apply-all', async (req, res) => {
 router.post('/locations/:id/resort', async (req, res) => {
   const { id } = req.params;
   try {
-    const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-    if (!location) return res.status(404).json({ error: 'Location not found' });
+    // One transaction from the first read to the last placement. The re-sort
+    // empties every slot before refilling them, so an error part way used to
+    // leave the rest of the container's cards in it with no slot at all.
+    const results = await db.withTransaction(async () => {
+      const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+      if (!location) return null;
 
-    const cards = await db.all(`
-      SELECT c.id as entry_id, c.card_id, c.printing, c.language, c.quantity, c.favorite, c.is_trade, c.list_type,
-             cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.image_url, cc.game,
-             cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
-      FROM collection c
-      JOIN card_cache cc ON c.card_id = cc.id
-      WHERE c.location_id = ? AND c.user_id = ?
-    `, [id, req.user.id]);
-    cards.forEach(c => { try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; } });
+      const cards = await db.all(`
+        SELECT c.id as entry_id, c.card_id, c.printing, c.language, c.quantity, c.favorite, c.is_trade, c.list_type,
+               cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.image_url, cc.orientation, cc.game,
+               cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
+        FROM collection c
+        JOIN card_cache cc ON c.card_id = cc.id
+        WHERE c.location_id = ? AND c.user_id = ?
+      `, [id, req.user.id]);
+      cards.forEach(c => { try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; } });
 
-    if (cards.length === 0) return res.json([]);
+      if (cards.length === 0) return [];
 
-    await db.run(`UPDATE collection SET compartment_id = NULL, position = 0 WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
+      await db.run(`UPDATE collection SET compartment_id = NULL, position = 0 WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
 
-    const ordered = sortCards(cards, location.sort_order, location.foil_sorting);
+      const ordered = sortCards(cards, location.sort_order, location.foil_sorting);
 
-    let workingCompartments = await loadCompartments(db, id, req.user.id);
-    const results = [];
+      let workingCompartments = await loadCompartments(db, id, req.user.id);
+      const placed = [];
 
-    for (const entry of ordered) {
-      const recommended = await recommendSlot(db, location, entry, workingCompartments, []);
-      if (!recommended) { results.push({ entry, recommended: null }); continue; }
+      for (const entry of ordered) {
+        const recommended = await recommendSlot(db, location, entry, workingCompartments, []);
+        if (!recommended) { placed.push({ entry, recommended: null }); continue; }
 
-      const finalLoc = recommended.location_id || Number(id);
-      await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`, [
-        finalLoc, recommended.compartment_id, recommended.position, entry.entry_id, req.user.id
-      ]);
-      results.push({ entry, recommended });
+        const finalLoc = recommended.location_id || Number(id);
+        await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`, [
+          finalLoc, recommended.compartment_id, recommended.position, entry.entry_id, req.user.id
+        ]);
+        placed.push({ entry, recommended });
 
-      if (finalLoc === Number(id) && !recommended.stacked) {
-        workingCompartments = workingCompartments.map(c =>
-          c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
-        );
+        if (finalLoc === Number(id) && !recommended.stacked) {
+          workingCompartments = workingCompartments.map(c =>
+            c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
+          );
+        }
       }
-    }
+      return placed;
+    });
+    if (!results) return res.status(404).json({ error: 'Location not found' });
 
     res.json(results);
   } catch (error) {

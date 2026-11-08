@@ -20,6 +20,10 @@ router.get('/', async (req, res) => {
         return res.json([]); // set autocomplete is a convenience; searching still works
       }
     }
+    // Riftbound's sets arrive with its catalogue, which is fetched on first use —
+    // opening the Riftbound search is a first use. Unreachable is not an error
+    // here: the list is a convenience and searching still says what is wrong.
+    if (game === 'riftbound') await require('../riftcodexApi').ensureCatalogue().catch(() => {});
     const where = game ? `WHERE game = ?` : '';
     const params = game ? [game] : [];
     const sets = await db.all(`

@@ -3,21 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <!-- Installable app: the manifest, plus what iOS reads instead of it. Icons
+         come from scripts/pwa-icons.mjs. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0a0f1d" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="Bindarr" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Bindarr</title>
-    <!-- Apply saved theme before first paint so there's no flash of the wrong theme. -->
-    <script>
-      (function () {
-        try {
-          const urlTheme = new URLSearchParams(window.location.search).get('theme');
-          document.documentElement.setAttribute('data-theme', urlTheme || localStorage.getItem('theme') || 'dark');
-        } catch (e) { /* private mode / storage blocked: stay on dark */ }
-      })();
-    </script>
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;500;600;700&family=Chakra+Petch:wght@400;500;600;700&family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@500;600;700;800;900&family=Crimson+Pro:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Outfit:wght@300;400;500;600;700;800&family=Philosopher:ital,wght@0,400;0,700;1,400;1,700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Righteous&display=swap" rel="stylesheet">
+    <!-- Apply saved theme before first paint so there's no flash of the wrong theme.
+         A file, not inline: the Content-Security-Policy blocks inline scripts. -->
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

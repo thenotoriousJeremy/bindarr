@@ -7,6 +7,7 @@ import {
 import { GAMES, enabledGames, setGameEnabled, defaultGame, gameLabel } from '../utils/games';
 import { containerTypeKey } from '../utils/cardOptions';
 import { LOCALES, localeName, useT } from '../utils/i18n';
+import Modal from './Modal';
 
 // First-run setup.
 //
@@ -54,11 +55,17 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
   const [shownGames, setShownGames] = useState(() => enabledGames());
   const [defaultGameValue, setDefaultGameValue] = useState(() => defaultGame());
 
-  // Step 3: optional provider keys
-  const [tcgKey, setTcgKey] = useState(user?.tcg_api_key || '');
-  const [psaToken, setPsaToken] = useState(user?.psa_api_token || '');
-  const [gradedKey, setGradedKey] = useState(user?.graded_price_api_key || '');
+  // Step 3: optional provider keys. Write-only, as in Settings: the server says
+  // whether each is saved (user.has_*), never what it is, so these hold only what
+  // is typed now, and an empty box keeps the saved key.
+  const [tcgKey, setTcgKey] = useState('');
+  const [psaToken, setPsaToken] = useState('');
+  const [gradedKey, setGradedKey] = useState('');
   const [savingKeys, setSavingKeys] = useState(false);
+  const typedKeys = Object.fromEntries(
+    [['tcg_api_key', tcgKey], ['psa_api_token', psaToken], ['graded_price_api_key', gradedKey]]
+      .filter(([, value]) => value.trim())
+  );
 
   // Step 4: storage
   const [locations, setLocations] = useState([]);
@@ -119,16 +126,18 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
   };
 
   const saveKeys = async () => {
+    if (!Object.keys(typedKeys).length) return;
     setSavingKeys(true);
     try {
       const r = await fetch('/api/auth/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tcg_api_key: tcgKey, psa_api_token: psaToken, graded_price_api_key: gradedKey }),
+        body: JSON.stringify(typedKeys),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || t('setup.keys.errSave'));
       onUpdateUser?.(j.user);
+      setTcgKey(''); setPsaToken(''); setGradedKey('');
       showToast?.(t('setup.keys.saved'));
     } catch (e) { showToast?.(e.message); }
     finally { setSavingKeys(false); }
@@ -395,21 +404,26 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
               <Failure what={`catalog:${c.game}`} />
             </div>
           ))}
-          {shownGames.includes('lorcana') && (
-            <div style={{ ...row, opacity: 0.9, background: 'rgba(255,255,255,0.03)' }}>
+          {/* Every shown, scannable game with no ready-made catalog to download
+              has to be built locally; say so rather than leaving it absent. */}
+          {engine && GAMES.filter(g => shownGames.includes(g.value) && g.features?.scan
+            && !(engine?.catalogs || []).some(c => c.game === g.value)).map(g => (
+            <div key={g.value} style={{ ...row, opacity: 0.9, background: 'rgba(255,255,255,0.03)' }}>
               <div style={{ minWidth: 0 }}>
                 <span style={{ fontSize: '0.76rem', color: 'var(--text-strong)' }}>
-                  {gameLabel('lorcana')}
+                  {gameLabel(g.value)}
                 </span>
                 <p style={{ ...body, fontSize: '0.72rem', marginTop: '0.15rem' }}>
-                  {t('setup.scan.lorcanaLocalNote')}
+                  {g.value === 'lorcana'
+                    ? t('setup.scan.lorcanaLocalNote')
+                    : t('setup.scan.localOnlyNote', { game: gameLabel(g.value) })}
                 </p>
               </div>
               <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', flexShrink: 0, fontStyle: 'italic' }}>
                 {t('setup.scan.buildLocally')}
               </span>
             </div>
-          )}
+          ))}
         </div>
         {!modelsReady && (
           <p style={{ fontSize: '0.72rem', color: 'var(--accent-yellow)', margin: '0.4rem 0 0' }}>
@@ -437,7 +451,7 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
           {t('setup.keys.tcgBody', { from: 1000, to: 20000 })}
           {' '}<A href="https://dev.pokemontcg.io/">dev.pokemontcg.io</A>
         </p>
-        <input type="password" value={tcgKey} onChange={(e) => setTcgKey(e.target.value)} style={input} placeholder={t('setup.keys.pasteKey')} />
+        <input type="password" value={tcgKey} onChange={(e) => setTcgKey(e.target.value)} style={input} placeholder={user?.has_tcg_api_key ? t('settings.keyReplacePlaceholder') : t('setup.keys.pasteKey')} />
       </div>
       <div>
         <div style={label}>{t('setup.keys.psaTitle')}</div>
@@ -445,7 +459,7 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
           {t('setup.keys.psaBody')}
           {' '}<A href="https://www.psacard.com/publicapi/documentation">psacard.com</A>
         </p>
-        <input type="password" value={psaToken} onChange={(e) => setPsaToken(e.target.value)} style={input} placeholder={t('setup.keys.pasteToken')} />
+        <input type="password" value={psaToken} onChange={(e) => setPsaToken(e.target.value)} style={input} placeholder={user?.has_psa_api_token ? t('settings.keyReplacePlaceholder') : t('setup.keys.pasteToken')} />
       </div>
       <div>
         <div style={label}>{t('setup.keys.gradedTitle')}</div>
@@ -453,9 +467,9 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
           {t('setup.keys.gradedBody')}
           {' '}<A href="https://www.pokemonpricetracker.com/">pokemonpricetracker.com</A>
         </p>
-        <input type="password" value={gradedKey} onChange={(e) => setGradedKey(e.target.value)} style={input} placeholder={t('setup.keys.pasteKey')} />
+        <input type="password" value={gradedKey} onChange={(e) => setGradedKey(e.target.value)} style={input} placeholder={user?.has_graded_price_api_key ? t('settings.keyReplacePlaceholder') : t('setup.keys.pasteKey')} />
       </div>
-      <button className="btn btn-primary btn-sm" onClick={saveKeys} disabled={savingKeys} style={{ alignSelf: 'flex-start' }}>
+      <button className="btn btn-primary btn-sm" onClick={saveKeys} disabled={savingKeys || !Object.keys(typedKeys).length} style={{ alignSelf: 'flex-start' }}>
         {savingKeys ? t('setup.keys.saving') : t('setup.keys.save')}
       </button>
     </>
@@ -479,7 +493,7 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
                   onChange={(e) => setEditName(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') renameLocation(l.id);
-                    if (e.key === 'Escape') setEditingId(null);
+                    if (e.key === 'Escape') { e.preventDefault(); setEditingId(null); }
                   }}
                   style={{ ...input, flex: 1 }}
                 />
@@ -566,12 +580,11 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
   const last = step === STEPS.length - 1;
 
   return (
-    <div style={{
+    <Modal onClose={onClose} label={t('setup.dialogLabel')} closeOnBackdrop={false} overlayStyle={{
       position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center',
       padding: '1rem', background: 'rgba(0,0,0,0.72)',
       backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
-    }}>
-      <div style={{
+    }} style={{
         width: '100%', maxWidth: 580, maxHeight: '90vh', display: 'flex', flexDirection: 'column',
         padding: '1.25rem', background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)',
         borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-glow)',
@@ -614,8 +627,7 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

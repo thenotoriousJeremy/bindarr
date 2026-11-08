@@ -82,7 +82,8 @@ function compartmentAcceptsCard(compartment, cardMetadata) {
 
 function locationAcceptsCard(location, cardMetadata) {
   if (location.game && location.game !== 'any') {
-    const cardGame = cardMetadata.game || 'pokemon';
+    // A row with no game predates multi-game support (utils/games LEGACY_GAME).
+    const cardGame = cardMetadata.game || require('./games').LEGACY_GAME;
     if (cardGame !== location.game) return false;
   }
 
@@ -489,7 +490,7 @@ async function recommendSlot(database, location, cardMetadata, overrideCompartme
 
   const allLocationCards = await dbClient.all(`
     SELECT c.id as entry_id, c.card_id, c.compartment_id, c.position, c.quantity, c.condition, c.printing, c.language, c.purchase_price, c.added_at, c.is_trade, c.favorite, c.list_type,
-           cc.name, cc.printed_name, cc.supertype, cc.game, cc.types, cc.subtypes, cc.rarity, cc.set_id, cc.set_name, cc.number, cc.image_url,
+           cc.name, cc.printed_name, cc.supertype, cc.game, cc.types, cc.subtypes, cc.rarity, cc.set_id, cc.set_name, cc.number, cc.image_url, cc.orientation,
            cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
     FROM collection c
     JOIN card_cache cc ON c.card_id = cc.id
@@ -792,7 +793,14 @@ async function recommendSlot(database, location, cardMetadata, overrideCompartme
   return null;
 }
 
-async function rebalanceCompartmentByScheme(database, compartmentId, sortOrder, foilSorting) {
+// The new order is computed from one read and written back in chunks, so it is
+// one transaction: a write landing in between would be overwritten from stale
+// positions, and a chunk failing part way would leave two cards on one slot.
+function rebalanceCompartmentByScheme(database, compartmentId, sortOrder, foilSorting) {
+  return db.withTransaction(() => rebalanceCompartment(database, compartmentId, sortOrder, foilSorting));
+}
+
+async function rebalanceCompartment(database, compartmentId, sortOrder, foilSorting) {
   const dbClient = database || db;
   const cards = await dbClient.all(
     `SELECT c.*, cc.name, cc.printed_name, cc.set_id, cc.set_id as set_code, cc.set_name, cc.number, cc.types, cc.subtypes, cc.supertype, cc.game, cc.rarity, cc.price_trend

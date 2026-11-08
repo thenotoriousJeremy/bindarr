@@ -18,6 +18,7 @@ const path = require('path');
 const sharp = require('sharp');
 const ort = require('onnxruntime-node');
 const { loadNpz } = require('./utils/npz');
+const games = require('./utils/games');
 
 const MODEL_DIR = process.env.CV_MODEL_DIR || path.join(__dirname, '..', 'data', 'models');
 const CORN_SIZE = 384;     // cornelius input
@@ -77,6 +78,19 @@ const SESSION_OPTS = { intraOpNumThreads: 1, interOpNumThreads: 1, executionMode
 let models = null;
 const catalogs = {};   // game -> { cat, ids, n, dim } (or an in-flight promise)
 
+// Device mode (embedded/index.js): no catalog files and no native ONNX runtime. The
+// phone app downloads the published catalogs itself, runs milo in its WebView and
+// sends the embedding, so all this module does there is the sweep. setSource()
+// hands it those catalogs:
+//   { hasModels(), hasCatalog(game), loadCatalog(game) -> { cat, ids, n, dim } }
+// A server never calls it, and every path below behaves as it always has.
+let source = null;
+function setSource(s) {
+  source = s;
+  models = null;
+  for (const key of Object.keys(catalogs)) delete catalogs[key];
+}
+
 // English keeps the bare filename so existing builds stay valid; other languages
 // get their own catalog, because a language whose card text AND set structure
 // differ (Japanese Pokemon) cannot be reached from the English one.
@@ -88,23 +102,35 @@ function catalogPath(game) {
   return path.join(MODEL_DIR, `milo-${game}.npz`);
 }
 
+// How a PUBLISHED catalog keys its rows: TCGplayer product ids (Pokémon,
+// Lorcana) or the provider's own card id, unprefixed (Magic). From the registry;
+// a locally built catalog is always keyed by card_cache.id whatever this says.
+const publishedIds = (game) => games.get(game)?.scan?.publishedIds || 'cardId';
+// A card id with its game prefix stripped, which is how a published catalog
+// that keys by provider id writes it.
+const ID_PREFIX_RE = new RegExp(`^(?:${games.VALUES.map(g => g.replace(/[^a-z0-9]/gi, '')).join('|')})-`);
+
 // A locally built catalog wins when present. Its ids are card_cache primary keys,
 // so every hit resolves by construction — which the published Pokemon catalog
 // cannot promise, being keyed by TCGplayer product ids of which only ~24% map to
 // a card this install has ever cached.
 function hasLocal(game, lang) {
+  if (source) return false;   // local builds need sharp and a disk; a phone has neither
   return fs.existsSync(localBin(game, lang)) && fs.existsSync(localMeta(game, lang));
 }
 
+const modelsPresent = () => (source ? source.hasModels()
+  : fs.existsSync(path.join(MODEL_DIR, 'cornelius.onnx')) && fs.existsSync(path.join(MODEL_DIR, 'milo.onnx')));
+const publishedPresent = (game) => (source ? source.hasCatalog(game) : fs.existsSync(catalogPath(game)));
+
 function isBuilt(game = 'mtg', lang) {
-  if (!fs.existsSync(path.join(MODEL_DIR, 'cornelius.onnx'))
-    || !fs.existsSync(path.join(MODEL_DIR, 'milo.onnx'))) return false;
+  if (!modelsPresent()) return false;
   if (hasLocal(game, lang)) return true;
   // No catalog in that language. English can still answer WHICH card it is —
   // the artwork is the same in every language — so the caller may still want
   // this pipeline and re-express the answer afterwards. Only report unbuilt
   // when even English is missing.
-  return hasLocal(game) || fs.existsSync(catalogPath(game));
+  return hasLocal(game) || publishedPresent(game);
 }
 
 // The languages this game has a catalog OF ITS OWN in.
@@ -118,7 +144,7 @@ function builtLangs(game = 'mtg') {
   const names = require('./utils/languages').LANGUAGES.map(l => l.name);
   const out = names.filter(l => hasLocal(game, l));
   // English also answers from a published .npz, which is not a local build.
-  if (!out.includes('English') && fs.existsSync(catalogPath(game))) out.unshift('English');
+  if (!out.includes('English') && publishedPresent(game)) out.unshift('English');
   return out;
 }
 
@@ -149,6 +175,11 @@ async function load(game = 'mtg', lang) {
   if (!catalogs[key]) {
     catalogs[key] = (async () => {
       const t0 = Date.now();
+      if (source) {
+        const { cat, ids, n, dim } = await source.loadCatalog(game);
+        console.log(`cvScan: ${key} device catalog ${n} x ${dim}d loaded in ${Date.now() - t0} ms`);
+        return { cat, ids, n, dim, local: false, lang: 'English' };
+      }
       const m = await loadModels();
       if (hasLocal(game, useLang)) {
         const meta = JSON.parse(fs.readFileSync(localMeta(game, useLang), 'utf8'));
@@ -385,6 +416,8 @@ function searchTopK(emb, cat, n, dim, k, allow) {
     while (j > 0 && sims[top[j - 1]] < sims[i]) { top[j] = top[j - 1]; j--; }
     top[j] = i;
   }
+  // Fewer rows than k: the insertion sort above never ran.
+  if (top.length < k) top.sort((a, b) => sims[b] - sims[a]);
   return top.map(i => ({ i, sim: sims[i] }));
 }
 
@@ -405,7 +438,7 @@ async function match(imageBuffer, game = 'mtg', topK = 8, opts = {}) {
   // narrowed the scan on purpose, and an unscoped sweep of the other language is
   // exactly the wrong-card answer the scope was meant to prevent.
   const wanted = (opts.sets || []).map(x => String(x).toLowerCase()).filter(Boolean);
-  const want = new Set(wanted.flatMap(x => [x, x.replace(/^(mtg|lorcana)-/, ''), `${game}-${x.replace(/^(mtg|lorcana)-/, '')}`]));
+  const want = new Set(wanted.flatMap(x => [x, games.bareSetId(x), `${game}-${games.bareSetId(x)}`]));
   let scoped = null;
   const search = [];
   for (const c of cats) {
@@ -426,14 +459,19 @@ async function match(imageBuffer, game = 'mtg', topK = 8, opts = {}) {
   // The client can do the dewarp itself: it ran cornelius for the live outline
   // anyway, so re-detecting on a crop that IS already the card would only find
   // the same square again, at the cost of a decode and a forward pass.
-  const det = opts.cropped
-    ? await useClientCrop(imageBuffer)
-    : await detectAndDewarp(cats[0].corn, imageBuffer);
+  // opts.embedding: the client already ran milo on its crop (device mode always
+  // does, having no server to send the pixels to). Everything after this point is
+  // the same scan either way.
+  const det = opts.embedding
+    ? { detected: opts.detected !== false, sharpness: 1 }
+    : opts.cropped
+      ? await useClientCrop(imageBuffer)
+      : await detectAndDewarp(cats[0].corn, imageBuffer);
 
   // One crop, one forward pass, reused by every catalog. milo's output is already
   // L2-normalised, so this vector goes straight into the cosine sweep.
-  const out = await cats[0].milo.run({ image: toTensor(det.rgb, EMBED_SIZE) });
-  const emb = out.embedding.data;
+  const emb = opts.embedding || (await cats[0].milo.run({ image: toTensor(det.rgb, EMBED_SIZE) })).embedding.data;
+  if (emb.length !== cats[0].dim) throw new Error(`embedding has ${emb.length} dimensions, the catalog ${cats[0].dim}`);
 
   // Cosines from different catalogs are directly comparable — same model, same
   // normalisation — so the merged list is just every sweep's hits sorted by score.
@@ -479,7 +517,7 @@ async function match(imageBuffer, game = 'mtg', topK = 8, opts = {}) {
     // A local catalog is already keyed by card_cache.id for any game; only the
     // published catalogs need their provider id translated.
     candidates.push(h.c.local ? { cardId: id, score: h.sim, catalogLang: h.c.lang }
-      : (game === 'pokemon' || game === 'lorcana') ? { productId: Number(id), score: h.sim, catalogLang: h.c.lang }
+      : publishedIds(game) === 'productId' ? { productId: Number(id), score: h.sim, catalogLang: h.c.lang }
         : { cardId: `${game}-${id}`, score: h.sim, catalogLang: h.c.lang });
     if (candidates.length >= topK) break;
   }
@@ -487,7 +525,7 @@ async function match(imageBuffer, game = 'mtg', topK = 8, opts = {}) {
   const top = candidates[0];
   const margin = candidates.length > 1 ? top.score - candidates[1].score : (top ? top.score : 0);
 
-  const crop = 'data:image/jpeg;base64,' + (await sharp(Buffer.from(det.rgb), {
+  const crop = opts.embedding ? (opts.thumb || null) : 'data:image/jpeg;base64,' + (await sharp(Buffer.from(det.rgb), {
     raw: { width: EMBED_SIZE, height: EMBED_SIZE, channels: 3 },
   }).resize({ width: 220 }).jpeg({ quality: 70 }).toBuffer()).toString('base64');
 
@@ -523,19 +561,20 @@ async function match(imageBuffer, game = 'mtg', topK = 8, opts = {}) {
 
 // Score a list of cards against an image embedding and sort them by visual similarity.
 async function scoreCards(imageBuffer, game = 'mtg', cards = [], opts = {}) {
-  if (!cards || cards.length <= 1 || !imageBuffer) return cards;
+  if (!cards || cards.length <= 1 || (!imageBuffer && !opts.embedding)) return cards;
   if (!isBuilt(game, opts.lang)) return cards;
 
   try {
     const cats = await loadAll(game, opts.lang);
     if (!cats || !cats.length) return cards;
 
-    const det = opts.cropped
-      ? await useClientCrop(imageBuffer)
-      : await detectAndDewarp(cats[0].corn, imageBuffer);
-
-    const out = await cats[0].milo.run({ image: toTensor(det.rgb, EMBED_SIZE) });
-    const emb = out.embedding.data;
+    let emb = opts.embedding;
+    if (!emb) {
+      const det = opts.cropped
+        ? await useClientCrop(imageBuffer)
+        : await detectAndDewarp(cats[0].corn, imageBuffer);
+      emb = (await cats[0].milo.run({ image: toTensor(det.rgb, EMBED_SIZE) })).embedding.data;
+    }
 
     for (const c of cats) {
       if (!c.idMap) {
@@ -549,7 +588,7 @@ async function scoreCards(imageBuffer, game = 'mtg', cards = [], opts = {}) {
     }
 
     let prodMap = null;
-    if (game === 'pokemon' || game === 'lorcana') {
+    if (publishedIds(game) === 'productId') {
       const db = require('./db');
       const cardIds = cards.map(c => c.id).filter(Boolean);
       if (cardIds.length) {
@@ -569,7 +608,7 @@ async function scoreCards(imageBuffer, game = 'mtg', cards = [], opts = {}) {
       const possibleIds = [];
       if (card.id) {
         possibleIds.push(String(card.id));
-        possibleIds.push(String(card.id).replace(/^(mtg|pokemon|lorcana)-/, ''));
+        possibleIds.push(String(card.id).replace(ID_PREFIX_RE, ''));
       }
       if (card.scryfall_id) possibleIds.push(String(card.scryfall_id));
       if (card.tcgplayer_id) possibleIds.push(String(card.tcgplayer_id));
@@ -620,5 +659,11 @@ function reload(game, lang) {
   delete catalogs[game];
 }
 
-module.exports = { match, load, loadAll, isBuilt, builtLangs, reload, scoreCards, STRONG_SIM, STRONG_MARGIN, GAP_FLOOR };
+// Drop the cached ONNX sessions so a replaced model file is read on the next scan.
+// A scan already holding the old sessions finishes on them.
+function reloadModels() {
+  models = null;
+}
+
+module.exports = { match, load, loadAll, isBuilt, builtLangs, reload, reloadModels, scoreCards, setSource, STRONG_SIM, STRONG_MARGIN, GAP_FLOOR };
 

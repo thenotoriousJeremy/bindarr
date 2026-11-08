@@ -3,6 +3,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
+process.env.BINDARR_DISABLE_FX_SYNC = '1';
 
 const TEST_DIR = __dirname;
 const files = fs.readdirSync(TEST_DIR)
@@ -34,7 +35,7 @@ async function runTestFile(file) {
       const output = data.toString();
       process.stdout.write(output);
       
-      const passMatches = output.match(/PASS: F\d-TC\d+/g);
+      const passMatches = output.match(/PASS: F\d+-TC\d+/g);
       if (passMatches) {
         filePassed += passMatches.length;
       }
@@ -44,7 +45,7 @@ async function runTestFile(file) {
       const output = data.toString();
       process.stderr.write(output);
       
-      const failMatches = output.match(/FAIL: F\d-TC\d+/g);
+      const failMatches = output.match(/FAIL: F\d+-TC\d+/g);
       if (failMatches) {
         fileFailed += failMatches.length;
       }

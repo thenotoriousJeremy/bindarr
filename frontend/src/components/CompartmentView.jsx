@@ -1,132 +1,20 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { useDroppable, useDraggable } from '@dnd-kit/core';
 import { Lock, Edit3 } from 'lucide-react';
 import { getPrintingBadgeStyle, getPrintingBadgeLabel, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { priceText } from '../utils/formatPrice';
-import { cardTypeCategory, colorCategory } from '../utils/cardSort';
-import { isBinderType } from '../utils/cardOptions';
+import { getSortCategories, changedCategories } from '../utils/sortCategories';
+import { useFx } from '../utils/useFx';
+import { isBinderType, conditionLabel } from '../utils/cardOptions';
 import { displayName } from '../utils/languages';
 import { useLongPress } from '../utils/useLongPress';
-import { pageColumns as resolvePageColumns } from '../utils/binderLayout';
+import { pageColumns as resolvePageColumns, layoutPockets } from '../utils/binderLayout';
 import CardImage from './CardImage';
+import BinderArtPiece from './BinderArtPiece';
 import { useT } from '../utils/i18n';
 
 const infoChipStyle = { fontSize: '0.6rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)', whiteSpace: 'nowrap' };
-
-// Collapse copies of the same card into one pocket, keyed the way the server
-// counts occupancy on a stacking container (card, printing and language; not
-// condition). The first copy holds the slot and the rest ride along in its
-// quantity, so the page lays out from stacks rather than from rows.
-function stackPocketCards(cards) {
-  const stacks = new Map();
-  for (const card of cards) {
-    const key = `${card.card_id}|${card.printing || 'Normal'}|${card.language || 'English'}`;
-    const held = stacks.get(key);
-    if (!held) {
-      stacks.set(key, { ...card, quantity: card.quantity || 1 });
-      continue;
-    }
-    held.quantity += card.quantity || 1;
-    // Whichever copy is actually filed decides where the stack sits; an unplaced
-    // one joining it must not drag the pocket back to "no position".
-    if (!(held.position > 0) && card.position > 0) held.position = card.position;
-  }
-  return Array.from(stacks.values());
-}
-
-// The label a card falls under for a given divider field.
-function categoryForField(card, field, setsList = []) {
-  switch (field) {
-    case 'name':
-      return card.name ? card.name.charAt(0).toUpperCase() : '?';
-    case 'set': {
-      if (!card.set_name) return 'Unknown Set';
-      if (!setsList || setsList.length === 0) return card.set_name;
-      const idx = setsList.findIndex(s => s.name === card.set_name);
-      return idx >= 0 ? `${idx + 1}. ${card.set_name}` : card.set_name;
-    }
-    case 'color_identity':
-    case 'color':
-      return colorCategory(card);
-    case 'type':
-      return cardTypeCategory(card);
-    case 'cmc':
-      return `CMC ${card.cmc != null && card.cmc !== '' ? card.cmc : '?'}`;
-    case 'rarity':
-      return card.rarity || 'Common';
-    case 'printing':
-      return card.printing || 'Normal';
-    case 'language':
-      return card.language || 'English';
-    case 'price': {
-      const p = card.price_trend || 0;
-      if (p >= 100) return '$100+';
-      if (p >= 50) return '$50+';
-      if (p >= 20) return '$20+';
-      if (p >= 10) return '$10+';
-      if (p >= 5) return '$5+';
-      if (p >= 1) return '$1+';
-      return '< $1';
-    }
-    default:
-      return null; // added_at, entry_id, number: too granular to divide on
-  }
-}
-
-function dividerFieldsOf(arr) {
-  if (!Array.isArray(arr) || arr.length === 0) return [];
-  const chosen = arr.filter(r => r && r.divider === true);
-  if (chosen.length > 0) return chosen.map(r => ({ field: r.by, color: r.dividerColor || '#6b7280' }));
-  if (arr.some(r => r && r.divider === false)) return [];
-  return [{ field: arr[0].by, color: '#6b7280' }];
-}
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function getSortCategories(card, sortOrder, setsList = []) {
-  if (!card || !sortOrder || sortOrder === 'custom') return [];
-
-  let dividerFields = [];
-  if (Array.isArray(sortOrder)) {
-    dividerFields = dividerFieldsOf(sortOrder);
-  } else if (typeof sortOrder === 'string' && sortOrder.startsWith('[')) {
-    try { dividerFields = dividerFieldsOf(JSON.parse(sortOrder)); }
-    catch (e) { dividerFields = []; }
-  } else if (typeof sortOrder === 'string') {
-    if (sortOrder.startsWith('name')) dividerFields = [{ field: 'name', color: '#6b7280' }];
-    else if (sortOrder.startsWith('set')) dividerFields = [{ field: 'set', color: '#6b7280' }];
-    else if (sortOrder.startsWith('type')) dividerFields = [{ field: 'type', color: '#6b7280' }];
-    else if (sortOrder.startsWith('price')) dividerFields = [{ field: 'price', color: '#6b7280' }];
-    else if (sortOrder.startsWith('language')) dividerFields = [{ field: 'language', color: '#6b7280' }];
-  }
-
-  return dividerFields.map(df => ({
-    field: df.field,
-    color: df.color,
-    label: categoryForField(card, df.field, setsList)
-  })).filter(c => c.label !== null);
-}
-
-// Category the container FILES by — the primary (first) sort field, matching
-// the backend's placement engine. Used by the Category-to-Page map, which must
-// track filing, not the (independent) visual divider choice.
-// eslint-disable-next-line react-refresh/only-export-components
-export function getPrimaryCategory(card, sortOrder, setsList = []) {
-  if (!card || !sortOrder || sortOrder === 'custom') return null;
-  let field = null;
-  if (Array.isArray(sortOrder)) field = sortOrder[0]?.by || null;
-  else if (typeof sortOrder === 'string' && sortOrder.startsWith('[')) {
-    try { field = JSON.parse(sortOrder)[0]?.by || null; } catch (e) { field = null; }
-  } else if (typeof sortOrder === 'string') {
-    if (sortOrder.startsWith('name')) field = 'name';
-    else if (sortOrder.startsWith('set')) field = 'set';
-    else if (sortOrder.startsWith('type')) field = 'type';
-    else if (sortOrder.startsWith('price')) field = 'price';
-    else if (sortOrder.startsWith('language')) field = 'language';
-  }
-  if (!field) return null;
-  return categoryForField(card, field, setsList);
-}
 
 // A binder pocket that accepts a dragged card. Two components, not one with a
 // conditional hook: CompartmentView also renders inside CheckoutWizardModal,
@@ -186,6 +74,7 @@ function DroppablePocket({ enabled, dropId, dropData, dragId, dragCard, children
 }
 
 function PrintingBadge({ printing }) {
+  const { t } = useT();
   if (!printing || printing === 'Normal') return null;
   return (
     <div style={{
@@ -195,7 +84,7 @@ function PrintingBadge({ printing }) {
       zIndex: 20, boxShadow: '0 2px 4px rgba(0,0,0,0.5)',
       ...getPrintingBadgeStyle(printing)
     }}>
-      {getPrintingBadgeLabel(printing)}
+      {getPrintingBadgeLabel(printing, t)}
     </div>
   );
 }
@@ -204,6 +93,7 @@ function PrintingBadge({ printing }) {
 // the binder grid so both surfaces describe a selection the same way.
 export function FocusedCardInfo({ card, slotNumber, moveSelect = null }) {
   const { t } = useT();
+  const { show } = useFx();
   if (!card) return null;
   const isEmpty = !!card.__empty;
   const isDivider = !!card.__divider;
@@ -233,19 +123,19 @@ export function FocusedCardInfo({ card, slotNumber, moveSelect = null }) {
             )}
             {card.printing && card.printing !== 'Normal' && (
               <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', ...getPrintingBadgeStyle(card.printing) }}>
-                {getPrintingBadgeLabel(card.printing)}
+                {getPrintingBadgeLabel(card.printing, t)}
               </span>
             )}
             {card.printing === 'Normal' && <span style={infoChipStyle}>{t('compartment.printingNormal')}</span>}
             {card.supertype && <span style={{ ...infoChipStyle, color: 'var(--text-strong)' }} title={t('compartment.supertype')}>{card.supertype}</span>}
             {(card.types || []).length > 0 && <span style={infoChipStyle} title={t('compartment.types')}>{card.types.join(' / ')}</span>}
             {(card.subtypes || []).length > 0 && <span style={infoChipStyle} title={t('compartment.subtypes')}>{card.subtypes.join(' / ')}</span>}
-            {card.condition && <span style={infoChipStyle}>{card.condition}</span>}
+            {card.condition && <span style={infoChipStyle}>{conditionLabel(t, card.condition)}</span>}
             {card.language && card.language !== 'English' && <span style={infoChipStyle}>{card.language}</span>}
             {card.quantity > 1 && <span style={{ ...infoChipStyle, color: 'var(--text-strong)' }}>x{card.quantity}</span>}
             {card.price_trend > 0 && (
               <span style={{ ...infoChipStyle, color: 'var(--accent-yellow)', marginLeft: 'auto' }}>
-                {t('compartment.value', { price: priceText(card.price_trend) })}
+                {t('compartment.value', { price: show(card.price_trend, card.price_currency).text })}
               </span>
             )}
             {card.purchase_price > 0 && <span style={infoChipStyle}>{t('compartment.paid', { price: priceText(card.purchase_price) })}</span>}
@@ -261,7 +151,7 @@ export default function CompartmentView({
   cards = [],
   locationType,
   // Container has allow_stacking: every copy of a card shares one pocket instead
-  // of taking one each. See stackPocketCards.
+  // of taking one each. See stackPocketCards in utils/stackTiles.
   allowStacking = false,
   // Binder's locations.page_columns: pockets per row on a binder page. null is
   // automatic, worked out from the page's capacity (see utils/binderLayout).
@@ -324,7 +214,20 @@ export default function CompartmentView({
   // Drag-and-drop filing: makes every pocket on this page a drop target for a
   // card dragged from elsewhere. Requires a DndContext above this component —
   // LocationManager provides one; nothing else that renders this view does.
-  dropEnabled = false
+  dropEnabled = false,
+
+  // Box map (boxes only). seekTo = { compartmentId, slot, divider, nonce } asks
+  // the coverflow to centre a 0-based slot of this row; `divider` lands on the
+  // divider card in front of it instead, and a new nonce repeats a request.
+  // onActiveSlotChange(compartmentId, slot) reports the slot it centres, so the
+  // map follows arrow keys, swipes and the wheel as well as its own seeks.
+  seekTo = null,
+  onActiveSlotChange = null,
+
+  // Binder artwork (binders only): Map of 0-based pocket index to
+  // { src, style } for the pockets that show a picture. A card filed in such a
+  // pocket still shows as the card; only an empty pocket shows the artwork.
+  artPockets = null
 }) {
   const { t } = useT();
   const isBinder = isBinderType(locationType);
@@ -355,7 +258,7 @@ export default function CompartmentView({
       const p = typeof cfg === 'string' ? JSON.parse(cfg) : cfg;
       const rules = Array.isArray(p) ? p : (p.rules || []);
       return rules.length;
-    } catch (e) { return 0; }
+    } catch { return 0; }
   })();
   const acceptsLabel = compRuleCount > 0 ? t('compartment.acceptsCount', { count: compRuleCount }) : t('compartment.accepts');
 
@@ -471,6 +374,10 @@ export default function CompartmentView({
     } else if (['ArrowLeft', 'ArrowUp'].includes(e.key)) {
       e.preventDefault();
       setCoverflowActiveIndex(prev => Math.max(0, prev - 1));
+    } else if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
+      // Keyboard stand-in for tapping the front card.
+      const active = e.currentTarget.querySelector('.box-coverflow-card.active');
+      if (active) { e.preventDefault(); active.click(); }
     }
   };
 
@@ -485,39 +392,41 @@ export default function CompartmentView({
     else setBinderActiveEntryId(id);
   };
 
+  // --- Box map link ---
+  // The coverflow's items are only known once the box branch below has built
+  // them, so that branch leaves them here for these effects, which run after it.
+  const renderedCardsRef = useRef([]);
+  const activeSlotRef = useRef(null);
+  const appliedSeekRef = useRef(null);
+  const reportedSlotRef = useRef(null);
+  useEffect(() => {
+    if (!seekTo || seekTo.nonce === appliedSeekRef.current) return;
+    if (!compartment || seekTo.compartmentId !== compartment.id) return;
+    appliedSeekRef.current = seekTo.nonce;
+    const items = renderedCardsRef.current;
+    let idx = items.findIndex(c => !c.__divider && c.__slotNumber === seekTo.slot + 1);
+    // Past the last card: the coverflow does not draw the empty tail of a row,
+    // so the nearest thing to it is the last card.
+    if (idx === -1) idx = items.length - 1;
+    if (seekTo.divider) while (idx > 0 && items[idx - 1].__divider) idx--;
+    if (idx >= 0) setCoverflowActiveIndex(idx);
+  }, [seekTo, compartment]);
+  useEffect(() => {
+    if (!onActiveSlotChange || !compartment || isBinderType(locationType)) return;
+    const report = `${compartment.id}:${activeSlotRef.current}`;
+    if (reportedSlotRef.current === report) return;
+    reportedSlotRef.current = report;
+    onActiveSlotChange(compartment.id, activeSlotRef.current);
+  });
+
   if (!compartment) return null;
 
   if (isBinder) {
     const cols = resolvePageColumns(compartment.capacity, pageColumns);
-    const pocketCards = allowStacking ? stackPocketCards(cards) : cards;
-    let maxSlotFromCards = compartment.capacity || 1;
-    pocketCards.forEach(c => {
-      if (c && c.position > 0) {
-        const s = Math.floor(c.position / 1000);
-        if (s > maxSlotFromCards) maxSlotFromCards = s;
-      }
-    });
     // Don't let the recommendation grow the page past capacity — that rendered a
     // phantom extra pocket (a 10th slot on a full 9-card page). Filing into a full
     // page shifts the others; the displaced last card moves to the next page.
-    const slotCount = Math.max(compartment.capacity || 1, maxSlotFromCards);
-    const pockets = new Array(slotCount).fill(null);
-    const unplaced = [];
-
-    pocketCards.forEach(c => {
-      const slot = (c && c.position > 0) ? Math.floor(c.position / 1000) : null;
-      if (slot && slot >= 1 && slot <= slotCount && !pockets[slot - 1]) {
-        pockets[slot - 1] = c;
-      } else {
-        unplaced.push(c);
-      }
-    });
-
-    unplaced.forEach(c => {
-      const freeIdx = pockets.findIndex(p => p === null);
-      if (freeIdx !== -1) pockets[freeIdx] = c;
-      else pockets.push(c);
-    });
+    const pockets = layoutPockets(cards, compartment.capacity, allowStacking);
 
     if (recommendedSpot && recommendedSpot.index >= 0) {
       const recIdx = Math.min(recommendedSpot.index, pockets.length - 1);
@@ -554,7 +463,7 @@ export default function CompartmentView({
                 onBlur={() => { if (editingLabel) { setEditingLabel(false); onRename(labelDraft); } }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') { setEditingLabel(false); onRename(labelDraft); }
-                  else if (e.key === 'Escape') setEditingLabel(false);
+                  else if (e.key === 'Escape') { e.preventDefault(); setEditingLabel(false); }
                 }}
                 style={{ padding: '0.15rem 0.4rem', fontSize: '0.75rem', width: '110px' }}
               />
@@ -682,28 +591,8 @@ export default function CompartmentView({
             return pockets.map((card, i) => {
               const pos = i + 1;
               const cats = card && card.__ghost ? [] : getSortCategories(card, sortOrder, setsList);
-              const prevCats = lastNonGhostCats;
-              
-              const newDividers = [];
-              if (cats.length > 0) {
-                if (prevCats.length === 0) {
-                  newDividers.push(...cats);
-                } else {
-                  let diffIdx = -1;
-                  for (let j = 0; j < cats.length; j++) {
-                    if (!prevCats[j] || cats[j].label !== prevCats[j].label) {
-                      diffIdx = j;
-                      break;
-                    }
-                  }
-                  if (diffIdx !== -1) {
-                    for (let j = diffIdx; j < cats.length; j++) {
-                      newDividers.push(cats[j]);
-                    }
-                  }
-                }
-                lastNonGhostCats = cats;
-              }
+              const newDividers = changedCategories(cats, lastNonGhostCats);
+              if (cats.length > 0) lastNonGhostCats = cats;
 
               const categoryStart = newDividers.length > 0;
               const isHighlighted = highlightPositions.includes(pos);
@@ -738,7 +627,7 @@ export default function CompartmentView({
                     ...getCardRarityBorder(card.rarity),
                     ...(isTarget ? {
                       border: '2.5px solid var(--accent-green)',
-                      boxShadow: '0 0 15px rgba(34,197,94,0.4), inset 0 0 20px rgba(34,197,94,0.3)'
+                      boxShadow: '0 0 15px var(--accent-green-glow), inset 0 0 20px var(--accent-green-glow)'
                     } : {}),
                     ...(card.entry_id === currentActiveId ? { border: '2.5px solid var(--accent-yellow)', boxShadow: '0 0 10px rgba(250,204,21,0.5)' } : {}),
                     ...(isSelected(card.entry_id) ? selectedOutline : {}),
@@ -798,14 +687,16 @@ export default function CompartmentView({
                   dropId={`pocket-${compartment.id}-${pos}`}
                   dropData={{ compartmentId: compartment.id, slot: pos, occupantEntryId: null }}
                   key={`empty-${i}`}
-                  className="binder-pocket empty"
+                  className={`binder-pocket empty ${artPockets?.get(i) ? 'has-art' : ''}`}
                   onClick={placementMode && pickedEntryId ? () => onPlaceSlot(compartment.id, pos, null) : undefined}
                   style={{
                     ...(isTarget ? { borderColor: 'var(--accent-green)', background: 'rgba(34,197,94,0.1)' } : {}),
                     ...(placementMode && pickedEntryId ? { cursor: 'pointer', borderColor: 'var(--accent-red)', background: 'rgba(255,71,71,0.08)' } : {})
                   }}
                 >
-                  <span className="slot-number">{pos}</span>
+                  {artPockets?.get(i)
+                    ? <BinderArtPiece src={artPockets.get(i).src} style={artPockets.get(i).style} />
+                    : <span className="slot-number">{pos}</span>}
                   {isTarget && (
                     <div style={{ color: 'var(--accent-green)', fontWeight: 'bold', fontSize: '0.8rem', marginTop: '0.5rem' }}>{t('compartment.pull')}</div>
                   )}
@@ -868,30 +759,16 @@ export default function CompartmentView({
           renderedCards.push({ ...card, __slotNumber: slotCounter });
         } else {
           const cats = getSortCategories(card, sortOrder, setsList);
-          let diffIdx = -1;
-          if (cats.length > 0) {
-            if (currentCats.length === 0) {
-              diffIdx = 0;
-            } else {
-              for (let j = 0; j < cats.length; j++) {
-                if (!currentCats[j] || cats[j].label !== currentCats[j].label) {
-                  diffIdx = j;
-                  break;
-                }
-              }
-            }
-          }
-          if (diffIdx !== -1) {
-            for (let j = diffIdx; j < cats.length; j++) {
-              renderedCards.push({
-                __divider: true,
-                entry_id: `div-${card.entry_id || i}-${cats[j].field}-${cats[j].label}`,
-                label: cats[j].label,
-                color: cats[j].color
-              });
-            }
-            currentCats = cats;
-          }
+          const newDividers = changedCategories(cats, currentCats);
+          newDividers.forEach(div => {
+            renderedCards.push({
+              __divider: true,
+              entry_id: `div-${card.entry_id || i}-${div.field}-${div.label}`,
+              label: div.label,
+              color: div.color
+            });
+          });
+          if (newDividers.length > 0) currentCats = cats;
           renderedCards.push({ ...card, __slotNumber: slotCounter });
         }
       } else {
@@ -940,6 +817,11 @@ export default function CompartmentView({
     }
 
     const activeCardIndex = Math.min(actualActiveIndex, Math.max(0, renderedCards.length - 1));
+    // For the box map. A divider card sits in front of the card it introduces,
+    // so a centred divider reports that card's slot.
+    renderedCardsRef.current = renderedCards;
+    const activeSlotItem = renderedCards.slice(activeCardIndex).find(c => !c.__divider);
+    activeSlotRef.current = activeSlotItem ? activeSlotItem.__slotNumber - 1 : null;
     // ponytail: coverflow renders every slot's card div for nav/positioning, but
     // only load the image for cards near the active one — the rest are rotated
     // ~48deg and faded to near-invisible, so loading their full-res art just
@@ -959,7 +841,7 @@ export default function CompartmentView({
                 onBlur={() => { if (editingLabel) { setEditingLabel(false); onRename(labelDraft); } }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') { setEditingLabel(false); onRename(labelDraft); }
-                  else if (e.key === 'Escape') setEditingLabel(false);
+                  else if (e.key === 'Escape') { e.preventDefault(); setEditingLabel(false); }
                 }}
                 style={{ padding: '0.15rem 0.4rem', fontSize: '0.8rem', width: '150px' }}
               />
@@ -993,11 +875,15 @@ export default function CompartmentView({
           </div>
         ) : (
           <>
+          {/* The coverflow is one keyboard stop: arrows move between cards and
+              Enter/Space taps the front one (handleCoverflowKeyDown). The cards'
+              own click handlers are the pointer path; giving each a tab stop
+              would put a whole row of cards in the tab order. */}
+          {/* eslint-disable jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-tabindex */}
           <div
             ref={coverflowContainerRef}
             className="box-coverflow-container"
             tabIndex={0}
-            style={{ outline: 'none' }}
             onTouchStart={handleCoverflowTouchStart}
             onTouchEnd={(e) => handleCoverflowTouchEnd(e, renderedCards.length)}
             onMouseDown={handleCoverflowMouseDown}
@@ -1018,9 +904,9 @@ export default function CompartmentView({
               {renderedCards.map((card, i) => {
                 const offset = i - activeCardIndex;
                 const absOffset = Math.abs(offset);
-                let transform = '';
+                let transform;
                 let zIndex = 10 - absOffset;
-                let opacity = 1;
+                let opacity;
                 let filter = 'none';
 
                 if (offset === 0) {
@@ -1040,7 +926,7 @@ export default function CompartmentView({
                 
                 const highlightStyle = isTarget ? { 
                   border: '2px solid var(--accent-green)', 
-                  boxShadow: '0 0 20px rgba(34,197,94,0.6)' 
+                  boxShadow: '0 0 20px var(--accent-green-glow)' 
                 } : {};
 
                 if (card.__empty) {
@@ -1153,6 +1039,7 @@ export default function CompartmentView({
               &rarr;
             </button>
           </div>
+          {/* eslint-enable jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-tabindex */}
 
           {(() => {
             const activeCard = renderedCards[activeCardIndex];
@@ -1172,7 +1059,8 @@ export default function CompartmentView({
               </select>
             ) : null;
 
-            return <FocusedCardInfo card={activeCard} slotNumber={activeCard.__slotNumber || activeCardIndex + 1} moveSelect={moveSelect} />;
+            // A divider names the slot its category starts at, same as its tab.
+            return <FocusedCardInfo card={activeCard} slotNumber={activeSlotItem?.__slotNumber || activeCardIndex + 1} moveSelect={moveSelect} />;
           })()}
           </>
         )}

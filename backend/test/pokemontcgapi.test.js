@@ -248,7 +248,8 @@ async function routes() {
   app.use('/api/settings', require('../src/routes/settings'));
   app.use('/api/sets', require('../src/routes/sets'));
   app.use('/api', require('../src/routes/collection'));
-  await db.run("INSERT INTO sessions (token, user_id, expires_at) VALUES ('fixture-session', 1, '2099-01-01')");
+  await db.run("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, 1, '2099-01-01')",
+    [require('../src/utils/authHelpers').hashSessionToken('fixture-session')]);
   const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;
   const headers = { 'Content-Type': 'application/json', Authorization: 'Bearer fixture-session' };

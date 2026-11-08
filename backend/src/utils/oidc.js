@@ -313,8 +313,11 @@ function isValidNativeChallenge(challenge) {
  * the signed state token (nat/nc) so the callback knows to hand off to the app
  * via bindarr://oidc instead of the web page -- and because the state is HMAC'd,
  * nobody can flip a web login into a native one, or swap the challenge, in transit.
+ *
+ * `webBindingHash` is the web login's counterpart: the hash of the cookie that
+ * ties it to the browser that started it (see createWebBinding), sealed as wb.
  */
-async function buildAuthorizationUrl(req, { nativeChallenge } = {}) {
+async function buildAuthorizationUrl(req, { nativeChallenge, webBindingHash } = {}) {
   const discovery = await getDiscovery();
   const clientId = getClientId();
   if (!clientId) {
@@ -333,7 +336,8 @@ async function buildAuthorizationUrl(req, { nativeChallenge } = {}) {
     cv: codeVerifier,
     n: nonce,
     ru: redirectUri,
-    ...(nativeChallenge ? { nat: 1, nc: nativeChallenge } : {})
+    ...(nativeChallenge ? { nat: 1, nc: nativeChallenge } : {}),
+    ...(webBindingHash ? { wb: webBindingHash } : {})
   });
 
   const url = new URL(discovery.authorization_endpoint);
@@ -489,41 +493,121 @@ async function exchangeCode({ code, stateToken, req }) {
 //
 // In memory, not SQLite: Bindarr is one process, a code lives for sixty seconds,
 // and a restart in between costs nothing worse than tapping the SSO button again.
+//
+// The web login hands off the same way (next section): one store, and each code
+// records which kind it is, so neither can be redeemed as the other.
 // ---------------------------------------------------------------------------
-const NATIVE_CODE_TTL_MS = 60 * 1000;
-const nativeCodes = new Map();
+const HANDOFF_CODE_TTL_MS = 60 * 1000;
+const handoffCodes = new Map();
 
-function pruneNativeCodes(now) {
-  for (const [code, entry] of nativeCodes) {
-    if (entry.expiresAt <= now) nativeCodes.delete(code);
+function pruneHandoffCodes(now) {
+  for (const [code, entry] of handoffCodes) {
+    if (entry.expiresAt <= now) handoffCodes.delete(code);
   }
+}
+
+function issueHandoffCode(userId, binding, now) {
+  pruneHandoffCodes(now);
+  const code = crypto.randomBytes(32).toString('base64url');
+  handoffCodes.set(code, { userId, ...binding, expiresAt: now + HANDOFF_CODE_TTL_MS });
+  return code;
+}
+
+// The entry for a live code, or null. A code is deleted on its FIRST presentation,
+// whatever the outcome: a wrong verifier or cookie burns it too, so it cannot be
+// retried, and a replay of a code that already worked finds nothing.
+function takeHandoffCode(code, now) {
+  if (typeof code !== 'string' || !code) return null;
+  const entry = handoffCodes.get(code);
+  if (!entry) return null;
+  handoffCodes.delete(code);
+  if (entry.expiresAt <= now) return null;
+  return entry;
 }
 
 function issueNativeCode(userId, challenge, now = Date.now()) {
   if (!isValidNativeChallenge(challenge)) {
     throw new Error('Invalid native app challenge.');
   }
-  pruneNativeCodes(now);
-  const code = crypto.randomBytes(32).toString('base64url');
-  nativeCodes.set(code, { userId, challenge, expiresAt: now + NATIVE_CODE_TTL_MS });
-  return code;
+  return issueHandoffCode(userId, { challenge }, now);
 }
 
-// Returns the user id the code was minted for, or null. A code is deleted on its
-// FIRST presentation, whatever the outcome: a wrong verifier burns it too, so it
-// cannot be retried, and a replay of a code that already worked finds nothing.
+// Returns the user id the code was minted for, or null.
 function consumeNativeCode(code, verifier, now = Date.now()) {
-  if (typeof code !== 'string' || !code) return null;
-  const entry = nativeCodes.get(code);
-  if (!entry) return null;
-  nativeCodes.delete(code);
-  if (entry.expiresAt <= now) return null;
+  const entry = takeHandoffCode(code, now);
+  // A web code carries no challenge, and is not redeemable here.
+  if (!entry || !entry.challenge) return null;
   if (typeof verifier !== 'string' || !verifier) return null;
 
   const expected = Buffer.from(entry.challenge, 'utf8');
   const actual = Buffer.from(crypto.createHash('sha256').update(verifier).digest('base64url'), 'utf8');
   if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) return null;
   return entry.userId;
+}
+
+// ---------------------------------------------------------------------------
+// Web hand-off.
+//
+// The browser's login used to end with the callback redirecting to
+// /?oidc_token=<the 7-day session token>: a credential in the URL, the history
+// and any proxy's access log -- and, since the page signed in with whatever token
+// a link carried, a way to put someone into an account of the sender's choosing
+// with nothing checking that they had started a login at all.
+//
+// It now ends like the native flow: a one-time code, redeemed by POST. The web
+// has no app-held verifier, so the code is bound to the browser instead:
+//
+//   - /oidc/login sets an HttpOnly cookie holding a random secret, and seals only
+//     its SHA-256 into the signed state (wb), which is what travels via the IdP;
+//   - the callback refuses a state whose cookie is not in this browser -- the
+//     OAuth login-CSRF check (RFC 6749 10.12) -- and mints a code bound to it;
+//   - the exchange redeems that code only alongside the same cookie.
+// ---------------------------------------------------------------------------
+const WEB_BINDING_COOKIE = 'bindarr_oidc';
+const WEB_BINDING_PATH = '/api/auth/oidc';
+
+function hashWebBinding(secret) {
+  return crypto.createHash('sha256').update(String(secret)).digest('base64url');
+}
+
+function createWebBinding() {
+  const secret = crypto.randomBytes(32).toString('base64url');
+  return { secret, hash: hashWebBinding(secret) };
+}
+
+// Whether `secret` (the cookie's value) is the one `expectedHash` was made from.
+function matchesWebBinding(secret, expectedHash) {
+  if (typeof secret !== 'string' || !secret || typeof expectedHash !== 'string' || !expectedHash) return false;
+  const actual = Buffer.from(hashWebBinding(secret), 'utf8');
+  const expected = Buffer.from(expectedHash, 'utf8');
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+function issueWebCode(userId, bindingHash, now = Date.now()) {
+  if (typeof bindingHash !== 'string' || !bindingHash) {
+    throw new Error('A web sign-in code needs the browser binding it belongs to.');
+  }
+  return issueHandoffCode(userId, { bindingHash }, now);
+}
+
+// Returns the user id the code was minted for, or null. `bindingSecret` is the
+// cookie the redeeming request carried.
+function consumeWebCode(code, bindingSecret, now = Date.now()) {
+  const entry = takeHandoffCode(code, now);
+  // A native code carries no binding, and is not redeemable here.
+  if (!entry || !entry.bindingHash) return null;
+  return matchesWebBinding(bindingSecret, entry.bindingHash) ? entry.userId : null;
+}
+
+// One cookie's value out of a Cookie header; the app has no cookie parser.
+function readCookie(header, name) {
+  if (typeof header !== 'string') return null;
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1 || part.slice(0, eq).trim() !== name) continue;
+    try { return decodeURIComponent(part.slice(eq + 1).trim()); } catch { return null; }
+  }
+  return null;
 }
 
 /**
@@ -583,6 +667,15 @@ module.exports = {
   isValidNativeChallenge,
   issueNativeCode,
   consumeNativeCode,
-  NATIVE_CODE_TTL_MS,
+  createWebBinding,
+  matchesWebBinding,
+  issueWebCode,
+  consumeWebCode,
+  readCookie,
+  WEB_BINDING_COOKIE,
+  WEB_BINDING_PATH,
+  STATE_TTL_MS,
+  HANDOFF_CODE_TTL_MS,
+  NATIVE_CODE_TTL_MS: HANDOFF_CODE_TTL_MS,
   _resetDiscoveryCache: () => { discoveryCache = null; discoveryExpiresAt = 0; }
 };

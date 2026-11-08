@@ -5,44 +5,60 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "prebuild": "node scripts/copy-ort.mjs",
-    "predev": "node scripts/copy-ort.mjs",
+    "prebuild": "node scripts/copy-ort.mjs && node scripts/build-device-backend.mjs",
+    "predev": "node scripts/copy-ort.mjs && node scripts/build-device-backend.mjs",
     "build": "vite build",
-    "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
+    "lint": "eslint . --report-unused-disable-directives --max-warnings 0",
     "check:locales": "node scripts/check-locales.mjs",
     "preview": "vite preview",
-    "test": "node --test \"src/utils/*.test.js\" && npm run check:locales"
+    "test": "node --test \"src/utils/*.test.js\" && npm run check:locales",
+    "test:utils": "node --test \"src/utils/*.test.js\""
   },
   "dependencies": {
+    "@capacitor-community/sqlite": "^8.1.1",
     "@capacitor/android": "^8.4.2",
-    "@capacitor/app": "^8.1.1",
+    "@capacitor/app": "^8.1.2",
     "@capacitor/cli": "^8.4.2",
     "@capacitor/core": "^8.4.2",
+    "@capacitor/file-transfer": "^2.0.6",
+    "@capacitor/filesystem": "^8.1.5",
     "@capacitor/ios": "^8.4.2",
-    "@capacitor/status-bar": "^8.0.3",
+    "@capacitor/share": "^8.0.3",
+    "@capacitor/status-bar": "^8.0.4",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "axios": "^1.21.0",
     "canvas-confetti": "^1.9.3",
-    "lucide-react": "^0.378.0",
-    "onnxruntime-web": "^1.27.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "recharts": "^2.12.7"
+    "lucide-react": "^0.577.0",
+    "onnxruntime-web": "^1.31.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
     "@capacitor/assets": "^3.0.5",
-    "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.0",
+    "@eslint/js": "^10.0.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-basic-ssl": "^2.3.0",
-    "@vitejs/plugin-react": "^6.0.3",
-    "eslint": "^8.57.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "eslint": "^10.14.0",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-react": "^7.34.1",
-    "eslint-plugin-react-hooks": "^4.6.2",
-    "eslint-plugin-react-refresh": "^0.4.7",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.14.0",
+    "sql.js": "^1.15.2",
     "vite": "^8.1.3"
   },
   "overrides": {
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "eslint-plugin-jsx-a11y": {
+      "eslint": "$eslint"
+    },
+    "eslint-plugin-react": {
+      "eslint": "$eslint"
+    }
   }
 }

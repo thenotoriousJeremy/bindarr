@@ -2,6 +2,8 @@ const express = require('express');
 const db = require('../db');
 const { resolveCardPrice, parseCardRow } = require('../utils/priceHelpers');
 const { compartmentLabel } = require('../utils/compartmentSort');
+const binderArt = require('../utils/binderArtStore');
+const { sendFileAt } = require('../utils/sendFileAt');
 
 const router = express.Router();
 
@@ -16,17 +18,17 @@ router.get('/:share_token/containers/:id', async (req, res) => {
   try {
     const owner = await db.get(`SELECT id, username, share_enabled, share_locations FROM users WHERE share_token = ?`, [share_token]);
     if (!owner || owner.share_enabled === 0) {
-      return res.status(404).json({ error: 'This card collection is private or does not exist.' });
+      return res.status(404).json({ error: 'This card collection is private or does not exist.', code: 'share_not_found' });
     }
     if (owner.share_locations !== 1) {
-      return res.status(404).json({ error: 'This collection does not share where its cards are stored.' });
+      return res.status(404).json({ error: 'This collection does not share where its cards are stored.', code: 'share_no_locations' });
     }
 
     const location = await db.get(
       `SELECT id, name, type, sort_order, allow_stacking, page_columns FROM locations WHERE id = ? AND user_id = ?`,
       [id, owner.id]
     );
-    if (!location) return res.status(404).json({ error: 'Container not found.' });
+    if (!location) return res.status(404).json({ error: 'Container not found.', code: 'container_not_found' });
 
     const compartments = await db.all(
       `SELECT id, idx, label, capacity FROM compartments WHERE location_id = ? ORDER BY idx ASC`,
@@ -39,7 +41,7 @@ router.get('/:share_token/containers/:id', async (req, res) => {
       SELECT c.id AS entry_id, c.card_id, c.compartment_id, c.position, c.quantity, c.condition,
              c.printing, c.language, c.favorite, c.is_trade, c.market_value,
              cc.name, cc.printed_name, cc.supertype, cc.subtypes, cc.types, cc.rarity,
-             cc.set_id, cc.set_name, cc.number, cc.image_url, cc.game, cc.cmc, cc.color_identity,
+             cc.set_id, cc.set_name, cc.number, cc.image_url, cc.orientation, cc.game, cc.cmc, cc.color_identity,
              cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
@@ -49,15 +51,55 @@ router.get('/:share_token/containers/:id', async (req, res) => {
 
     const cards = rows.map(row => ({ ...parseCardRow(row), price_trend: resolveCardPrice(row) }));
 
+    // Binder artwork travels with the page it decorates. Its image is served by
+    // the route below, which re-checks this same share and container.
+    const artwork = (await binderArt.layersForLocation(location.id, owner.id)).map(layer => ({
+      ...layer,
+      image_url: `/api/shared/${encodeURIComponent(share_token)}/containers/${location.id}/art/${layer.artwork_id}`,
+    }));
+
     res.json({
       owner: owner.username,
       location,
       compartments: compartments.map(c => ({ ...c, display_label: compartmentLabel(c, location.type) })),
-      cards
+      cards,
+      artwork
     });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to retrieve shared container' });
+  }
+});
+
+// A binder artwork image, public only through a shared container that shows it.
+// Same gate as the container itself (share_enabled and share_locations), and the
+// artwork must be on a page of THAT container: knowing an artwork id is not
+// enough, and an image the owner uploaded but never placed stays private.
+router.get('/:share_token/containers/:id/art/:artworkId', async (req, res) => {
+  const { share_token, id, artworkId } = req.params;
+  try {
+    const owner = await db.get(`SELECT id, share_enabled, share_locations FROM users WHERE share_token = ?`, [share_token]);
+    if (!owner || owner.share_enabled === 0 || owner.share_locations !== 1) {
+      return res.status(404).json({ error: 'Artwork not found.' });
+    }
+    const row = await db.get(
+      `SELECT a.id, a.mime FROM binder_artwork a
+         JOIN binder_art_layers l ON l.artwork_id = a.id AND l.user_id = a.user_id
+         JOIN compartments c ON c.id = l.compartment_id
+         JOIN locations loc ON loc.id = c.location_id AND loc.user_id = a.user_id
+        WHERE a.id = ? AND a.user_id = ? AND loc.id = ?
+        LIMIT 1`,
+      [artworkId, owner.id, id]
+    );
+    const file = row && binderArt.resolve(owner.id, row.id);
+    if (!file) return res.status(404).json({ error: 'Artwork not found.' });
+    res.set('Content-Type', row.mime);
+    // Revalidated, so turning sharing off takes effect on the next view.
+    res.set('Cache-Control', 'public, max-age=0, must-revalidate');
+    sendFileAt(res, file);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve artwork' });
   }
 });
 
@@ -69,7 +111,7 @@ router.get('/:share_token', async (req, res) => {
   try {
     const owner = await db.get(`SELECT id, username, share_enabled, share_locations FROM users WHERE share_token = ?`, [share_token]);
     if (!owner || owner.share_enabled === 0) {
-      return res.status(404).json({ error: 'This card collection is private or does not exist.' });
+      return res.status(404).json({ error: 'This card collection is private or does not exist.', code: 'share_not_found' });
     }
 
     let filterSql = `WHERE c.user_id = ?`;
@@ -113,7 +155,7 @@ router.get('/:share_token', async (req, res) => {
         cc.set_id,
         cc.set_name,
         cc.number,
-        cc.image_url,
+        cc.image_url, cc.orientation,
         cc.price_trend,
         cc.price_normal,
         cc.price_holofoil,

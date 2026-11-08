@@ -2,7 +2,7 @@
 # Bindarr Dockerfile
 # Stage 1: Build Frontend Assets
 # =========================================
-FROM node:20-alpine AS frontend-builder
+FROM node:24-alpine AS frontend-builder
 WORKDIR /app/frontend
 
 # Copy frontend packages and lockfiles
@@ -13,6 +13,12 @@ RUN npm ci
 COPY frontend/ ./
 # Shared JSON tables imported via ../../../shared/*.json (resolves to /app/shared)
 COPY shared/ /app/shared/
+# The mobile app's device mode runs the backend's own route modules, bundled into
+# the frontend by scripts/build-device-backend.mjs, so the build needs their
+# source (and package.json, for the version). Not their dependencies: the bundler
+# resolves those against frontend/node_modules.
+COPY backend/package.json /app/backend/package.json
+COPY backend/src/ /app/backend/src/
 # Build production bundles
 RUN npm run build
 
@@ -25,7 +31,7 @@ RUN npm run build
 # CLIP, so alpine may now be viable.
 # ponytail: not switched, because sqlite3 and sharp prebuilts have their own
 # glibc assumptions and proving that out is a separate job from removing CLIP.
-FROM node:20-slim AS production
+FROM node:24-slim AS production
 WORKDIR /app
 
 # Native build tools for SQLite3, gosu to drop root in the entrypoint, plus

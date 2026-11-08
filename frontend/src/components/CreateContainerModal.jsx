@@ -3,7 +3,7 @@ import { X, BookOpen, Box, Package, Award, LayoutGrid, Layers, Archive, HelpCirc
 import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
 import PageColumnsSelect from './PageColumnsSelect';
 import { isBinderType, containerTypeKey } from '../utils/cardOptions';
-import { useBackGuard } from '../utils/useBackGuard';
+import Modal from './Modal';
 import { gameOptions, showGamePicker } from '../utils/games';
 import { useT } from '../utils/i18n';
 
@@ -46,7 +46,6 @@ export default function CreateContainerModal({ onClose, onCreate, setsList = [],
   const [filterDraft, setFilterDraft] = useState([]);
   const [submitting, setSubmitting] = useState(false);
 
-  useBackGuard(true, onClose);
 
   const pickType = (next) => {
     setType(next);
@@ -77,12 +76,13 @@ export default function CreateContainerModal({ onClose, onCreate, setsList = [],
   };
 
   return (
-    <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
-      <div className="glass-panel" style={{ width: '560px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }} onClick={(e) => e.stopPropagation()}>
+    <Modal onClose={onClose} label={t('container.newTitle')} closeOnBackdrop={false}
+      overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      className="glass-panel" style={{ width: '560px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         {/* Header + step indicator */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <h3 style={{ margin: 0 }}>{t('container.newTitle')}</h3>
-          <button className="btn btn-secondary btn-icon-only" onClick={onClose} style={{ width: '28px', height: '28px', padding: 0 }}><X size={15} /></button>
+          <button className="btn btn-secondary btn-icon-only" onClick={onClose} aria-label={t('common.close')} style={{ width: '28px', height: '28px', padding: 0 }}><X size={15} /></button>
         </div>
         <div style={{ display: 'flex', gap: '0.4rem' }}>
           {STEPS.map((s, i) => (
@@ -197,7 +197,6 @@ export default function CreateContainerModal({ onClose, onCreate, setsList = [],
             </button>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

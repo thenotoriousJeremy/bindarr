@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Effective date:** July 16, 2026
+**Effective date:** November 7, 2026
 
 Bindarr is a **self-hosted** application. You run your own Bindarr server and
 your own database. The developer of Bindarr does **not** operate a hosted
@@ -20,6 +20,12 @@ All data lives on the server **you** run. This may include:
 None of this is transmitted to the developer or to any third-party analytics,
 advertising, or tracking service. Bindarr contains no analytics SDKs, no ad
 networks, and no telemetry.
+
+## Fonts
+
+The app's fonts are served by your own Bindarr server, along with the rest of
+the interface. Opening the app makes no request to Google Fonts or any other
+third-party font service.
 
 ## Camera
 

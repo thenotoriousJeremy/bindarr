@@ -1,5 +1,9 @@
-import { CONDITIONS, getPrintings, getLanguageNamesForGame, GRADERS, GRADES } from '../utils/cardOptions';
+import { CONDITIONS, getPrintings, getLanguageNamesForGame, GRADERS, GRADES, conditionLabel, printingLabel } from '../utils/cardOptions';
 import { useT } from '../utils/i18n';
+
+// The most copies one add or edit may ask for. Mirrors the server's bound
+// (backend/src/utils/requestBounds.js), which refuses anything past it.
+const MAX_QUANTITY = 9999;
 
 // Shared quantity / purchase-price / condition / printing / language inputs for
 // the add-card and edit-card flows. Presentational only: the parent owns the
@@ -26,7 +30,7 @@ export default function CardEntryFields({
   const grading = !!onGrader;
   const graded = grading && grader !== 'Raw';
 
-  const stepQty = (delta) => onQuantity(String(Math.max(1, (parseInt(quantity, 10) || 1) + delta)));
+  const stepQty = (delta) => onQuantity(String(Math.min(MAX_QUANTITY, Math.max(1, (parseInt(quantity, 10) || 1) + delta))));
   const Quantity = stacked ? (
     // Scanner quick-add: quantity is the most-changed field, so give it big
     // tap targets instead of a bare number input.
@@ -34,14 +38,14 @@ export default function CardEntryFields({
       <label>{t('card.quantity')}</label>
       <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'stretch', width: '100%', boxSizing: 'border-box' }}>
         <button type="button" className="btn btn-secondary" onClick={() => stepQty(-1)} aria-label={t('card.quantityDown')} style={{ width: '44px', height: '44px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem', fontWeight: 800, flexShrink: 0 }}>&minus;</button>
-        <input type="number" className="input-control" min="1" value={quantity} onChange={(e) => onQuantity(e.target.value)} required style={{ flex: 1, minWidth: 0, textAlign: 'center', fontWeight: 700, height: '44px' }} />
+        <input type="number" className="input-control" min="1" max={MAX_QUANTITY} value={quantity} onChange={(e) => onQuantity(e.target.value)} required style={{ flex: 1, minWidth: 0, textAlign: 'center', fontWeight: 700, height: '44px' }} />
         <button type="button" className="btn btn-secondary" onClick={() => stepQty(1)} aria-label={t('card.quantityUp')} style={{ width: '44px', height: '44px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem', fontWeight: 800, flexShrink: 0 }}>+</button>
       </div>
     </div>
   ) : (
     <div className="form-group" style={groupStyle}>
       <label>{t('card.quantity')}</label>
-      <input type="number" className="input-control" min="1" value={quantity} onChange={(e) => onQuantity(e.target.value)} required />
+      <input type="number" className="input-control" min="1" max={MAX_QUANTITY} value={quantity} onChange={(e) => onQuantity(e.target.value)} required />
     </div>
   );
   const Price = (
@@ -60,7 +64,7 @@ export default function CardEntryFields({
       <select className="select-control" value={graded ? 'Near Mint' : condition} disabled={graded}
         title={graded ? t('card.conditionGradedHint') : undefined}
         onChange={(e) => onCondition(e.target.value)}>
-        {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+        {CONDITIONS.map(c => <option key={c} value={c}>{conditionLabel(t, c)}</option>)}
       </select>
     </div>
   );
@@ -68,7 +72,7 @@ export default function CardEntryFields({
     <div className="form-group" style={groupStyle}>
       <label>{t('card.printing')}</label>
       <select className="select-control" value={printing} onChange={(e) => onPrinting(e.target.value)}>
-        {printings.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+        {printings.map(p => <option key={p.value} value={p.value}>{printingLabel(t, p.value, game)}</option>)}
       </select>
     </div>
   );

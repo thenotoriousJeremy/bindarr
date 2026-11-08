@@ -49,11 +49,13 @@ const toName = (input) => resolve(input).name;
 // for "can we use what we already had".
 const isEnglish = (input) => resolve(input).code === 'en';
 
-// Which languages a game is printed in. Default/fallback is all languages.
+// Which languages a game is printed in. No game means every language; an unknown
+// game is printed in none. Each game lists its own languages in shared/games.json,
+// rather than each language listing its games here.
 function getLanguagesForGame(game) {
   if (!game) return LANGUAGES;
-  const g = String(game).toLowerCase();
-  return LANGUAGES.filter(l => !l.games || l.games.includes(g));
+  const codes = require('./games').languagesFor(String(game).toLowerCase());
+  return codes ? LANGUAGES.filter(l => codes.includes(l.code)) : [];
 }
 
 const getLanguageNamesForGame = (game) => getLanguagesForGame(game).map(l => l.name);

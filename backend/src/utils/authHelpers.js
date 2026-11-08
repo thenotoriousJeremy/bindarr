@@ -23,6 +23,15 @@ function verifyPassword(password, storedHash) {
   return crypto.timingSafeEqual(storedBuf, verifyBuf);
 }
 
+// What the sessions table stores in place of a token: its SHA-256. A copy of the
+// database -- a backup, a borrowed volume -- then holds nothing that signs anyone
+// in. Unsalted and fast on purpose: a token is 256 random bits, so unlike a
+// password there is nothing to guess, and every request has to hash it once.
+// The prefix marks a row as hashed; initDb hashes any row stored before this.
+function hashSessionToken(token) {
+  return `sha256:${crypto.createHash('sha256').update(String(token)).digest('hex')}`;
+}
+
 async function generateSession(userId) {
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date();
@@ -31,8 +40,17 @@ async function generateSession(userId) {
   await db.run(`
     INSERT INTO sessions (token, user_id, expires_at)
     VALUES (?, ?, ?)
-  `, [token, userId, expiresAtStr]);
+  `, [hashSessionToken(token), userId, expiresAtStr]);
   return token;
 }
 
-module.exports = { verifyPassword, generateSession };
+// Sign a user out everywhere. `exceptTokenHash` spares one session: changing your
+// own password keeps you signed in on the device that just proved it knows it.
+async function revokeSessions(userId, { exceptTokenHash = null } = {}) {
+  if (exceptTokenHash) {
+    return db.run(`DELETE FROM sessions WHERE user_id = ? AND token != ?`, [userId, exceptTokenHash]);
+  }
+  return db.run(`DELETE FROM sessions WHERE user_id = ?`, [userId]);
+}
+
+module.exports = { verifyPassword, generateSession, hashSessionToken, revokeSessions };

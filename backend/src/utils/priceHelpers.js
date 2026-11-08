@@ -42,12 +42,20 @@ function resolveCardPrice(card) {
 // Pokémon row) become []. Returns a shallow copy; the raw row is untouched.
 function parseCardRow(row) {
   if (!row) return row;
-  return {
+  const parsed = {
     ...row,
     subtypes: JSON.parse(row.subtypes || '[]'),
     types: JSON.parse(row.types || '[]'),
     color_identity: JSON.parse(row.color_identity || '[]'),
+    // Magic keyword abilities ('["Flying","Ward"]'), on the rows that have them.
+    ...(typeof row.keywords === 'string' ? { keywords: JSON.parse(row.keywords) } : {}),
   };
+  // A card's numeric stats (Riftbound's energy/might/power) are a JSON object.
+  // Only parsed when the column was selected, so a partial row stays partial.
+  if (typeof row.attributes === 'string') {
+    try { parsed.attributes = JSON.parse(row.attributes); } catch { parsed.attributes = null; }
+  }
+  return parsed;
 }
 
 // position orders cards WITHIN a single compartment (a binder page, a box
@@ -140,6 +148,10 @@ const SWEEP_COLUMN = {
   // install. It was invisible because the daily interval passed force: true and
   // skipped the gate, which is exactly why that argument is gone now.
   lorcana: 'lorcana_prices_swept_at',
+  // TCGplayer prices for Riftbound via TCGCSV (riftboundPrices.js). Its own clock
+  // rather than tcgcsv's: the two sweep different games, and one marking the
+  // other's gate would silently skip a game for a day.
+  riftbound: 'riftbound_prices_swept_at',
 };
 
 // How often the automatic sweep is allowed to run, as configured. 0 turns it off.
@@ -208,6 +220,7 @@ module.exports = {
   parseSqliteUtc,
   shouldSweepPrices,
   markPricesSwept,
+  SWEEP_COLUMN,
   priceRefreshDays,
   DEFAULT_PRICE_REFRESH_DAYS,
   PRICE_SWEEP_INTERVAL_MS,

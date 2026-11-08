@@ -1,17 +1,25 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, Plus, X, ShieldAlert, Check, MousePointerClick, Zap, Undo2, Maximize2 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { priceText } from '../utils/formatPrice';
+import Price from './Price';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import CardEntryFields from './CardEntryFields';
 import CardImageZoom from './CardImageZoom';
-import { translateJapaneseName, POKEMON_EN_TO_JP, getCardDisplayName } from '../utils/langHelper';
+import ScryfallSyntaxHelp from './ScryfallSyntaxHelp';
+import { checkSearchSyntax, syntaxErrorText } from '../utils/scryfallSyntax';
+import { translateJapaneseName, POKEMON_EN_TO_JP, getCardDisplayName, loadNameDictionaries, hasJapaneseText } from '../utils/langHelper';
 import { useMultiSelect } from '../utils/useMultiSelect';
-import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
+import { CONDITIONS, PRINTINGS, conditionLabel, printingLabel } from '../utils/cardOptions';
 import { langName, isEnglish, displayName, translatedName, setReference, setCode, getLanguagesForGame, isLanguageSupported } from '../utils/languages';
 import { defaultGame, gameOptions, showGamePicker, gameLabel } from '../utils/games';
 import CardImage from './CardImage';
+import AddToListSelect from './AddToListSelect';
+import WishlistHeart, { AddSelectedToWishlist } from './WishlistHeart';
 import { useT } from '../utils/i18n';
+import { onActivateKey, useEscape } from '../utils/a11y';
+import RiotNotice from './RiotNotice';
+import { apiErrorText } from '../utils/apiError';
+import { LatestRequest, isAbortError } from '../utils/request';
 
 // Search failures worth explaining in-page rather than only as a toast. `keyHint`
 // marks the ones a user API key actually fixes; an upstream 5xx does not. Title
@@ -37,6 +45,9 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState(null);
+  // A Magic query that cannot be read (an open quote, a stray parenthesis), shown
+  // under the box instead of being sent off to come back empty.
+  const [syntaxError, setSyntaxError] = useState(null);
 
   // Paging. A full page back means there is probably another one; `total` is the
   // provider's real match count when it reports one (cache hits don't).
@@ -133,8 +144,17 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
     }
   };
 
+  // Only the newest search may write results. Without this a slow "pika"
+  // answered after a quick "pikachu" and replaced its results; now starting a
+  // search aborts the one before it, and a response that lands late anyway is
+  // dropped. Leaving the screen aborts whatever is still running.
+  const searchReq = useRef(null);
+  if (!searchReq.current) searchReq.current = new LatestRequest();
+  useEffect(() => () => searchReq.current.cancel(), []);
+
   // pageNum > 1 appends to the existing results instead of replacing them.
   const runSearch = async (pageNum, size = pageSize) => {
+    const req = searchReq.current.begin();
     const append = pageNum > 1;
     if (append) setLoadingMore(true); else setLoading(true);
     setSearchError(null);
@@ -153,6 +173,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       let finalQuery = query || '';
       if (query && game === 'pokemon') {
         const isJa = searchLang === 'ja' || searchLang === 'Japanese';
+        // The name maps are fetched on first use; a search that needs them waits.
+        if (isJa || hasJapaneseText(query)) await loadNameDictionaries().catch(() => {});
         if (isJa) {
           const jpMapped = POKEMON_EN_TO_JP[query.trim()];
           if (jpMapped) finalQuery = jpMapped;
@@ -170,9 +192,11 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       params.append('page', pageNum);
       params.append('limit', size);
 
-      const response = await fetch(`/api/search?${params.toString()}`);
+      const response = await fetch(`/api/search?${params.toString()}`, { signal: req.signal });
+      if (!req.isLatest()) return;
       if (response.ok) {
         const data = await response.json();
+        if (!req.isLatest()) return;
         const reported = parseInt(response.headers.get('X-Total-Count'), 10);
         if (Number.isFinite(reported)) setTotal(reported);
         setHasMore(data.length >= size);
@@ -189,6 +213,10 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         if (!append && data.length === 1 && !selectMode) openQuickAdd(data[0]);
       } else {
         const errData = await response.json().catch(() => ({}));
+        if (!req.isLatest()) return;
+        // The server read the query and refused it (or Scryfall did): that belongs
+        // under the box, like the check in handleSearch.
+        if (response.status === 400 && errData.code) { setSyntaxError(errData); return; }
         if (response.status === 403 || errData.error === 'Invalid API Key') {
           setSearchError('invalid-key');
         } else if (response.status === 429 || errData.error === 'Rate limit exceeded') {
@@ -196,20 +224,28 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         } else if (response.status === 503) {
           setSearchError('upstream');
         }
-        showToast(errData.error || t('search.errRequest'));
+        showToast(apiErrorText(t, errData, 'search.errRequest'));
       }
     } catch (err) {
+      if (isAbortError(err) || !req.isLatest()) return;
       console.error(err);
       showToast(t('search.errApi'));
     } finally {
-      setLoading(false);
-      setLoadingMore(false);
+      if (req.isLatest()) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   };
 
   const handleSearch = (e) => {
     if (e) e.preventDefault();
     if (!query && !numberQuery && !setCodeQuery) return;
+    // Magic's name box also takes Scryfall syntax. Syntax that cannot be read is
+    // named here, before a request; anything that reads goes to Scryfall intact.
+    const problem = game === 'mtg' ? checkSearchSyntax(query) : null;
+    setSyntaxError(problem);
+    if (problem) return;
     runSearch(1);
   };
 
@@ -322,7 +358,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         exitSelectMode();
         onAddSuccess();
       } else {
-        showToast(data.error || t('search.errBulkAdd'));
+        showToast(apiErrorText(t, data, 'search.errBulkAdd'));
       }
     } catch (err) {
       console.error(err);
@@ -351,7 +387,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       })
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || t('search.errAddCard'));
+    if (!response.ok) throw new Error(apiErrorText(t, data, 'search.errAddCard'));
     return data;
   };
 
@@ -370,7 +406,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       const res = await fetch(`/api/search?${params.toString()}`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        showToast(err.error || t('search.errLookup'));
+        showToast(apiErrorText(t, err, 'search.errLookup'));
         return;
       }
       const matches = await res.json();
@@ -411,7 +447,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   const undoRapidAdd = async (entry) => {
     try {
       const results = await Promise.all(entry.entryIds.map(id =>
-        fetch(`/api/collection/${id}`, { method: 'DELETE' })
+        // Undoing an add: the copy goes away for good, not to the trash.
+        fetch(`/api/collection/${id}?trash=0`, { method: 'DELETE' })
       ));
       if (results.some(res => !res.ok)) { showToast(t('search.errUndo')); return; }
       setRapidLog(prev => prev.filter(e => e !== entry));
@@ -447,6 +484,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
 
   const handleGameChange = (newGame) => {
     setGame(newGame);
+    setSyntaxError(null);
     if (!isLanguageSupported(newGame, searchLang)) {
       setSearchLang('en');
       setLanguage(langName('en'));
@@ -485,6 +523,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
     setGrade('');
     setCertNumber('');
   };
+  useEscape(isDrawerOpen, closeDrawer);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -528,7 +567,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         // A rejected cert number (already in the collection) explains itself; the
         // generic message would send the user back to re-type a correct number.
         const body = await response.json().catch(() => null);
-        showToast(body?.error || t('search.errAddDb'));
+        showToast(apiErrorText(t, body, 'search.errAddDb'));
       }
     } catch (err) {
       console.error(err);
@@ -567,13 +606,18 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                 <input
                   type="text"
                   className="input-control"
-                  placeholder={t(game === 'mtg' ? 'search.namePlaceholderMtg' : 'search.namePlaceholderPokemon')}
+                  placeholder={t(game === 'mtg' ? 'search.namePlaceholderMtg' : game === 'riftbound' ? 'search.namePlaceholderRiftbound' : 'search.namePlaceholderPokemon')}
                   value={query}
-                  onChange={(e) => setQuery(e.target.value)}
+                  onChange={(e) => { setQuery(e.target.value); setSyntaxError(null); }}
+                  aria-invalid={syntaxError ? true : undefined}
                   style={{ width: '100%', paddingLeft: '2.5rem' }}
                 />
                 <Search size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               </div>
+              {syntaxError && (
+                <div role="alert" style={{ fontSize: '0.75rem', color: 'var(--accent-red)' }}>{syntaxErrorText(t, syntaxError)}</div>
+              )}
+              {game === 'mtg' && <ScryfallSyntaxHelp context="search" />}
             </div>
           </div>
 
@@ -616,7 +660,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                 type="text"
                 className="input-control"
                 list="known-set-codes"
-                placeholder={t(game === 'mtg' ? 'search.setsPlaceholderMtg' : 'search.setsPlaceholderPokemon')}
+                placeholder={t(game === 'mtg' ? 'search.setsPlaceholderMtg' : game === 'riftbound' ? 'search.setsPlaceholderRiftbound' : 'search.setsPlaceholderPokemon')}
                 value={setCodeQuery}
                 onChange={(e) => setSetCodeQuery(e.target.value)}
               />
@@ -681,10 +725,10 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
               style={{ flex: '1 1 180px', fontSize: '1.1rem', fontWeight: 700 }}
             />
             <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)} style={{ fontSize: '0.75rem', maxWidth: '150px' }}>
-              {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+              {CONDITIONS.map(c => <option key={c} value={c}>{conditionLabel(t, c)}</option>)}
             </select>
             <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)} style={{ fontSize: '0.75rem', maxWidth: '150px' }}>
-              {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+              {PRINTINGS.map(p => <option key={p} value={p}>{printingLabel(t, p, game)}</option>)}
             </select>
             <input
               type="number"
@@ -751,15 +795,19 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         </div>
       )}
 
+      {game === 'riftbound' && <RiotNotice style={{ margin: '0 0 1rem' }} />}
+
       {/* Loading state */}
-      {loading && <div className="spinner"></div>}
+      {/* Only when there is nothing to show: a new search over existing results
+          keeps them on screen, dimmed, until its answer replaces them. */}
+      {loading && cards.length === 0 && <div className="spinner"></div>}
 
       {/* Filters and Sorting Panel */}
-      {!loading && cards.length > 0 && (
+      {cards.length > 0 && (
         <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem', alignItems: 'end' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t('search.filterType')}</label>
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t(game === 'riftbound' ? 'search.filterDomain' : 'search.filterType')}</label>
               <select className="select-control" value={filterType} onChange={e => setFilterType(e.target.value)}>
                 <option value="">{t('collection.allTypes')}</option>
                 {uniqueTypes.map(type => <option key={type} value={type}>{type}</option>)}
@@ -775,7 +823,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t('search.filterSupertype')}</label>
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t(game === 'riftbound' ? 'search.filterCardType' : 'search.filterSupertype')}</label>
               <select className="select-control" value={filterSupertype} onChange={e => setFilterSupertype(e.target.value)}>
                 <option value="">{t('collection.allSupertypes')}</option>
                 {uniqueSupertypes.map(s => <option key={s} value={s}>{s}</option>)}
@@ -825,10 +873,10 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={clearSelection}>{t('bulk.clear')}</button>
           <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
           <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)} style={{ fontSize: '0.72rem', maxWidth: '150px', padding: '0.3rem 0.4rem' }}>
-            {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+            {CONDITIONS.map(c => <option key={c} value={c}>{conditionLabel(t, c)}</option>)}
           </select>
           <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)} style={{ fontSize: '0.72rem', maxWidth: '150px', padding: '0.3rem 0.4rem' }}>
-            {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+            {PRINTINGS.map(p => <option key={p} value={p}>{printingLabel(t, p, game)}</option>)}
           </select>
           <input
             type="number"
@@ -847,13 +895,26 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
           >
             {bulkAdding ? t('search.adding') : t('search.addN', { count: selectedIds.size })}
           </button>
+          <AddSelectedToWishlist
+            cardIds={() => filteredAndSortedCards.filter(c => selectedIds.has(c.id)).map(c => c.id)}
+            showToast={showToast}
+            disabled={selectedIds.size === 0}
+            style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }}
+          />
+          <AddToListSelect
+            cardIds={() => filteredAndSortedCards.filter(c => selectedIds.has(c.id)).map(c => c.id)}
+            game={game}
+            showToast={showToast}
+            disabled={selectedIds.size === 0}
+            style={{ fontSize: '0.72rem', maxWidth: '160px', padding: '0.3rem 0.4rem' }}
+          />
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem', marginLeft: 'auto' }} onClick={exitSelectMode}>{t('bulk.done')}</button>
         </div>
       )}
 
       {/* Search Results Grid */}
-      {!loading && cards.length > 0 && filteredAndSortedCards.length > 0 && (
-        <div className="card-grid">
+      {cards.length > 0 && filteredAndSortedCards.length > 0 && (
+        <div className="card-grid" aria-busy={loading} style={loading ? { opacity: 0.55, transition: 'opacity 0.15s' } : undefined}>
           {filteredAndSortedCards.map((card) => {
             const glowClass = (card.types && card.types[0]) ? `type-glow-${card.types[0].toLowerCase()}` : 'type-glow-normal';
             const isSelected = selectedIds.has(card.id);
@@ -862,7 +923,11 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                 key={card.id}
                 className="tcg-card"
                 style={{ cursor: 'pointer', touchAction: 'pan-y' }}
+                role="button"
+                tabIndex={0}
+                aria-pressed={selectMode ? isSelected : undefined}
                 onClick={(e) => handleCardClick(card, e)}
+                onKeyDown={onActivateKey((e) => handleCardClick(card, e))}
                 {...pressHandlers(card.id)}
               >
                 <div className={`tcg-card-inner ${glowClass}`} style={isSelected ? { outline: '3px solid var(--accent-red)', outlineOffset: '2px' } : undefined}>
@@ -878,6 +943,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                       <Check size={10} /> {card.owned_qty}
                     </div>
                   )}
+                  {!selectMode && <WishlistHeart card={card} showToast={showToast} />}
                   {!selectMode && (
                     <div style={{ position: 'absolute', bottom: '8px', right: '8px', background: 'rgba(0,0,0,0.85)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border-glass-hover)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <Plus size={10} style={{ color: 'var(--accent-red)' }} />
@@ -902,7 +968,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                   ) : null}
                   <div className="tcg-card-meta">
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>{card.set_name}</span>
-                    <span className="tcg-card-price">{priceText(card.price_trend, card.price_currency)}</span>
+                    <span className="tcg-card-price"><Price value={card.price_trend} currency={card.price_currency} /></span>
                   </div>
                 </div>
               </div>
@@ -940,7 +1006,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       )}
 
       {/* Drawer Dialog Backdrop */}
-      <div className={`drawer-backdrop ${isDrawerOpen ? 'open' : ''}`} onClick={closeDrawer}></div>
+      {/* Pointer-only dismissal; Esc is the keyboard twin (useEscape above). */}
+      <div role="presentation" className={`drawer-backdrop ${isDrawerOpen ? 'open' : ''}`} onClick={closeDrawer}></div>
 
       {/* Quick Add Drawer Sheet */}
       <div className={`quick-add-drawer ${isDrawerOpen ? 'open' : ''}`}>
@@ -958,7 +1025,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                   {' • '}#{selectedCard.number})
                 </p>
               </div>
-              <button className="btn btn-secondary btn-icon-only" onClick={closeDrawer} style={{ borderRadius: '50%', flexShrink: 0 }}>
+              <button type="button" className="btn btn-secondary btn-icon-only" onClick={closeDrawer} aria-label={t('common.close')} style={{ borderRadius: '50%', flexShrink: 0 }}>
                 <X size={18} />
               </button>
             </div>
@@ -966,7 +1033,11 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
             <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', width: '100%', maxWidth: '100%', boxSizing: 'border-box', overflow: 'hidden' }}>
               {/* Tap the art to enlarge, same as the collection inspector. */}
               <div
+                role="button"
+                tabIndex={0}
+                aria-label={t('inspector.fullScreen')}
                 onClick={() => setIsFullScreen(true)}
+                onKeyDown={onActivateKey(() => setIsFullScreen(true))}
                 title={t('inspector.zoomHint')}
                 style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', lineHeight: 0 }}
               >
@@ -982,8 +1053,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                 </div>
               </div>
               <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('search.tcgMarketPrice', { printing })}</div>
-                <div style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--accent-yellow)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{priceText(resolveCardPrice(selectedCard, printing), selectedCard.price_currency)}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('search.tcgMarketPrice', { printing: printingLabel(t, printing, selectedCard.game || game) })}</div>
+                <div style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--accent-yellow)', overflow: 'hidden', textOverflow: 'ellipsis' }}><Price value={resolveCardPrice(selectedCard, printing)} currency={selectedCard.price_currency} /></div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{t('search.rarityLabel')} <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{selectedCard.rarity}</span></div>
               </div>
             </div>
@@ -1000,6 +1071,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
               <div className="quick-add-footer" style={{ marginTop: '1.25rem', paddingTop: '1rem' }}>
                 <div className="quick-add-footer-actions">
                   <button type="button" className="btn btn-secondary" onClick={closeDrawer}>{t('common.cancel')}</button>
+                  <WishlistHeart card={selectedCard} showToast={showToast} variant="button" size={14} />
+                  <AddToListSelect cardIds={[selectedCard.id]} game={selectedCard.game || game} showToast={showToast} />
                   <button type="submit" className="btn btn-primary">{t('search.addToCollection')}</button>
                 </div>
               </div>

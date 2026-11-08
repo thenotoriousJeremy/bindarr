@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { User, Lock, ArrowRight, Eye, EyeOff, Server, Shield } from 'lucide-react';
-import { isNative, getServerUrl, setServerUrl } from '../apiBase';
+import { User, Lock, ArrowRight, Eye, EyeOff, Server, Shield, Smartphone } from 'lucide-react';
+import { isNative, canRunOnDevice, getServerUrl, setServerUrl, setDeviceMode } from '../apiBase';
 import { useT } from '../utils/i18n';
+import { apiErrorText } from '../utils/apiError';
 import { getOrCreateVerifier, challengeFor } from '../utils/nativeOidc';
 import Logo from './Logo';
 
@@ -11,6 +12,9 @@ const OWNER_USERNAME = 'admin';
 
 function Login({ onLoginSuccess }) {
   const { t } = useT();
+  // The app either signs in to a server or runs Bindarr on the phone itself
+  // (device mode, see apiBase.js). The web build is always served by a server.
+  const [target, setTarget] = useState('server');
   const [isRegister, setIsRegister] = useState(false);
   // Native app connects to the user's own self-hosted instance; web is same-origin.
   const [server, setServer] = useState(getServerUrl());
@@ -44,6 +48,14 @@ function Login({ onLoginSuccess }) {
   // login opens in the system browser and comes back through bindarr://oidc,
   // where App.jsx redeems the one-time code with the verifier (utils/nativeOidc).
   const [oidcChallenge, setOidcChallenge] = useState('');
+
+  // Being on this screen means nothing is signed in, so no backend is chosen yet.
+  // Declared first so it runs before the config fetch below: a device mode left
+  // selected by an earlier session would otherwise answer that fetch, and the
+  // server login after it, from the on-device database.
+  useEffect(() => {
+    setDeviceMode(false);
+  }, []);
 
   useEffect(() => {
     if (!isNative || !oidcEnabled) return;
@@ -143,13 +155,35 @@ function Login({ onLoginSuccess }) {
 
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || t('login.errFailed'));
+        throw new Error(apiErrorText(t, data, 'login.errFailed'));
       }
 
       onLoginSuccess(data.token, data.user);
     } catch (err) {
       console.error(err);
       setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Device mode has no account to sign in to: opening the on-device database
+  // creates the phone's owner and session on first run and finds them after.
+  const handleUseDevice = async () => {
+    setError('');
+    setLoading(true);
+    setDeviceMode(true);
+    try {
+      const { startDevice } = await import('../device/runtime.js');
+      const { token } = await startDevice();
+      const response = await fetch('/api/auth/me');
+      const data = await response.json();
+      if (!response.ok || !data.user) throw new Error(data.error || response.statusText);
+      onLoginSuccess(token, data.user);
+    } catch (err) {
+      console.error('Device mode failed to start:', err);
+      setDeviceMode(false);
+      setError(t('login.errDevice', { message: err.message || String(err) }));
     } finally {
       setLoading(false);
     }
@@ -181,11 +215,38 @@ function Login({ onLoginSuccess }) {
             Bind<span style={{ color: 'var(--accent-red)' }}>arr</span>
           </h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
-            {t(setupRequired ? 'login.setupTagline' : isRegister ? 'login.taglineRegister' : 'login.taglineLogin')}
+            {t(target === 'device' ? 'login.taglineDevice' : setupRequired ? 'login.setupTagline' : isRegister ? 'login.taglineRegister' : 'login.taglineLogin')}
           </p>
         </div>
 
-        {setupRequired && (
+        {canRunOnDevice && (
+          <div className="sub-nav-tabs" role="tablist" aria-label={t('login.targetLabel')} style={{ marginBottom: '1.5rem' }}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={target === 'server'}
+              className={`sub-nav-tab ${target === 'server' ? 'active' : ''}`}
+              onClick={() => { setTarget('server'); setError(''); }}
+              disabled={loading}
+            >
+              <Server size={16} />
+              <span>{t('login.targetServer')}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={target === 'device'}
+              className={`sub-nav-tab ${target === 'device' ? 'active' : ''}`}
+              onClick={() => { setTarget('device'); setError(''); }}
+              disabled={loading}
+            >
+              <Smartphone size={16} />
+              <span>{t('login.targetDevice')}</span>
+            </button>
+          </div>
+        )}
+
+        {target === 'server' && setupRequired && (
           <div style={{
             padding: '0.75rem 1rem',
             marginBottom: '1.5rem',
@@ -214,7 +275,7 @@ function Login({ onLoginSuccess }) {
           </div>
         )}
 
-        {oidcEnabled && !setupRequired && !isRegister && (
+        {target === 'server' && oidcEnabled && !setupRequired && !isRegister && (
           <div style={{ marginBottom: '1.25rem' }}>
             <a
               href={oidcHref}
@@ -253,142 +314,180 @@ function Login({ onLoginSuccess }) {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          {isNative && (
+        {target === 'device' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <ul style={{ margin: 0, paddingLeft: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              <li>{t('login.deviceStays')}</li>
+              <li>{t('login.deviceOnline')}</li>
+              <li>{t('login.deviceLimits')}</li>
+            </ul>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleUseDevice}
+              disabled={loading}
+              style={{
+                padding: '0.75rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.5rem',
+                fontSize: '1rem',
+                fontWeight: 700,
+                boxShadow: 'var(--shadow-accent)'
+              }}
+            >
+              {loading ? (
+                <div className="spinner" style={{ width: '16px', height: '16px', margin: 0, borderWidth: '2px' }}></div>
+              ) : (
+                <>
+                  <span>{t('login.deviceStart')}</span>
+                  <ArrowRight size={16} />
+                </>
+              )}
+            </button>
+            <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.4 }}>
+              {t('login.deviceSwitchLater')}
+            </p>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {isNative && (
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label htmlFor="login-server" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('login.serverUrl')}</label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    id="login-server"
+                    type="url"
+                    inputMode="url"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    className="input-control"
+                    style={{ width: '100%', paddingLeft: '2.5rem' }}
+                    placeholder="https://your-server.example.com"
+                    value={server}
+                    onChange={(e) => { setServer(e.target.value); setServerUrl(e.target.value); }}
+                    required
+                    disabled={loading}
+                  />
+                  <Server size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                </div>
+              </div>
+            )}
+
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label htmlFor="login-server" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('login.serverUrl')}</label>
+              <label htmlFor="login-username" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('login.username')}</label>
               <div style={{ position: 'relative' }}>
                 <input
-                  id="login-server"
-                  type="url"
-                  inputMode="url"
-                  autoCapitalize="none"
-                  autoCorrect="off"
+                  id="login-username"
+                  type="text"
+                  name="username"
+                  autoComplete="username"
                   className="input-control"
                   style={{ width: '100%', paddingLeft: '2.5rem' }}
-                  placeholder="https://your-server.example.com"
-                  value={server}
-                  onChange={(e) => { setServer(e.target.value); setServerUrl(e.target.value); }}
+                  placeholder={t('login.usernamePlaceholder')}
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
                   required
-                  disabled={loading}
+                  // readOnly, never disabled: a disabled field is dropped from the
+                  // form, so a password manager inspecting it mid-submit sees no
+                  // username to save. Read-only still blocks typing.
+                  readOnly={setupRequired || loading}
                 />
-                <Server size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                <User size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               </div>
             </div>
-          )}
 
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label htmlFor="login-username" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('login.username')}</label>
-            <div style={{ position: 'relative' }}>
-              <input
-                id="login-username"
-                type="text"
-                name="username"
-                autoComplete="username"
-                className="input-control"
-                style={{ width: '100%', paddingLeft: '2.5rem' }}
-                placeholder={t('login.usernamePlaceholder')}
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-                // readOnly, never disabled: a disabled field is dropped from the
-                // form, so a password manager inspecting it mid-submit sees no
-                // username to save. Read-only still blocks typing.
-                readOnly={setupRequired || loading}
-              />
-              <User size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-            </div>
-          </div>
-
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label htmlFor="login-password" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('login.password')}</label>
-            <div style={{ position: 'relative' }}>
-              <input
-                id="login-password"
-                type={showPassword ? 'text' : 'password'}
-                name="password"
-                autoComplete={creating ? 'new-password' : 'current-password'}
-                className="input-control"
-                style={{ width: '100%', paddingLeft: '2.5rem', paddingRight: '2.5rem' }}
-                placeholder={t('login.passwordPlaceholder')}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                readOnly={loading}
-              />
-              <Lock size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                aria-label={t(showPassword ? 'login.hidePassword' : 'login.showPassword')}
-                style={{
-                  position: 'absolute',
-                  right: '0.75rem',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--text-muted)',
-                  cursor: 'pointer',
-                  padding: '8px',
-                  display: 'flex',
-                  alignItems: 'center'
-                }}
-              >
-                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
-          </div>
-
-          {creating && (
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label htmlFor="login-confirm-password" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('login.confirmPassword')}</label>
+              <label htmlFor="login-password" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('login.password')}</label>
               <div style={{ position: 'relative' }}>
                 <input
-                  id="login-confirm-password"
+                  id="login-password"
                   type={showPassword ? 'text' : 'password'}
-                  name="confirm-password"
-                  autoComplete="new-password"
+                  name="password"
+                  autoComplete={creating ? 'new-password' : 'current-password'}
                   className="input-control"
-                  style={{ width: '100%', paddingLeft: '2.5rem' }}
-                  placeholder={t('login.confirmPasswordPlaceholder')}
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  style={{ width: '100%', paddingLeft: '2.5rem', paddingRight: '2.5rem' }}
+                  placeholder={t('login.passwordPlaceholder')}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                   required
                   readOnly={loading}
                 />
                 <Lock size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={t(showPassword ? 'login.hidePassword' : 'login.showPassword')}
+                  style={{
+                    position: 'absolute',
+                    right: '0.75rem',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                    padding: '8px',
+                    display: 'flex',
+                    alignItems: 'center'
+                  }}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
               </div>
             </div>
-          )}
 
-          <button
-            type="submit"
-            className="btn btn-primary"
-            style={{
-              padding: '0.75rem',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '0.5rem',
-              fontSize: '1rem',
-              fontWeight: 700,
-              boxShadow: 'var(--shadow-accent)'
-            }}
-            disabled={loading}
-          >
-            {loading ? (
-              <div className="spinner" style={{ width: '16px', height: '16px', margin: 0, borderWidth: '2px' }}></div>
-            ) : (
-              <>
-                <span>{t(setupRequired ? 'login.setupSubmit' : isRegister ? 'login.register' : 'login.login')}</span>
-                <ArrowRight size={16} />
-              </>
+            {creating && (
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label htmlFor="login-confirm-password" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('login.confirmPassword')}</label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    id="login-confirm-password"
+                    type={showPassword ? 'text' : 'password'}
+                    name="confirm-password"
+                    autoComplete="new-password"
+                    className="input-control"
+                    style={{ width: '100%', paddingLeft: '2.5rem' }}
+                    placeholder={t('login.confirmPasswordPlaceholder')}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                    readOnly={loading}
+                  />
+                  <Lock size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                </div>
+              </div>
             )}
-          </button>
-        </form>
 
-        {registrationEnabled && !setupRequired && (
+            <button
+              type="submit"
+              className="btn btn-primary"
+              style={{
+                padding: '0.75rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.5rem',
+                fontSize: '1rem',
+                fontWeight: 700,
+                boxShadow: 'var(--shadow-accent)'
+              }}
+              disabled={loading}
+            >
+              {loading ? (
+                <div className="spinner" style={{ width: '16px', height: '16px', margin: 0, borderWidth: '2px' }}></div>
+              ) : (
+                <>
+                  <span>{t(setupRequired ? 'login.setupSubmit' : isRegister ? 'login.register' : 'login.login')}</span>
+                  <ArrowRight size={16} />
+                </>
+              )}
+            </button>
+          </form>
+        )}
+
+        {target === 'server' && registrationEnabled && !setupRequired && (
           <div style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
             {t(isRegister ? 'login.haveAccount' : 'login.noAccount')}{' '}
             <button

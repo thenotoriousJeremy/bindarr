@@ -392,6 +392,7 @@ async function updateCollectionPrices(force = false) {
     console.log(`Lorcana price update complete: ${priced} cards refreshed.`);
   } catch (err) {
     console.error('Error during Lorcana price update:', err.message);
+    require('./notify').emit({ type: 'price_sweep_failed', source: 'lorcast', error: err.message });
   }
 }
 

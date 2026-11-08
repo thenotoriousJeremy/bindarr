@@ -1,8 +1,13 @@
+// Magic's Mythic and Lorcana's Legendary, Enchanted, Epic and Iconic contain
+// none of Pokémon's rarity words, so they used to fall through to common: a
+// mythic got a grey "COM" badge and no glow.
+const TOP_OUTSIDE_POKEMON = /mythic|legendary|enchanted|epic|iconic/;
+
 // Single source of truth for the rarity tiers used across LocationManager's
 // visualizers (card border glow, badge color, badge label).
 export function getRarityTier(rarity) {
   const r = (rarity || '').toLowerCase();
-  if (r.includes('secret') || r.includes('ultra') || r.includes('hyper') || r.includes('illustration') || r.includes('double rare') || r.includes('shiny rare') || r.includes('classic collection')) {
+  if (TOP_OUTSIDE_POKEMON.test(r) || r.includes('secret') || r.includes('ultra') || r.includes('hyper') || r.includes('illustration') || r.includes('double rare') || r.includes('shiny rare') || r.includes('classic collection')) {
     return 'top';
   }
   if (r.includes('rare') || r.includes('promo')) return 'rare';
@@ -81,6 +86,11 @@ export function getRarityBadgeStyle(rarity) {
 export function getRarityBadgeLabel(rarity) {
   const r = (rarity || '').toLowerCase();
   if (r.includes('secret') || r.includes('ultra') || r.includes('hyper') || r.includes('illustration')) return 'ULTRA';
+  if (r.includes('mythic')) return 'MYTHIC';
+  if (r.includes('legendary')) return 'LEG';
+  if (r.includes('enchanted')) return 'ENCH';
+  if (r.includes('epic')) return 'EPIC';
+  if (r.includes('iconic')) return 'ICONIC';
   if (r.includes('double rare')) return 'DR';
   if (r.includes('shiny rare')) return 'SR';
   if (r.includes('rare')) return 'RARE';

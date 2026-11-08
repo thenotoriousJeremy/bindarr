@@ -1,5 +1,12 @@
 const rateLimit = require('express-rate-limit');
 const db = require('../db');
+const { hashSessionToken } = require('../utils/authHelpers');
+
+// The marker on a 401 that means "this request carries no usable session". The
+// SPA signs out on this and nothing else (frontend/src/utils/sessionExpiry.js), so
+// a route answering 401 for some other reason can never log anyone out. Only this
+// gate sends it.
+const SESSION_EXPIRED = 'session_expired';
 
 async function authenticateToken(req, res, next) {
   let token = null;
@@ -9,18 +16,22 @@ async function authenticateToken(req, res, next) {
   }
 
   if (!token) {
-    return res.status(401).json({ error: 'Access denied. No token provided.' });
+    return res.status(401).json({ error: 'Access denied. No token provided.', code: SESSION_EXPIRED });
   }
 
   try {
     const columns = `u.username, u.role, u.share_token, u.share_enabled, u.share_locations,
-                     u.tcg_api_key, u.psa_api_token, u.graded_price_api_key, u.api_key, u.oidc_sub`;
+                     u.tcg_api_key, u.psa_api_token, u.graded_price_api_key, u.api_key, u.oidc_sub,
+                     u.nav_tabs`;
+    // Sessions are stored hashed (authHelpers.hashSessionToken), so it is the
+    // hash that is looked up -- the stored value itself is not a credential.
+    const tokenHash = hashSessionToken(token);
     let session = await db.get(`
       SELECT s.user_id, ${columns}
       FROM sessions s
       JOIN users u ON s.user_id = u.id
       WHERE s.token = ? AND s.expires_at > DATETIME('now')
-    `, [token]);
+    `, [tokenHash]);
 
     // Not a session? It may be an API key — a long-lived credential for scripts
     // and dashboards (issue #33). What makes that safe to hand out is the GET-only
@@ -37,7 +48,7 @@ async function authenticateToken(req, res, next) {
     }
 
     if (!session) {
-      return res.status(401).json({ error: 'Invalid or expired session token.' });
+      return res.status(401).json({ error: 'Invalid or expired session token.', code: SESSION_EXPIRED });
     }
 
     req.user = {
@@ -52,8 +63,13 @@ async function authenticateToken(req, res, next) {
       graded_price_api_key: session.graded_price_api_key || '',
       api_key: session.api_key || '',
       oidc_sub: session.oidc_sub || null,
+      nav_tabs: session.nav_tabs ?? null,
       via_api_key: viaApiKey
     };
+    // Which session this is, for the routes that end it (logout) or keep it while
+    // ending the others (a password change). Beside req.user, not in it, because
+    // req.user is what GET /me serializes. Null for an API key, which has none.
+    req.sessionTokenHash = viaApiKey ? null : tokenHash;
     next();
   } catch (error) {
     console.error(error);

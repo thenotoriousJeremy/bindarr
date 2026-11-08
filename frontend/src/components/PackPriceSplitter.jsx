@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useT } from '../utils/i18n';
 
 // Distribute a total price paid (a pack/deck) across a set of collection
@@ -6,11 +6,21 @@ import { useT } from '../utils/i18n';
 // server-side in POST /api/collection/bulk (action 'purchase_split'); this is
 // just the total input + method picker shared by the collection bulk bar and
 // the scanner's recent-scans panel.
-export default function PackPriceSplitter({ entryIds, onApplied, showToast, style }) {
+//
+// `sealedUnitId` + `sealedUnitPrice` are set when this is opened from an
+// opened sealed unit ("link cards from this pack"): the total is pre-filled
+// from the unit's own price, and applying the split also stamps each entry's
+// sealed_unit_id so the cards can be traced back to what they were pulled from.
+export default function PackPriceSplitter({ entryIds, onApplied, showToast, style, sealedUnitId, sealedUnitPrice }) {
   const { t } = useT();
-  const [total, setTotal] = useState('');
-  const [method, setMethod] = useState('weighted');
+  const [total, setTotal] = useState(sealedUnitPrice != null ? String(sealedUnitPrice) : '');
+  const [method, setMethod] = useState(sealedUnitId ? 'equal' : 'weighted');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (sealedUnitPrice != null) setTotal(String(sealedUnitPrice));
+    setMethod(sealedUnitId ? 'equal' : 'weighted');
+  }, [sealedUnitId, sealedUnitPrice]);
 
   const apply = async () => {
     const amount = parseFloat(total);
@@ -21,11 +31,15 @@ export default function PackPriceSplitter({ entryIds, onApplied, showToast, styl
       const res = await fetch('/api/collection/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entry_ids: entryIds, action: 'purchase_split', value: { total: amount, method } }),
+        body: JSON.stringify(sealedUnitId
+          ? { entry_ids: entryIds, action: 'link_sealed_unit', value: { unit_id: sealedUnitId, total: amount, method } }
+          : { entry_ids: entryIds, action: 'purchase_split', value: { total: amount, method } }),
       });
       const d = await res.json().catch(() => ({}));
-      if (res.ok) { showToast(d.message || t('split.applied')); setTotal(''); onApplied?.(); }
-      else showToast(d.error || t('split.failed'));
+      if (!res.ok) { showToast(d.error || t('split.failed')); return; }
+      showToast(d.message || t('split.applied'));
+      setTotal('');
+      onApplied?.();
     } catch {
       showToast(t('split.error'));
     } finally {

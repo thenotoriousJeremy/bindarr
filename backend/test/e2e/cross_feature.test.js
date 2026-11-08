@@ -1,3 +1,8 @@
+// Set here as well as in run.js: a suite run on its own boots a server on a fresh
+// database, which would otherwise run a full TCGCSV sync (~800 requests) at boot.
+process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
+process.env.BINDARR_DISABLE_FX_SYNC = '1';
+
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -7,10 +12,12 @@ const { spawn } = require('child_process');
 // Isolated temp DB and unique port
 const tmpDb = path.join(os.tmpdir(), `bindarr-cross-test-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;
-const port = '3011';
+const { freePort } = require('../freePort');
+let port;
 
 const projectRoot = path.join(__dirname, '../../../');
 const db = require('../../src/db');
+const { hashSessionToken } = require('../../src/utils/authHelpers');
 
 async function waitForServer(port) {
   const url = `http://localhost:${port}/api/health`;
@@ -40,6 +47,7 @@ async function waitForDatabase() {
 }
 
 async function runTests() {
+  port = String(await freePort());
   // Start server preloading scryfall-mock.js
   const mockScript = path.join(__dirname, 'scryfall-mock.js');
   const serverScript = path.join(projectRoot, 'backend/src/server.js');
@@ -61,7 +69,7 @@ async function runTests() {
     expiresAt.setDate(expiresAt.getDate() + 1);
     await db.run(
       `INSERT OR REPLACE INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`,
-      [token, adminId, expiresAt.toISOString()]
+      [hashSessionToken(token), adminId, expiresAt.toISOString()]
     );
 
     const authHeaders = {

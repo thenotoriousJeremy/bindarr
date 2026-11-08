@@ -18,6 +18,7 @@ Bindarr is a self-hosted, multi-user collection manager for Pokémon, Magic: The
 
 - `backend/src/` — Express service, database, provider clients, scan/catalog/backup logic.
 - `backend/src/routes/` — feature routers; mount/access order is defined in `backend/src/server.js`.
+- `backend/src/embedded/` — device mode: the composition root the mobile app runs instead of `server.js` (no server; on-device SQLite), and the stand-ins for Node modules a phone lacks (`aliases.js`). See MOBILE.md.
 - `backend/src/middleware/` — authentication, authorization, and rate limits.
 - `backend/src/utils/` — shared policy/domain helpers. Reuse these instead of duplicating provider, language, price, placement, or TLS logic.
 - `backend/test/` — standalone unit assertions; `backend/test/e2e/` boots real server processes with temporary SQLite state.
@@ -35,7 +36,7 @@ npm run dev                         # backend nodemon + HTTPS Vite dev server
 npm run dev:backend                 # backend only
 npm run dev:frontend                # frontend only
 npm run build:frontend              # build frontend/dist
-npm test                            # backend unit/e2e, then frontend utilities/locales
+npm test                            # every suite (backend unit/e2e, frontend utils/locales, mirror), one summary
 npm start                           # production backend start
 
 cd backend && npm run test:e2e      # E2E only
@@ -53,6 +54,7 @@ Use `npm ci` in each package scope for reproducible CI/container installs. Backe
 - **Modules:** backend is CommonJS (`require`, `module.exports`); frontend is ESM/JSX (`import`, `export`). Keep the boundary intact.
 - **Names:** camelCase for values/functions, PascalCase for React components, snake_case for SQLite/API fields. Use lower-case game values: `pokemon`, `mtg`, `lorcana`.
 - **Backend routes:** create `express.Router()`, validate early, use parameterized SQL (`?` with values), wrap async work in `try/catch`, log operational context, and return client-safe `{ error: '...' }` responses. Use `db.run/get/all`; do not use raw callback sqlite calls.
+- **Device mode:** the phone app bundles the route modules (`frontend/scripts/build-device-backend.mjs`), so route code must not depend on Node APIs outside `backend/src/embedded/aliases.js` on a path device mode reaches (no `Buffer`, streams or filesystem writes there), and a new bare `require` needs either an alias or a frontend dependency. A route mounted in `server.js` should be mounted in `embedded/index.js` too, or answer 501 there. `backend/test/embedded.test.js` loads the routes the way the bundle does.
 - **Auth:** preserve central auth/mount placement. Authenticated mutations must be user-scoped with `req.user.id`; do not rely on client-provided user IDs.
 - **Providers:** normalize and cache through the existing provider modules. For Pokémon search/set work use `pokemonProvider.apiFor(lang)`; for an existing card ID use `cardApi`. Do not add feature-local language/ID-prefix branching.
 - **Async/error handling:** non-critical startup warmups/background jobs may intentionally use fallbacks; mutations, auth, and ownership checks must fail explicitly. Do not turn deliberate non-blocking work into request-path blocking.
@@ -79,7 +81,7 @@ Use `npm ci` in each package scope for reproducible CI/container installs. Backe
 ## Runtime/Tooling Preferences
 
 - Use **npm**, with separate root, `backend/`, and `frontend/` manifests/lockfiles; this is not an npm workspace.
-- Local documented floor: Node 18+ and npm 9+. Use **Node 20** for server/container/CI parity; Node 22 is used only by mobile/demo release workflows.
+- Local documented floor: Node 22.12+ and npm 10+ (Vite 8 and the Capacitor CLI refuse anything older). Use **Node 24** (LTS, supported until April 2028) for server/container/CI parity; every workflow, the mobile/demo releases included, runs on it.
 - Frontend: React/Vite, ESM, JSX, HTTPS on `https://localhost:5173`. Backend: Node/Express/CommonJS on `http://localhost:3001` by default.
 - Native dependencies (`sqlite3`, `sharp`, `onnxruntime-node`) are platform-sensitive. Install/rebuild in the target environment; Docker production uses Debian/glibc, not Alpine.
 - Configure runtime through `.env.example`. Preserve `DB_PATH`, TLS, CORS, `PUBLIC_BASE_URL`, `TRUST_PROXY`, bootstrap auth, and provider-key semantics. Do not commit `.env`, database/WAL files, build output, models, catalogs, or generated native assets.
@@ -87,10 +89,11 @@ Use `npm ci` in each package scope for reproducible CI/container installs. Backe
 
 ## Testing & QA
 
-- `npm test` runs `backend/test/run.js`, `backend/test/e2e/run.js`, then `frontend` utility tests and locale validation.
+- `npm test` (`scripts/test-all.mjs`) runs backend unit (`test/run.js`), backend e2e (`test/e2e/run.js`), frontend utility tests, locale validation and the TCGCSV mirror test, each regardless of the others, then prints a summary and fails if any failed. `node scripts/test-all.mjs <name>` runs a subset; `cd backend && npm test` runs both backend runners the same way.
+- E2E servers bind a free port from `backend/test/freePort.js`, never a fixed number, so runs can overlap. New suites should do the same and blank `HTTPS_PORT`.
 - Backend tests are plain Node/assert scripts, not Jest/Vitest. Unit suites live in `backend/test/*.test.js`; E2E suites in `backend/test/e2e/*.test.js` run serially against real Express processes.
 - Set `DB_PATH` **before** importing DB-dependent backend modules. Use a per-PID temporary SQLite path and clean its `.db`, `-wal`, and `-shm` files. Prefer real temporary SQLite state over DB mocks.
 - Keep provider tests deterministic/offline with checked-in fixtures and existing Axios interception. `backend/test/live/*.live.js` requires credentials and may consume provider credits; it is intentionally outside normal test discovery.
 - Frontend utility tests live beside utilities as `frontend/src/utils/*.test.js`, using built-in `node:test`/`node:assert`. Match the surrounding test style; do not add a test framework.
 - Locale changes require `cd frontend && npm run check:locales`. Preserve English keys/order, placeholders, and required plural categories; add translations under `frontend/src/locales/<BCP-47>.json`.
-- CI hard-gates backend tests, frontend lint, and locale validation. There is no coverage threshold or configured coverage tool.
+- CI: `.github/workflows/test.yml` gates every PR and push to main on backend unit + e2e, frontend utility tests, locale validation, lint and build, and the mirror test (runners have no scan models, like a fresh install). `docker-build.yml` builds the image for amd64 and arm64 and smoke-tests it (native modules load, `/api/health` answers) before anything is tagged. `audit.yml` fails only on critical advisories in production dependencies; Dependabot (`.github/dependabot.yml`) proposes weekly grouped updates. There is no coverage threshold or configured coverage tool.

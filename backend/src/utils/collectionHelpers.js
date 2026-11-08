@@ -19,34 +19,17 @@ function defaultCompartmentPlan(type) {
 }
 
 // How many copies of each collection entry are physically pulled for a
-// checked-out deck. Sums required quantity per card across all of the user's
-// checked-out decks, then allocates greedily onto their owned entries using the
-// same ordering the checkout locator uses (located copies first, newest first),
-// so storage greys out the same copies the wizard told them to grab.
+// checked-out deck: exactly the copies checkout claimed (utils/deckAllocation.js),
+// so storage greys out the same copies the wizard told them to grab. One query —
+// this used to re-derive the claim with a query per card on every collection load.
 async function checkedOutAllocation(userId) {
-  const required = await db.all(`
-    SELECT dc.card_id, SUM(dc.quantity) AS req
-    FROM deck_cards dc
-    JOIN decks d ON dc.deck_id = d.id
+  const rows = await db.all(`
+    SELECT a.entry_id, a.quantity
+    FROM deck_allocations a
+    JOIN decks d ON a.deck_id = d.id
     WHERE d.user_id = ? AND d.checked_out = 1
-    GROUP BY dc.card_id
   `, [userId]);
-  const alloc = new Map();
-  for (const { card_id, req } of required) {
-    let need = req;
-    const entries = await db.all(`
-      SELECT id AS entry_id, quantity FROM collection
-      WHERE user_id = ? AND list_type = 'collection' AND card_id = ?
-      ORDER BY (location_id IS NOT NULL) DESC, added_at DESC
-    `, [userId, card_id]);
-    for (const e of entries) {
-      if (need <= 0) break;
-      const take = Math.min(e.quantity, need);
-      need -= take;
-      alloc.set(e.entry_id, take);
-    }
-  }
-  return alloc;
+  return new Map(rows.map(r => [r.entry_id, r.quantity]));
 }
 
 // Resolves where a card should actually land. Supports both object destructuring signature
@@ -117,8 +100,26 @@ async function resolveCompartmentAndPosition(arg1, locationId, cardId, userId) {
   }
 
   const recommended = await recommendSlot(dbClient, location, cardMetadata);
-  if (!recommended) return null;
+  // No room anywhere the card may go. An object, not null: every caller reads
+  // .compartment_id straight off the result, so null made a full binder a 500
+  // (this was { full: true } until d0ee430). The caller leaves the card unsorted
+  // and reports container_full.
+  if (!recommended) return { compartment_id: null, position: 0, full: true };
   return { compartment_id: recommended.compartment_id, position: recommended.position, location_id: recommended.location_id, label: recommended.label };
+}
+
+// A container or compartment the user may file a copy into: one of their own.
+// Both kinds of id are global, so one a client sends can exist and still be
+// somebody else's — PUT /collection/:id took compartment_id on trust, which let
+// any user file their cards into another user's binder. Null when not theirs.
+async function ownedLocation(locationId, userId) {
+  return db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
+}
+
+async function ownedCompartment(compartmentId, userId) {
+  return db.get(`
+    SELECT cp.id, cp.location_id FROM compartments cp JOIN locations l ON l.id = cp.location_id
+    WHERE cp.id = ? AND l.user_id = ?`, [compartmentId, userId]);
 }
 
 async function describePlacement(database, entryId, userId) {
@@ -162,39 +163,8 @@ async function getCompartmentOccupancy(database, compartmentId) {
   return row ? row.total_cards : 0;
 }
 
-// One physical card = one row. Split any legacy stacked entry (quantity > 1)
-// into that many single-card rows so every copy takes its own storage slot,
-// gets its own popup, and can be added to a deck individually. Idempotent:
-// once run there are no quantity>1 rows, so a re-run is a no-op.
-// ponytail: split copies keep the original's compartment with fractional
-// position offsets (same as the add path). A page that overflows its capacity
-// shows extra pockets; a manual re-sort redistributes if desired.
-async function splitStackedEntries(database) {
-  const dbClient = database || db;
-  const stacked = await dbClient.all(`SELECT * FROM collection WHERE quantity > 1`);
-  if (stacked.length === 0) return 0;
-  let created = 0;
-  for (const e of stacked) {
-    const copies = e.quantity;
-    await dbClient.run(`UPDATE collection SET quantity = 1 WHERE id = ?`, [e.id]);
-    for (let i = 1; i < copies; i++) {
-      await dbClient.run(`
-        INSERT INTO collection (
-          card_id, user_id, quantity, condition, printing, language, purchase_price,
-          location_id, compartment_id, position, is_trade, favorite, list_type, game
-        ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [
-        e.card_id, e.user_id, e.condition, e.printing, e.language, e.purchase_price,
-        e.location_id, e.compartment_id, (e.position || 0) + i * 0.001, e.is_trade, e.favorite, e.list_type, e.game
-      ]);
-      created++;
-    }
-  }
-  return created;
-}
-
-// The rows the collection view stacks together with this one: same card, same
-// printing details, same list. Ordered as trim candidates — unplaced copies
+// The rows identical to this one: same card, same printing details, same list.
+// Ordered as trim candidates — unplaced copies
 // first, then newest — so a copy already filed into a binder is the last one
 // removed. The edited row itself is excluded: it is never the row deleted.
 async function stackSiblings(dbClient, userId, row, entryId) {
@@ -206,25 +176,53 @@ async function stackSiblings(dbClient, userId, row, entryId) {
   `, [userId, row.card_id, row.condition, row.printing, row.language, row.list_type, entryId]);
 }
 
-// Make the number of copies this stack represents equal `target`, keeping the
-// edited row. The quantity field in the card popup is absolute — "how many of
-// these I own" — and the stacked collection view sums the identical rows into
-// that one number, so the edit has to reconcile the whole group both ways.
-// Growing inserts single-card rows (one physical card = one row, mirroring the
-// edited row's placement); shrinking removes the trim candidates first and only
-// then reduces the edited row's own quantity, which a legacy stacked row can
-// still have above 1. Returns the net change in copies.
+// Make the number of copies this row's stack represents equal `target`, keeping
+// the edited row. The quantity field in the card popup is absolute — "how many
+// of these I own" — so an edit reconciles a whole group, both ways. Here the
+// group is the identical rows (stackSiblings), for a caller that does not say
+// which rows its number covered; the card popup does say (setTileQuantity),
+// because a tile on screen is often not this group. Returns the net change in
+// copies.
 async function setStackQuantity(database, userId, entryId, target) {
   const dbClient = database || db;
   const row = await dbClient.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [entryId, userId]);
   if (!row) return 0;
   const siblings = await stackSiblings(dbClient, userId, row, entryId);
+  return (await reconcileStack(dbClient, userId, row, siblings, target)).change;
+}
 
+// The same reconcile over a stacked tile: exactly the rows the client drew under
+// one number (see tileMembers), with the same trim order. The tile is not the
+// identical-row group above — the collection view stacks by card alone unless
+// told to split by condition or printing, and a stacking binder stacks a pocket
+// — and reconciling that group instead is how a x5 tile of 3 Near Mint + 2
+// Lightly Played copies, set to 4, came out at six. Returns { change, ids }, ids
+// being the rows the tile holds afterwards, so a screen that keeps the tile
+// object can keep it current.
+async function setTileQuantity(database, userId, entryId, target, memberIds) {
+  const dbClient = database || db;
+  const row = await dbClient.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [entryId, userId]);
+  if (!row) return { change: 0, ids: [] };
+  const siblings = await dbClient.all(`
+    SELECT id, quantity FROM collection
+    WHERE user_id = ? AND id != ? AND id IN (SELECT value FROM json_each(?))
+    ORDER BY (location_id IS NULL) DESC, id DESC
+  `, [userId, entryId, JSON.stringify(memberIds)]);
+  return reconcileStack(dbClient, userId, row, siblings, target);
+}
+
+// Grow or shrink `row` and its `siblings` (trim candidates, in trim order) to
+// `target` copies. Growing inserts single-card rows (one physical card = one row,
+// mirroring the edited row's placement); shrinking removes the trim candidates
+// first and only then reduces the edited row's own quantity, which a legacy
+// stacked row can still have above 1.
+async function reconcileStack(dbClient, userId, row, siblings, target) {
   const start = (row.quantity || 1) + siblings.reduce((n, s) => n + (s.quantity || 1), 0);
   let current = start;
+  const ids = [row.id, ...siblings.map(s => s.id)];
 
   for (let i = 0; current < target; i++, current++) {
-    await dbClient.run(`
+    const added = await dbClient.run(`
       INSERT INTO collection (
         card_id, user_id, quantity, condition, printing, language, purchase_price,
         location_id, compartment_id, position, is_trade, favorite, list_type, game
@@ -234,6 +232,7 @@ async function setStackQuantity(database, userId, entryId, target) {
       row.location_id, row.compartment_id, (row.position || 0) + (i + 1) * 0.001,
       row.is_trade, row.favorite, row.list_type, row.game
     ]);
+    if (added) ids.push(added.lastID);
   }
 
   for (const s of siblings) {
@@ -243,17 +242,40 @@ async function setStackQuantity(database, userId, entryId, target) {
     current -= drop;
     if (drop >= have) {
       await dbClient.run(`DELETE FROM collection WHERE id = ? AND user_id = ?`, [s.id, userId]);
+      ids.splice(ids.indexOf(s.id), 1);
     } else {
       await dbClient.run(`UPDATE collection SET quantity = quantity - ? WHERE id = ? AND user_id = ?`, [drop, s.id, userId]);
     }
   }
 
   if (current > target) {
-    await dbClient.run(`UPDATE collection SET quantity = ? WHERE id = ? AND user_id = ?`, [target, entryId, userId]);
+    await dbClient.run(`UPDATE collection SET quantity = ? WHERE id = ? AND user_id = ?`, [target, row.id, userId]);
     current = target;
   }
 
-  return current - start;
+  return { change: current - start, ids };
+}
+
+// The rows a client says a stacked tile stands for (PUT /collection/:id's
+// stack_entry_ids), checked before the edit writes anything and against the
+// edited row as it was. Kept only where they are this user's copies of that
+// row's card in its list. Anything else is ignored rather than refused: a tile
+// can name a copy deleted in another tab since, and ignoring an id can only make
+// the tile smaller, never reach a row that is not part of it. The edited row is
+// always a member. Null when no list was sent, { error } for one that is not a
+// list of ids, else { ids }.
+async function tileMembers(dbClient, userId, entry, raw) {
+  if (raw === undefined) return null;
+  if (!Array.isArray(raw) || !raw.every(id => Number.isSafeInteger(id) && id > 0)) {
+    return { error: 'stack_entry_ids must be a list of collection entry ids' };
+  }
+  const rows = await dbClient.all(`
+    SELECT id FROM collection
+    WHERE user_id = ? AND card_id = ? AND list_type IS ? AND id IN (SELECT value FROM json_each(?))
+  `, [userId, entry.card_id, entry.list_type, JSON.stringify(raw)]);
+  const ids = new Set(rows.map(r => r.id));
+  ids.add(entry.id);
+  return { ids: [...ids] };
 }
 
 module.exports = {
@@ -262,7 +284,10 @@ module.exports = {
   checkedOutAllocation,
   resolveCompartmentAndPosition,
   describePlacement,
+  ownedLocation,
+  ownedCompartment,
   normalizeRuleConfig,
-  splitStackedEntries,
   setStackQuantity,
+  setTileQuantity,
+  tileMembers,
 };

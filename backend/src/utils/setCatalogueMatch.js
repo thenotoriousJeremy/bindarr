@@ -37,8 +37,8 @@
 // the join silently misses. Decomposing first makes both "pokemongo".
 const fold = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
 
-// Provider prefixes are not part of the set code: pokemontcgapi-sv1 is sv1.
-const normId = (s) => fold(s).toLowerCase().replace(/^(mtg|pokemontcgapi)-/, '').replace(/[^a-z0-9]/g, '');
+// Provider prefixes are not part of the set code.
+const normId = (s) => fold(s).toLowerCase().replace(/^(mtg|lorcana|pokemontcgapi)-/, '').replace(/[^a-z0-9]/g, '');
 
 // Only zeros sitting between a letter and a digit — see the note above.
 const unpadId = (s) => normId(s).replace(/([a-z])0+(\d)/g, '$1$2');

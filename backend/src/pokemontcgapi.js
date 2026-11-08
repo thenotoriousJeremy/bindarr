@@ -346,21 +346,31 @@ async function updateCollectionPrices() {
       await markPricesSwept('pokemontcgapi');
       return;
     }
-    // Bounded OR groups stay under the query complexity limit. No per-card
-    // detail requests and no whole-set sweep just to refresh one owned card.
-    for (let i = 0; i < owned.length; i += 25) {
-      const q = owned.slice(i, i + 25).map(c => `id:${quote(providerId(c.id))}`).join(' OR ');
-      for await (const rows of pages('/cards', { q, include: CARD_INCLUDE })) {
-        const cards = rows.map(normalizeCard);
-        await cacheCards(cards);
-        for (const card of cards) await recordPrice(card.id, card.price_trend);
-      }
-    }
+    await refreshPrices(owned.map(c => c.id));
     await markPricesSwept('pokemontcgapi');
   } catch (error) {
     console.warn('pokemontcgapi price refresh:', error.message);
+    require('./notify').emit({ type: 'price_sweep_failed', source: 'pokemontcgapi', error: error.message });
+  }
+}
+
+// Price these cards now, in bounded OR groups: they stay under the query
+// complexity limit, and a batch costs a fraction of the per-card detail fetch
+// (about one credit per six cards against two each). No whole-set sweep just to
+// refresh a few owned cards. Throws on an upstream failure; callers decide.
+async function refreshPrices(ids) {
+  const own = (ids || []).filter(id => String(id).startsWith(PREFIX));
+  for (let i = 0; i < own.length; i += 25) {
+    const q = own.slice(i, i + 25).map(id => `id:${quote(providerId(id))}`).join(' OR ');
+    for await (const rows of pages('/cards', { q, include: CARD_INCLUDE })) {
+      const cards = rows.map(normalizeCard);
+      await cacheCards(cards);
+      for (const card of cards) await recordPrice(card.id, card.price_trend);
+    }
   }
 }
 
 module.exports = { client, hasKey, providerId, normalizeCard, extractPrices, cacheCards, listSets, fetchAndCacheSets,
-  getCardsBySet, searchCards, getCardById, hydrateCard, updateCollectionPrices, LIST_INCLUDE, CARD_INCLUDE };
+  // getSetCards is the name tcgdexApi lists a set under too, for callers holding either client.
+  getCardsBySet, getSetCards: getCardsBySet, searchCards, getCardById, hydrateCard, updateCollectionPrices, refreshPrices,
+  LIST_INCLUDE, CARD_INCLUDE };

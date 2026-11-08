@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Database, Play, Square, RefreshCw, Check, AlertTriangle, Cpu, Download, ListFilter, Languages, Zap } from 'lucide-react';
 import SetTree from './SetTree';
 import { useT } from '../utils/i18n';
+import { gameInfo, gameLabel } from '../utils/games';
+import { fillParts } from '../utils/translate';
 
 // Scan catalogs.
 //
@@ -17,7 +19,6 @@ import { useT } from '../utils/i18n';
 // a side effect of building a scan index, so a set nobody indexed simply was not
 // in the database — which is why Pokemon sat at 35% of the real card pool while
 // looking, from the old panel, entirely built.
-const GAME_LABEL = { mtg: 'Magic: The Gathering', pokemon: 'Pokémon', lorcana: 'Disney Lorcana' };
 const POLL_MS = 1000;
 
 // The house style, so this panel reads as part of Admin rather than its own app.
@@ -79,14 +80,17 @@ function EngineCard({ engine, onDownload, busy }) {
   if (!engine) return null;
   const models = engine.models || [];
   const missing = models.filter(m => !m.present);
+  // Installed and working, but an older release's file with a faster replacement.
+  const outdated = models.filter(m => m.outdated);
 
   return (
     <Step
       n="1"
       icon={<Cpu size={16} style={{ color: 'var(--accent-red)' }} />}
       title={t('catalog.scanEngine')}
-      status={missing.length ? t('catalog.requiredNotInstalled') : t('catalog.installed')}
-      tone={missing.length ? 'var(--accent-yellow)' : 'var(--type-grass)'}
+      status={missing.length ? t('catalog.requiredNotInstalled')
+        : outdated.length ? t('catalog.updateAvailable') : t('catalog.installed')}
+      tone={missing.length || outdated.length ? 'var(--accent-yellow)' : 'var(--type-grass)'}
     >
       <div style={ROW}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', flex: '1 1 20rem' }}>
@@ -102,11 +106,18 @@ function EngineCard({ engine, onDownload, busy }) {
               </a>
             )).reduce((acc, el) => acc.length ? [...acc, ', ', el] : [el], [])}
           </p>
+          {!missing.length && !!outdated.length && <p style={NOTE}>{t('catalog.engineOutdated')}</p>}
         </div>
         {!!missing.length && (
           <button type="button" className="btn btn-primary btn-sm" disabled={busy}
             onClick={() => onDownload('models')} style={BTN}>
             <Download size={14} /> {t('catalog.download')}
+          </button>
+        )}
+        {!missing.length && !!outdated.length && (
+          <button type="button" className="btn btn-primary btn-sm" disabled={busy}
+            onClick={() => onDownload('models')} style={BTN}>
+            <Download size={14} /> {t('catalog.update')}
           </button>
         )}
       </div>
@@ -117,12 +128,13 @@ function EngineCard({ engine, onDownload, busy }) {
 // Step two, and the answer for most installs: a published catalog is one download
 // away from a working scanner, against the hours a local build takes. The
 // tradeoffs are real and stated, but they are stated in a panel that is OPEN.
-function ReadyMadeCard({ engine, onDownload, busy, enginePresent, productMap, onBuildMap }) {
+function ReadyMadeCard({ engine, onDownload, busy, enginePresent, productMaps, mapGame, onMapGameChange, onBuildMap }) {
   const { t } = useT();
   if (!engine) return null;
   const cats = engine.catalogs || [];
   if (!cats.length) return null;
   const have = cats.filter(c => c.present).length;
+  const productMap = productMaps?.[mapGame];
   const mapJob = productMap?.progress;
   const mapRows = productMap?.rows || 0;
 
@@ -146,8 +158,10 @@ function ReadyMadeCard({ engine, onDownload, busy, enginePresent, productMap, on
           matched and then resolved to nothing. The product map is what closes that
           gap, and it downloads with the catalog. */}
       <p style={HINT}>
-        <strong style={{ color: 'var(--text-strong)' }}>Magic</strong> {t('catalog.magicVsPokemon').split('Magic')[1]?.split('Pokémon')[0]?.trim()}
-        {' '}<strong style={{ color: 'var(--text-strong)' }}>Pokémon</strong>{t('catalog.magicVsPokemon').split('Pokémon')[1]}
+        {fillParts(t('catalog.magicVsPokemon'), {
+          magic: <strong key="magic" style={{ color: 'var(--text-strong)' }}>Magic</strong>,
+          pokemon: <strong key="pokemon" style={{ color: 'var(--text-strong)' }}>Pokémon</strong>,
+        })}
       </p>
       <div className="collection-table-wrapper" style={{ overflowX: 'auto' }}>
         <table className="collection-table">
@@ -162,7 +176,7 @@ function ReadyMadeCard({ engine, onDownload, busy, enginePresent, productMap, on
           <tbody>
             {cats.map(c => (
               <tr key={c.name}>
-                <td style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{GAME_LABEL[c.game] || c.game}</td>
+                <td style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{gameLabel(c.game)}</td>
                 <td>{mb(c.bytes)}</td>
                 <td className="hide-mobile">{c.snapshot}</td>
                 <td style={{ textAlign: 'right' }}>
@@ -198,10 +212,22 @@ function ReadyMadeCard({ engine, onDownload, busy, enginePresent, productMap, on
               {' · '}{mapJob ? t('catalog.productMapBuilding') : mapRows ? t('catalog.productMapMapped', { count: num(mapRows) }) : t('catalog.productMapNotBuilt')}
             </span>
           </span>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={!!mapJob}
-            onClick={onBuildMap} style={BTN}>
-            <RefreshCw size={14} /> {mapJob ? t('catalog.btnBuilding') : mapRows ? t('catalog.btnRefresh') : t('catalog.btnBuild')}
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+              {t('catalog.thGame')}
+              <select value={mapGame} onChange={(e) => onMapGameChange(e.target.value)} disabled={!!mapJob}
+                className="select-control" aria-label={t('catalog.thGame')}
+                style={{ minWidth: '10rem', padding: '0.45rem 2rem 0.45rem 0.65rem', fontSize: '0.8rem' }}>
+                {Object.keys(productMaps || { pokemon: 1 }).map(g => (
+                  <option key={g} value={g}>{gameLabel(g)}</option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className="btn btn-secondary btn-sm" disabled={!!mapJob}
+              onClick={onBuildMap} style={BTN}>
+              <RefreshCw size={14} /> {mapJob ? t('catalog.btnBuilding') : mapRows ? t('catalog.btnRefresh') : t('catalog.btnBuild')}
+            </button>
+          </div>
         </div>
         <p style={NOTE}>
           {t('catalog.productMapDesc')}
@@ -238,11 +264,12 @@ function BuildPicker({ game, lang, disabled, onBuild, showToast, label }) {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const codeOf = (s) => game === 'mtg'
-    ? (s.ptcgo_code || (s.id || '').replace(/^mtg-/, ''))
-    : game === 'lorcana'
-      ? (s.ptcgo_code || (s.id || '').replace(/^lorcana-/, ''))
-      : s.id;
+  // A game whose set ids carry a prefix (shared/games.json setIdPrefix) builds by
+  // its bare code; Pokémon's ids are the code already.
+  const setPrefix = gameInfo(game)?.setIdPrefix;
+  const codeOf = (s) => setPrefix
+    ? (s.ptcgo_code || (s.id || '').replace(new RegExp('^' + setPrefix), ''))
+    : s.id;
 
   useEffect(() => {
     if (!open || sets.length) return;
@@ -457,6 +484,7 @@ export default function CatalogPanel({ showToast }) {
   const [last, setLast] = useState(null);
   const [loading, setLoading] = useState(true);
   const [engine, setEngine] = useState(null);
+  const [mapGame, setMapGame] = useState('pokemon');
   const timer = useRef(null);
 
   const load = async () => {
@@ -492,10 +520,11 @@ export default function CatalogPanel({ showToast }) {
   // refuses while the other holds its slot), so a single poll covers whichever is.
   useEffect(() => {
     clearTimeout(timer.current);
-    // The product map is a third job with its own progress, and it is STARTED by a
-    // catalog download finishing — so the poll has to survive the download it
-    // followed, or the bar freezes mid-build until the panel is reopened.
-    if (!progress && !engine?.progress && !engine?.productMap?.progress) return;
+    // The product map is a third job with its own progress, one per game, and it
+    // is STARTED by a catalog download finishing — so the poll has to survive the
+    // download it followed, or the bar freezes mid-build until the panel is reopened.
+    const mapRunning = Object.values(engine?.productMaps || {}).some(m => m?.progress);
+    if (!progress && !engine?.progress && !mapRunning) return;
     timer.current = setTimeout(async () => {
       try {
         if (progress) {
@@ -506,21 +535,22 @@ export default function CatalogPanel({ showToast }) {
           // A build that just finished changes the row counts, so refresh the list.
           if (!j.progress) load();
         }
-        if (engine?.progress || engine?.productMap?.progress) {
+        if (engine?.progress || mapRunning) {
           const e = await fetch('/api/admin/models');
           if (e.ok) {
             const ej = await e.json();
             setEngine(ej);
             // A finished download changes what is installed, and a downloaded
             // catalog changes what the list reports as published.
-            if (!ej.progress && !ej.productMap?.progress) load();
+            const stillRunning = Object.values(ej.productMaps || {}).some(m => m?.progress);
+            if (!ej.progress && !stillRunning) load();
           }
         }
       } catch { /* a dropped poll is not worth surfacing; the next one retries */ }
     }, POLL_MS);
     return () => clearTimeout(timer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [progress, engine?.progress, engine?.productMap?.progress]);
+  }, [progress, engine?.progress, JSON.stringify(engine?.productMaps)]);
 
   const download = async (what) => {
     try {
@@ -538,13 +568,21 @@ export default function CatalogPanel({ showToast }) {
   };
 
   // Normally started by the Pokémon catalog download itself; this is the refresh
-  // after a set release, or a retry when a run died halfway.
-  const buildProductMap = async () => {
+  // after a set release, a retry when a run died halfway, or the first build for
+  // a game (MTG, Lorcana) that never had one.
+  const buildProductMap = async (game) => {
     try {
-      const r = await fetch('/api/admin/models/product-map', { method: 'POST' });
+      const r = await fetch('/api/admin/models/product-map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ game }),
+      });
       const j = await r.json();
       if (!r.ok) return showToast?.(j.error || t('catalog.errStartProductMapGeneric'));
-      setEngine(prev => ({ ...(prev || {}), productMap: { ...(prev?.productMap || {}), progress: j.progress } }));
+      setEngine(prev => ({
+        ...(prev || {}),
+        productMaps: { ...(prev?.productMaps || {}), [game]: { ...(prev?.productMaps?.[game] || {}), progress: j.progress } },
+      }));
     } catch (e) {
       showToast?.(t('catalog.errStartProductMap', { message: e.message }));
     }
@@ -607,7 +645,7 @@ export default function CatalogPanel({ showToast }) {
       <details key={`${c.game}|${c.lang}`} style={INNER}>
         <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-strong)' }}>
-            {GAME_LABEL[c.game] || c.game}
+            {gameLabel(c.game)}
             <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}> · {c.lang}</span>
           </span>
           <span style={{ fontSize: '0.8rem', color: c.built ? 'var(--type-grass)' : 'var(--text-secondary)' }}>
@@ -707,8 +745,10 @@ export default function CatalogPanel({ showToast }) {
         onDownload={download}
         busy={!!engine?.progress || !!running}
         enginePresent={!(engine?.models || []).some(m => !m.present)}
-        productMap={engine?.productMap}
-        onBuildMap={buildProductMap}
+        productMaps={engine?.productMaps}
+        mapGame={mapGame}
+        onMapGameChange={setMapGame}
+        onBuildMap={() => buildProductMap(mapGame)}
       />
 
       {/* One progress bar for both downloads: models and published catalogs share a
@@ -752,7 +792,7 @@ export default function CatalogPanel({ showToast }) {
           <div style={INNER}>
             <div style={ROW}>
               <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-strong)' }}>
-                {GAME_LABEL[running.game] || running.game} · {running.lang}
+                {gameLabel(running.game)} · {running.lang}
               </span>
               <button type="button" className="btn btn-secondary btn-sm" onClick={stop} disabled={running.cancelled}
                 style={BTN}>
@@ -771,7 +811,7 @@ export default function CatalogPanel({ showToast }) {
           <p style={{ ...HINT, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             {last.phase === 'error'
               ? <><AlertTriangle size={15} color="var(--accent-red)" /> {t('catalog.lastBuildFailed', { message: last.message })}</>
-              : <><Check size={15} color="var(--type-grass)" /> {GAME_LABEL[last.game] || last.game} · {last.lang}: {last.message}</>}
+              : <><Check size={15} color="var(--type-grass)" /> {gameLabel(last.game)} · {last.lang}: {last.message}</>}
           </p>
         )}
 

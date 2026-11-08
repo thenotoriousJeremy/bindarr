@@ -62,7 +62,7 @@ function NoteItem({ note, onSave, onTogglePin, onDelete }) {
         onChange={e => setBody(e.target.value)}
         onBlur={handleBodyBlur}
         rows={5}
-        style={{ resize: 'vertical', background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', color: 'var(--text-strong)', padding: '0.5rem', fontSize: '0.9rem', outline: 'none', fontFamily: 'inherit' }}
+        style={{ resize: 'vertical', background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', color: 'var(--text-strong)', padding: '0.5rem', fontSize: '0.9rem', outline: 'none', fontFamily: 'inherit' }}
       />
     </div>
   );

@@ -2,6 +2,8 @@ const axios = require('axios');
 const db = require('./db');
 const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
 const { parseSetList } = require('./utils/setQuery');
+const { rulesTextFields } = require('./utils/mtgRulesText');
+const scryfallSyntax = require('./utils/scryfallSyntax');
 const cardSearchSql = require('./utils/cardSearchSql');
 const languages = require('./utils/languages');
 const { cacheNormalizedCards } = require('./utils/cardCache');
@@ -186,6 +188,10 @@ const CACHE_AGE_LIMIT_MS = 1000 * 60 * 60 * 24 * 3; // 3 days
 // English adds nothing to the query: that is already Scryfall's default, and
 // staying on the exact old query string keeps the English path byte-identical.
 function langSearch(q, lang) {
+  // Scryfall syntax that names its own language (lang:ja, -lang:en) keeps it. The
+  // picker's language is not added on top; Scryfall is only told that non-English
+  // printings may come back.
+  if (lang === scryfallSyntax.QUERY_LANGUAGE) return { q, params: '&include_multilingual=true' };
   const code = languages.resolve(lang).scryfall;
   if (code === 'en') return { q, params: '' };
   return { q: `${q} lang:${code}`, params: '&include_multilingual=true' };
@@ -237,6 +243,11 @@ function normalizeCard(raw, lang) {
   // Scryfall returns when a card was never printed in the language asked for.
   const language = languages.toName(raw.lang || lang);
   const imgSrc = raw.image_uris || face.image_uris || {};
+  // The second face's own art, for flipping the card in the inspector (#103). Only
+  // when there is no top-level image: split, flip and adventure cards also carry
+  // card_faces, but they are one printed side and their faces share that image
+  // (same rule cardSets.mtgCardImages applies to scanning).
+  const backSrc = (!raw.image_uris && raw.card_faces?.[1]?.image_uris) || null;
   const typeLine = raw.type_line || face.type_line || '';
   const colors = raw.colors || face.colors || [];
   // The preferred currency first, then the other — and never a mix of the two in
@@ -276,8 +287,17 @@ function normalizeCard(raw, lang) {
   const [normal, foil] = quotes[currency];
   const cmc = raw.cmc != null ? parseFloat(raw.cmc) : null;
   const colorIdentity = raw.color_identity || face.color_identity || [];
+  // A multi-faced card carries its rules text per face, not at the top level, and a
+  // reversible card even its oracle id. The deck rules read both (shared/deckRules.mjs).
+  const faces = Array.isArray(raw.card_faces) ? raw.card_faces : [];
+  const oracleText = raw.oracle_text != null
+    ? raw.oracle_text
+    : faces.map(f => f.oracle_text || '').filter(Boolean).join('\n//\n');
 
   return {
+    // Type line, oracle text, cost, stats and keywords: what Scryfall syntax
+    // filters your own cards by (utils/mtgRulesText).
+    ...rulesTextFields(raw),
     id: `mtg-${raw.id}`,
     name: face.name || raw.name || '',
     // The card game itself lives in the dedicated `game` column; `supertype`
@@ -290,6 +310,7 @@ function normalizeCard(raw, lang) {
     set_name: raw.set_name || '',
     number: raw.collector_number || '',
     image_url: imgSrc.normal || imgSrc.large || imgSrc.small || '',
+    image_url_back: backSrc ? (backSrc.normal || backSrc.large || backSrc.small || null) : null,
     price_trend: normal != null ? normal : (foil != null ? foil : 0),
     price_normal: normal,
     price_holofoil: foil,
@@ -299,6 +320,10 @@ function normalizeCard(raw, lang) {
     price_avg30: null,
     cmc: cmc,
     color_identity: colorIdentity.map(c => COLOR_NAMES[c] || c),
+    // What every printing of this card shares — how a deck that accepts any printing
+    // recognises a copy of another one as the same card.
+    oracle_id: raw.oracle_id || faces.find(f => f.oracle_id)?.oracle_id || null,
+    oracle_text: oracleText,
     game: 'mtg',
     // Which printing this row IS. The quick-add form defaults the copy's language
     // to it, so adding a Japanese card no longer files it as English.
@@ -463,13 +488,61 @@ async function fetchWindow(q, lang, offset, limit, order) {
 // exist upstream in all (null when the answer came from cache, which has no
 // such count). Wrapping keeps the many early returns in the body unchanged.
 // Same options object as tcgApi/tcgdexApi — see the note there.
+// `syntax` is a parsed Scryfall-syntax query (utils/scryfallSyntax.forSearch),
+// which takes the place of `name` and is searched by runSyntaxSearch instead.
 async function searchCards({
   name = '', number = '', set = '', scope = 'database', userId = null,
-  lang = null, allPrints = false, page = 1, limit = 60,
+  lang = null, allPrints = false, page = 1, limit = 60, syntax = null,
 } = {}) {
   const meta = { total: null };
-  const cards = await runSearch(meta, name, number, set, scope, userId, lang, allPrints, page, limit);
+  const cards = syntax
+    ? await runSyntaxSearch(meta, syntax, { number, set, scope, userId, lang, page, limit })
+    : await runSearch(meta, name, number, set, scope, userId, lang, allPrints, page, limit);
   return { cards, total: meta.total };
+}
+
+// Scryfall syntax typed into the name box (t:creature c:g cmc<=3).
+//
+// Search & Add sends it to Scryfall intact, because Scryfall reads its own
+// syntax. It goes in parentheses, so the form's set, number and language terms AND
+// with the whole query; appended bare, `t:goblin or t:elf set:mh3` would have
+// bound the set to the elves alone. Your collection is something Scryfall cannot
+// see, so that scope (the deck builder's search) is answered from the cached rows
+// by the same evaluator the collection screen runs.
+//
+// None of runSearch's plain-name heuristics apply. There is no local LIKE lookup
+// (it cannot read syntax) and no first-word fallback (it would answer an empty
+// `t:goblin c:u` with every goblin). Results are not re-sorted by collector number
+// either: Scryfall's order, or the user's own order:, is the one asked for.
+async function runSyntaxSearch(meta, syntax, { number = '', set = '', scope, userId, lang, page = 1, limit = 60 }) {
+  const offset = (page - 1) * limit;
+  if (scope === 'collection') {
+    if (!userId) return [];
+    return scryfallSyntax.collectionMatches({ userId, syntax, limit, offset });
+  }
+  const cleanNumber = String(number || '').trim().replace(/^#/, '').split('/')[0].trim();
+  const q = scryfallSyntax.catalogQuery(syntax, {
+    setList: parseSetList(set),
+    // Scryfall stores "488", not "0488".
+    number: cleanNumber.replace(/^0+/, '') || cleanNumber,
+  });
+  try {
+    const { cards: raw, total } = await fetchWindow(q, syntax.ownLanguage ? scryfallSyntax.QUERY_LANGUAGE : lang, offset, limit);
+    if (total != null) meta.total = total;
+    const cards = raw.map(c => normalizeCard(c, lang));
+    await cacheCards(cards);
+    return cards;
+  } catch (err) {
+    const status = err.response && err.response.status;
+    // 404 = nothing matched; 422 = a page past the last one.
+    if (status === 404 || status === 422) return [];
+    // 400 = Scryfall read the query and refused it. That is about what the user
+    // typed, so pass on what Scryfall said instead of "the card API is down".
+    if (status === 400) throw await scryfallSyntax.upstreamRejected(err.response.data);
+    console.error('Scryfall syntax search failed:', err.message);
+    if (status === 429) throw new Error('RATE_LIMIT_EXCEEDED');
+    throw new Error('UPSTREAM_UNAVAILABLE');
+  }
 }
 
 // Search MTG cards: local card_cache first (game='mtg'), then Scryfall. Mirrors
@@ -492,10 +565,19 @@ async function runSearch(meta, nameQuery = '', numberQuery = '', setQuery = '', 
     try {
       // A set code narrows to that printing (exact, usually one result -> fast
       // path in the scanner); without it, return every printing to pick from.
-      const q = setList.length ? `!"${cleanName}" ${scrySet} unique:prints` : `!"${cleanName}" unique:prints`;
-      const raw = await fetchFromScryfall(q, lang);
+      // Digital-only printings are left out, as everywhere a physical copy is
+      // being identified: there is no card to own.
+      const q = setList.length ? `!"${cleanName}" ${scrySet} unique:prints -is:digital` : `!"${cleanName}" unique:prints -is:digital`;
+      // Every printing, not the first 60 of one page. Sol Ring and the basic lands
+      // have hundreds, so "Change printing" and the scanner's set picker never
+      // offered their older ones. fetchWindow walks has_more on the shared queue
+      // and 429 retry, capped at six pages: about three seconds at /cards/search's
+      // two requests a second. `total` says how many exist beyond the cap.
+      const PRINTS_CAP = 6 * SCRY_PAGE_SIZE;
+      const { cards: raw, total } = await fetchWindow(q, lang, 0, PRINTS_CAP);
       if (raw.length) {
-        const cards = raw.map(c => normalizeCard(c, lang)).slice(0, 60);
+        if (total != null) meta.total = total;
+        const cards = raw.map(c => normalizeCard(c, lang));
         await cacheCards(cards);
         return cards;
       }
@@ -689,11 +771,15 @@ async function fetchAndCacheSets(force = false) {
     const resp = await scryGet('/sets');
     const sets = (resp.data && resp.data.data) || [];
     for (const s of sets) {
+      // printed_total is what set completion counts to (routes/stats.js), so it is
+      // the size printed on the cards ("/303"), not card_count, which adds every
+      // showcase, borderless and promo variant numbered past it. Older sets print
+      // no total and fall back to the card count. `total` stays the card count.
       await db.run(
         `INSERT OR REPLACE INTO sets (id, name, series, printed_total, total, release_date, ptcgo_code, symbol_url, logo_url, game)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'mtg')`,
         [
-          `mtg-${s.code}`, s.name, s.set_type || '', s.card_count || 0, s.card_count || 0,
+          `mtg-${s.code}`, s.name, s.set_type || '', s.printed_size || s.card_count || 0, s.card_count || 0,
           s.released_at || '', s.code || '', s.icon_svg_uri || '', s.icon_svg_uri || ''
         ]
       );
@@ -744,9 +830,11 @@ async function updateCollectionPrices(force = false) {
       console.log(`MTG price update complete: ${pairs.length} priced, ${notFound} not found on Scryfall.`);
     } catch (e) {
       console.error('MTG price update failed:', e.message);
+      require('./notify').emit({ type: 'price_sweep_failed', source: 'scryfall', error: e.message });
     }
   } catch (err) {
     console.error('Error during MTG price update:', err.message);
+    require('./notify').emit({ type: 'price_sweep_failed', source: 'scryfall', error: err.message });
   }
 }
 

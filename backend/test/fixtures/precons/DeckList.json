@@ -1,0 +1,72 @@
+{
+  "meta": {
+    "date": "2026-11-06",
+    "version": "5.3.0+20261106"
+  },
+  "data": [
+    {
+      "code": "10E",
+      "fileName": "ArcanisSGuile_10E",
+      "name": "Arcanis's Guile",
+      "releaseDate": "2007-07-13",
+      "source": "http://www.wizards.com/magic/displaythemedeck.asp?set=tenthedition&decknum=2&lang=en",
+      "type": "Theme Deck"
+    },
+    {
+      "code": "DSC",
+      "fileName": "DeathToll_DSC",
+      "name": "Death Toll",
+      "releaseDate": "2024-09-27",
+      "source": "https://magic.wizards.com/en/news/announcements/duskmourn-house-of-horror-commander-decklists",
+      "type": "Commander Deck"
+    },
+    {
+      "code": "SLD",
+      "fileName": "20WaysToWin_SLD",
+      "name": "20 Ways to Win",
+      "releaseDate": "2024-12-04",
+      "source": "https://magic.wizards.com/en/news/announcements/secret-lair-commander-deck-20-ways-to-win-full-decklist",
+      "type": "Commander Deck"
+    },
+    {
+      "code": "SLD",
+      "fileName": "ABoxOfRocks_SLD",
+      "name": "A Box of Rocks",
+      "releaseDate": "2021-03-15",
+      "source": "https://secretlair.wizards.com/us/product/615019",
+      "type": "Secret Lair Drop"
+    },
+    {
+      "code": "SLD",
+      "fileName": "ABoxOfRocksFoilEdition_SLD",
+      "name": "A Box of Rocks Foil Edition",
+      "releaseDate": "2021-03-15",
+      "source": "https://secretlair.wizards.com/us/product/615022",
+      "type": "Secret Lair Drop"
+    },
+    {
+      "code": "SLD",
+      "fileName": "DandânDeck_SLD",
+      "name": "Dandân Deck",
+      "releaseDate": "2026-03-17",
+      "source": "https://secretlair.wizards.com/us/product/1249043",
+      "type": "Dandan Deck"
+    },
+    {
+      "code": "SLU",
+      "fileName": "HiddenPathways_SLU",
+      "name": "Hidden Pathways",
+      "releaseDate": "2021-05-07",
+      "source": "https://wpn.wizards.com/en/products/secret-lair-ultimate-edition-2?product=2wR1Lgr3MJp2SbzEgsv88",
+      "type": "Secret Lair Drop"
+    },
+    {
+      "code": "WOC",
+      "fileName": "VirtueAndValor_WOC",
+      "name": "Virtue and Valor",
+      "releaseDate": "2023-09-08",
+      "source": "https://magic.wizards.com/en/news/announcements/wilds-of-eldraine-commander-decklists",
+      "type": "Commander Deck"
+    }
+  ]
+}

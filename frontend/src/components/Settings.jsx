@@ -1,39 +1,74 @@
-import { useState, useEffect } from 'react';
-import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload, Eye, EyeOff, SlidersHorizontal, Info, Bug, Lightbulb, MessagesSquare, ScrollText, Github, Layers, Languages } from 'lucide-react';
-import { GAMES, enabledGames, setGameEnabled, gameOptions, defaultGame } from '../utils/games';
+import { useState, useEffect, lazy, Suspense } from 'react';
+import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload, Eye, EyeOff, SlidersHorizontal, Info, Bug, Lightbulb, MessagesSquare, ScrollText, Github, Layers, Languages, Smartphone, Server, PackageOpen } from 'lucide-react';
+import { GAMES, enabledGames, setGameEnabled, gameOptions, defaultGame, isGameEnabled } from '../utils/games';
+import RiotNotice from './RiotNotice';
 import { CURRENCIES, getCurrency, setCurrency } from '../utils/formatPrice';
 import { LOCALES, localeName, useT } from '../utils/i18n';
+import { apiErrorText } from '../utils/apiError';
 import { REPO_URL } from '../utils/repo';
+import { saveFile } from '../utils/saveFile';
+import NotificationSettings from './NotificationSettings';
+import { isDeviceMode } from '../apiBase';
+import InstanceSettings from './InstanceSettings';
+import PreconImportModal from './PreconImportModal';
+import NavTabsSettings from './NavTabsSettings';
+
+// Device mode only; a server-mode build never loads the download manager.
+const DeviceScanSetup = lazy(() => import('./DeviceScanSetup'));
 
 // One secret: what it is called, what it buys you, and where to get one. Three of
 // these replaced three near-identical panels, so a fourth provider is a few lines
 // rather than another screenful.
-function KeyField({ id, label, hint, link, linkLabel, value, onChange, disabled, placeholder, t }) {
+//
+// Write-only. The server says whether a key is set (`configured`), never what it
+// is, so the box is only ever for typing a NEW key, and leaving it empty leaves the
+// saved one alone. Clearing is its own button rather than "save an empty box",
+// which would make every untouched field a delete.
+function KeyField({ id, label, hint, link, linkLabel, configured, value, onChange, onClear, disabled, placeholder, t }) {
   const [shown, setShown] = useState(false);
   return (
     <div className="form-group" style={{ marginBottom: 0 }}>
-      <label htmlFor={id}>{label}</label>
-      <div style={{ position: 'relative' }}>
-        <input
-          id={id}
-          type={shown ? 'text' : 'password'}
-          autoComplete="off"
-          className="input-control"
-          placeholder={placeholder}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          style={{ fontFamily: 'monospace', paddingRight: '2.4rem', width: '100%' }}
-        />
-        <button
-          type="button"
-          onClick={() => setShown((v) => !v)}
-          aria-label={t(shown ? 'settings.hideApiKey' : 'settings.showApiKey')}
-          title={t(shown ? 'settings.hideApiKey' : 'settings.showApiKey')}
-          style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
-        >
-          {shown ? <EyeOff size={16} /> : <Eye size={16} />}
-        </button>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '0.5rem' }}>
+        <label htmlFor={id}>{label}</label>
+        <span style={{ fontSize: '0.72rem', fontWeight: 600, color: configured ? 'var(--accent-yellow)' : 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap' }}>
+          {configured && <Check size={12} />}
+          {t(configured ? 'settings.keyConfigured' : 'settings.keyNotSet')}
+        </span>
+      </div>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+        <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+          <input
+            id={id}
+            type={shown ? 'text' : 'password'}
+            autoComplete="off"
+            className="input-control"
+            placeholder={configured ? t('settings.keyReplacePlaceholder') : placeholder}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={disabled}
+            style={{ fontFamily: 'monospace', paddingRight: '2.4rem', width: '100%' }}
+          />
+          <button
+            type="button"
+            onClick={() => setShown((v) => !v)}
+            aria-label={t(shown ? 'settings.hideApiKey' : 'settings.showApiKey')}
+            title={t(shown ? 'settings.hideApiKey' : 'settings.showApiKey')}
+            style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
+          >
+            {shown ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
+        {configured && (
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onClear}
+            disabled={disabled}
+            style={{ padding: '0.5rem 0.9rem', fontSize: '0.8rem', flexShrink: 0 }}
+          >
+            {t('settings.keyClear')}
+          </button>
+        )}
       </div>
       {/* The link carries a whole clause rather than sitting mid-sentence: a
           translator gets two complete units instead of two fragments whose order
@@ -48,8 +83,11 @@ function KeyField({ id, label, hint, link, linkLabel, value, onChange, disabled,
   );
 }
 
-function Settings({ user, onUpdateUser, showToast }) {
+function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
   const { locale, setLocale, t } = useT();
+  // Device mode (no server): sharing, passwords and the read-only API key all
+  // exist for other people or other machines, so their panels are left out.
+  const deviceMode = isDeviceMode();
   const [currentPassword, setCurrentPassword] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -60,11 +98,16 @@ function Settings({ user, onUpdateUser, showToast }) {
   const [shareLoading, setShareLoading] = useState(false);
   const [containers, setContainers] = useState([]);
 
-  const [tcgApiKey, setTcgApiKey] = useState(user?.tcg_api_key || '');
-  const [psaToken, setPsaToken] = useState(user?.psa_api_token || '');
-  const [gradedKey, setGradedKey] = useState(user?.graded_price_api_key || '');
+  // New values typed for the provider keys, not the saved ones -- the server never
+  // sends those (see KeyField). Empty means "keep what is saved".
+  const [tcgApiKey, setTcgApiKey] = useState('');
+  const [psaToken, setPsaToken] = useState('');
+  const [gradedKey, setGradedKey] = useState('');
   const [keysLoading, setKeysLoading] = useState(false);
-  const [accessKey, setAccessKey] = useState(user?.api_key || '');
+  // The read-only API key, held here only once fetched on request (or just made):
+  // the stored user object knows only that one exists.
+  const hasAccessKey = !!user?.has_api_key;
+  const [accessKey, setAccessKey] = useState('');
   const [showAccessKey, setShowAccessKey] = useState(false);
   const [accessKeyLoading, setAccessKeyLoading] = useState(false);
 
@@ -76,6 +119,7 @@ function Settings({ user, onUpdateUser, showToast }) {
   const [shownGames, setShownGames] = useState(() => enabledGames());
 
   const [versionInfo, setVersionInfo] = useState(null);
+  const [showPrecons, setShowPrecons] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [backendReachable, setBackendReachable] = useState(true);
 
@@ -170,22 +214,66 @@ function Settings({ user, onUpdateUser, showToast }) {
     return `${REPO_URL}/issues/new?labels=enhancement&title=${encodeURIComponent('[Feature] ')}&body=${encodeURIComponent(body)}`;
   };
 
+  // A full backup (GET /api/backup): the whole account, not a card list. Restoring
+  // one is also how a collection moves between installs, a phone's included.
+  const handleFullBackup = async () => {
+    try {
+      const response = await fetch('/api/backup');
+      if (!response.ok) {
+        showToast(t('settings.errExport'));
+        return;
+      }
+      await saveFile(await response.blob(), `bindarr_backup_${new Date().toISOString().slice(0, 10)}.json`);
+    } catch (err) {
+      console.error(err);
+      showToast(t('settings.errExportGeneric'));
+    }
+  };
+
+  const restoreBackup = async (backup, fileName) => {
+    if (!window.confirm(t('settings.confirmRestore', { file: fileName }))) return;
+    showToast(t('settings.restoring'));
+    try {
+      const response = await fetch('/api/backup/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backup }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (response.ok) {
+        showToast(t('settings.restoreOk', { cards: result.cards, locations: result.locations, decks: result.decks }));
+      } else {
+        showToast(t('settings.restoreFailed', { error: result.error || t('settings.unknownError') }));
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(t('settings.restoreFailed', { error: err.message }));
+    }
+  };
+
   const handleImportFile = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
-    if (!window.confirm(t('settings.confirmImport', { file: file.name }))) {
-      e.target.value = '';
-      return;
-    }
+    e.target.value = '';
 
     const reader = new FileReader();
     const isJson = file.name.endsWith('.json');
     const format = isJson ? 'json' : (file.name.endsWith('.txt') ? 'manabox' : 'csv');
 
     reader.onload = async (event) => {
+      const fileData = event.target.result;
+      // The one Import button takes full backups too: they announce themselves,
+      // and they restore rather than merge, so they get their own warning.
+      if (isJson) {
+        let parsed = null;
+        try { parsed = JSON.parse(fileData); } catch { /* the import route reports it */ }
+        if (parsed && parsed.format === 'bindarr-backup') {
+          await restoreBackup(parsed, file.name);
+          return;
+        }
+      }
+      if (!window.confirm(t('settings.confirmImport', { file: file.name }))) return;
       try {
-        const fileData = event.target.result;
         showToast(t('settings.importing'));
         const response = await fetch('/api/import', {
           method: 'POST',
@@ -200,7 +288,7 @@ function Settings({ user, onUpdateUser, showToast }) {
         if (response.ok) {
           showToast(result.message || t('settings.importOk'));
         } else {
-          showToast(t('settings.importFailed', { error: result.error || t('settings.unknownError') }));
+          showToast(t('settings.importFailed', { error: apiErrorText(t, result, 'settings.unknownError') }));
         }
       } catch (err) {
         console.error(err);
@@ -213,7 +301,6 @@ function Settings({ user, onUpdateUser, showToast }) {
     };
 
     reader.readAsText(file);
-    e.target.value = null;
   };
 
   // Containers to offer share links for. Only fetched once both share toggles are
@@ -230,10 +317,6 @@ function Settings({ user, onUpdateUser, showToast }) {
     if (user) {
       setShareEnabled(user.share_enabled === 1 || user.share_enabled === true);
       setShareLocations(user.share_locations === 1 || user.share_locations === true);
-      setTcgApiKey(user.tcg_api_key || '');
-      setPsaToken(user.psa_api_token || '');
-      setGradedKey(user.graded_price_api_key || '');
-      setAccessKey(user.api_key || '');
     }
   }, [user]);
 
@@ -267,7 +350,7 @@ function Settings({ user, onUpdateUser, showToast }) {
         setConfirmPassword('');
       } else {
         const data = await response.json();
-        showToast(data.error || t('settings.errPasswordUpdate'));
+        showToast(apiErrorText(t, data, 'settings.errPasswordUpdate'));
       }
     } catch (err) {
       console.error(err);
@@ -284,15 +367,7 @@ function Settings({ user, onUpdateUser, showToast }) {
         showToast(t('settings.errExport'));
         return;
       }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `bindarr_collection.${format === 'json' ? 'json' : 'csv'}`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      await saveFile(await response.blob(), `bindarr_collection.${format === 'json' ? 'json' : 'csv'}`);
     } catch (err) {
       console.error(err);
       showToast(t('settings.errExportGeneric'));
@@ -380,26 +455,28 @@ function Settings({ user, onUpdateUser, showToast }) {
     }
   };
 
-  // All three provider keys in one PUT. They are independent services, but they
-  // are set up in one sitting and the settings route takes them together, so three
-  // buttons only ever meant three chances to save two of them.
-  const handleSaveKeys = async (e) => {
-    e.preventDefault();
+  // One PUT for the provider keys. The keys are write-only, so it carries only the
+  // ones typed into: an empty box means "keep the saved key", not "delete it".
+  const typedKeys = Object.fromEntries(
+    [['tcg_api_key', tcgApiKey], ['psa_api_token', psaToken], ['graded_price_api_key', gradedKey]]
+      .filter(([, value]) => value.trim())
+  );
+  const putKeys = async (keys, okMessage) => {
     setKeysLoading(true);
     try {
       const response = await fetch('/api/auth/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tcg_api_key: tcgApiKey,
-          psa_api_token: psaToken,
-          graded_price_api_key: gradedKey
-        })
+        body: JSON.stringify(keys)
       });
       const data = await response.json().catch(() => null);
       if (response.ok) {
         onUpdateUser(data.user);
-        showToast(t('settings.keysUpdated'));
+        // Typed keys are saved now; the boxes go back to "replace".
+        if ('tcg_api_key' in keys) setTcgApiKey('');
+        if ('psa_api_token' in keys) setPsaToken('');
+        if ('graded_price_api_key' in keys) setGradedKey('');
+        showToast(t(okMessage));
       } else {
         showToast(data?.error || t('settings.errKeys'));
       }
@@ -411,10 +488,45 @@ function Settings({ user, onUpdateUser, showToast }) {
     }
   };
 
+  const handleSaveKeys = (e) => {
+    e.preventDefault();
+    if (Object.keys(typedKeys).length) putKeys(typedKeys, 'settings.keysUpdated');
+  };
+
+  // Removing a key is deliberate, and it cannot be undone from here -- the saved
+  // value is not shown anywhere to copy back.
+  const handleClearKey = (field) => {
+    if (!window.confirm(t('settings.keyConfirmClear'))) return;
+    putKeys({ [field]: '' }, 'settings.keyCleared');
+  };
+
+  // Show or hide the read-only API key. Fetched only when asked for, and kept in
+  // this component's state: the user object App stores knows only has_api_key.
+  const toggleAccessKey = async () => {
+    if (showAccessKey) { setShowAccessKey(false); return; }
+    if (accessKey) { setShowAccessKey(true); return; }
+    setAccessKeyLoading(true);
+    try {
+      const response = await fetch('/api/auth/api-key');
+      const data = await response.json().catch(() => null);
+      if (response.ok && data?.api_key) {
+        setAccessKey(data.api_key);
+        setShowAccessKey(true);
+      } else {
+        showToast(data?.error || t('settings.errAccessKey'));
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(t('settings.errAccessKey'));
+    } finally {
+      setAccessKeyLoading(false);
+    }
+  };
+
   // Create/rotate/revoke the read-only API key. Rotating and revoking both break
   // whatever is already using the old key, so both ask first.
   const handleAccessKey = async (action) => {
-    if (action === 'create' && accessKey && !window.confirm(t('settings.accessConfirmRotate'))) return;
+    if (action === 'create' && hasAccessKey && !window.confirm(t('settings.accessConfirmRotate'))) return;
     if (action === 'revoke' && !window.confirm(t('settings.accessConfirmRevoke'))) return;
     setAccessKeyLoading(true);
     try {
@@ -424,7 +536,7 @@ function Settings({ user, onUpdateUser, showToast }) {
         const next = action === 'revoke' ? '' : (data?.api_key || '');
         setAccessKey(next);
         setShowAccessKey(action !== 'revoke');
-        onUpdateUser({ ...user, api_key: next });
+        onUpdateUser({ ...user, has_api_key: !!next });
         showToast(t(action === 'revoke' ? 'settings.accessRevoked' : 'settings.accessCreated'));
       } else {
         showToast(data?.error || t('settings.errAccessKey'));
@@ -460,272 +572,311 @@ function Settings({ user, onUpdateUser, showToast }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+      {showPrecons && <PreconImportModal onClose={() => setShowPrecons(false)} showToast={showToast} />}
       {/* Title Panel */}
       <div className="glass-panel">
         <h2 style={{ fontSize: '1.25rem', color: 'var(--text-strong)' }}>{t('settings.title')}</h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{t('settings.subtitle')}</p>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{t(deviceMode ? 'settings.subtitleDevice' : 'settings.subtitle')}</p>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }} className="settings-grid">
-        {/* Sharing Panel */}
-        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
-            <Share2 size={20} style={{ color: 'var(--accent-red)' }} />
-            <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>{t('settings.sharingTitle')}</h3>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-            <div>
-              <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.95rem' }}>{t('settings.shareLibrary')}</div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{t('settings.shareLibraryHint')}</div>
+        {/* Device mode: where the collection lives, and the way back to a server. */}
+        {deviceMode && (
+          <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
+              <Smartphone size={20} style={{ color: 'var(--accent-red)' }} />
+              <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>{t('settings.deviceTitle')}</h3>
             </div>
-            <label className="switch-control" style={{ position: 'relative', display: 'inline-block', width: '46px', height: '24px' }}>
-              <input 
-                type="checkbox" 
-                checked={shareEnabled} 
-                onChange={(e) => handleShareToggle(e.target.checked)}
-                disabled={shareLoading}
-                style={{ opacity: 0, width: 0, height: 0 }}
-              />
-              <span className={`switch-slider ${shareEnabled ? 'active' : ''}`} style={{
-                position: 'absolute',
-                cursor: 'pointer',
-                top: 0, left: 0, right: 0, bottom: 0,
-                backgroundColor: shareEnabled ? 'var(--type-grass)' : '#334155',
-                transition: '0.3s',
-                borderRadius: '24px'
-              }}>
-                <span style={{
-                  position: 'absolute',
-                  height: '18px', width: '18px',
-                  left: shareEnabled ? '24px' : '4px',
-                  bottom: '3px',
-                  backgroundColor: '#fff',
-                  transition: '0.3s',
-                  borderRadius: '50%',
-                  boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
-                }}></span>
-              </span>
-            </label>
+            <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-glass)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.5', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <span>{t('settings.deviceIntro')}</span>
+              <span>{t('settings.deviceBackupHint')}</span>
+              <span>{t('settings.deviceLimits')}</span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => { if (window.confirm(t('settings.deviceConfirmLeave'))) onLeaveDevice(); }}
+              style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
+            >
+              <Server size={14} />
+              <span>{t('settings.deviceConnectServer')}</span>
+            </button>
           </div>
+        )}
 
-          {shareEnabled && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem' }}>
-              
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>{t('settings.linkCollection')}</label>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <input 
-                    type="text" 
-                    className="input-control" 
-                    value={shareUrl} 
-                    readOnly 
-                    style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)', cursor: 'default' }}
-                  />
-                  <button className="btn btn-secondary" onClick={() => copyToClipboard(shareUrl, 'collection')} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap' }}>
-                    {copiedType === 'collection' ? <Check size={14} style={{ color: 'var(--type-grass)' }} /> : <Clipboard size={14} />}
-                    <span>{t('settings.copy')}</span>
-                  </button>
-                </div>
+        {deviceMode && (
+          <Suspense fallback={null}>
+            <DeviceScanSetup showToast={showToast} />
+          </Suspense>
+        )}
+
+        {deviceMode && <InstanceSettings showToast={showToast} deviceMode />}
+
+        {/* Sharing Panel */}
+        {!deviceMode && (
+          <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
+              <Share2 size={20} style={{ color: 'var(--accent-red)' }} />
+              <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>{t('settings.sharingTitle')}</h3>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+              <div>
+                <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.95rem' }}>{t('settings.shareLibrary')}</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{t('settings.shareLibraryHint')}</div>
               </div>
-
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>{t('settings.linkTrade')}</label>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <input 
-                    type="text" 
-                    className="input-control" 
-                    value={tradeUrl} 
-                    readOnly 
-                    style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)', cursor: 'default' }}
-                  />
-                  <button className="btn btn-secondary" onClick={() => copyToClipboard(tradeUrl, 'trade')} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap' }}>
-                    {copiedType === 'trade' ? <Check size={14} style={{ color: 'var(--type-grass)' }} /> : <Clipboard size={14} />}
-                    <span>{t('settings.copy')}</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>{t('settings.linkWishlist')}</label>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <input 
-                    type="text" 
-                    className="input-control" 
-                    value={wishlistUrl} 
-                    readOnly 
-                    style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)', cursor: 'default' }}
-                  />
-                  <button className="btn btn-secondary" onClick={() => copyToClipboard(wishlistUrl, 'wishlist')} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap' }}>
-                    {copiedType === 'wishlist' ? <Check size={14} style={{ color: 'var(--type-grass)' }} /> : <Clipboard size={14} />}
-                    <span>{t('settings.copy')}</span>
-                  </button>
-                </div>
-              </div>
-
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                {/* The three query strings go in as placeholders rather than as
-                    <code> elements: that keeps the sentence one translatable unit
-                    and stops a translator from accidentally localising a URL. */}
-                💡 <strong>{t('settings.tipLabel')}</strong> {t('settings.themeTip', {
-                  theme: activeTheme,
-                  lcars: '?theme=lcars',
-                  light: '?theme=light',
-                  dark: '?theme=dark',
-                })}
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                <div>
-                  <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.95rem' }}>{t('settings.showLocations')}</div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{t('settings.showLocationsHint')}</div>
-                </div>
-                <label className="switch-control" style={{ position: 'relative', display: 'inline-block', width: '46px', height: '24px' }}>
-                  <input
-                    type="checkbox"
-                    checked={shareLocations}
-                    onChange={(e) => handleLocationsToggle(e.target.checked)}
-                    disabled={shareLoading}
-                    style={{ opacity: 0, width: 0, height: 0 }}
-                  />
-                  <span className={`switch-slider ${shareLocations ? 'active' : ''}`} style={{
+              <label className="switch-control" style={{ position: 'relative', display: 'inline-block', width: '46px', height: '24px' }}>
+                <input 
+                  type="checkbox" 
+                  checked={shareEnabled} 
+                  aria-label={t('settings.shareLibrary')}
+                  onChange={(e) => handleShareToggle(e.target.checked)}
+                  disabled={shareLoading}
+                  style={{ opacity: 0, width: 0, height: 0 }}
+                />
+                <span className={`switch-slider ${shareEnabled ? 'active' : ''}`} style={{
+                  position: 'absolute',
+                  cursor: 'pointer',
+                  top: 0, left: 0, right: 0, bottom: 0,
+                  backgroundColor: shareEnabled ? 'var(--type-grass)' : '#334155',
+                  transition: '0.3s',
+                  borderRadius: '24px'
+                }}>
+                  <span style={{
                     position: 'absolute',
-                    cursor: 'pointer',
-                    top: 0, left: 0, right: 0, bottom: 0,
-                    backgroundColor: shareLocations ? 'var(--type-grass)' : '#334155',
+                    height: '18px', width: '18px',
+                    left: shareEnabled ? '24px' : '4px',
+                    bottom: '3px',
+                    backgroundColor: '#fff',
                     transition: '0.3s',
-                    borderRadius: '24px'
-                  }}>
-                    <span style={{
-                      position: 'absolute',
-                      height: '18px', width: '18px',
-                      left: shareLocations ? '24px' : '4px',
-                      bottom: '3px',
-                      backgroundColor: '#fff',
-                      transition: '0.3s',
-                      borderRadius: '50%',
-                      boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
-                    }}></span>
-                  </span>
-                </label>
-              </div>
+                    borderRadius: '50%',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
+                  }}></span>
+                </span>
+              </label>
+            </div>
 
-              {/* A container link opens that binder or box as itself — pockets
-                  and pages, or box rows — rather than as a flat card list, which
-                  is why it needs the locations toggle above to be on. */}
-              {shareLocations && containers.length > 0 && (
+            {shareEnabled && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem' }}>
+              
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label>{t('settings.linkContainer')}</label>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                    {containers.map(loc => (
-                      <div key={loc.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {loc.name}
-                        </span>
-                        <button
-                          className="btn btn-secondary"
-                          onClick={() => copyToClipboard(`${origin}/share/${user?.share_token}?container=${loc.id}${themeQuery}`, `container-${loc.id}`, 'container')}
-                          style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap' }}
-                        >
-                          {copiedType === `container-${loc.id}` ? <Check size={14} style={{ color: 'var(--type-grass)' }} /> : <Clipboard size={14} />}
-                          <span>{t('settings.copy')}</span>
-                        </button>
-                      </div>
-                    ))}
+                  <label>{t('settings.linkCollection')}</label>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <input 
+                      type="text" 
+                      className="input-control" 
+                      value={shareUrl} 
+                      readOnly 
+                      style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)', cursor: 'default' }}
+                    />
+                    <button className="btn btn-secondary" onClick={() => copyToClipboard(shareUrl, 'collection')} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap' }}>
+                      {copiedType === 'collection' ? <Check size={14} style={{ color: 'var(--type-grass)' }} /> : <Clipboard size={14} />}
+                      <span>{t('settings.copy')}</span>
+                    </button>
                   </div>
                 </div>
-              )}
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-                <button
-                  className="btn btn-secondary"
-                  onClick={handleRegenerateToken}
-                  disabled={shareLoading}
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
-                >
-                  <RefreshCw size={12} className={shareLoading ? 'spin-animation' : ''} />
-                  <span>{t('settings.regenerateLink')}</span>
-                </button>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label>{t('settings.linkTrade')}</label>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <input 
+                      type="text" 
+                      className="input-control" 
+                      value={tradeUrl} 
+                      readOnly 
+                      style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)', cursor: 'default' }}
+                    />
+                    <button className="btn btn-secondary" onClick={() => copyToClipboard(tradeUrl, 'trade')} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap' }}>
+                      {copiedType === 'trade' ? <Check size={14} style={{ color: 'var(--type-grass)' }} /> : <Clipboard size={14} />}
+                      <span>{t('settings.copy')}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label>{t('settings.linkWishlist')}</label>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <input 
+                      type="text" 
+                      className="input-control" 
+                      value={wishlistUrl} 
+                      readOnly 
+                      style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)', cursor: 'default' }}
+                    />
+                    <button className="btn btn-secondary" onClick={() => copyToClipboard(wishlistUrl, 'wishlist')} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap' }}>
+                      {copiedType === 'wishlist' ? <Check size={14} style={{ color: 'var(--type-grass)' }} /> : <Clipboard size={14} />}
+                      <span>{t('settings.copy')}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                  {/* The three query strings go in as placeholders rather than as
+                      <code> elements: that keeps the sentence one translatable unit
+                      and stops a translator from accidentally localising a URL. */}
+                  💡 <strong>{t('settings.tipLabel')}</strong> {t('settings.themeTip', {
+                    theme: activeTheme,
+                    lcars: '?theme=lcars',
+                    light: '?theme=light',
+                    dark: '?theme=dark',
+                  })}
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.95rem' }}>{t('settings.showLocations')}</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{t('settings.showLocationsHint')}</div>
+                  </div>
+                  <label className="switch-control" style={{ position: 'relative', display: 'inline-block', width: '46px', height: '24px' }}>
+                    <input
+                      type="checkbox"
+                      checked={shareLocations}
+                      aria-label={t('settings.showLocations')}
+                      onChange={(e) => handleLocationsToggle(e.target.checked)}
+                      disabled={shareLoading}
+                      style={{ opacity: 0, width: 0, height: 0 }}
+                    />
+                    <span className={`switch-slider ${shareLocations ? 'active' : ''}`} style={{
+                      position: 'absolute',
+                      cursor: 'pointer',
+                      top: 0, left: 0, right: 0, bottom: 0,
+                      backgroundColor: shareLocations ? 'var(--type-grass)' : '#334155',
+                      transition: '0.3s',
+                      borderRadius: '24px'
+                    }}>
+                      <span style={{
+                        position: 'absolute',
+                        height: '18px', width: '18px',
+                        left: shareLocations ? '24px' : '4px',
+                        bottom: '3px',
+                        backgroundColor: '#fff',
+                        transition: '0.3s',
+                        borderRadius: '50%',
+                        boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
+                      }}></span>
+                    </span>
+                  </label>
+                </div>
+
+                {/* A container link opens that binder or box as itself — pockets
+                    and pages, or box rows — rather than as a flat card list, which
+                    is why it needs the locations toggle above to be on. */}
+                {shareLocations && containers.length > 0 && (
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label>{t('settings.linkContainer')}</label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                      {containers.map(loc => (
+                        <div key={loc.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {loc.name}
+                          </span>
+                          <button
+                            className="btn btn-secondary"
+                            onClick={() => copyToClipboard(`${origin}/share/${user?.share_token}?container=${loc.id}${themeQuery}`, `container-${loc.id}`, 'container')}
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap' }}
+                          >
+                            {copiedType === `container-${loc.id}` ? <Check size={14} style={{ color: 'var(--type-grass)' }} /> : <Clipboard size={14} />}
+                            <span>{t('settings.copy')}</span>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={handleRegenerateToken}
+                    disabled={shareLoading}
+                    style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
+                  >
+                    <RefreshCw size={12} className={shareLoading ? 'spin-animation' : ''} />
+                    <span>{t('settings.regenerateLink')}</span>
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {!shareEnabled && (
-            <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(255, 71, 71, 0.05)', border: '1px solid rgba(255,71,71,0.1)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-              <ShieldAlert size={16} style={{ color: 'var(--accent-red)', flexShrink: 0 }} />
-              <span>{t('settings.privateNotice')}</span>
-            </div>
-          )}
-        </div>
+            {!shareEnabled && (
+              <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(255, 71, 71, 0.05)', border: '1px solid rgba(255,71,71,0.1)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                <ShieldAlert size={16} style={{ color: 'var(--accent-red)', flexShrink: 0 }} />
+                <span>{t('settings.privateNotice')}</span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Change Password Panel */}
-        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
-            <KeyRound size={20} style={{ color: 'var(--accent-yellow)' }} />
-            <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>{t('settings.securityTitle')}</h3>
+        {!deviceMode && (
+          <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
+              <KeyRound size={20} style={{ color: 'var(--accent-yellow)' }} />
+              <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>{t('settings.securityTitle')}</h3>
+            </div>
+
+            <form onSubmit={handlePasswordChange} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label htmlFor="current-password">{t('settings.currentPassword')}</label>
+                <input
+                  id="current-password"
+                  type="password"
+                  name="current-password"
+                  autoComplete="current-password"
+                  className="input-control"
+                  placeholder={t('settings.currentPasswordPlaceholder')}
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  required
+                  disabled={passwordLoading}
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label htmlFor="settings-new-password">{t('settings.newPassword')}</label>
+                <input
+                  id="settings-new-password"
+                  type="password"
+                  name="new-password"
+                  autoComplete="new-password"
+                  className="input-control"
+                  placeholder={t('settings.newPasswordPlaceholder', { count: 8 })}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  disabled={passwordLoading}
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label htmlFor="settings-confirm-password">{t('login.confirmPassword')}</label>
+                <input
+                  id="settings-confirm-password"
+                  type="password"
+                  name="confirm-password"
+                  autoComplete="new-password"
+                  className="input-control"
+                  placeholder={t('login.confirmPasswordPlaceholder')}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required
+                  disabled={passwordLoading}
+                />
+              </div>
+
+              <button 
+                type="submit" 
+                className="btn btn-primary" 
+                disabled={passwordLoading}
+                style={{ padding: '0.6rem 1.2rem', alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+              >
+                {passwordLoading ? (
+                  <div className="spinner" style={{ width: '14px', height: '14px', margin: 0, borderWidth: '2px' }}></div>
+                ) : t('settings.updatePassword')}
+              </button>
+            </form>
           </div>
-
-          <form onSubmit={handlePasswordChange} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label htmlFor="current-password">{t('settings.currentPassword')}</label>
-              <input
-                id="current-password"
-                type="password"
-                name="current-password"
-                autoComplete="current-password"
-                className="input-control"
-                placeholder={t('settings.currentPasswordPlaceholder')}
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                required
-                disabled={passwordLoading}
-              />
-            </div>
-
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label htmlFor="settings-new-password">{t('settings.newPassword')}</label>
-              <input
-                id="settings-new-password"
-                type="password"
-                name="new-password"
-                autoComplete="new-password"
-                className="input-control"
-                placeholder={t('settings.newPasswordPlaceholder', { count: 8 })}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                disabled={passwordLoading}
-              />
-            </div>
-
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label htmlFor="settings-confirm-password">{t('login.confirmPassword')}</label>
-              <input
-                id="settings-confirm-password"
-                type="password"
-                name="confirm-password"
-                autoComplete="new-password"
-                className="input-control"
-                placeholder={t('login.confirmPasswordPlaceholder')}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                disabled={passwordLoading}
-              />
-            </div>
-
-            <button 
-              type="submit" 
-              className="btn btn-primary" 
-              disabled={passwordLoading}
-              style={{ padding: '0.6rem 1.2rem', alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-            >
-              {passwordLoading ? (
-                <div className="spinner" style={{ width: '14px', height: '14px', margin: 0, borderWidth: '2px' }}></div>
-              ) : t('settings.updatePassword')}
-            </button>
-          </form>
-        </div>
+        )}
 
         {/* Every key in one panel. These were four panels — four headers, four
             bordered intro boxes, four save buttons — for what is three text inputs
@@ -744,24 +895,27 @@ function Settings({ user, onUpdateUser, showToast }) {
             <KeyField
               id="settings-tcg-api-key" label={t('settings.apiKeyTitle')} hint={t('settings.apiKeyIntro')}
               link="https://dev.pokemontcg.io" linkLabel={t('settings.apiKeyGetOne')}
+              configured={!!user?.has_tcg_api_key} onClear={() => handleClearKey('tcg_api_key')}
               value={tcgApiKey} onChange={setTcgApiKey} disabled={keysLoading} t={t}
               placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
             />
             <KeyField
               id="settings-psa-token" label={t('settings.psaTokenTitle')} hint={t('settings.psaTokenIntro')}
               link="https://www.psacard.com/publicapi/documentation" linkLabel={t('settings.psaTokenGetOne')}
+              configured={!!user?.has_psa_api_token} onClear={() => handleClearKey('psa_api_token')}
               value={psaToken} onChange={setPsaToken} disabled={keysLoading} t={t}
             />
             <KeyField
               id="settings-graded-key" label={t('settings.gradedKeyTitle')} hint={t('settings.gradedKeyIntro')}
               link="https://www.pokemonpricetracker.com/api" linkLabel={t('settings.gradedKeyGetOne')}
+              configured={!!user?.has_graded_price_api_key} onClear={() => handleClearKey('graded_price_api_key')}
               value={gradedKey} onChange={setGradedKey} disabled={keysLoading} t={t}
             />
 
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={keysLoading}
+              disabled={keysLoading || !Object.keys(typedKeys).length}
               style={{ padding: '0.6rem 1.2rem', alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
             >
               {keysLoading ? (
@@ -771,71 +925,80 @@ function Settings({ user, onUpdateUser, showToast }) {
           </form>
 
           {/* The one key that points the other way: not a credential Bindarr uses
-              to reach a service, but one something else uses to read Bindarr. Shown
-              in full rather than once-at-creation — read-only is what makes that
-              acceptable, and a write-once secret is one people rotate repeatedly
-              until they manage to catch it. */}
-          <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label htmlFor="settings-access-key">{t('settings.accessTitle')}</label>
-              {accessKey ? (
-                <div style={{ position: 'relative' }}>
-                  <input
-                    id="settings-access-key"
-                    type={showAccessKey ? 'text' : 'password'}
-                    readOnly
-                    className="input-control"
-                    value={accessKey}
-                    onClick={(e) => e.target.select()}
-                    style={{ fontFamily: 'monospace', paddingRight: '2.4rem', width: '100%' }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowAccessKey((v) => !v)}
-                    aria-label={t(showAccessKey ? 'settings.hideApiKey' : 'settings.showApiKey')}
-                    title={t(showAccessKey ? 'settings.hideApiKey' : 'settings.showApiKey')}
-                    style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
-                  >
-                    {showAccessKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                  </button>
+              to reach a service, but one something else uses to read Bindarr. It
+              can be shown again rather than only once at creation — read-only is
+              what makes that acceptable, and a write-once secret is one people
+              rotate repeatedly until they manage to catch it. Shown on request
+              only, though: it is fetched when the eye is pressed and lives in this
+              component, never in the user object App keeps in localStorage. */}
+          {!deviceMode && (
+            <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label htmlFor="settings-access-key">{t('settings.accessTitle')}</label>
+                {hasAccessKey ? (
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      id="settings-access-key"
+                      type="text"
+                      readOnly
+                      className="input-control"
+                      value={showAccessKey ? accessKey : ''}
+                      placeholder="bnd_••••••••••••••••••••••••"
+                      onClick={(e) => e.target.select()}
+                      style={{ fontFamily: 'monospace', paddingRight: '2.4rem', width: '100%' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={toggleAccessKey}
+                      disabled={accessKeyLoading}
+                      aria-label={t(showAccessKey ? 'settings.hideApiKey' : 'settings.showApiKey')}
+                      title={t(showAccessKey ? 'settings.hideApiKey' : 'settings.showApiKey')}
+                      style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
+                    >
+                      {showAccessKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{t('settings.accessNone')}</div>
+                )}
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: 1.45 }}>
+                  {t('settings.accessIntro')} {t('settings.accessNetWorth')}
                 </div>
-              ) : (
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{t('settings.accessNone')}</div>
-              )}
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: 1.45 }}>
-                {t('settings.accessIntro')} {t('settings.accessNetWorth')}
+                <pre style={{ margin: '0.4rem 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                  {`curl -H "Authorization: Bearer ${(showAccessKey && accessKey) || '<key>'}" ${origin}/api/stats/networth`}
+                </pre>
               </div>
-              <pre style={{ margin: '0.4rem 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                {`curl -H "Authorization: Bearer ${accessKey || '<key>'}" ${origin}/api/stats/networth`}
-              </pre>
-            </div>
 
-            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={accessKeyLoading}
-                onClick={() => handleAccessKey('create')}
-                style={{ padding: '0.5rem 1rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-              >
-                {accessKeyLoading ? (
-                  <div className="spinner" style={{ width: '14px', height: '14px', margin: 0, borderWidth: '2px' }}></div>
-                ) : t(accessKey ? 'settings.accessRotate' : 'settings.accessCreate')}
-              </button>
-              {accessKey && (
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                 <button
                   type="button"
                   className="btn btn-secondary"
                   disabled={accessKeyLoading}
-                  onClick={() => handleAccessKey('revoke')}
-                  style={{ padding: '0.5rem 1rem', fontSize: '0.8rem' }}
+                  onClick={() => handleAccessKey('create')}
+                  style={{ padding: '0.5rem 1rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                 >
-                  {t('settings.accessRevoke')}
+                  {accessKeyLoading ? (
+                    <div className="spinner" style={{ width: '14px', height: '14px', margin: 0, borderWidth: '2px' }}></div>
+                  ) : t(hasAccessKey ? 'settings.accessRotate' : 'settings.accessCreate')}
                 </button>
-              )}
+                {hasAccessKey && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={accessKeyLoading}
+                    onClick={() => handleAccessKey('revoke')}
+                    style={{ padding: '0.5rem 1rem', fontSize: '0.8rem' }}
+                  >
+                    {t('settings.accessRevoke')}
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
+
+        {/* Sent by a server; a phone-only install has none to send them. */}
+        {!deviceMode && <NotificationSettings isAdmin={user?.role === 'admin'} showToast={showToast} />}
 
         {/* Collection Backup & Data Options Panel */}
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -845,7 +1008,7 @@ function Settings({ user, onUpdateUser, showToast }) {
           </div>
 
           <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-glass)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-            {t('settings.backupHint')}
+            {t('settings.backupHint')} {t('settings.fullBackupHint')}
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
@@ -867,6 +1030,15 @@ function Settings({ user, onUpdateUser, showToast }) {
               <Download size={14} />
               <span>{t('settings.exportJson')}</span>
             </button>
+            <button
+              type="button"
+              onClick={handleFullBackup}
+              className="btn btn-secondary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
+            >
+              <Download size={14} />
+              <span>{t('settings.exportFullBackup')}</span>
+            </button>
 
             <label 
               className="btn btn-primary" 
@@ -881,6 +1053,19 @@ function Settings({ user, onUpdateUser, showToast }) {
                 style={{ display: 'none' }}
               />
             </label>
+            {/* A boxed Magic product, by name: MTGJSON's precon and Secret Lair lists. */}
+            {isGameEnabled('mtg') && (
+              <button
+                type="button"
+                onClick={() => setShowPrecons(true)}
+                className="btn btn-secondary"
+                title={t('precon.hint')}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
+              >
+                <PackageOpen size={14} />
+                <span>{t('precon.open')}</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -934,6 +1119,8 @@ function Settings({ user, onUpdateUser, showToast }) {
               </span>
             </div>
           </div>
+
+          <NavTabsSettings user={user} onUpdateUser={onUpdateUser} showToast={showToast} />
 
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label htmlFor="settings-theme">{t('prefs.theme')}</label>
@@ -1059,6 +1246,8 @@ function Settings({ user, onUpdateUser, showToast }) {
             <Info size={20} style={{ color: 'var(--accent-yellow)' }} />
             <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>{t('settings.aboutTitle')}</h3>
           </div>
+          {/* Riot requires this notice wherever Riftbound content is enabled. */}
+          {isGameEnabled('riftbound') && <RiotNotice style={{ margin: 0 }} />}
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
             <div>

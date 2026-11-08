@@ -15,12 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install backend dependencies
         run: npm ci
@@ -69,7 +69,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # GHCR rejects upper case in a repository name and this owner has one, so
       # the raw docker commands below cannot use github.repository directly.
@@ -79,7 +79,7 @@ jobs:
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry (GHCR)
         if: github.event_name != 'pull_request'
@@ -91,13 +91,13 @@ jobs:
 
       - name: Extract metadata (labels) for Docker
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ steps.image.outputs.name }}
 
       - name: Build and push image by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
@@ -113,6 +113,39 @@ jobs:
           provenance: false
           outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
 
+      # The build above proves the image compiles, not that it runs. The native
+      # modules (sqlite3 compiled in the image, sharp and onnxruntime-node from
+      # prebuilts) only fail when they are loaded, and a Node or base-image bump is
+      # exactly when they would. Rebuilt from the cache the step above just wrote,
+      # so this is an export, not a second compile. Runs before `merge` applies any
+      # tag, so an image that cannot start is never published as a release.
+      - name: Load image for smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          provenance: false
+          load: true
+          tags: bindarr:smoke
+
+      - name: Smoke test the image
+        run: |
+          docker run --rm --entrypoint node bindarr:smoke -e \
+            "require('sqlite3'); require('sharp'); require('onnxruntime-node'); console.log('native modules load on', process.version, process.arch)"
+          # No TCGCSV or FX sync from a throwaway boot: a fresh database would run both.
+          docker run -d --name smoke -p 3001:3001 -e BINDARR_DISABLE_TCGCSV_SYNC=1 -e BINDARR_DISABLE_FX_SYNC=1 bindarr:smoke
+          ok=0
+          for i in $(seq 1 45); do
+            if curl -fsS http://localhost:3001/api/health; then ok=1; break; fi
+            sleep 2
+          done
+          echo; echo '--- container log ---'
+          docker logs smoke
+          docker rm -f smoke > /dev/null
+          [ "$ok" = 1 ] || { echo "::error::The image never answered /api/health."; exit 1; }
+
       # A file per digest, named after it, so `merge` can collect the set from
       # both legs without knowing which architectures ran.
       - name: Export digest
@@ -124,7 +157,7 @@ jobs:
 
       - name: Upload digest
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digest-${{ matrix.arch }}
           path: /tmp/digests/*
@@ -147,14 +180,14 @@ jobs:
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
           pattern: digest-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry (GHCR)
         uses: docker/login-action@v3
@@ -165,7 +198,7 @@ jobs:
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ steps.image.outputs.name }}
           # `latest` follows the newest RELEASE, not main. The README tells

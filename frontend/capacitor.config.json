@@ -8,6 +8,11 @@
     },
     "StatusBar": {
       "overlaysWebView": false
+    },
+    "CapacitorSQLite": {
+      "iosDatabaseLocation": "Library/CapacitorDatabase",
+      "iosIsEncryption": false,
+      "androidIsEncryption": false
     }
   }
 }

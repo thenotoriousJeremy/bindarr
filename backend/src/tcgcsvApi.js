@@ -28,12 +28,118 @@ const db = require('./db');
 const { recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
 const { normId, normName, fold } = require('./utils/setCatalogueMatch');
 const metrics = require('./utils/metrics');
+const { slimResults, SEALED_ONLY_CATEGORY } = require('./utils/tcgcsvSlim');
 
-const API_BASE_URL = 'https://tcgcsv.com';
+const API_BASE_URL = (process.env.TCGCSV_BASE_URL || 'https://tcgcsv.com').replace(/\/+$/, '');
 const TCGCSV_403_COOLDOWN_HOURS = 24;
 const TCGCSV_MIN_REQUEST_INTERVAL_MS = 110;
 const TCGCSV_MAX_SYNC_REQUESTS = 10000;
-const SYNC_CATEGORIES = [1, 3, 71, 85];
+// A pending version that has not completed within this long is abandoned and
+// last-updated.txt is checked again, so a run that keeps failing cannot pin the
+// cache to a stale version forever.
+const TCGCSV_PENDING_MAX_AGE_HOURS = 24;
+
+// Verified against the live endpoint, not guessed.
+const CATEGORY = { english: 3, japanese: 85 };
+
+// The TCGplayer categories the daily sync mirrors. Only what something reads.
+// This is the ONE place to extend: a feature that needs a new category adds it
+// here, and adds any fields it reads to utils/tcgcsvSlim.js. Each category costs
+// 1 + 2 x (its group count) requests per sync.
+//
+//   3, 85  Pokémon (English, Japanese): the price sweep, the scan product map,
+//          and sealed product.
+//   1, 71  Magic, Lorcana: sealed product only (the sealed inventory's catalog
+//          and market value). utils/tcgcsvSlim.js keeps only their sealed
+//          products and those products' prices, never their cards.
+//
+// 1 and 71 are OFF unless an admin turns on Magic/Lorcana sealed tracking
+// (app_settings.sealed_tcg_extra_enabled). Fetching them still means every MTG
+// and Lorcana group's product and price lists, a multiple of the Pokémon
+// requests, and per-install volume is what got Bindarr blocked by TCGCSV once.
+// An instance that never tracks Magic sealed product should not pay for it.
+const BASE_SYNC_CATEGORIES = Object.values(CATEGORY);
+const SYNC_CATEGORIES = [...BASE_SYNC_CATEGORIES, ...Object.values(SEALED_ONLY_CATEGORY)];
+
+async function sealedExtraEnabled() {
+  const row = await db.get(`SELECT sealed_tcg_extra_enabled FROM app_settings WHERE id = 1`);
+  return !!(row && row.sealed_tcg_extra_enabled);
+}
+
+
+// Which of those categories something on THIS instance actually needs. A fresh
+// install, and every dev or test boot on a throwaway database, has nothing to
+// price, yet a full sync is ~800 requests: booting those got this project's
+// User-Agent and then a developer's IP flagged by TCGCSV. So the automatic paths
+// (boot, the daily schedule, the price sweep) sync a category only on demand:
+//
+//   3, 85  a Pokémon card in any collection or wishlist -- the collection's
+//          own wishlist rows and any card list (routes/lists.js), the
+//          default Wishlist the hearts fill included -- or a Pokémon sealed
+//          purchase.
+//   1, 71  the Magic/Lorcana sealed gate is on AND a Magic or Lorcana sealed
+//          purchase exists.
+//   89     a Riftbound card in any collection or card list (riftboundPrices.js).
+//
+// `explicit` is an admin acting on purpose: building a product map (which the
+// first Pokémon scan-catalog download does, before any card exists) or turning
+// the sealed gate on. That syncs every category the gate allows, demand or not;
+// otherwise a new install could never set up Pokémon scanning.
+async function demandedCategories({ explicit = false } = {}) {
+  const allowed = await syncCategories();
+  if (explicit) return allowed;
+  const row = await db.get(`
+    SELECT
+      EXISTS (SELECT 1 FROM collection c JOIN card_cache cc ON cc.id = c.card_id
+               WHERE cc.game = 'pokemon')
+      OR EXISTS (SELECT 1 FROM card_list_items i JOIN card_cache cc ON cc.id = i.card_id
+                  WHERE cc.game = 'pokemon')
+      OR EXISTS (SELECT 1 FROM sealed_purchases WHERE game = 'pokemon') AS pokemon,
+      EXISTS (SELECT 1 FROM sealed_purchases WHERE game IN ('mtg', 'lorcana')) AS extra,
+      EXISTS (SELECT 1 FROM collection WHERE game = 'riftbound')
+      OR EXISTS (SELECT 1 FROM card_list_items i JOIN card_cache cc ON cc.id = i.card_id
+                  WHERE cc.game = 'riftbound') AS riftbound
+  `);
+  const wanted = (c) => {
+    if (BASE_SYNC_CATEGORIES.includes(c)) return !!row.pokemon;
+    if (OPTIONAL_SYNC_CATEGORIES.some(o => o.categoryId === c)) return !!row.riftbound;
+    return !!row.extra;
+  };
+  return allowed.filter(wanted);
+}
+
+// Turning the gate on mid-dataset must not wait for tomorrow's last-updated.txt,
+// and must not re-download Pokémon either. Re-opening the CURRENT version as
+// pending does both: runSync resumes it, syncResults skips every path already
+// stored, so only the newly enabled categories are fetched. Turning it off needs
+// nothing: they drop out of the next version, and readers are gated meanwhile.
+async function setSealedExtraEnabled(enabled) {
+  const before = await sealedExtraEnabled();
+  await db.run(`UPDATE app_settings SET sealed_tcg_extra_enabled = ? WHERE id = 1`, [enabled ? 1 : 0]);
+  if (enabled && !before) {
+    await db.run(`
+      UPDATE app_settings
+         SET tcgcsv_pending_version = tcgcsv_data_version, tcgcsv_last_checked_at = CURRENT_TIMESTAMP
+       WHERE id = 1 AND tcgcsv_data_version IS NOT NULL AND tcgcsv_pending_version IS NULL
+    `);
+    syncIfUpdatedSafely('enabling Magic/Lorcana sealed tracking', { explicit: true });
+  }
+}
+
+// Categories synced only while something in this install reads them. Riftbound
+// (89) is priced straight off its groups by riftboundPrices.js, but an install
+// that has never cached a Riftbound card has nothing to price, and this mirror
+// is free: 1 + 2 x (its groups) requests a day are not asked of it for nothing.
+const OPTIONAL_SYNC_CATEGORIES = [{ categoryId: 89, game: 'riftbound' }];
+
+async function syncCategories() {
+  const wanted = [...((await sealedExtraEnabled()) ? SYNC_CATEGORIES : BASE_SYNC_CATEGORIES)];
+  for (const { categoryId, game } of OPTIONAL_SYNC_CATEGORIES) {
+    const used = await db.get(`SELECT 1 AS used FROM card_cache WHERE game = ? LIMIT 1`, [game]).catch(() => null);
+    if (used) wanted.push(categoryId);
+  }
+  return wanted;
+}
 
 // TCGCSV rejects a request with no identifying User-Agent — a 401 with a note
 // asking you to say who you are. That is a reasonable ask of a free mirror, so the
@@ -51,6 +157,7 @@ metrics.instrumentAxiosClient(client, 'tcgcsv');
 
 let loggedCooldownUntil;
 let lastRequestAt = 0;
+let requestsSent = 0;   // every request that left the process; runSync logs its share
 let requestQueue = Promise.resolve();
 let syncPromise = null;
 
@@ -68,6 +175,23 @@ class TcgcsvCacheMissError extends Error {
     this.name = 'TcgcsvCacheMissError';
     this.code = 'TCGCSV_CACHE_MISS';
   }
+}
+
+// A response that will not get better by asking again: the path is gone (404), or
+// TCGCSV answered 200 with something that is not its {success, results[]}
+// envelope. For one group that is recorded as empty so the sync can finish.
+class TcgcsvBadResponseError extends Error {
+  constructor(path, why) {
+    super(`TCGCSV ${path} failed: ${why}`);
+    this.name = 'TcgcsvBadResponseError';
+    this.code = 'TCGCSV_BAD_RESPONSE';
+  }
+}
+
+function isPermanentGroupFailure(error) {
+  if (!error) return false;
+  if (error.code === 'TCGCSV_BAD_RESPONSE') return true;
+  return Boolean(error.response && error.response.status === 404);
 }
 
 function isCooldownError(error) {
@@ -104,9 +228,6 @@ async function start403Cooldown() {
   loggedCooldownUntil = null;
   console.warn(`TCGCSV HTTP 403 received; suppressing further TCGCSV requests for ${TCGCSV_403_COOLDOWN_HOURS} hours.`);
 }
-
-// Verified against the live endpoint, not guessed.
-const CATEGORY = { english: 3, japanese: 85 };
 
 // Which TCGplayer category serves a card_cache language. TCGplayer splits Pokémon
 // into the Western releases (3) and the Japanese ones (85); every other language
@@ -150,6 +271,7 @@ function pacedGet(path, config = {}) {
     if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
     await check403Cooldown();
     lastRequestAt = Date.now();
+    requestsSent++;
     try {
       return await client.get(path, config);
     } catch (error) {
@@ -169,11 +291,17 @@ function pacedGet(path, config = {}) {
 }
 
 function parseResults(path, data) {
-  if (!data || data.success === false) {
-    const why = (data && data.errors && data.errors.join('; ')) || 'unknown error';
-    throw new Error(`TCGCSV ${path} failed: ${why}`);
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new TcgcsvBadResponseError(path, `not a TCGCSV response (${Array.isArray(data) ? 'bare array' : typeof data})`);
   }
-  return data.results || [];
+  if (data.success === false) {
+    const why = (Array.isArray(data.errors) && data.errors.join('; ')) || 'success:false';
+    throw new TcgcsvBadResponseError(path, why);
+  }
+  if (!Array.isArray(data.results)) {
+    throw new TcgcsvBadResponseError(path, 'response has no results array');
+  }
+  return data.results;
 }
 
 async function cachedResults(path, dataVersion) {
@@ -183,84 +311,132 @@ async function cachedResults(path, dataVersion) {
   if (!version) throw new TcgcsvCacheMissError(path);
 
   const row = await db.get(
-    `SELECT results_json FROM tcgcsv_response_cache WHERE path = ? AND data_version = ?`,
+    `SELECT results_json FROM tcgcsv_cache WHERE path = ? AND data_version = ?`,
     [path, version]
   );
   if (!row) throw new TcgcsvCacheMissError(path);
   return JSON.parse(row.results_json);
 }
 
-async function syncResults(path, dataVersion) {
+// Fetch one path for a pending version, unless an earlier (interrupted) run of the
+// same version already stored it. Stores only the slim shape (utils/tcgcsvSlim.js).
+//
+// `perGroup`: a 404 or malformed answer for ONE group's products/prices is stored
+// as empty and the sync carries on — otherwise a single permanently broken group
+// would keep the version from ever completing. Anything else (network, 5xx, 403)
+// throws, and the next tick resumes from what is already stored.
+async function syncResults(path, dataVersion, { perGroup = false, keepProductIds = null } = {}) {
   const existing = await db.get(
-    `SELECT results_json FROM tcgcsv_response_cache WHERE path = ? AND data_version = ?`,
+    `SELECT results_json FROM tcgcsv_cache WHERE path = ? AND data_version = ?`,
     [path, dataVersion]
   );
   if (existing) return JSON.parse(existing.results_json);
 
-  const { data } = await pacedGet(path);
-  const results = parseResults(path, data);
+  let results;
+  try {
+    const { data } = await pacedGet(path);
+    results = slimResults(path, parseResults(path, data), { keepProductIds });
+  } catch (error) {
+    if (!perGroup || !isPermanentGroupFailure(error)) throw error;
+    console.warn(`TCGCSV: recording ${path} as empty for ${dataVersion}: ${error.message}`);
+    results = [];
+  }
   await db.run(
-    `INSERT OR REPLACE INTO tcgcsv_response_cache (path, data_version, results_json)
+    `INSERT OR REPLACE INTO tcgcsv_cache (path, data_version, results_json)
      VALUES (?, ?, ?)`,
     [path, dataVersion, JSON.stringify(results)]
   );
   return results;
 }
 
-async function runSync() {
+// Fetch last-updated.txt. Returns the version to sync, or null when the cache is
+// already current.
+async function checkLastUpdated(currentVersion) {
+  const { data } = await pacedGet('/last-updated.txt', { responseType: 'text' });
+  const dataVersion = String(data || '').trim();
+  if (!dataVersion || !Number.isFinite(Date.parse(dataVersion))) {
+    throw new Error(`Invalid TCGCSV last-updated.txt value: ${dataVersion || '(empty)'}`);
+  }
+
+  if (dataVersion === currentVersion) {
+    await db.run(`UPDATE app_settings SET tcgcsv_last_checked_at = CURRENT_TIMESTAMP WHERE id = 1`);
+    console.log(`TCGCSV data is current at ${dataVersion}; skipping full sync.`);
+    return null;
+  }
+
+  await db.run(
+    `UPDATE app_settings
+        SET tcgcsv_last_checked_at = CURRENT_TIMESTAMP, tcgcsv_pending_version = ?
+      WHERE id = 1`,
+    [dataVersion]
+  );
+  return dataVersion;
+}
+
+async function runSync(categories) {
+  const requestsAtStart = requestsSent;
+  const requestsThisRun = () => requestsSent - requestsAtStart;
   const state = await db.get(`
-    SELECT tcgcsv_data_version, tcgcsv_pending_version, tcgcsv_last_checked_at
+    SELECT tcgcsv_data_version, tcgcsv_pending_version,
+           (tcgcsv_last_checked_at IS NULL OR
+            tcgcsv_last_checked_at < datetime('now', '-${TCGCSV_PENDING_MAX_AGE_HOURS} hours')) AS checked_stale
       FROM app_settings WHERE id = 1
   `);
   let dataVersion = state.tcgcsv_pending_version;
 
-  if (!dataVersion) {
-    const recentlyChecked = await db.get(`
-      SELECT tcgcsv_last_checked_at
-        FROM app_settings
-       WHERE id = 1 AND tcgcsv_last_checked_at >= datetime('now', '-24 hours')
-    `);
-    if (recentlyChecked) return { updated: false, checked: false };
-
-    const { data } = await pacedGet('/last-updated.txt', { responseType: 'text' });
-    dataVersion = String(data || '').trim();
-    if (!dataVersion || !Number.isFinite(Date.parse(dataVersion))) {
-      throw new Error(`Invalid TCGCSV last-updated.txt value: ${dataVersion || '(empty)'}`);
-    }
-
-    if (dataVersion === state.tcgcsv_data_version) {
-      await db.run(`UPDATE app_settings SET tcgcsv_last_checked_at = CURRENT_TIMESTAMP WHERE id = 1`);
-      console.log(`TCGCSV data is current at ${dataVersion}; skipping full sync.`);
-      return { updated: false, checked: true, dataVersion };
-    }
-
-    await db.run(
-      `UPDATE app_settings
-          SET tcgcsv_last_checked_at = CURRENT_TIMESTAMP, tcgcsv_pending_version = ?
-        WHERE id = 1`,
-      [dataVersion]
+  if (dataVersion && state.checked_stale) {
+    // tcgcsv_last_checked_at is written in the same statement that sets the
+    // pending version, so its age is the age of the pending version.
+    const abandoned = dataVersion;
+    console.warn(
+      `TCGCSV: abandoning pending version ${abandoned}, unfinished after ` +
+      `${TCGCSV_PENDING_MAX_AGE_HOURS}h; checking last-updated.txt again.`
     );
+    await db.run(`UPDATE app_settings SET tcgcsv_pending_version = NULL WHERE id = 1`);
+    dataVersion = await checkLastUpdated(state.tcgcsv_data_version);
+    // If TCGCSV still publishes the abandoned version its rows are reused below;
+    // otherwise they are dead weight.
+    if (dataVersion !== abandoned && abandoned !== state.tcgcsv_data_version) {
+      await db.run(`DELETE FROM tcgcsv_cache WHERE data_version = ?`, [abandoned]);
+    }
+    if (!dataVersion) return { updated: false, checked: true, requests: requestsThisRun() };
+  } else if (!dataVersion) {
+    if (!state.checked_stale) {
+      await backfillCategories(state.tcgcsv_data_version, categories);
+      return { updated: false, checked: false, requests: requestsThisRun() };
+    }
+    dataVersion = await checkLastUpdated(state.tcgcsv_data_version);
+    if (!dataVersion) {
+      await backfillCategories(state.tcgcsv_data_version, categories);
+      return { updated: false, checked: true, dataVersion: state.tcgcsv_data_version, requests: requestsThisRun() };
+    }
   }
 
   const groupsByCategory = {};
   let groupCount = 0;
-  for (const categoryId of SYNC_CATEGORIES) {
+  for (const categoryId of categories) {
     const groups = await syncResults(`/tcgplayer/${categoryId}/groups`, dataVersion);
     groupsByCategory[categoryId] = groups;
     groupCount += groups.length;
   }
 
-  const expectedRequests = 1 + SYNC_CATEGORIES.length + (groupCount * 2);
+  // A fresh version costs last-updated.txt, one groups list per category, then
+  // products + prices per group. Both per-group lists are needed: products feed the
+  // price sweep and the scan product map, prices feed the sweep.
+  const expectedRequests = 1 + categories.length + (groupCount * 2);
   if (expectedRequests > TCGCSV_MAX_SYNC_REQUESTS) {
     throw new Error(
       `TCGCSV sync requires ${expectedRequests} requests, exceeding the ${TCGCSV_MAX_SYNC_REQUESTS} request budget`
     );
   }
 
-  for (const categoryId of SYNC_CATEGORIES) {
+  for (const categoryId of categories) {
     for (const group of groupsByCategory[categoryId]) {
-      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/products`, dataVersion);
-      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/prices`, dataVersion);
+      const products = await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/products`, dataVersion, { perGroup: true });
+      // A sealed-only category keeps the prices of the products it kept and no
+      // card prices (utils/tcgcsvSlim.js); elsewhere the set is ignored.
+      const keepProductIds = new Set(products.map(p => p.productId));
+      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/prices`, dataVersion, { perGroup: true, keepProductIds });
     }
   }
 
@@ -270,20 +446,52 @@ async function runSync() {
       WHERE id = 1`,
     [dataVersion]
   );
-  await db.run(`DELETE FROM tcgcsv_response_cache WHERE data_version != ?`, [dataVersion]);
+  await db.run(`DELETE FROM tcgcsv_cache WHERE data_version != ?`, [dataVersion]);
+  const requests = requestsThisRun();
   console.log(
     `TCGCSV sync complete for ${dataVersion}: ${groupCount} groups, ` +
-    `${expectedRequests} requests maximum.`
+    `${requests} requests this run (${expectedRequests} for a full sync).`
   );
-  return { updated: true, dataVersion, groups: groupCount, expectedRequests };
+  return { updated: true, dataVersion, groups: groupCount, expectedRequests, requests };
 }
 
-async function syncIfUpdated() {
+// A category this install has only just started reading (its first Riftbound
+// card) is not in the version already cached, and a current version is not
+// synced again until TCGCSV publishes a new one — up to a day of no prices for
+// no reason. Fill just that category into the current version instead.
+async function backfillCategories(dataVersion, categories) {
+  if (!dataVersion) return;
+  for (const categoryId of categories) {
+    const path = `/tcgplayer/${categoryId}/groups`;
+    const have = await db.get(`SELECT 1 AS have FROM tcgcsv_cache WHERE path = ? AND data_version = ?`, [path, dataVersion]);
+    if (have) continue;
+    const groups = await syncResults(path, dataVersion);
+    for (const group of groups) {
+      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/products`, dataVersion, { perGroup: true });
+      await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/prices`, dataVersion, { perGroup: true });
+    }
+    console.log(`TCGCSV: added category ${categoryId} (${groups.length} groups) to cached version ${dataVersion}.`);
+  }
+}
+
+// Logged once per stretch with nothing to sync, not on every hourly tick.
+let noDemandLogged = false;
+
+async function syncIfUpdated({ explicit = false } = {}) {
   if (process.env.BINDARR_DISABLE_TCGCSV_SYNC === '1') {
     return { updated: false, disabled: true };
   }
   if (syncPromise) return syncPromise;
-  const running = runSync();
+  const categories = await demandedCategories({ explicit });
+  if (!categories.length) {
+    if (!noDemandLogged) {
+      console.log('TCGCSV sync skipped: nothing on this instance needs TCGCSV prices yet (no Pokémon cards or sealed purchases).');
+      noDemandLogged = true;
+    }
+    return { updated: false, skipped: 'no-demand', requests: 0 };
+  }
+  noDemandLogged = false;
+  const running = runSync(categories);
   syncPromise = running;
   try {
     return await running;
@@ -434,7 +642,10 @@ function normNumber(n) {
   return fold(head).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^0+(?=\d)/, '');
 }
 
+// Cached products carry the slim `number`; a raw TCGCSV product carries it in
+// extendedData. Both are accepted so a caller can hand either.
 const numberOf = (product) => {
+  if (product.number != null) return product.number;
   const ext = product.extendedData || [];
   const f = ext.find(e => e && String(e.name).toLowerCase() === 'number');
   return f ? f.value : null;
@@ -615,8 +826,12 @@ async function priceSet({ set_id, set_name, language }, match, groupDataCache = 
 // same way the other providers' sweeps do — without it the boot sweep re-runs on
 // every restart, which under nodemon means every code edit.
 async function updateCollectionPrices(force = false, scope = 'owned') {
+  // The sync is separate from the sweep: a failed or paused sync (network, 5xx,
+  // the 403 cooldown) leaves the last complete version in the cache, and pricing
+  // from yesterday's data beats not pricing. Only a true cache miss — no version
+  // ever completed — stops the sweep, below.
+  await syncIfUpdatedSafely('price update');
   try {
-    await syncIfUpdated();
     if (!force && !(await shouldSweepPrices('tcgcsv'))) {
       console.log('Skipping TCGCSV price update: already swept within the last 24h.');
       return;
@@ -641,8 +856,8 @@ async function updateCollectionPrices(force = false, scope = 'owned') {
         if (!r.matched) unmatched.push(`${s.set_id} (${s.language})`);
         priced += r.priced;
       } catch (e) {
-        if (e && e.response && e.response.status === 403) return;
-        if (isCooldownError(e)) return;
+        // Reads come from the cache, never the network, so there is no 403 to
+        // stop for here: one set failing must not abandon the rest.
         console.warn(`TCGCSV: ${s.set_id} (${s.language}) failed: ${e.message}`);
       }
     }
@@ -654,8 +869,27 @@ async function updateCollectionPrices(force = false, scope = 'owned') {
       console.log(`TCGCSV: no TCGplayer group for ${unmatched.length} set(s): ${unmatched.slice(0, 20).join(', ')}${unmatched.length > 20 ? ', …' : ''}`);
     }
   } catch (err) {
-    if (isCooldownError(err)) return;
+    if (isCacheMissError(err)) {
+      console.warn(`Skipping TCGCSV price update: no completed TCGCSV sync cached yet (${err.message}).`);
+      return;
+    }
     console.error('Error during TCGCSV price update:', err.message);
+    require('./notify').emit({ type: 'price_sweep_failed', source: 'tcgcsv', error: err.message });
+  }
+}
+
+// Run the daily sync for a reader that can live with the existing cache. Never
+// throws; returns the sync result, or null when it failed.
+async function syncIfUpdatedSafely(context, options) {
+  try {
+    return await syncIfUpdated(options);
+  } catch (err) {
+    if (isCooldownError(err)) {
+      console.warn(`TCGCSV sync paused by HTTP 403 cooldown; ${context} uses the cached data.`);
+    } else {
+      console.warn(`TCGCSV sync failed (${err.message}); ${context} uses the cached data.`);
+    }
+    return null;
   }
 }
 
@@ -663,8 +897,17 @@ module.exports = {
   CATEGORY,
   categoryFor,
   setsToPrice,
+  SYNC_CATEGORIES,
+  BASE_SYNC_CATEGORIES,
+  syncCategories,
+  demandedCategories,
+  sealedExtraEnabled,
+  setSealedExtraEnabled,
+  SEALED_ONLY_CATEGORY,
   syncIfUpdated,
+  syncIfUpdatedSafely,
   updateCollectionPrices,
+  parseResults,
   client,
   priceSet,
   getGroups,

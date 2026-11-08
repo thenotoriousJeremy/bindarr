@@ -1,7 +1,5 @@
 const express = require('express');
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const db = require('../db');
 const tcgApi = require('../tcgApi');
 const scryfallApi = require('../scryfallApi');
@@ -9,9 +7,11 @@ const catalog = require('../catalog');
 const { parseCardRow } = require('../utils/priceHelpers');
 const languages = require('../utils/languages');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
-const { BACKUP_DIR, listBackups, createBackup } = require('../backup');
 const metrics = require('../utils/metrics');
 const getCollectionMetrics = require('../utils/collectionMetrics');
+const { revokeSessions } = require('../utils/authHelpers');
+const { BACKUP_DIR, listBackups, createBackup, resolveBackupFile } = require('../backup');
+const binderArtStore = require('../utils/binderArtStore');
 
 const router = express.Router();
 
@@ -34,6 +34,15 @@ router.get('/metrics', async (req, res) => {
 
 router.post('/seed-cards', async (req, res) => {
   try {
+    // Seeding is for an empty account only. It used to clear every collection row in
+    // the seed sets first, which also deleted real cards the admin owned from those
+    // sets; nothing marks a row as seeded, so the only safe rule is not to seed over
+    // existing data at all.
+    const existing = await db.get(`SELECT COUNT(*) AS n FROM collection WHERE user_id = ?`, [req.user.id]);
+    if (existing.n > 0) {
+      return res.status(409).json({ error: `Refusing to seed: this account already has ${existing.n} collection entries. Seed test data into an empty account instead.` });
+    }
+
     let binder = await db.get(`SELECT id FROM locations WHERE user_id = ? AND type = 'Binder' LIMIT 1`, [req.user.id]);
     if (!binder) {
       const result = await db.run(`
@@ -83,15 +92,6 @@ router.post('/seed-cards', async (req, res) => {
         return res.status(502).json({ error: 'Could not fetch seed card data from the card APIs, and local cache is empty. Try again shortly.' });
       }
     }
-
-    const seedSetIds = [...new Set(MOCK_POOL.map(c => c.set_id))];
-    const seedSetPlaceholders = seedSetIds.map(() => '?').join(',');
-    await db.run(
-      `DELETE FROM collection WHERE user_id = ? AND card_id IN (
-         SELECT id FROM card_cache WHERE set_id IN (${seedSetPlaceholders})
-       )`,
-      [req.user.id, ...seedSetIds]
-    );
 
     const conditions = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played'];
     const languages = ['English', 'English', 'English', 'Japanese'];
@@ -206,6 +206,9 @@ router.post('/users', async (req, res) => {
     return res.status(400).json({ error: 'Username and password are required' });
   }
 
+  if (typeof username !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Username and password must be text' });
+  }
   const cleanUsername = username.trim().toLowerCase();
   if (cleanUsername.length < 3) {
     return res.status(400).json({ error: 'Username must be at least 3 characters' });
@@ -250,11 +253,17 @@ router.put('/users/:id', async (req, res) => {
     }
 
     if (password !== undefined) {
-      if (password.length < 8) {
+      if (typeof password !== 'string' || password.length < 8) {
         return res.status(400).json({ error: 'Password must be at least 8 characters' });
       }
       const newHash = db.hashPassword(password);
       await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, id]);
+      // A reset happens because the old password was forgotten or got out, so
+      // every session made with it goes too. An admin resetting their OWN password
+      // here keeps the session doing it, the same as a change from Settings.
+      await revokeSessions(targetUser.id, {
+        exceptTokenHash: targetUser.id === req.user.id ? req.sessionTokenHash : null
+      });
     }
 
     if (role !== undefined) {
@@ -293,6 +302,8 @@ router.delete('/users/:id', async (req, res) => {
     await db.run(`DELETE FROM collection WHERE user_id = ?`, [id]);
     await db.run(`DELETE FROM locations WHERE user_id = ?`, [id]);
     await db.run(`DELETE FROM users WHERE id = ?`, [id]);
+    // Their binder artwork rows cascade with the user; the files do not.
+    binderArtStore.removeUser(targetUser.id);
 
     res.json({ message: `User "${targetUser.username}" and all their card collections/locations have been permanently deleted.` });
   } catch (error) {
@@ -304,8 +315,6 @@ router.delete('/users/:id', async (req, res) => {
 
 
 // --- Set-index build management ---
-
-const isGame = (g) => g === 'mtg' || g === 'pokemon' || g === 'lorcana';
 
 // List persisted builds plus any in-flight/recent build progress.
 // --- Catalogs -------------------------------------------------------------
@@ -363,21 +372,29 @@ router.post('/catalogs/build', (req, res) => {
 router.get('/models', async (req, res) => {
   // The product map ships with the ready-made Pokémon catalog's state because it is
   // that catalog's other half: product ids with nothing to look them up in name no
-  // cards at all.
+  // cards at all. Reported per game now that the map covers sealed product too.
+  const productMap = require('../tcgplayerCatalog');
+  const productMaps = {};
+  for (const game of Object.keys(productMap.SEALED_CATEGORIES)) {
+    productMaps[game] = await productMap.summary(game);
+  }
   res.json({
     ...require('../utils/modelAssets').status(),
-    productMap: await require('../tcgplayerCatalog').summary(),
+    productMap: productMaps.pokemon,
+    productMaps,
   });
 });
 
-// Build (or refresh) the TCGplayer product map. A download of the ready-made
-// Pokémon catalog starts this on its own — this is the button for refreshing it
-// after a set release, or recovering from a run that failed halfway.
+// Build (or refresh) the TCGplayer product map for one game. A download of the
+// ready-made Pokémon catalog starts this on its own — this is the button for
+// refreshing it after a set release, or recovering from a run that failed
+// halfway, or building it for a game that never had one.
 router.post('/models/product-map', (req, res) => {
   const productMap = require('../tcgplayerCatalog');
+  const game = (req.body && req.body.game) || 'pokemon';
   try {
     if (req.body && req.body.stop) return res.json({ stopped: productMap.stop() });
-    res.json({ progress: productMap.start() });
+    res.json({ progress: productMap.start(game) });
   } catch (e) {
     res.status(409).json({ error: e.message, progress: productMap.state() });
   }
@@ -419,10 +436,14 @@ router.post('/backups', async (req, res) => {
   }
 });
 
+// pokemontcg.io → TCGdex / pokemontcgapi.com card ids, before the 2027 shutdown.
+router.use('/pokemon-migration', require('./pokemonMigration'));
+
 router.get('/backups/:file/download', (req, res) => {
-  const name = path.basename(req.params.file); // strip any path traversal
-  const full = path.join(BACKUP_DIR, name);
-  if (!name.endsWith('.bak') || !fs.existsSync(full)) {
+  // Only a file listed in BACKUP_DIR; backup.resolveBackupFile refuses anything
+  // that names a path rather than a file there.
+  const full = resolveBackupFile(req.params.file);
+  if (!full) {
     return res.status(404).json({ error: 'Backup not found' });
   }
   res.download(full);

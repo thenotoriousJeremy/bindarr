@@ -1,26 +1,57 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, lazy, Suspense } from 'react';
-import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords, StickyNote } from 'lucide-react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, Suspense } from 'react';
+import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords, StickyNote, Package, ListChecks, Smartphone, Library } from 'lucide-react';
 import Login from './components/Login';
 import Logo from './components/Logo';
 import { App as CapacitorApp } from '@capacitor/app';
-import { pushBackGuard } from './utils/useBackGuard';
+import { useRouteSync, goToTab, initialTab } from './utils/router';
 import { useT } from './utils/i18n';
-import { isNative } from './apiBase';
+import { useStableCallback } from './utils/useStableCallback';
+import { clearApiCache } from './utils/useApi';
+import { isNative, isDeviceMode, setDeviceMode } from './apiBase';
 import { parseOidcReturn, takeVerifier } from './utils/nativeOidc';
+import { isSessionExpired } from './utils/sessionExpiry';
+import { loadStoredUser, saveStoredUser } from './utils/storedUser';
+import { readOidcCode } from './utils/webOidc';
+import { clearOfflineData, isOffline, isWriteMethod, noteApiResponse, noteApiUnreachable, offlineWriteResponse, setWriteBlockedText, subscribeOffline } from './utils/offline';
+import { lazyWithReload } from './utils/lazyWithReload';
+import { useNameDictionaries } from './utils/useNameDictionaries';
+import { navBarTabs, litNavTab, collectionTarget, isCollectionView } from './utils/navTabs';
+import { wishlist } from './utils/wishlist';
+import CollectionViews from './components/CollectionViews';
 
 // View components are code-split so heavy deps (recharts in the chart views)
-// load on demand instead of in the initial bundle.
-const Dashboard = lazy(() => import('./components/Dashboard'));
-const AddCards = lazy(() => import('./components/AddCards'));
-const CollectionList = lazy(() => import('./components/CollectionList'));
-const LocationManager = lazy(() => import('./components/LocationManager'));
-const Settings = lazy(() => import('./components/Settings'));
-const AdminPanel = lazy(() => import('./components/AdminPanel'));
-const SetupWizard = lazy(() => import('./components/SetupWizard'));
-const SharedCollection = lazy(() => import('./components/SharedCollection'));
-const SharedContainer = lazy(() => import('./components/SharedContainer'));
-const DeckBuilder = lazy(() => import('./components/DeckBuilder'));
-const Notes = lazy(() => import('./components/Notes'));
+// load on demand instead of in the initial bundle. A view whose chunk an upgrade
+// removed reloads the page once rather than crashing (see utils/chunkReload).
+const Dashboard = lazyWithReload(() => import('./components/Dashboard'));
+const AddCards = lazyWithReload(() => import('./components/AddCards'));
+const CollectionList = lazyWithReload(() => import('./components/CollectionList'));
+const LocationManager = lazyWithReload(() => import('./components/LocationManager'));
+const Settings = lazyWithReload(() => import('./components/Settings'));
+const AdminPanel = lazyWithReload(() => import('./components/AdminPanel'));
+const SetupWizard = lazyWithReload(() => import('./components/SetupWizard'));
+const SharedCollection = lazyWithReload(() => import('./components/SharedCollection'));
+const SharedContainer = lazyWithReload(() => import('./components/SharedContainer'));
+const DeckBuilder = lazyWithReload(() => import('./components/DeckBuilder'));
+const Lists = lazyWithReload(() => import('./components/Lists'));
+const Notes = lazyWithReload(() => import('./components/Notes'));
+const SealedList = lazyWithReload(() => import('./components/SealedList'));
+const SetCompletion = lazyWithReload(() => import('./components/SetCompletion'));
+
+// Each nav-bar tab's label and icon. Which of them the bar shows is the user's
+// choice (utils/navTabs.js, Settings).
+const NAV_TAB_META = {
+  dashboard: ['nav.dashboard', LayoutDashboard],
+  'add-cards': ['nav.addCards', Plus],
+  collection: ['nav.collection', Database],
+  sets: ['nav.browse', Library],
+  storage: ['nav.storage', MapPin],
+  deckbuilder: ['nav.deckBuilder', Swords],
+  lists: ['nav.lists', ListChecks],
+  notes: ['nav.notes', StickyNote],
+  sealed: ['nav.sealed', Package],
+  settings: ['nav.settings', SettingsIcon],
+  admin: ['nav.admin', ShieldAlert],
+};
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -32,6 +63,14 @@ class ErrorBoundary extends React.Component {
   }
   componentDidCatch(error, errorInfo) {
     console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+  // Tabs stay mounted while hidden, so a crash would otherwise persist until a
+  // manual reload. Clearing it when its tab is left gives the view a fresh try
+  // the next time it is opened.
+  componentDidUpdate(prevProps) {
+    if (prevProps.active && !this.props.active && this.state.hasError) {
+      this.setState({ hasError: false, error: null });
+    }
   }
   render() {
     if (this.state.hasError) {
@@ -67,6 +106,17 @@ window.fetch = function (input, options = {}) {
   const url = typeof input === 'string' ? input : (input && input.url) || '';
   const isPublicOrAuthRoute = url.includes('/api/shared/') || url.includes('/api/auth/login') || url.includes('/api/auth/register') || url.includes('/api/auth/bootstrap') || url.includes('/api/auth/oidc/exchange');
 
+  // Device mode answers /api on the phone itself, so being offline changes
+  // nothing there: no banner, no refused writes.
+  const isApi = url.startsWith('/api/') && !isDeviceMode();
+  const write = isApi && isWriteMethod(options.method || (input && input.method));
+  // Read-only while offline (utils/offline.js): refuse the write up front with a
+  // message the view can show, rather than a network error it can only guess at.
+  if (write && isOffline()) {
+    window.dispatchEvent(new Event('bindarr_offline_write'));
+    return Promise.resolve(offlineWriteResponse());
+  }
+
   const token = localStorage.getItem('bindarr_token');
   const finalOptions = { ...options };
   if (token && url.startsWith('/api/') && !isPublicOrAuthRoute) {
@@ -76,11 +126,21 @@ window.fetch = function (input, options = {}) {
     };
   }
   return originalFetch(input, finalOptions).then(response => {
+    if (isApi) noteApiResponse(response);
     if (response.status === 401 && !isPublicOrAuthRoute) {
-      // Dispatch custom event to trigger logout without page refresh
-      window.dispatchEvent(new Event('bindarr_logout'));
+      // Only the auth gate's "this session is gone" signs out -- not every 401
+      // (utils/sessionExpiry). Read off a clone, so the caller still gets the body.
+      isSessionExpired(response).then(expired => {
+        if (expired) window.dispatchEvent(new Event('bindarr_logout'));
+      });
     }
     return response;
+  }, err => {
+    if (!isApi) throw err;
+    noteApiUnreachable();
+    if (!write) throw err;
+    window.dispatchEvent(new Event('bindarr_offline_write'));
+    return offlineWriteResponse();
   });
 };
 
@@ -93,17 +153,17 @@ const handledOidcReturns = new Set();
 
 function App() {
   const { t } = useT();
+  // Names of non-English cards come from dictionaries fetched on first use
+  // (utils/langHelper). Re-render once they land, so every open view swaps the
+  // English names it drew in the meantime.
+  useNameDictionaries();
   const [token, setToken] = useState(localStorage.getItem('bindarr_token'));
-  const [user, setUser] = useState(() => {
-    try {
-      const u = localStorage.getItem('bindarr_user');
-      return u ? JSON.parse(u) : null;
-    } catch {
-      return null;
-    }
-  });
+  // Through utils/storedUser, which also strips the API keys older builds kept in
+  // this copy.
+  const [user, setUser] = useState(() => loadStoredUser());
 
-  const [activeTab, setActiveTab] = useState('dashboard');
+  // Follows the URL (utils/router.js); a reload lands back on the same tab.
+  const [activeTab, setActiveTab] = useState(initialTab);
   // First-run scanning setup. Asked once per session, only for an admin, and only
   // while it is genuinely incomplete — setupNeeded() reads the same endpoints the
   // wizard does so there is one definition of 'set up'.
@@ -113,24 +173,63 @@ function App() {
   const [selectedCardFilter, setSelectedCardFilter] = useState('');
   const [toast, setToast] = useState(null);
   const [statsTrigger, setStatsTrigger] = useState(0);
+  // The set the Sets tab should open, from the dashboard's set-progress list. A
+  // new object per click, so reopening the same set still reaches the tab.
+  const [focusSet, setFocusSet] = useState(null);
+  const [offline, setOffline] = useState(isOffline);
+  // The Collection sub-view last open (CollectionViews), where the Collection
+  // tab takes you back to from elsewhere. Adjusted during render, like mountedTabs.
+  const [lastCollectionView, setLastCollectionView] = useState(isCollectionView(activeTab) ? activeTab : 'collection');
+  if (isCollectionView(activeTab) && activeTab !== lastCollectionView) setLastCollectionView(activeTab);
 
-  const tabGuardRef = useRef(null);
+  // Every tab opened this session stays mounted (hidden when inactive), so its
+  // filters, search, open deck/container and inner scroll boxes are still there
+  // when you come back. Mounted lazily: a tab costs nothing until first opened.
+  // Adjusted during render rather than in an effect so the new tab mounts in
+  // the same commit that activates it.
+  const [mountedTabs, setMountedTabs] = useState([activeTab]);
+  if (!mountedTabs.includes(activeTab)) setMountedTabs([...mountedTabs, activeTab]);
 
-  // Navigate tabs through here so each change pushes a history entry: a back
-  // gesture then returns to the PREVIOUS tab (not always dashboard), and modals
-  // stack their own guards on top. We never dispose the old tab guard — each
-  // switch pushes a fresh entry so the back button walks through tab history.
-  // Disposing with history.back() would race during rapid switches and navigate
-  // the browser past the app origin into about:blank.
-  const goTab = (tab) => {
-    if (tab === activeTab) return;
-    const prev = activeTab;
-    tabGuardRef.current = pushBackGuard(() => {
-      tabGuardRef.current = null;
-      setActiveTab(prev);
-    });
+  // The page itself (window) is the scroller, shared by every tab, so each
+  // tab's offset is read as you leave it (showTab, before the DOM changes — a
+  // scroll listener would race the page shrinking) and put back when it
+  // returns (the restoring layout effect sits below the tab-bar fit check).
+  const scrollByTabRef = useRef({});
+  const shownTabRef = useRef(activeTab);
+  const showTab = (tab) => {
+    scrollByTabRef.current[shownTabRef.current] = window.scrollY;
     setActiveTab(tab);
   };
+
+  // A focus request is consumed by the storage tab; clear it once you leave so
+  // the same card can be located again, and so a stale target doesn't keep
+  // suppressing storage's own default selection.
+  useEffect(() => {
+    if (activeTab !== 'storage') setFocusEntryId(null);
+  }, [activeTab]);
+
+  // A new session starts with only the landing tab mounted, so nothing from the
+  // previous account's views lingers. Used by both logout paths; it touches only
+  // state setters and a ref, so the 401 listener can call it without re-binding.
+  const resetTabs = () => {
+    clearApiCache();
+    setActiveTab('dashboard');
+    setMountedTabs(['dashboard']);
+    setFocusSet(null);
+    setLastCollectionView('collection');
+    wishlist.reset();
+    scrollByTabRef.current = {};
+  };
+
+  // Navigate tabs through here: it pushes the tab's URL, so Back and Forward walk
+  // tab history, and useRouteSync below then shows the tab.
+  // Stable identity (as are showToast and triggerRefresh): the tabs are
+  // memoized, and a toast appearing re-renders App, which must not re-render
+  // a 20,000-card grid through a handler prop that merely looks new.
+  const goTab = useStableCallback((tab) => {
+    if (tab !== activeTab) goToTab(tab);
+  });
+  const openSet = useCallback((target) => { setFocusSet({ ...target }); goTab('sets'); }, [goTab]);
 
   // Detect public share route on load
   const [shareToken] = useState(() => {
@@ -143,42 +242,48 @@ function App() {
     return /^\d+$/.test(id || '') ? id : null;
   });
 
-  const showToast = (message) => {
-    setToast(message);
-  };
+  useRouteSync({ enabled: !shareToken, signedIn: !!(token && user), activeTab, showTab });
 
-  // Handle OIDC / SSO token in URL redirect
+  // showToast(message) for a note; showToast(message, { onAction, actionLabel })
+  // adds a button (Undo by default) and keeps the toast up long enough to use it.
+  // Stable identity: the tabs are memoized and receive it as a prop.
+  const showToast = useCallback((message, options) => {
+    setToast({ message, ...(options || {}), id: Date.now() + Math.random() });
+  }, []);
+
+  // Web SSO return. The callback sends the browser back with ?oidc_code=..., a
+  // one-time code that redeems only together with the HttpOnly cookie set when
+  // THIS browser started the login (utils/webOidc) -- never the session itself,
+  // which the old ?oidc_token= / ?token= sign-in took from any link. Off the URL
+  // before it is used, so a reload or the history cannot present it again; and,
+  // as with the native hand-off below, the answer is not dropped on a re-run (the
+  // code is spent by then, and a second pass finds nothing left to read).
   useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const oidcToken = params.get('oidc_token') || params.get('token');
-      if (oidcToken && !token) {
-        // Clean URL parameters immediately
-        const newUrl = window.location.pathname + (window.location.hash || '');
-        window.history.replaceState({}, document.title, newUrl);
-
-        // Fetch user profile with the token to complete login
-        fetch('/api/auth/me', {
-          headers: { 'Authorization': `Bearer ${oidcToken}` }
-        })
-          .then(res => res.ok ? res.json() : Promise.reject(new Error('Failed to fetch profile')))
-          .then(data => {
-            if (data.user) {
-              setToken(oidcToken);
-              setUser(data.user);
-              localStorage.setItem('bindarr_token', oidcToken);
-              localStorage.setItem('bindarr_user', JSON.stringify(data.user));
-              showToast(t('toast.welcomeBack', { name: data.user.username }));
-              setActiveTab('dashboard');
-            }
-          })
-          .catch(err => {
-            console.error('OIDC token verification failed:', err);
-            showToast(t('login.errOidcFailed'));
-          });
-      }
-    } catch { /* ignore URL parse error */ }
-  }, [t, token]);
+    if (isNative) return;
+    const ret = readOidcCode(window.location.href);
+    if (!ret) return;
+    window.history.replaceState(window.history.state, document.title, ret.cleanUrl);
+    fetch('/api/auth/oidc/exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: ret.code })
+    })
+      .then(res => res.json().then(data => (res.ok ? data : Promise.reject(new Error(data.error || 'exchange failed')))))
+      .then(data => {
+        if (!data.token || !data.user) return;
+        // Same completion as handleLoginSuccess, as in the native hand-off.
+        setToken(data.token);
+        setUser(data.user);
+        localStorage.setItem('bindarr_token', data.token);
+        saveStoredUser(data.user);
+        showToast(t('toast.welcomeBack', { name: data.user.username }));
+        setActiveTab('dashboard');
+      })
+      .catch(err => {
+        console.error('OIDC exchange failed:', err);
+        showToast(t('login.errOidcFailed'));
+      });
+  }, [t, showToast]);
 
   // Native SSO return (issue #94). The login ran in the system browser; the
   // server sends it back as bindarr://oidc?code=... (or ?oidc_error=...), either
@@ -220,7 +325,7 @@ function App() {
           setToken(data.token);
           setUser(data.user);
           localStorage.setItem('bindarr_token', data.token);
-          localStorage.setItem('bindarr_user', JSON.stringify(data.user));
+          saveStoredUser(data.user);
           showToast(t('toast.welcomeBack', { name: data.user.username }));
           setActiveTab('dashboard');
         })
@@ -241,13 +346,13 @@ function App() {
       cancelled = true;
       if (listener) listener.remove();
     };
-  }, [t]);
+  }, [t, showToast]);
 
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => {
         setToast(null);
-      }, 2500);
+      }, toast.onAction ? 6000 : 2500);
       return () => clearTimeout(timer);
     }
   }, [toast]);
@@ -296,12 +401,23 @@ function App() {
     return () => window.removeEventListener('resize', check);
   }, [token, user, activeTab, t]);
 
+  // Put the shown tab's page offset back (see showTab). Before paint, so there
+  // is no flash of the old offset, and declared after the fit check above on
+  // purpose: that check resizes the header, and scroll anchoring would shift a
+  // restore made before it by a few pixels. Storage's focus-a-card scroll runs
+  // later (passive effect) and wins.
+  useLayoutEffect(() => {
+    shownTabRef.current = activeTab;
+    window.scrollTo(0, scrollByTabRef.current[activeTab] || 0);
+  }, [activeTab]);
+
   // Offer first-run setup to an admin until it is finished or skipped. The flag
   // lives on the server, so closing the wizard halfway resumes it at the next
   // login on any device; everything it configures is also reachable from Settings
-  // and Admin.
+  // and Admin. Not in device mode: the wizard sets up a server's scan models and
+  // catalogs, and nothing it offers applies to a phone on its own.
   useEffect(() => {
-    if (!user || user.role !== 'admin') return;
+    if (!user || user.role !== 'admin' || isDeviceMode()) return;
     let cancelled = false;
     import('./components/SetupWizard')
       .then(m => m.setupNeeded())
@@ -310,6 +426,15 @@ function App() {
     return () => { cancelled = true; };
   }, [user]);
 
+  // Offline banner, and the message a refused write carries (utils/offline.js).
+  useEffect(() => subscribeOffline(setOffline), []);
+  useEffect(() => {
+    setWriteBlockedText(t('offline.writeBlocked'));
+    const onBlocked = () => setToast(t('offline.writeBlocked'));
+    window.addEventListener('bindarr_offline_write', onBlocked);
+    return () => window.removeEventListener('bindarr_offline_write', onBlocked);
+  }, [t]);
+
   // Handle automatic logout on 401
   useEffect(() => {
     const handleAutoLogout = () => {
@@ -317,11 +442,31 @@ function App() {
       setUser(null);
       localStorage.removeItem('bindarr_token');
       localStorage.removeItem('bindarr_user');
+      clearOfflineData();
+      resetTabs();
       showToast(t('toast.sessionExpired'));
     };
     window.addEventListener('bindarr_logout', handleAutoLogout);
     return () => window.removeEventListener('bindarr_logout', handleAutoLogout);
-  }, [t]);
+  }, [t, showToast]);
+
+  // The stored user is a copy, and one saved by an older build has no has_* key
+  // flags (it had the keys themselves, which loadStoredUser drops), so Settings
+  // would call every saved key "not set". Re-read it once per session start. An
+  // unchanged answer keeps the same object, so nothing keyed on `user` re-runs.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    fetch('/api/auth/me')
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (cancelled || !data || !data.user) return;
+        setUser(prev => (JSON.stringify(prev) === JSON.stringify(data.user) ? prev : data.user));
+        saveStoredUser(data.user);
+      })
+      .catch(() => { /* offline or server down: the stored copy stands */ });
+    return () => { cancelled = true; };
+  }, [token]);
 
   // Pointer-reactive foil: one delegated listener drives --px/--py (0-100%) on
   // whichever card the pointer is over, so the holo/reverse-holo rainbow tracks
@@ -351,9 +496,20 @@ function App() {
     setToken(newToken);
     setUser(newUser);
     localStorage.setItem('bindarr_token', newToken);
-    localStorage.setItem('bindarr_user', JSON.stringify(newUser));
-    showToast(t('toast.welcomeBack', { name: newUser.username }));
+    saveStoredUser(newUser);
+    showToast(isDeviceMode() ? t('toast.deviceReady') : t('toast.welcomeBack', { name: newUser.username }));
     setActiveTab('dashboard');
+  };
+
+  // Device mode → back to the login screen to pick a server. The collection stays
+  // in the on-device database, so choosing "This device" again finds it intact.
+  const handleLeaveDevice = () => {
+    setDeviceMode(false);
+    setToken(null);
+    setUser(null);
+    localStorage.removeItem('bindarr_token');
+    localStorage.removeItem('bindarr_user');
+    resetTabs();
   };
 
   const handleLogout = () => {
@@ -364,17 +520,20 @@ function App() {
     setUser(null);
     localStorage.removeItem('bindarr_token');
     localStorage.removeItem('bindarr_user');
+    // The last account's collection must not stay readable offline.
+    clearOfflineData();
+    resetTabs();
     showToast(t('toast.loggedOut'));
   };
 
   const handleUpdateUser = (updatedUser) => {
     setUser(updatedUser);
-    localStorage.setItem('bindarr_user', JSON.stringify(updatedUser));
+    saveStoredUser(updatedUser);
   };
 
-  const triggerRefresh = () => {
+  const triggerRefresh = useCallback(() => {
     setStatsTrigger(prev => prev + 1);
-  };
+  }, []);
 
   // Render shared collection view if URL matches /share/:token. ?container=<id>
   // narrows it to one binder or box, drawn as that container rather than a list.
@@ -388,17 +547,32 @@ function App() {
     );
   }
 
-  // Render login screen if unauthenticated
+  // Render login screen if unauthenticated. The toast too: "your session expired"
+  // and a failed SSO hand-off are said exactly when this screen is showing, and
+  // without it here they were never seen.
   if (!token || !user) {
-    return <Login onLoginSuccess={handleLoginSuccess} />;
+    return (
+      <>
+        <Login onLoginSuccess={handleLoginSuccess} />
+        {toast && <div className="toast">{toast}</div>}
+      </>
+    );
   }
 
-  const renderContent = () => {
-    switch (activeTab) {
+  // One account and no server: the Admin tab's account, backup and catalog
+  // management have nothing to manage, and its instance settings move into
+  // Settings (see InstanceSettings).
+  const deviceMode = isDeviceMode();
+  const showAdmin = user.role === 'admin' && !deviceMode;
+  const barTabs = navBarTabs(user.nav_tabs, { showAdmin, activeTab });
+  const litTab = litNavTab(activeTab, barTabs);
+
+  const renderTab = (tab) => {
+    switch (tab === 'admin' && !showAdmin ? 'dashboard' : tab) {
       case 'dashboard':
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
       case 'add-cards':
-        return <AddCards onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab} />;
+        return <AddCards active={activeTab === 'add-cards'} onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab} />;
       case 'collection':
         return (
           <CollectionList 
@@ -425,16 +599,22 @@ function App() {
             setFocusEntryId={setFocusEntryId}
           />
         );
+      case 'sets':
+        return <SetCompletion focusSet={focusSet} statsTrigger={statsTrigger} showToast={showToast} />;
       case 'deckbuilder':
         return <DeckBuilder showToast={showToast} />;
+      case 'lists':
+        return <Lists active={activeTab === 'lists'} statsTrigger={statsTrigger} showToast={showToast} />;
       case 'notes':
         return <Notes showToast={showToast} />;
+      case 'sealed':
+        return <SealedList showToast={showToast} />;
       case 'settings':
-        return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
+        return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} onLeaveDevice={handleLeaveDevice} />;
       case 'admin':
         return <AdminPanel user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
       default:
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
     }
   };
 
@@ -459,119 +639,91 @@ function App() {
             labels don't fit (navRef check above), the label span is hidden for
             all but the active tab (index.css). */}
         <nav ref={navRef} className="nav-tabs" style={{ margin: 0 }}>
-          <button 
-            className={`nav-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => goTab('dashboard')}
-            aria-label={t('nav.dashboard')}
-            title={t('nav.dashboard')}
-          >
-            <LayoutDashboard size={18} />
-            <span className="nav-tab-label">{t('nav.dashboard')}</span>
-          </button>
-          <button
-            className={`nav-tab ${activeTab === 'add-cards' ? 'active' : ''}`}
-            onClick={() => goTab('add-cards')}
-            aria-label={t('nav.addCards')}
-            title={t('nav.addCards')}
-          >
-            <Plus size={18} />
-            <span className="nav-tab-label">{t('nav.addCards')}</span>
-          </button>
-          <button
-            className={`nav-tab ${activeTab === 'collection' ? 'active' : ''}`}
-            onClick={() => goTab('collection')}
-            aria-label={t('nav.collection')}
-            title={t('nav.collection')}
-          >
-            <Database size={18} />
-            <span className="nav-tab-label">{t('nav.collection')}</span>
-          </button>
-          <button
-            className={`nav-tab ${activeTab === 'storage' ? 'active' : ''}`}
-            onClick={() => goTab('storage')}
-            aria-label={t('nav.storage')}
-            title={t('nav.storage')}
-          >
-            <MapPin size={18} />
-            <span className="nav-tab-label">{t('nav.storage')}</span>
-          </button>
-          <button
-            className={`nav-tab ${activeTab === 'deckbuilder' ? 'active' : ''}`}
-            onClick={() => goTab('deckbuilder')}
-            aria-label={t('nav.deckBuilder')}
-            title={t('nav.deckBuilder')}
-          >
-            <Swords size={18} />
-            <span className="nav-tab-label">{t('nav.deckBuilder')}</span>
-          </button>
-
-          <button
-            className={`nav-tab ${activeTab === 'notes' ? 'active' : ''}`}
-            onClick={() => goTab('notes')}
-            aria-label={t('nav.notes')}
-            title={t('nav.notes')}
-          >
-            <StickyNote size={18} />
-            <span className="nav-tab-label">{t('nav.notes')}</span>
-          </button>
-
-          <button
-            className={`nav-tab ${activeTab === 'settings' ? 'active' : ''}`}
-            onClick={() => goTab('settings')}
-            aria-label={t('nav.settings')}
-            title={t('nav.settings')}
-          >
-            <SettingsIcon size={18} />
-            <span className="nav-tab-label">{t('nav.settings')}</span>
-          </button>
-          {user.role === 'admin' && (
-            <button 
-              className={`nav-tab ${activeTab === 'admin' ? 'active' : ''}`}
-              onClick={() => goTab('admin')}
-              aria-label={t('nav.admin')}
-              title={t('nav.admin')}
-            >
-              <ShieldAlert size={18} style={{ color: 'var(--accent-red)' }} />
-              <span className="nav-tab-label">{t('nav.admin')}</span>
-            </button>
-          )}
+          {barTabs.map(tab => {
+            const [labelKey, Icon] = NAV_TAB_META[tab];
+            const label = t(labelKey);
+            return (
+              <button
+                key={tab}
+                className={`nav-tab ${litTab === tab ? 'active' : ''}`}
+                onClick={() => goTab(tab === 'collection' ? collectionTarget(activeTab, lastCollectionView, barTabs) : tab)}
+                aria-label={label}
+                title={label}
+                aria-current={litTab === tab ? 'page' : undefined}
+              >
+                <Icon size={18} style={tab === 'admin' ? { color: 'var(--accent-red)' } : undefined} />
+                <span className="nav-tab-label">{label}</span>
+              </button>
+            );
+          })}
         </nav>
 
         <div className="header-actions" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div className="header-greeting" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-            <Sparkles size={14} style={{ color: 'var(--accent-yellow)' }} />
-            <span>{t('header.greeting')} <strong style={{ color: 'var(--text-strong)' }}>{user.username}</strong> ({t(`role.${user.role}`)})</span>
-          </div>
-          <button
-            onClick={handleLogout}
-            className="btn btn-secondary btn-icon-only"
-            title={t('header.logOut')}
-            aria-label={t('header.logOut')}
-            style={{ padding: '0.4rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
-          >
-            <LogOut size={14} />
-          </button>
+          {deviceMode ? (
+            // Nobody to greet and nothing to log out of; say where the data is.
+            <div className="header-greeting" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+              <Smartphone size={14} style={{ color: 'var(--accent-yellow)' }} />
+              <span>{t('header.onDevice')}</span>
+            </div>
+          ) : (
+            <>
+              <div className="header-greeting" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                <Sparkles size={14} style={{ color: 'var(--accent-yellow)' }} />
+                <span>{t('header.greeting')} <strong style={{ color: 'var(--text-strong)' }}>{user.username}</strong> ({t(`role.${user.role}`)})</span>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="btn btn-secondary btn-icon-only"
+                title={t('header.logOut')}
+                aria-label={t('header.logOut')}
+                style={{ padding: '0.4rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
+              >
+                <LogOut size={14} />
+              </button>
+            </>
+          )}
         </div>
       </header>
 
+      {offline && !isDeviceMode() && (
+        <div className="offline-banner" role="status">{t('offline.banner')}</div>
+      )}
+
       {/* Main Content Area */}
       <main style={{ flex: 1, marginTop: '1rem' }}>
-        {/* key on activeTab remounts the boundary per tab, so a crash in one
-            view clears when you navigate away instead of persisting until a
-            manual reload. */}
-        <ErrorBoundary key={activeTab} t={t}>
-          <div className="view-transition">
-            <Suspense fallback={<ChunkFallback />}>
-              {renderContent()}
-            </Suspense>
+        {/* Browse, Lists and Sealed live under Collection (utils/navTabs.js). */}
+        {isCollectionView(activeTab) && <CollectionViews active={activeTab} onSelect={goTab} />}
+        {/* One pane per tab opened so far (see mountedTabs). Inactive panes are
+            hidden, not unmounted; the active one carries .view-transition, so
+            the fade replays on every switch. Each has its own boundary, so a
+            crash stays in its tab and clears when you leave it. */}
+        {mountedTabs.map(tab => (
+          <div
+            key={tab}
+            className={tab === activeTab ? 'tab-pane view-transition' : 'tab-pane tab-pane-hidden'}
+          >
+            <ErrorBoundary active={tab === activeTab} t={t}>
+              <Suspense fallback={<ChunkFallback />}>
+                {renderTab(tab)}
+              </Suspense>
+            </ErrorBoundary>
           </div>
-        </ErrorBoundary>
+        ))}
       </main>
 
       {/* Toast Notification */}
       {toast && (
-        <div className="toast">
-          {toast}
+        <div key={toast.id} className={toast.onAction ? 'toast toast-action' : 'toast'} role="status">
+          <span>{toast.message}</span>
+          {toast.onAction && (
+            <button
+              type="button"
+              className="toast-action-btn"
+              onClick={() => { const run = toast.onAction; setToast(null); run(); }}
+            >
+              {toast.actionLabel || t('toast.undo')}
+            </button>
+          )}
         </div>
       )}
     </div>

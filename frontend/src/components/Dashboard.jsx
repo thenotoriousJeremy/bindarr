@@ -1,13 +1,27 @@
-import { useState, useEffect } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, AreaChart, Area } from 'recharts';
+import { memo, Suspense, useState } from 'react';
 import { TrendingUp, Coins, Library, Trophy, Plus, ArrowUpRight } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { priceText, currencySymbol } from '../utils/formatPrice';
+import { useFx } from '../utils/useFx';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { defaultGameFilter, gameOptions, showGamePicker, gameLabel } from '../utils/games';
 import { useT } from '../utils/i18n';
+import { onActivateKey } from '../utils/a11y';
+import { lazyNamed } from '../utils/lazyWithReload';
+import ChartFallback from './charts/ChartFallback';
+
+// The plots are code-split (charts/DashboardCharts): recharts is the largest
+// dependency in the app, and the numbers and lists here should not wait for it.
+const charts = () => import('./charts/DashboardCharts');
+const ValueTimeline = lazyNamed(charts, 'ValueTimeline');
+const SetValueBars = lazyNamed(charts, 'SetValueBars');
+const DistributionDonut = lazyNamed(charts, 'DistributionDonut');
+import { useApi } from '../utils/useApi';
 import CardInspectorModal from './CardInspectorModal';
 import CardImage from './CardImage';
+import { PokemonMigrationNotice } from './PokemonMigrationBanner';
+import RiotNotice from './RiotNotice';
+import Price from './Price';
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
@@ -40,69 +54,40 @@ const TYPE_COLORS = {
   'Steel': '#94a3b8'
 };
 
-function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEntryId, onUpdate, showToast }) {
+function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId, setFocusEntryId, onUpdate, showToast }) {
   const { t, locale } = useT();
   // Money and dates follow the interface language, not the browser's: a user who
   // picked German sees 1.234,56 and 3.8.2026 even on an en-US browser.
   const money = (n) => (n || 0).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  // The server converts the totals into this (review item 9), so it is part of
+  // every stats request and a change in Settings refetches them.
+  const { currency: displayCurrency, show } = useFx();
   const [timePeriod, setTimePeriod] = useState('30d');
   // '' | 'pokemon' | 'mtg'. Collapses to the only visible game when the other is
   // hidden in Settings, so the totals never include cards the user cannot see.
   const [gameFilter, setGameFilter] = useState(() => defaultGameFilter());
   
-  // Timeline Chart State
-  const [historyData, setHistoryData] = useState([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Clickable Card Inspector State
   const [inspectorCard, setInspectorCard] = useState(null);
 
-  useEffect(() => {
-    fetchStats();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statsTrigger, gameFilter]);
+  // Both refetch whenever anything changes the collection (statsTrigger), and
+  // neither blanks the page to do it: the figures already on screen stay until
+  // the new ones arrive. Switching game, period or currency mid-request cannot
+  // leave the older answer on screen, because only the latest request lands.
+  const statsQuery = useApi(`/api/stats?currency=${displayCurrency}${gameFilter ? `&game=${gameFilter}` : ''}`, null, { deps: [statsTrigger] });
+  const stats = statsQuery.data || null;
+  const loading = statsQuery.loading && !stats;
+  const error = !stats && statsQuery.error ? (statsQuery.error.status ? t('dash.errStats') : statsQuery.error.message) : null;
+  const fetchStats = statsQuery.refetch;
 
-  useEffect(() => {
-    if (stats && stats.summary.totalCards > 0) {
-      fetchTimelineHistory();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timePeriod, stats, gameFilter]);
-
-  const fetchStats = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`/api/stats${gameFilter ? `?game=${gameFilter}` : ''}`);
-      if (!response.ok) {
-        throw new Error(t('dash.errStats'));
-      }
-      const data = await response.json();
-      setStats(data);
-    } catch (err) {
-      console.error(err);
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchTimelineHistory = async () => {
-    try {
-      setLoadingHistory(true);
-      const response = await fetch(`/api/stats/history?period=${timePeriod}${gameFilter ? `&game=${gameFilter}` : ''}`);
-      if (response.ok) {
-        const data = await response.json();
-        setHistoryData(data);
-      }
-    } catch (err) {
-      console.error('Error loading history timeline:', err);
-    } finally {
-      setLoadingHistory(false);
-    }
-  };
+  const historyQuery = useApi(
+    `/api/stats/history?period=${timePeriod}&currency=${displayCurrency}${gameFilter ? `&game=${gameFilter}` : ''}`,
+    null,
+    { enabled: !!(stats && stats.summary.totalCards > 0), deps: [statsTrigger] }
+  );
+  const historyData = Array.isArray(historyQuery.data) ? historyQuery.data : [];
+  const loadingHistory = historyQuery.loading && !historyQuery.data;
 
   const renderGameTabs = () => {
     // One game shown: "All" and that game are the same list, so there is nothing
@@ -177,9 +162,21 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
   });
   const rarityChartData = rarities.map((r, i) => ({ ...r, fill: COLORS[i % COLORS.length] }));
 
+  // What the money on this page is in. `valueCurrency` is the display currency
+  // when the server could convert everything, the collection's one currency when
+  // it could not but did not need to, and null for a mix with no rates — then
+  // only the per-currency subtotals are shown, never their sum.
+  const unit = summary.valueCurrency;
+  const unitSymbol = unit ? currencySymbol(unit) : '';
+  const subtotals = Object.entries(summary.valueByCurrency || {});
+  const subtotalText = subtotals.map(([c, v]) => priceText(v, c)).join(' + ');
+  const chartHistory = historyData.filter(p => p.value != null);
+  const chartSets = sets.filter(s => s.value != null);
+
   return (
     <div>
       {renderGameTabs()}
+      <PokemonMigrationNotice onNavigate={onNavigate} />
 
       {/* Metrics Summary Grid */}
       <div className="metrics-grid">
@@ -213,7 +210,22 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
               ))}
             </div>
           </div>
-          <div className="metric-value">{currencySymbol()}{money(summary.totalValue)}</div>
+          <div className="metric-value">
+            {summary.totalValue != null ? `${unitSymbol}${money(summary.totalValue)}` : (subtotalText || priceText(0))}
+          </div>
+          {/* Converted totals say so, with the rate date and the amounts as quoted;
+              a mix with no rates says why there is no single total. */}
+          {summary.converted && (
+            <div className="metric-footer" style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+              <span>{t('fx.convertedTotal', { currency: unit, date: summary.fxDate })}</span>
+              <span>{t('fx.subtotals', { list: subtotals.map(([c, v]) => priceText(v, c)).join(' · ') })}</span>
+            </div>
+          )}
+          {summary.totalValue == null && subtotals.length > 1 && (
+            <div className="metric-footer" style={{ color: 'var(--text-muted)' }}>
+              <span>{t('fx.noRatesTotal')}</span>
+            </div>
+          )}
           {(() => {
             const change = timePeriod === '7d' ? summary.change7d :
                            timePeriod === '30d' ? summary.change30d :
@@ -233,7 +245,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
               <div className={`metric-footer ${isPositive ? 'positive' : 'negative'}`} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <TrendingUp size={12} style={{ transform: isPositive ? 'none' : 'rotate(180deg)' }} />
                 <span>
-                  {isPositive ? '+' : ''}{currencySymbol()}{money(change.abs)} ({isPositive ? '+' : ''}{change.pct}%)
+                  {isPositive ? '+' : ''}{unitSymbol}{money(change.abs)} ({isPositive ? '+' : ''}{change.pct}%)
                 </span>
               </div>
             );
@@ -248,13 +260,16 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
           </div>
           <div className="metric-value">{currencySymbol()}{money(summary.totalSpent)}</div>
           <div className="metric-footer">
-            <span>{t('dash.avgPerCard', { price: priceText(summary.avgCardValue) })}</span>
+            <span>{t('dash.avgPerCard', { price: summary.avgCardValue != null ? priceText(summary.avgCardValue, unit) : '—' })}</span>
           </div>
         </div>
 
         {/* Unrealized Gain / ROI */}
         {(() => {
           const roi = summary.roi || { abs: 0, pct: null };
+          // abs is null when the value could not be put in the display currency,
+          // which is the currency purchase prices were typed in.
+          const noRate = roi.abs == null;
           const isPositive = (roi.abs || 0) >= 0;
           return (
             <div className={`glass-panel metric-card ${isPositive ? 'accent-gain-up' : 'accent-gain-down'}`}>
@@ -263,10 +278,10 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
                 <span className="metric-icon"><ArrowUpRight size={18} style={{ transform: isPositive ? 'none' : 'rotate(90deg)' }} /></span>
               </div>
               <div className="metric-value" style={{ color: isPositive ? '#22c55e' : '#ef4444' }}>
-                {isPositive ? '+' : '−'}{currencySymbol()}{money(Math.abs(roi.abs || 0))}
+                {noRate ? '—' : `${isPositive ? '+' : '−'}${currencySymbol()}${money(Math.abs(roi.abs))}`}
               </div>
               <div className="metric-footer">
-                <span>{roi.pct === null ? t('dash.roiUnset') : t('dash.roiVsCost', { pct: `${isPositive ? '+' : ''}${roi.pct}` })}</span>
+                <span>{noRate ? t('fx.gainNeedsRate') : roi.pct === null ? t('dash.roiUnset') : t('dash.roiVsCost', { pct: `${isPositive ? '+' : ''}${roi.pct}` })}</span>
               </div>
             </div>
           );
@@ -296,27 +311,12 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
         <div className="chart-container" style={{ height: '240px', position: 'relative' }}>
           {loadingHistory ? (
             <div className="spinner" style={{ position: 'absolute', top: '45%', left: '45%' }}></div>
-          ) : historyData.length < 2 ? (
+          ) : chartHistory.length < 2 ? (
             <div className="chart-empty">{t('dash.notEnoughHistory')}</div>
           ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={historyData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--type-grass)" stopOpacity={0.4}/>
-                    <stop offset="95%" stopColor="var(--type-grass)" stopOpacity={0.0}/>
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="date" stroke="var(--text-secondary)" style={{ fontSize: '0.7rem' }} />
-                <YAxis stroke="var(--text-secondary)" style={{ fontSize: '0.7rem' }} tickFormatter={(v) => `${currencySymbol()}${v}`} />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }}
-                  labelStyle={{ color: 'var(--text-primary)' }}
-                  formatter={(v) => [`${currencySymbol()}${v}`, t('dash.portfolioValue')]}
-                />
-                <Area type="monotone" dataKey="value" stroke="var(--type-grass)" strokeWidth={2} fillOpacity={1} fill="url(#colorVal)" />
-              </AreaChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<ChartFallback />}>
+              <ValueTimeline data={chartHistory} symbol={unitSymbol} />
+            </Suspense>
           )}
         </div>
       </div>
@@ -330,21 +330,12 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
           <div className="glass-panel">
             <h3 className="chart-title">{t('dash.valueBySet')}</h3>
             <div className="chart-container">
-              {sets.length === 0 ? (
+              {chartSets.length === 0 ? (
                 <div className="chart-empty">{t('dash.noSetData')}</div>
               ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={sets} layout="vertical" margin={{ left: 10, right: 30, top: 10, bottom: 10 }}>
-                  <XAxis type="number" stroke="var(--text-secondary)" tickFormatter={(v) => `${currencySymbol()}${v}`} />
-                  <YAxis dataKey="name" type="category" width={120} stroke="var(--text-secondary)" tickLine={false} axisLine={false} style={{ fontSize: '0.8rem' }} />
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }}
-                    labelStyle={{ color: 'var(--text-primary)' }}
-                    formatter={(v) => [`${currencySymbol()}${v}`, t('dash.value')]}
-                  />
-                  <Bar dataKey="value" fill="var(--accent-red)" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              <Suspense fallback={<ChartFallback />}>
+                <SetValueBars data={chartSets} symbol={unitSymbol} />
+              </Suspense>
               )}
             </div>
           </div>
@@ -353,41 +344,15 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '1.5rem' }}>
             {/* Type Distribution Donut Chart */}
             <div className="glass-panel">
-              <h3 className="chart-title">{t(gameFilter === 'mtg' ? 'dash.colorDistribution' : 'dash.typeDistribution')}</h3>
+              <h3 className="chart-title">{t(gameFilter === 'mtg' ? 'dash.colorDistribution' : gameFilter === 'riftbound' ? 'dash.domainDistribution' : 'dash.typeDistribution')}</h3>
+              {gameFilter === 'riftbound' && <RiotNotice style={{ margin: '0 0 0.5rem' }} />}
               <div className="chart-container" style={{ height: '220px' }}>
                 {typeChartData.length === 0 ? (
                   <div className="chart-empty">{t('dash.noTypeData')}</div>
                 ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={typeChartData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={50}
-                      outerRadius={80}
-                      paddingAngle={3}
-                      dataKey="value"
-                    >
-                      {typeChartData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }}
-                      itemStyle={{ color: 'var(--text-strong)' }}
-                      labelStyle={{ color: 'var(--text-strong)' }}
-                      formatter={(v) => [v, t('dash.cards')]}
-                    />
-                    <Legend 
-                      verticalAlign="bottom" 
-                      height={36} 
-                      iconSize={10} 
-                      style={{ fontSize: '0.75rem' }} 
-                      formatter={(value) => <span style={{ color: 'var(--text-secondary)' }}>{value}</span>}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
+                <Suspense fallback={<ChartFallback />}>
+                  <DistributionDonut data={typeChartData} colorKey="color" innerRadius={50} outerRadius={80} />
+                </Suspense>
                 )}
               </div>
             </div>
@@ -399,36 +364,9 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
                 {rarityChartData.length === 0 ? (
                   <div className="chart-empty">{t('dash.noRarityData')}</div>
                 ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={rarityChartData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={45}
-                      outerRadius={78}
-                      paddingAngle={3}
-                      dataKey="value"
-                    >
-                      {rarityChartData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.fill} />
-                      ))}
-                    </Pie>
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }}
-                      itemStyle={{ color: 'var(--text-strong)' }}
-                      labelStyle={{ color: 'var(--text-strong)' }}
-                      formatter={(v) => [v, t('dash.cards')]}
-                    />
-                    <Legend 
-                      verticalAlign="bottom" 
-                      height={36} 
-                      iconSize={10} 
-                      style={{ fontSize: '0.75rem' }} 
-                      formatter={(value) => <span style={{ color: 'var(--text-secondary)', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
+                <Suspense fallback={<ChartFallback />}>
+                  <DistributionDonut data={rarityChartData} colorKey="fill" innerRadius={45} outerRadius={78} legendEllipsis />
+                </Suspense>
                 )}
               </div>
             </div>
@@ -448,7 +386,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
               {topValuable.map((card, idx) => (
                 <div 
                   key={idx} 
-                  onClick={() => setInspectorCard(card)}
+                  role="button" tabIndex={0} onClick={() => setInspectorCard(card)} onKeyDown={onActivateKey(() => setInspectorCard(card))}
                   style={{ 
                     display: 'flex', 
                     gap: '0.75rem', 
@@ -471,15 +409,15 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
                       <span>{card.set_name} • {card.rarity}</span>
                       {card.printing && card.printing !== 'Normal' && (
                         <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 4px', borderRadius: '3px', flexShrink: 0, ...getPrintingBadgeStyle(card.printing) }}>
-                          {getPrintingBadgeLabel(card.printing)}
+                          {getPrintingBadgeLabel(card.printing, t)}
                         </span>
                       )}
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontWeight: 800, color: 'var(--accent-yellow)', fontSize: '0.95rem' }}>{priceText(card.price_trend)}<span style={{ fontSize: '0.6rem', fontWeight: 500, color: 'var(--text-muted)' }}> {t('dash.each')}</span></div>
+                    <div style={{ fontWeight: 800, color: 'var(--accent-yellow)', fontSize: '0.95rem' }}><Price value={card.price_trend} currency={card.price_currency} /><span style={{ fontSize: '0.6rem', fontWeight: 500, color: 'var(--text-muted)' }}> {t('dash.each')}</span></div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                      {card.quantity > 1 ? t('dash.qtyTotal', { qty: card.quantity, price: priceText(card.price_trend * card.quantity) }) : t('dash.qty', { qty: 1 })}
+                      {card.quantity > 1 ? t('dash.qtyTotal', { qty: card.quantity, price: show(card.price_trend * card.quantity, card.price_currency).text }) : t('dash.qty', { qty: 1 })}
                     </div>
                   </div>
                 </div>
@@ -498,7 +436,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
                 {recentAdditions.map((card, idx) => (
                   <div
                     key={idx}
-                    onClick={() => setInspectorCard(card)}
+                    role="button" tabIndex={0} onClick={() => setInspectorCard(card)} onKeyDown={onActivateKey(() => setInspectorCard(card))}
                     style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', cursor: 'pointer', transition: 'all 0.2s ease' }}
                     className="dashboard-card-clickable"
                   >
@@ -511,13 +449,13 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
                         <span>{card.set_name} • #{card.number}</span>
                         {card.printing && card.printing !== 'Normal' && (
                           <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 4px', borderRadius: '3px', flexShrink: 0, ...getPrintingBadgeStyle(card.printing) }}>
-                            {getPrintingBadgeLabel(card.printing)}
+                            {getPrintingBadgeLabel(card.printing, t)}
                           </span>
                         )}
                       </div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: 700, color: 'var(--accent-yellow)', fontSize: '0.8rem' }}>{priceText(card.price_trend)}<span style={{ fontSize: '0.55rem', fontWeight: 500, color: 'var(--text-muted)' }}> {t('dash.each')}</span></div>
+                      <div style={{ fontWeight: 700, color: 'var(--accent-yellow)', fontSize: '0.8rem' }}><Price value={card.price_trend} currency={card.price_currency} /><span style={{ fontSize: '0.55rem', fontWeight: 500, color: 'var(--text-muted)' }}> {t('dash.each')}</span></div>
                       <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{card.quantity > 1 ? t('dash.qty', { qty: card.quantity }) : (card.added_at ? new Date(card.added_at).toLocaleDateString(locale) : '')}</div>
                     </div>
                   </div>
@@ -532,7 +470,18 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
               <h3 className="chart-title">{t('dash.setProgress')}</h3>
               <div className="set-progress-grid" style={{ marginTop: '1rem' }}>
                 {setProgress.map((set, idx) => (
-                  <div key={idx} className="set-progress-item">
+                  // Opens the set's full card list, missing cards included. The game
+                  // goes along when one is picked; the Sets tab works it out otherwise.
+                  <div
+                    key={idx}
+                    className="set-progress-item dashboard-card-clickable"
+                    role="button"
+                    tabIndex={0}
+                    title={t('dash.openSet')}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => onOpenSet && onOpenSet({ setId: set.setId, game: gameFilter || null })}
+                    onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onOpenSet) { e.preventDefault(); onOpenSet({ setId: set.setId, game: gameFilter || null }); } }}
+                  >
                     <div className="set-progress-header">
                       <span style={{ color: 'var(--text-strong)' }}>{set.setName}</span>
                       <span style={{ color: 'var(--text-secondary)' }}>{set.ownedUnique} / {set.totalCards} ({set.percent}%)</span>
@@ -566,4 +515,4 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
   );
 }
 
-export default Dashboard;
+export default memo(Dashboard);

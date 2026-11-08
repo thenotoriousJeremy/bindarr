@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { Award, Search, Plus } from 'lucide-react';
 import CardImage from './CardImage';
 import { useT } from '../utils/i18n';
-import { priceText } from '../utils/formatPrice';
+import { useFx } from '../utils/useFx';
+import { apiErrorText } from '../utils/apiError';
 import { displayName } from '../utils/languages';
 
 // Add a graded slab by the cert number printed on its label.
@@ -21,6 +22,7 @@ import { displayName } from '../utils/languages';
 // candidates and the collector picks, which they can do from the slab in their hand.
 export default function SlabLookup({ onAddSuccess, showToast }) {
   const { t } = useT();
+  const { show } = useFx();
   const [cert, setCert] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -76,7 +78,7 @@ export default function SlabLookup({ onAddSuccess, showToast }) {
       });
       const body = await res.json().catch(() => null);
       if (!res.ok) {
-        showToast && showToast(body?.error || t('slab.errAdd'));
+        showToast && showToast(apiErrorText(t, body, 'slab.errAdd'));
         return;
       }
       showToast && showToast(t('slab.added', {
@@ -184,7 +186,7 @@ export default function SlabLookup({ onAddSuccess, showToast }) {
                       so it is shown as context for identifying the printing, not as
                       what the slab is worth. */}
                   <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                    {t('slab.rawPrice', { price: priceText(card.price_trend) })}
+                    {t('slab.rawPrice', { price: show(card.price_trend, card.price_currency).text })}
                   </div>
                   <button
                     type="button"

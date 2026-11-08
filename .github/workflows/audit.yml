@@ -1,0 +1,56 @@
+name: Dependency audit
+
+# npm audit for the three lockfiles. Its own workflow, not a step in the test
+# jobs: an advisory published overnight says nothing about whether a change is
+# correct, so it must not turn a pull request's tests red. The weekly run
+# catches advisories for code nobody touched.
+#
+# The gate is CRITICAL advisories in what ships: the server's production
+# dependencies (the Docker image installs `npm ci --omit=dev`) and the
+# frontend's (what the bundle and the native apps are built from). Everything
+# else, dev tooling included, is printed below the gate without failing it, so
+# it stays visible without becoming a check people learn to ignore.
+# Fixes go through `npm audit fix` (never --force) or Dependabot.
+on:
+  pull_request:
+    paths:
+      - '**/package.json'
+      - '**/package-lock.json'
+      - '.github/workflows/audit.yml'
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: npm audit (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: root
+            dir: .
+          - package: backend
+            dir: backend
+          - package: frontend
+            dir: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # Reads the lockfile only; nothing is installed.
+      - name: Critical advisories in production dependencies
+        working-directory: ${{ matrix.dir }}
+        run: npm audit --omit=dev --audit-level=critical
+      - name: Full report, dev dependencies included (not a gate)
+        if: ${{ !cancelled() }}
+        working-directory: ${{ matrix.dir }}
+        run: npm audit || true

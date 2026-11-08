@@ -23,6 +23,7 @@ const db = require('../src/db');
 const { resolveCardPrice } = require('../src/utils/priceHelpers');
 const gradedPrices = require('../src/gradedPrices');
 const { authenticateToken } = require('../src/middleware/auth');
+const { hashSessionToken } = require('../src/utils/authHelpers');
 
 // Recorded from the live API. Two shapes matter and both appear here: an exact
 // `tcgPlayerId` lookup answers with `data` as a single OBJECT, a search answers
@@ -122,8 +123,8 @@ async function runAuth(token, method = 'GET') {
   // A session token still authenticates a write — the API-key branch must not have
   // swallowed the normal path.
   await db.run(
-    `INSERT INTO sessions (user_id, token, expires_at) VALUES (?, 'session-token', DATETIME('now', '+1 day'))`,
-    [user.id]
+    `INSERT INTO sessions (user_id, token, expires_at) VALUES (?, ?, DATETIME('now', '+1 day'))`,
+    [user.id, hashSessionToken('session-token')]
   );
   const sessionWrite = await runAuth('session-token', 'POST');
   assert.ok(sessionWrite.passed, 'a real session still writes');
@@ -194,6 +195,14 @@ async function runAuth(token, method = 'GET') {
     await assert.rejects(
       () => gradedPrices.fetchGradedPrice({ ...base, grader: 'PSA', grade: 2, apiKey: 'testkey' }),
       (e) => { assert.ok(/PSA10/.test(e.message.replace(/\s/g, '')), `expected recorded grades in: ${e.message}`); return true; }
+    );
+
+    // A key the provider rejects comes back as 403, never 401: a 401 from Bindarr
+    // means the caller's own session is gone, and the app signs out on that.
+    gradedPrices.client.get = async () => { const e = new Error('x'); e.response = { status: 401 }; throw e; };
+    await assert.rejects(
+      () => gradedPrices.fetchGradedPrice({ ...base, apiKey: 'revoked' }),
+      (e) => e.status === 403 && /rejected/.test(e.message)
     );
   } finally {
     gradedPrices.client.get = realGet;

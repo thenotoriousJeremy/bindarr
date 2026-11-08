@@ -131,8 +131,8 @@ function searchableName(subject) {
 //
 // Throws with a `status` the route passes straight through, because the three
 // failure modes need different words: no token configured is the user's setup, a
-// 401 is a bad token, and a 404 means PSA has no such cert (a typo, or a slab from
-// another grader).
+// rejected token (PSA's 401, passed on as 403) is a bad token, and a 404 means PSA
+// has no such cert (a typo, or a slab from another grader).
 async function lookupCert(certInput, token = '') {
   const cert_number = normalizeCertNumber(certInput);
   if (!cert_number) {
@@ -169,7 +169,9 @@ async function lookupCert(certInput, token = '') {
     const status = err.response?.status;
     if (status === 401 || status === 403) {
       const e = new Error('PSA rejected the API token. Check it in Settings.');
-      e.status = 401;
+      // 403, not PSA's 401: a 401 from Bindarr means the caller's own session is
+      // gone, and the app signs out on it. This is a token in Settings.
+      e.status = 403;
       throw e;
     }
     if (status === 404) {

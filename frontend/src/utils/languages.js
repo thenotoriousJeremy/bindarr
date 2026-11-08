@@ -5,6 +5,7 @@
 // carries the provider-specific spellings (Scryfall's zht, TCGdex's zh-tw); the UI
 // ignores them and only ever speaks the canonical code.
 import LANGUAGE_TABLE from '../../../shared/languages.js';
+import GAME_TABLE from '../../../shared/games.js';
 
 export const LANGUAGES = LANGUAGE_TABLE;
 
@@ -33,11 +34,13 @@ export const isEnglish = (nameOrCode) => {
   return !key || key === 'en' || key === 'english';
 };
 
-// Which languages a game is printed in. Default/fallback is all languages.
+// Which languages a game is printed in, from the game registry (shared/games.json
+// lists each game's language codes). No game means every language; an unknown
+// game is printed in none. Same rule as backend/src/utils/languages.
 export function getLanguagesForGame(game) {
   if (!game) return LANGUAGES;
-  const g = String(game).toLowerCase();
-  return LANGUAGES.filter(l => !l.games || l.games.includes(g));
+  const entry = GAME_TABLE.find(g => g.value === String(game).toLowerCase());
+  return entry ? LANGUAGES.filter(l => (entry.languages || []).includes(l.code)) : [];
 }
 
 export const getLanguageNamesForGame = (game) => getLanguagesForGame(game).map(l => l.name);
@@ -74,12 +77,17 @@ export function translatedName(card) {
 }
 
 // The set's code. Unlike its name this reads the same in every language, so it is
-// what you can actually search for or quote. MTG set ids are stored prefixed.
+// what you can actually search for or quote. Some games' set ids are stored with
+// a prefix ('mtg-fdn', 'lorcana-tfc'; shared/games.json `setIdPrefix`), which is
+// not part of the code anyone types.
 //
 // Casing is left exactly as the provider gives it: TCGdex codes are mixed-case
 // ("SV8a", "sv03") and upper-casing them produces a code that does not resolve.
+const SET_PREFIXES = GAME_TABLE.map(g => g.setIdPrefix).filter(Boolean);
 export function setCode(card) {
-  const code = String(card?.set_id || '').replace(/^mtg-/, '');
+  const raw = String(card?.set_id || '');
+  const prefix = SET_PREFIXES.find(p => raw.toLowerCase().startsWith(p));
+  const code = prefix ? raw.slice(prefix.length) : raw;
   return code || null;
 }
 

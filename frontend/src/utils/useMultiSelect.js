@@ -1,5 +1,8 @@
 import { useRef, useState } from 'react';
 import { useLongPress } from './useLongPress';
+import { useT } from './i18n';
+import { undoFor, undoToast } from './undo';
+import { apiErrorText } from './apiError';
 
 // Long-press-to-arm multi-select + bulk actions over collection entries. Shared
 // by CollectionList and the scanner's recent-scans strip so both get the same
@@ -8,8 +11,10 @@ import { useLongPress } from './useLongPress';
 // data (refetch, or prune a local list). Selection is cleared before onChanged,
 // so the acted-on ids are passed along. Optional `guard()` returns a message
 // string to block arming/bulk (e.g. a locked container) or a falsy value to
-// allow it; the message is shown as a toast.
+// allow it; the message is shown as a toast. A delete or a move to Unsorted
+// carries an Undo button; undoing runs onChanged again with action 'undo'.
 export function useMultiSelect({ showToast, onChanged, guard } = {}) {
+  const { t } = useT();
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [bulkMoveTarget, setBulkMoveTarget] = useState('');
@@ -78,15 +83,18 @@ export function useMultiSelect({ showToast, onChanged, guard } = {}) {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        showToast(data.message || 'Done.');
+        const undo = undoFor(action, value, data);
+        showToast(data.message || t('bulk.done'), undoToast(undo, {
+          showToast, t, onDone: () => onChanged && onChanged({ ids, action: 'undo', value: null })
+        }));
         clearSelection();
         onChanged && onChanged({ ids, action, value });
       } else {
-        showToast(data.error || 'Bulk action failed.');
+        showToast(apiErrorText(t, data, 'bulk.errAction'));
       }
     } catch (err) {
       console.error(err);
-      showToast('Error performing bulk action.');
+      showToast(t('bulk.errActionGeneric'));
     }
   };
 

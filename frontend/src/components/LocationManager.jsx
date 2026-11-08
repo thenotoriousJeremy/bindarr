@@ -1,68 +1,28 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { DndContext, DragOverlay, MouseSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
-import { Plus, Minus, Trash2, X, MoreVertical, Settings, RefreshCw, Lock, LayoutGrid, List, MousePointerClick, ChevronDown, ChevronUp, Edit3, Upload } from 'lucide-react';
+import { memo, useState, useEffect, useMemo, useRef } from 'react';
+import { DndContext, DragOverlay, MouseSensor, useSensor, useSensors, pointerWithin } from '@dnd-kit/core';
+import { X, Lock } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
-import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
-import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
 import CardInspectorModal from './CardInspectorModal';
 import { useMultiSelect } from '../utils/useMultiSelect';
-import { isBinderType as computeIsBinder, binderSpread } from '../utils/cardOptions';
+import { undoToast, placementUndo } from '../utils/undo';
+import { isBinderType as computeIsBinder } from '../utils/cardOptions';
 import { displayName } from '../utils/languages';
-import CompartmentView, { FocusedCardInfo } from './CompartmentView';
-import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
+import ContainerOverview from './ContainerOverview';
 import CreateContainerModal from './CreateContainerModal';
-import PageColumnsSelect from './PageColumnsSelect';
-import CardImage from './CardImage';
+import BinderArtworkEditor from './BinderArtworkEditor';
+import { useBinderArt } from '../utils/useBinderArt';
+import { isDeviceMode } from '../apiBase';
+import { artPocketsByPage } from '../utils/binderArtGeometry';
 import { useBackGuard } from '../utils/useBackGuard';
+import { useTabParam, setTabParam } from '../utils/router';
 import { useT } from '../utils/i18n';
-
-// An Unsorted-queue card that can be dragged into a binder pocket. Split in two
-// so the hook only mounts when dragging is on — the queue also renders for
-// auto-sorted and locked containers, where there is nothing to drag to.
-// MouseSensor activates on mousedown, while hold-to-select listens on
-// pointerdown, so both sets of listeners can be spread onto the same element.
-function ActiveDraggable({ entryId, card, style, children, ...divProps }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: entryId, data: { card } });
-  return (
-    <div
-      ref={setNodeRef}
-      style={{ ...style, cursor: 'grab', ...(isDragging ? { opacity: 0.4 } : {}) }}
-      {...attributes}
-      {...listeners}
-      {...divProps}
-    >
-      {children}
-    </div>
-  );
-}
-
-function DraggableCard({ enabled, entryId, card, children, ...divProps }) {
-  if (!enabled) return <div {...divProps}>{children}</div>;
-  return <ActiveDraggable entryId={entryId} card={card} {...divProps}>{children}</ActiveDraggable>;
-}
-
-// The Unsorted queue as a drop target, so a filed card can be dragged back OUT
-// of the binder. Without it the queue is one-way: cards go in by drag and only
-// come back by opening the card and clearing its container.
-function UnsortedDropZone({ enabled, children }) {
-  const { setNodeRef, isOver } = useDroppable({ id: 'unsorted-queue' });
-  if (!enabled) return <>{children}</>;
-  return (
-    <div
-      ref={setNodeRef}
-      style={{
-        // An empty queue is exactly when you most want to drag a card out of the
-        // binder, and an empty div is nothing to aim at — so it keeps a target
-        // worth of height whether or not there is anything in it.
-        minHeight: '90px',
-        borderRadius: 'var(--radius-sm)',
-        ...(isOver ? { outline: '3px solid var(--accent-green)', outlineOffset: '-3px' } : {}),
-      }}
-    >
-      {children}
-    </div>
-  );
-}
+import { apiErrorText } from '../utils/apiError';
+import ContainerList from './storage/ContainerList';
+import ContainerSettingsModal, { CompartmentRulesModal, CapacitySyncModal } from './storage/ContainerSettings';
+import BinderViewPanel, { BinderPageNav } from './storage/BinderViewPanel';
+import BoxViewPanel from './storage/BoxViewPanel';
+import UnsortedQueue from './storage/UnsortedQueue';
+import { FilingGuidePanel, FilingBar } from './storage/FilingGuide';
 
 function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, focusEntryId }) {
   const { t } = useT();
@@ -82,10 +42,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
 
   const [showCreate, setShowCreate] = useState(false);
-  const containerImportInput = useRef(null);
 
   const [capacityUpdatePending, setCapacityUpdatePending] = useState(null);
-  const [showKebabMenu, setShowKebabMenu] = useState(false);
   const [showRulesModal, setShowRulesModal] = useState(false);
   const [sortDraft, setSortDraft] = useState([]);
   const [filterDraft, setFilterDraft] = useState([]);
@@ -112,16 +70,18 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   // Per-compartment filing-rule editor.
   const [rulesComp, setRulesComp] = useState(null);
-  useBackGuard(!!rulesComp, () => setRulesComp(null));
-  useBackGuard(showRulesModal, () => setShowRulesModal(false));
-  useBackGuard(!!capacityUpdatePending, () => setCapacityUpdatePending(null));
-  useBackGuard(!!selectedLocationId, () => setSelectedLocationId && setSelectedLocationId(null));
   const [compRuleDraft, setCompRuleDraft] = useState([]);
 
   const [unsortedSearch, setUnsortedSearch] = useState('');
   const [unsortedSort, setUnsortedSort] = useState('scanned-desc');
   const [unsortedViewMode, setUnsortedViewMode] = useState('grid'); // 'grid' | 'detail'
-  const [containerViewMode, setContainerViewMode] = useState('layout'); // 'layout' | 'list'
+  // Per kind of container: 'layout' is a box's coverflow or a binder's page
+  // spread, 'overview' every card at once. Remembered, so someone who reads their
+  // boxes as a grid gets the grid without asking each time.
+  const [containerViewModes, setContainerViewModes] = useState(() => ({
+    box: localStorage.getItem('bindarr_container_view_box') === 'overview' ? 'overview' : 'layout',
+    binder: localStorage.getItem('bindarr_container_view_binder') === 'overview' ? 'overview' : 'layout',
+  }));
   const [containerCardScale, setContainerCardScale] = useState(1);
   const [unsortedBulkLocation, setUnsortedBulkLocation] = useState('');
 
@@ -205,6 +165,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const isBinderType = computeIsBinder(selectedLoc?.type);
   const isCustom = selectedLoc?.sort_order === 'custom';
 
+  const containerKind = isBinderType ? 'binder' : 'box';
+  const containerViewMode = containerViewModes[containerKind];
+  const setContainerViewMode = (mode) => {
+    localStorage.setItem(`bindarr_container_view_${containerKind}`, mode);
+    setContainerViewModes(modes => ({ ...modes, [containerKind]: mode }));
+  };
+  // Filing and Arrange both work on the layout (the ghost slot, tap-to-place)
+  // and hide the view switch while they run, so they always get the layout.
+  const viewMode = (filingMode || moveMode) ? 'layout' : containerViewMode;
+
   useEffect(() => {
     if (filingMode && filingQueue[filingIndex]?.recommended) {
       const rec = filingQueue[filingIndex].recommended;
@@ -248,6 +218,17 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [activeCompartmentId, setActiveCompartmentId] = useState(null);
   const [, setCoverflowActiveIndex] = useState(0); // value unused; setter drives filing-snap resets
 
+  // Box map and coverflow, kept in step: boxSeek asks the open row to centre a
+  // slot (CompartmentView's seekTo), boxCursor is the slot it reports back.
+  const [boxSeek, setBoxSeek] = useState(null);
+  const [boxCursor, setBoxCursor] = useState(null);
+  const seekNonce = useRef(0);
+  const seekBox = (compartmentId, slot, { divider = false } = {}) => {
+    seekNonce.current += 1;
+    setActiveCompartmentId(compartmentId);
+    setBoxSeek({ compartmentId, slot, divider, nonce: seekNonce.current });
+  };
+
   const handleTouchStart = (e) => {
     if (!e.changedTouches || !e.changedTouches[0]) return;
     touchStartRef.current = {
@@ -283,6 +264,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     setBinderActiveEntryId(null);
     if (!filingReadOnly) setFilingQueue([]);
     setCoverflowActiveIndex(0);
+    setBoxSeek(null);
+    setBoxCursor(null);
     storage.exitSelectMode();
     setMoveMode(false);
     setPickedEntryId(null);
@@ -366,8 +349,38 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLocationId]);
 
+  // The open container is mirrored in the URL (/storage/:id) so a reload or a
+  // link reopens it. Switching containers replaces the entry rather than
+  // stacking one per container: Back leaves Storage.
+  const routeLocationId = useTabParam('storage');
+  const routedLocationRef = useRef(null);
   useEffect(() => {
-    if (!focusEntryId || allCards.length === 0) return;
+    if (routeLocationId == null || String(activeLocationId) === routeLocationId) return;
+    routedLocationRef.current = Number(routeLocationId);
+    setActiveLocationId(Number(routeLocationId));
+    setMobilePane('container');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeLocationId]);
+  useEffect(() => {
+    if (activeLocationId == null || String(activeLocationId) === routeLocationId) return;
+    setTabParam('storage', activeLocationId, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeLocationId]);
+  // A link to a container that is gone (or not yours) falls back to the first.
+  // Only for ids the URL supplied: one just created is set before the list
+  // reloads, and must not be taken for a dead link.
+  useEffect(() => {
+    if (activeLocationId != null && activeLocationId === routedLocationRef.current
+      && locations.length > 0 && !locations.some(l => l.id === activeLocationId)) {
+      setActiveLocationId(locations[0].id);
+    }
+  }, [locations, activeLocationId]);
+
+  useEffect(() => {
+    // App clears the request when you leave this tab (the tab stays mounted), so
+    // forget it here too: locating the same card again must navigate again.
+    if (!focusEntryId) { focusNavRef.current = null; return; }
+    if (allCards.length === 0) return;
     const targetCard = allCards.find(c => (c.entry_id || c.id) === focusEntryId);
     if (!targetCard) return;
 
@@ -404,6 +417,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
         } else if (attempts < 15) {
           attempts++;
+          // The Unsorted queue mounts only the rows in view, so the card may have
+          // no element yet: scroll its row in, and the next attempt finds it.
+          const idx = unsortedCardsRef.current.findIndex(c => c.entry_id === focusEntryId);
+          if (idx !== -1 && unsortedGridRef.current) unsortedGridRef.current.scrollToIndex(idx);
           setTimeout(tryScroll, 100);
         }
       };
@@ -426,6 +443,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     ));
     return sortCardsByOrder([...cards], unsortedSort, selectedLoc?.foil_sorting, setsList);
   }, [allCards, unsortedSearch, unsortedSort, selectedLoc, setsList]);
+  // For locating a card the windowed queue has not mounted (see the focus effect).
+  const unsortedGridRef = useRef(null);
+  const unsortedCardsRef = useRef(unsortedCards);
+  unsortedCardsRef.current = unsortedCards;
 
   // Distinct values per filterable field from the cards actually owned, so the
   // FilterBuilder value box suggests real options (e.g. subtypes like "Basic")
@@ -445,6 +466,22 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       printing: uniq(c => [c.printing]),
     };
   }, [allCards]);
+
+  // Binder artwork (issue #104): decoration over empty pockets, never a card.
+  // Server-only: the embedded phone backend has no sharp and no image store.
+  const artworkAvailable = isBinderType && !isDeviceMode();
+  const [artworkOpen, setArtworkOpen] = useState(false);
+  const binderArt = useBinderArt(selectedLoc?.id, artworkAvailable);
+  const artByPage = useMemo(() => {
+    const byPage = artPocketsByPage({ layers: binderArt.layers, compartments, pageColumns: selectedLoc?.page_columns });
+    for (const pockets of byPage.values()) {
+      for (const [slot, piece] of pockets) {
+        if (binderArt.srcs[piece.artworkId]) pockets.set(slot, { ...piece, src: binderArt.srcs[piece.artworkId] });
+        else pockets.delete(slot);
+      }
+    }
+    return byPage;
+  }, [binderArt.layers, binderArt.srcs, compartments, selectedLoc?.page_columns]);
 
   const cardsByCompartment = useMemo(() => {
     const map = new Map();
@@ -482,7 +519,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         setActiveLocationId(data.id);
         onUpdate();
       } else {
-        showToast(data.error || 'Failed to create container.');
+        showToast(apiErrorText(t, data, 'loc.errCreate'));
       }
     } catch (err) {
       console.error(err);
@@ -502,7 +539,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           body: JSON.stringify({ data: String(reader.result || ''), name: file.name.replace(/\.[^.]+$/, '') })
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || t('loc.errCreate'));
+        if (!response.ok) throw new Error(apiErrorText(t, data, 'loc.errCreate'));
         showToast(data.message);
         setActiveLocationId(data.id);
         await refreshAll();
@@ -558,7 +595,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         onUpdate();
       } else {
         const data = await res.json().catch(() => ({}));
-        showToast(data.error || 'Failed to update container.');
+        showToast(apiErrorText(t, data, 'loc.errUpdateContainer'));
       }
     } catch (err) {
       console.error(err);
@@ -612,7 +649,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       } else {
         const friendlyError = (data.error || '').toLowerCase().includes('do not match the destination binder rules')
           ? t('loc.moveRuleMismatch')
-          : (data.error || t('loc.errMove'));
+          : apiErrorText(t, data, 'loc.errMove');
         showToast(friendlyError);
       }
     } catch (err) {
@@ -641,7 +678,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         showToast(t('loc.compartmentMoved'));
         await Promise.all([fetchCompartments(selectedLoc.id), fetchLocations()]);
       } else {
-        showToast(data.error || t('loc.errMove'));
+        showToast(apiErrorText(t, data, 'loc.errMove'));
       }
     } catch (err) {
       console.error(err);
@@ -660,7 +697,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       const res = await fetch(`/api/compartments/${compartmentId}`, { method: 'DELETE' });
       const data = await res.json();
       if (res.ok) { showToast(t('loc.compartmentRemoved')); await Promise.all([fetchCompartments(activeLocationId), fetchLocations()]); }
-      else showToast(data.error || 'Failed to remove compartment.');
+      else showToast(apiErrorText(t, data, 'loc.errRemoveCompartment'));
     } catch (err) { console.error(err); showToast(t('loc.errRemoveCompartment')); }
   };
 
@@ -734,7 +771,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       if (res.ok) { showToast(t('loc.cardMoved')); await refreshAll(); }
       else {
         const errData = await res.json().catch(()=>({}));
-        showToast(errData.error || 'Failed to move card.');
+        showToast(apiErrorText(t, errData, 'loc.errMove'));
       }
     } catch (err) { console.error(err); showToast(t('loc.errMove')); }
   };
@@ -773,7 +810,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         setPickedEntryId(null);
         await refreshAll(); onUpdate();
       } else {
-        showToast(data.error === 'COMPARTMENT_FULL' ? 'That page/row is full.' : (data.error || 'Failed to place card.'));
+        showToast(apiErrorText(t, data, 'loc.errPlace'));
       }
     } catch (err) { console.error(err); showToast(t('loc.errPlace')); }
   };
@@ -806,10 +843,12 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        showToast(body?.error || t('loc.errPlace'));
+        showToast(apiErrorText(t, body, 'loc.errPlace'));
         return;
       }
-      showToast(t('loc.movedToUnsorted'));
+      showToast(t('loc.movedToUnsorted'), undoToast(placementUndo(allCards.find(c => c.entry_id === entryId)), {
+        showToast, t, onDone: async () => { await refreshAll(); onUpdate(); }
+      }));
       setPickedEntryId(null);
       await refreshAll(); onUpdate();
     } catch (err) { console.error(err); showToast(t('loc.errPlace')); }
@@ -836,7 +875,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     if (!window.confirm(t('loc.confirmRemoveCard'))) return;
     try {
       const res = await fetch(`/api/collection/${entryId}`, { method: 'DELETE' });
-      if (res.ok) { showToast(t('loc.cardRemoved')); await refreshAll(); onUpdate(); }
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(t('loc.cardRemoved'), undoToast(data.trash_batch && { kind: 'trash', batch: data.trash_batch }, {
+          showToast, t, onDone: async () => { await refreshAll(); onUpdate(); }
+        }));
+        await refreshAll(); onUpdate();
+      }
       else showToast(t('loc.errRemoveCard'));
     } catch (err) { console.error(err); showToast(t('loc.errRemoveCardGeneric')); }
   };
@@ -847,13 +892,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     [allCards, activeLocationId]
   );
 
-  const containerListCards = useMemo(() => {
-    const compartmentIndex = new Map(compartments.map((compartment, index) => [compartment.id, index]));
-    return [...cardsInActiveLocation].sort((a, b) =>
-      (compartmentIndex.get(a.compartment_id) ?? Infinity) - (compartmentIndex.get(b.compartment_id) ?? Infinity)
-      || (a.position || 0) - (b.position || 0)
-    );
-  }, [cardsInActiveLocation, compartments]);
+  // From the All cards overview back to the layout, at that row or page.
+  const openCompartmentInLayout = (compartmentId) => {
+    setContainerViewMode('layout');
+    if (isBinderType) {
+      const idx = compartments.findIndex(c => c.id === compartmentId);
+      if (idx !== -1) setActivePageIndex(idx);
+    } else {
+      setActiveCompartmentId(compartmentId);
+    }
+  };
 
   const openCompartmentRules = (comp) => {
     let draft = [];
@@ -862,7 +910,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       try {
         const p = typeof cfg === 'string' ? JSON.parse(cfg) : cfg;
         draft = Array.isArray(p) ? p : (p.rules || []);
-      } catch (e) { draft = []; }
+      } catch { draft = []; }
     }
     setCompRuleDraft(draft);
     setRulesComp(comp);
@@ -898,7 +946,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       });
       const data = await res.json();
       if (res.ok) { showToast(data.message); await refreshAll(); onUpdate(); }
-      else showToast(data.error || 'Failed to file batch.');
+      else showToast(apiErrorText(t, data, 'loc.errFileBatch'));
     } catch (err) { console.error(err); showToast(t('loc.errFileBatch')); }
   };
 
@@ -984,6 +1032,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         body: JSON.stringify({ location_id: locationId, compartment_id: compartmentId, position })
       });
       if (res.ok) {
+        // Filled up since the recommendation was made: the card stays unfiled.
+        const filed = await res.json().catch(() => ({}));
+        if (filed.container_full) showToast(t('loc.containerFull'));
         await refreshAll();
         advanceFiling();
       } else {
@@ -1014,6 +1065,49 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     } catch (err) { console.error(err); showToast(t('loc.errResortGeneric')); }
   };
 
+  // Seed the Container Settings drafts from the open container (kebab menu).
+  const openContainerSettings = () => {
+    let sDraft = [];
+    if (selectedLoc.sort_order && selectedLoc.sort_order.startsWith('[')) {
+      try { sDraft = JSON.parse(selectedLoc.sort_order); } catch { /* ignore */ }
+    } else if (selectedLoc.sort_order && selectedLoc.sort_order !== 'custom') {
+      if (selectedLoc.sort_order === 'name-asc') sDraft = [{id: '1', by:'name', dir:'asc'}];
+      else if (selectedLoc.sort_order === 'price-desc') sDraft = [{id: '1', by:'price', dir:'desc'}];
+      else if (selectedLoc.sort_order === 'set-number') sDraft = [{id: '1', by:'set', dir:'asc'}];
+      else if (selectedLoc.sort_order === 'set-number-printing') sDraft = [{id: '1', by:'set', dir:'asc'}, {id: '2', by:'printing', dir:'asc'}];
+      else if (selectedLoc.sort_order === 'type-name') sDraft = [{id: '1', by:'type', dir:'asc'}, {id: '2', by:'name', dir:'asc'}];
+      else if (selectedLoc.sort_order === 'language') sDraft = [{id: '1', by:'language', dir:'asc'}];
+    }
+    setSortDraft(sDraft);
+
+    let fDraft = [];
+    if (selectedLoc.rule_type === 'compound') {
+      try {
+        const cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config;
+        fDraft = cfg?.rules || [];
+      } catch { /* ignore */ }
+    } else if (selectedLoc.rule_type === 'alphabetical_range') {
+      let cfg = {};
+      try { cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config; } catch { /* ignore */ }
+      if (cfg?.start) fDraft.push({ id: '1', action: 'include', field: 'name', operator: '>=', value: cfg.start });
+      if (cfg?.end) fDraft.push({ id: '2', action: 'include', field: 'name', operator: '<=', value: cfg.end });
+    }
+    setFilterDraft(fDraft);
+
+    setNameDraft(selectedLoc.name || '');
+    setStackingDraft(!!selectedLoc.allow_stacking);
+    setColumnsDraft(selectedLoc.page_columns ? String(selectedLoc.page_columns) : '');
+    let fixed = null;
+    try { fixed = selectedLoc.fixed_slots ? JSON.parse(selectedLoc.fixed_slots) : null; } catch { /* ignore */ }
+    setFixedDraft(Array.isArray(fixed) && fixed.length > 0 ? fixed.map(r => ({ ...r, max_number: r.max_number ?? '' })) : null);
+    setCountDraft(String(compartments.length));
+    const caps = compartments.map(c => c.capacity);
+    const uniform = caps.length > 0 && caps.every(c => c === caps[0]);
+    setCapacityDraft(uniform ? String(caps[0]) : '');
+
+    setShowRulesModal(true);
+  };
+
   // Save the Container Settings modal: rename, sort/filter rules, and a
   // one-shot capacity applied to every row/page. Switching to Custom freezes
   // the current order server-side; a structured sort change offers a re-sort.
@@ -1040,6 +1134,21 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     if (isBinderType) fields.page_columns = columnsDraft === '' ? null : parseInt(columnsDraft, 10);
     const trimmedName = (nameDraft || '').trim();
     if (trimmedName && trimmedName !== selectedLoc.name) fields.name = trimmedName;
+
+    // Fewer pages/rows sends whatever the cut ones hold to Unsorted: say how many
+    // before anything is saved, so backing out leaves the container untouched.
+    const shrinkTo = parseInt(countDraft, 10);
+    if (shrinkTo > 0 && shrinkTo < compartments.length) {
+      let message = t('loc.confirmShrinkUnknown');
+      try {
+        const res = await fetch(`/api/locations/${selectedLoc.id}/shrink-preview?count=${shrinkTo}`);
+        if (res.ok) {
+          const { wouldMove } = await res.json();
+          message = wouldMove > 0 ? t('loc.confirmShrink', { count: wouldMove }) : null;
+        }
+      } catch (err) { console.error(err); }
+      if (message && !window.confirm(message)) return;
+    }
 
     await handleUpdateLocationFields(fields);
 
@@ -1120,202 +1229,51 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       )}
 
       {rulesComp && (
-        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRulesComp(null)}>
-          <div className="glass-panel" style={{ width: '480px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', background: 'var(--bg-secondary)' }} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ margin: 0 }}>{rulesComp.display_label}: Accepts</h3>
-            <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0 }}>
-              Rules controlling which cards may be filed into this {isBinderType ? 'page' : 'row'}. No rules = accepts anything the container allows.
-            </p>
-            <FilterBuilder value={compRuleDraft} onChange={setCompRuleDraft} setsList={setsList} fieldOptions={filterFieldOptions} />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
-              <button className="btn btn-secondary" onClick={() => setRulesComp(null)}>{t('common.cancel')}</button>
-              <button className="btn btn-primary" onClick={saveCompartmentRules}>{t('loc.saveRules')}</button>
-            </div>
-          </div>
-        </div>
+        <CompartmentRulesModal
+          rulesComp={rulesComp}
+          setRulesComp={setRulesComp}
+          isBinderType={isBinderType}
+          compRuleDraft={compRuleDraft}
+          setCompRuleDraft={setCompRuleDraft}
+          setsList={setsList}
+          filterFieldOptions={filterFieldOptions}
+          saveCompartmentRules={saveCompartmentRules}
+        />
       )}
 
       {capacityUpdatePending && (
-        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div className="glass-panel" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--bg-secondary)' }}>
-            <h3 style={{ margin: 0 }}>{t('loc.syncCapacity')}</h3>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0 }}>
-              Do you want to apply the capacity <strong>{capacityUpdatePending.capacity}</strong> to ALL compartments in this container, or just this specific one?
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-              <button className="btn btn-secondary" onClick={() => { handleSetCapacity(capacityUpdatePending.id, capacityUpdatePending.capacity, false); setCapacityUpdatePending(null); }}>{t('loc.justThisOne')}</button>
-              <button className="btn btn-primary" onClick={() => { handleSetCapacity(capacityUpdatePending.id, capacityUpdatePending.capacity, true); setCapacityUpdatePending(null); }}>{t('loc.applyToAll')}</button>
-            </div>
-          </div>
-        </div>
+        <CapacitySyncModal
+          capacityUpdatePending={capacityUpdatePending}
+          setCapacityUpdatePending={setCapacityUpdatePending}
+          handleSetCapacity={handleSetCapacity}
+        />
       )}
 
       {showRulesModal && selectedLoc && (
-        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
-          <div className="glass-panel" style={{ width: '400px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--bg-secondary)' }}>
-            <h3 style={{ margin: 0 }}>{t('loc.containerSettings')}</h3>
-
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-              {t('loc.containerName')}
-              <input
-                className="input-control"
-                value={nameDraft}
-                onChange={(e) => setNameDraft(e.target.value)}
-                placeholder={selectedLoc.name}
-                style={{ padding: '0.35rem 0.5rem', fontSize: '0.9rem' }}
-              />
-            </label>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                {t(isBinderType ? 'loc.numberOfPages' : 'loc.numberOfRows')}
-                <input
-                  type="number"
-                  min="1"
-                  max="500"
-                  className="input-control"
-                  value={countDraft}
-                  onChange={(e) => setCountDraft(e.target.value)}
-                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }}
-                />
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                Cards per {isBinderType ? 'page' : 'row'}
-                <input
-                  type="number"
-                  min="1"
-                  className="input-control"
-                  value={capacityDraft}
-                  onChange={(e) => setCapacityDraft(e.target.value)}
-                  placeholder={t('loc.varies')}
-                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }}
-                />
-              </label>
-            </div>
-
-            {/* Binders only: a box row is a coverflow, it has no pocket grid. */}
-            {isBinderType && (
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                {t('loc.pageColumns')}
-                <PageColumnsSelect
-                  value={columnsDraft}
-                  onChange={setColumnsDraft}
-                  capacity={capacityDraft}
-                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }}
-                />
-                <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem', lineHeight: 1.35 }}>{t('loc.pageColumnsHint')}</span>
-              </label>
-            )}
-
-            {/* Binders only: a box row shows its cards in a coverflow, where a
-                shared slot has nothing to show — the pocket grid is what makes a
-                stack visible. */}
-            {isBinderType && (
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
-                <input
-                  type="checkbox"
-                  id="allowStackingOpt"
-                  checked={stackingDraft}
-                  onChange={(e) => setStackingDraft(e.target.checked)}
-                  style={{ width: '16px', height: '16px', cursor: 'pointer', marginTop: '0.1rem', flexShrink: 0 }}
-                />
-                <label htmlFor="allowStackingOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--text-primary)', lineHeight: 1.35 }}>
-                  <strong>{t('loc.allowStacking')}</strong>
-                  <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.7rem' }}>
-                    {t('loc.allowStackingHint')}
-                  </span>
-                </label>
-              </div>
-            )}
-
-            {isBinderType && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
-                  <input
-                    type="checkbox"
-                    id="fixedSlotsOpt"
-                    checked={!!fixedDraft}
-                    onChange={(e) => setFixedDraft(e.target.checked ? [{ set_id: '', start_slot: 1, max_number: '' }] : null)}
-                    style={{ width: '16px', height: '16px', cursor: 'pointer', marginTop: '0.1rem', flexShrink: 0 }}
-                  />
-                  <label htmlFor="fixedSlotsOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--text-primary)', lineHeight: 1.35 }}>
-                    <strong>{t('loc.fixedSlots')}</strong>
-                    <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.7rem' }}>
-                      {t('loc.fixedSlotsHint')}
-                    </span>
-                  </label>
-                </div>
-                {fixedDraft && (
-                  <>
-                    {fixedDraft.map((row, i) => {
-                      const update = (patch) => setFixedDraft(fixedDraft.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-                      return (
-                        <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 4.5rem 4.5rem auto', gap: '0.35rem', alignItems: 'end' }}>
-                          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', fontSize: '0.65rem', color: 'var(--text-secondary)', minWidth: 0 }}>
-                            {t('loc.fixedSlotsSet')}
-                            <select className="select-control" value={row.set_id} onChange={(e) => update({ set_id: e.target.value })} style={{ fontSize: '0.75rem', padding: '0.3rem' }}>
-                              <option value="">—</option>
-                              {/* A saved set the catalogue no longer lists still shows, rather than reading as unset. */}
-                              {row.set_id && !setsList.some(s => s.id === row.set_id) && <option value={row.set_id}>{row.set_id}</option>}
-                              {setsList
-                                .filter(s => !selectedLoc.game || selectedLoc.game === 'any' || s.game === selectedLoc.game || s.id === row.set_id)
-                                .map(s => <option key={s.id} value={s.id}>{s.name} ({s.ptcgo_code || s.id})</option>)}
-                            </select>
-                          </label>
-                          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
-                            {t('loc.fixedSlotsStart')}
-                            <input type="number" min="1" className="input-control" value={row.start_slot} onChange={(e) => update({ start_slot: e.target.value })} style={{ fontSize: '0.75rem', padding: '0.3rem' }} />
-                          </label>
-                          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
-                            {t('loc.fixedSlotsMax')}
-                            <input type="number" min="1" className="input-control" value={row.max_number} placeholder={t('loc.fixedSlotsNoMax')} onChange={(e) => update({ max_number: e.target.value })} style={{ fontSize: '0.75rem', padding: '0.3rem' }} />
-                          </label>
-                          <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setFixedDraft(fixedDraft.filter((_, j) => j !== i))} title={t('loc.fixedSlotsRemove')} aria-label={t('loc.fixedSlotsRemove')} style={{ width: '28px', height: '28px', padding: 0 }}>
-                            <X size={14} />
-                          </button>
-                        </div>
-                      );
-                    })}
-                    <button type="button" className="btn btn-secondary" onClick={() => setFixedDraft([...fixedDraft, { set_id: '', start_slot: 1, max_number: '' }])} style={{ alignSelf: 'flex-start', fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}>
-                      <Plus size={12} /> {t('loc.fixedSlotsAdd')}
-                    </button>
-                    <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem', lineHeight: 1.35 }}>{t('loc.fixedSlotsOverflow')}</span>
-                  </>
-                )}
-              </div>
-            )}
-
-            <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.04))', borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.55rem', fontSize: '0.72rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              {/* Label only — the count sits in the value beside it, so this is
-                  not loc.cardsCurrentlyStored, whose sentence carries a {count}
-                  this row has nowhere to put. */}
-              <span style={{ color: 'var(--text-muted)' }}>{t(selectedLoc.allow_stacking ? 'loc.slotsUsedLabel' : 'loc.cardsStoredLabel')}</span>
-              <strong style={{ fontSize: '0.9rem', color: 'var(--text-strong)' }}>{selectedLoc.total_cards || 0} / {selectedLoc.total_capacity || 0}</strong>
-            </div>
-
-            <div style={{ background: 'rgba(255, 170, 0, 0.1)', border: '1px solid #d97706', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', color: 'var(--text-primary)', lineHeight: 1.4 }}>
-              <strong>{t('loc.reorganizeWarningTitle')}</strong>
-              <ul style={{ margin: '0.35rem 0 0', paddingLeft: '1.1rem' }}>
-                <li>{t('loc.ruleNoteResort', { containerType: isBinderType ? t('loc.binderLower') : t('loc.boxLower') })}</li>
-                <li>{t('loc.ruleNoteFilter')}</li>
-                <li>{t('loc.ruleNoteCustom')}</li>
-                <li>{t('loc.ruleNoteShrink', { unitType: isBinderType ? t('loc.pageLower') : t('loc.rowLower') })}</li>
-              </ul>
-            </div>
-
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-              {t('loc.sortHint')}
-            </span>
-            <SortBuilder value={sortDraft} onChange={setSortDraft} />
-            <FilterBuilder value={filterDraft} onChange={setFilterDraft} setsList={setsList} fieldOptions={filterFieldOptions} />
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-              <button className="btn btn-secondary" onClick={() => setShowRulesModal(false)}>{t('common.cancel')}</button>
-              <button className="btn btn-primary" onClick={saveContainerSettings}>{t('admin.saveSettings')}</button>
-            </div>
-          </div>
-        </div>
+        <ContainerSettingsModal
+          selectedLoc={selectedLoc}
+          isBinderType={isBinderType}
+          setsList={setsList}
+          filterFieldOptions={filterFieldOptions}
+          nameDraft={nameDraft}
+          setNameDraft={setNameDraft}
+          countDraft={countDraft}
+          setCountDraft={setCountDraft}
+          capacityDraft={capacityDraft}
+          setCapacityDraft={setCapacityDraft}
+          columnsDraft={columnsDraft}
+          setColumnsDraft={setColumnsDraft}
+          stackingDraft={stackingDraft}
+          setStackingDraft={setStackingDraft}
+          fixedDraft={fixedDraft}
+          setFixedDraft={setFixedDraft}
+          sortDraft={sortDraft}
+          setSortDraft={setSortDraft}
+          filterDraft={filterDraft}
+          setFilterDraft={setFilterDraft}
+          setShowRulesModal={setShowRulesModal}
+          saveContainerSettings={saveContainerSettings}
+        />
       )}
 
       {/* Tabs stay visible during filing so there's always a way back — otherwise
@@ -1335,206 +1293,35 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           (the recommended slot blinks in it); the compact filing bar is pinned
           at the bottom of the screen. */}
       <div className="glass-panel" style={{ padding: '0.9rem', display: (isStacked && !filingMode && mobilePane !== 'container') ? 'none' : 'flex', flexDirection: 'column', gap: '0.75rem', overflowY: 'auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <select
-              className="select-control"
-              value={activeLocationId || ''}
-              onChange={(e) => setActiveLocationId(parseInt(e.target.value, 10))}
-              style={{ fontSize: '1rem', fontWeight: 'bold', padding: '0.3rem', width: 'auto', minWidth: '150px' }}
-            >
-              <option value="" disabled>{t('loc.selectContainer')}</option>
-              {locations.map(loc => <option key={loc.id} value={loc.id}>{loc.locked ? '🔒 ' : ''}{loc.name} ({loc.type})</option>)}
-            </select>
-            <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setShowCreate(s => !s)} style={{ width: '28px', height: '28px', padding: 0 }} title={t('loc.createContainer')}>
-              <Plus size={14} />
-            </button>
-            <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => containerImportInput.current?.click()} style={{ width: '28px', height: '28px', padding: 0 }} title={t('loc.importContainer')}>
-              <Upload size={14} />
-            </button>
-            <input ref={containerImportInput} type="file" accept=".txt,text/plain" onChange={handleContainerImportFile} style={{ display: 'none' }} />
-            {selectedLoc && !!selectedLoc.locked && (
-              <button type="button" onClick={handleToggleContainerLock} title={t('loc.lockedBadgeHint')} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.62rem', fontWeight: 800, padding: '0.15rem 0.45rem', borderRadius: '999px', cursor: 'pointer', background: 'rgba(255,193,7,0.15)', border: '1px solid var(--accent-yellow)', color: 'var(--accent-yellow)' }}>
-                <Lock size={11} /> Locked
-              </button>
-            )}
-          </div>
-          
-          {selectedLoc && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            {!filingMode && !moveMode && (
-              <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                <button
-                  type="button"
-                  className={`btn btn-icon-only ${containerViewMode === 'layout' ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setContainerViewMode('layout')}
-                  style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-                  title={t('loc.gridView')}
-                >
-                  <LayoutGrid size={13} />
-                </button>
-                <button
-                  type="button"
-                  className={`btn btn-icon-only ${containerViewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setContainerViewMode('list')}
-                  style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-                  title={t('loc.detailView')}
-                >
-                  <List size={13} />
-                </button>
-              </div>
-            )}
-            {containerViewMode === 'list' && !filingMode && !moveMode && (
-              <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                <button
-                  type="button"
-                  className="btn btn-icon-only btn-secondary"
-                  disabled={containerCardScale <= 0.6}
-                  onClick={() => setContainerCardScale(scale => Math.max(0.6, +(scale - 0.2).toFixed(1)))}
-                  aria-label={t('loc.decreaseCardScale')}
-                  title={t('loc.decreaseCardScale')}
-                  style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-                >
-                  <Minus size={13} />
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-icon-only btn-secondary"
-                  disabled={containerCardScale >= 2.5}
-                  onClick={() => setContainerCardScale(scale => Math.min(2.5, +(scale + 0.2).toFixed(1)))}
-                  aria-label={t('loc.increaseCardScale')}
-                  title={t('loc.increaseCardScale')}
-                  style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-                >
-                  <Plus size={13} />
-                </button>
-              </div>
-            )}
-            {!filingMode && !moveMode && (selectedLoc.total_cards || 0) > 0 && (
-              <button
-                type="button"
-                className={`btn ${storage.selectMode ? 'btn-primary' : 'btn-secondary'}`}
-                disabled={!!selectedLoc.locked}
-                onClick={() => (storage.selectMode ? storage.exitSelectMode() : storage.setSelectMode(true))}
-                style={{ fontSize: '0.7rem', padding: '0.3rem 0.6rem' }}
-                title={t(selectedLoc.locked ? 'loc.lockedSelectHint' : 'loc.selectHint')}
-              >
-                {t(storage.selectMode ? 'bulk.done' : 'collection.select')}
-              </button>
-            )}
-            {!filingMode && !storage.selectMode && isCustom && (
-              <button
-                type="button"
-                className={`btn ${moveMode ? 'btn-primary' : 'btn-secondary'}`}
-                disabled={!!selectedLoc.locked}
-                onClick={() => { setMoveMode(m => !m); setPickedEntryId(null); }}
-                style={{ fontSize: '0.7rem', padding: '0.3rem 0.6rem' }}
-                title={t(selectedLoc.locked ? 'loc.lockedArrangeHint' : 'loc.arrangeHint')}
-              >
-                {t(moveMode ? 'loc.doneArranging' : 'loc.arrange')}
-              </button>
-            )}
-            <div className="kebab-menu">
-              <button className="kebab-menu-button" onClick={() => setShowKebabMenu(s => !s)}>
-                <MoreVertical size={16} color="var(--text-secondary)" />
-              </button>
-              {showKebabMenu && (
-                <div className="kebab-dropdown">
-                  <button className="kebab-item" disabled={!!selectedLoc.locked} onClick={() => { setShowKebabMenu(false); handleAddCompartment(); }}>
-                    <Plus size={14} /> {t(isBinderType ? 'loc.addPage' : 'loc.addCompartment')}
-                  </button>
-                  <button className="kebab-item" 
-                          disabled={!!selectedLoc.locked || compartments.length <= 1 || (cardsByCompartment.get(compartments[compartments.length-1]?.id) || []).length > 0} 
-                          onClick={() => { setShowKebabMenu(false); handleRemoveCompartment(compartments[compartments.length-1].id); }}
-                          title={t(selectedLoc.locked ? 'loc.containerLockedShort' : 'loc.removeLastHint')}
-                  >
-                    <Trash2 size={14} /> {t(isBinderType ? 'loc.removeLastPage' : 'loc.removeLastCompartment')}
-                  </button>
-                  <button className="kebab-item" onClick={() => { setShowKebabMenu(false); startResort(); }} disabled={!!selectedLoc.locked || (selectedLoc.total_cards || 0) === 0}>
-                    <RefreshCw size={14} /> Re-sort Container
-                  </button>
-                  <button className="kebab-item" onClick={() => { setShowKebabMenu(false); handleToggleContainerLock(); }} title={t('loc.lockKebabHint')}>
-                    <Lock size={14} /> {t(selectedLoc.locked ? 'loc.unlockContainer' : 'loc.lockContainer')}
-                  </button>
-                  <button className="kebab-item" disabled={!!selectedLoc.locked} onClick={() => {
-                    setShowKebabMenu(false);
-                    let sDraft = [];
-                    if (selectedLoc.sort_order && selectedLoc.sort_order.startsWith('[')) {
-                      try { sDraft = JSON.parse(selectedLoc.sort_order); } catch { /* ignore */ }
-                    } else if (selectedLoc.sort_order && selectedLoc.sort_order !== 'custom') {
-                      if (selectedLoc.sort_order === 'name-asc') sDraft = [{id: '1', by:'name', dir:'asc'}];
-                      else if (selectedLoc.sort_order === 'price-desc') sDraft = [{id: '1', by:'price', dir:'desc'}];
-                      else if (selectedLoc.sort_order === 'set-number') sDraft = [{id: '1', by:'set', dir:'asc'}];
-                      else if (selectedLoc.sort_order === 'set-number-printing') sDraft = [{id: '1', by:'set', dir:'asc'}, {id: '2', by:'printing', dir:'asc'}];
-                      else if (selectedLoc.sort_order === 'type-name') sDraft = [{id: '1', by:'type', dir:'asc'}, {id: '2', by:'name', dir:'asc'}];
-                      else if (selectedLoc.sort_order === 'language') sDraft = [{id: '1', by:'language', dir:'asc'}];
-                    }
-                    setSortDraft(sDraft);
-
-                    let fDraft = [];
-                    if (selectedLoc.rule_type === 'compound') {
-                      try {
-                        const cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config;
-                        fDraft = cfg?.rules || [];
-                      } catch { /* ignore */ }
-                    } else if (selectedLoc.rule_type === 'alphabetical_range') {
-                      let cfg = {};
-                      try { cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config; } catch { /* ignore */ }
-                      if (cfg?.start) fDraft.push({ id: '1', action: 'include', field: 'name', operator: '>=', value: cfg.start });
-                      if (cfg?.end) fDraft.push({ id: '2', action: 'include', field: 'name', operator: '<=', value: cfg.end });
-                    }
-                    setFilterDraft(fDraft);
-
-                    setNameDraft(selectedLoc.name || '');
-                    setStackingDraft(!!selectedLoc.allow_stacking);
-                    setColumnsDraft(selectedLoc.page_columns ? String(selectedLoc.page_columns) : '');
-                    let fixed = null;
-                    try { fixed = selectedLoc.fixed_slots ? JSON.parse(selectedLoc.fixed_slots) : null; } catch { /* ignore */ }
-                    setFixedDraft(Array.isArray(fixed) && fixed.length > 0 ? fixed.map(r => ({ ...r, max_number: r.max_number ?? '' })) : null);
-                    setCountDraft(String(compartments.length));
-                    const caps = compartments.map(c => c.capacity);
-                    const uniform = caps.length > 0 && caps.every(c => c === caps[0]);
-                    setCapacityDraft(uniform ? String(caps[0]) : '');
-
-                    setShowRulesModal(true);
-                  }}>
-                    <Settings size={14} /> Container Settings
-                  </button>
-                  <button className="kebab-item" disabled={!!selectedLoc.locked} onClick={() => { setShowKebabMenu(false); handleDeleteLocation(selectedLoc.id, selectedLoc.name); }} style={{ color: 'var(--accent-red)' }}>
-                    <Trash2 size={14} /> Delete Container
-                  </button>
-                </div>
-              )}
-            </div>
-            </div>
-          )}
-        </div>
-
-        {storage.selectMode && (
-          <div className="glass-panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', background: 'rgba(255,71,71,0.08)' }}>
-            <span style={{ fontWeight: 800, color: 'var(--text-strong)', fontSize: '0.8rem' }}>{storage.selectedIds.size} selected</span>
-            <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem' }} onClick={() => storage.setSelectedIds(new Set(cardsInActiveLocation.map(c => c.entry_id)))}>Select all ({cardsInActiveLocation.length})</button>
-            <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem' }} onClick={() => storage.setSelectedIds(new Set())}>{t('bulk.clear')}</button>
-            <div style={{ width: '1px', height: '20px', background: 'var(--border-glass)' }} />
-            <button
-              className="btn btn-primary"
-              style={{ fontSize: '0.68rem', padding: '0.25rem 0.6rem' }}
-              disabled={!storage.selectedIds.size}
-              onClick={() => storage.runBulk('move', null, t('loc.confirmRemoveFromStorage', { count: storage.selectedIds.size }))}
-            >
-              {t('loc.removeFromStorage')}
-            </button>
-            <button
-              className="btn btn-danger"
-              style={{ fontSize: '0.68rem', padding: '0.25rem 0.6rem' }}
-              disabled={!storage.selectedIds.size}
-              onClick={() => storage.runBulk('delete', null, t('loc.confirmDeleteFromCollection', { count: storage.selectedIds.size }))}
-            >
-              {t('common.delete')}
-            </button>
-            <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem', marginLeft: 'auto' }} onClick={storage.exitSelectMode}>{t('bulk.done')}</button>
-          </div>
-        )}
+        <ContainerList
+          locations={locations}
+          activeLocationId={activeLocationId}
+          setActiveLocationId={setActiveLocationId}
+          selectedLoc={selectedLoc}
+          compartments={compartments}
+          cardsByCompartment={cardsByCompartment}
+          cardsInActiveLocation={cardsInActiveLocation}
+          isBinderType={isBinderType}
+          isCustom={isCustom}
+          filingMode={filingMode}
+          moveMode={moveMode}
+          setMoveMode={setMoveMode}
+          setPickedEntryId={setPickedEntryId}
+          containerViewMode={containerViewMode}
+          setContainerViewMode={setContainerViewMode}
+          viewMode={viewMode}
+          containerCardScale={containerCardScale}
+          setContainerCardScale={setContainerCardScale}
+          storage={storage}
+          setShowCreate={setShowCreate}
+          handleContainerImportFile={handleContainerImportFile}
+          handleToggleContainerLock={handleToggleContainerLock}
+          handleAddCompartment={handleAddCompartment}
+          handleRemoveCompartment={handleRemoveCompartment}
+          startResort={startResort}
+          openContainerSettings={openContainerSettings}
+          handleDeleteLocation={handleDeleteLocation}
+        />
 
         {!selectedLoc ? (
           <p style={{ color: 'var(--text-secondary)' }}>{t('loc.selectPrompt')}</p>
@@ -1569,304 +1356,99 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </div>
             )}
 
-            {containerViewMode === 'layout' && isBinderType && compartments.length > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem', margin: '0.2rem 0', background: 'rgba(0,0,0,0.1)', padding: '0.4rem', borderRadius: 'var(--radius-sm)' }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  disabled={activePageIndex <= 0}
-                  onClick={() => setActivePageIndex(prev => {
-                    if (isMobile) return Math.max(0, prev - 1);
-                    const { spread } = binderSpread(prev);
-                    return spread <= 1 ? 0 : (spread - 1) * 2 - 1;
-                  })}
-                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                >
-                  {t('loc.prev')}
-                </button>
-                <select
-                  className="select-control"
-                  value={activePageIndex}
-                  onChange={(e) => {
-                    if (e.target.value === '__add_new__') {
-                      handleAddCompartment();
-                    } else {
-                      setActivePageIndex(parseInt(e.target.value, 10));
-                    }
-                  }}
-                  style={{ fontSize: '0.75rem', padding: '0.15rem 0.35rem', fontWeight: 600 }}
-                >
-                  {compartments.map((c, idx) => (
-                    <option key={c.id} value={idx}>
-                      {c.display_label || t('loc.pageName', { number: idx + 1 })} ({idx + 1}/{compartments.length})
-                    </option>
-                  ))}
-                  <option value="__add_new__" disabled={!!selectedLoc.locked}>+ {t('loc.addPage')}</option>
-                </select>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  disabled={isMobile
-                    ? activePageIndex >= compartments.length - 1
-                    : binderSpread(activePageIndex).spread * 2 + 1 >= compartments.length}
-                  onClick={() => setActivePageIndex(prev => {
-                    // Next spread's left page — the opening spread has none, so
-                    // stepping off page 1 lands on page 2.
-                    const next = isMobile ? prev + 1 : binderSpread(prev).spread * 2 + 1;
-                    return next < compartments.length ? next : prev;
-                  })}
-                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                >
-                  {t('loc.next')}
-                </button>
-              </div>
+            {viewMode === 'layout' && isBinderType && compartments.length > 0 && (
+              <BinderPageNav
+                compartments={compartments}
+                activePageIndex={activePageIndex}
+                setActivePageIndex={setActivePageIndex}
+                isMobile={isMobile}
+                selectedLoc={selectedLoc}
+                handleAddCompartment={handleAddCompartment}
+                artworkAvailable={artworkAvailable}
+                setArtworkOpen={setArtworkOpen}
+              />
             )}
 
-            {containerViewMode === 'list' && (
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${84 * containerCardScale}px, 1fr))`, gap: '0.45rem' }}>
-                {containerListCards.map(card => {
-                  const selected = storage.selectedIds.has(card.entry_id);
-                  return (
-                    <button
-                      key={card.entry_id}
-                      type="button"
-                      onClick={() => storage.selectMode ? storage.toggleSelect(card.entry_id) : setInspectorCard(card)}
-                      aria-label={displayName(card)}
-                      title={displayName(card)}
-                      style={{ display: 'flex', justifyContent: 'center', width: '100%', padding: '0.25rem', border: selected ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', background: selected ? 'rgba(255,71,71,0.12)' : 'rgba(255,255,255,0.03)', cursor: 'pointer' }}
-                    >
-                      <CardImage card={card} style={{ width: '100%', borderRadius: '3px' }} />
-                    </button>
-                  );
-                })}
-              </div>
+            {viewMode === 'overview' && (
+              <ContainerOverview
+                location={selectedLoc}
+                compartments={compartments}
+                cardsByCompartment={cardsByCompartment}
+                setsList={setsList}
+                cardScale={containerCardScale}
+                selectedIds={storage.selectMode ? storage.selectedIds : null}
+                onCardClick={(card) => (storage.selectMode ? storage.toggleSelect(card.entry_id) : setInspectorCard(card))}
+                onOpenCompartment={openCompartmentInLayout}
+              />
             )}
-            <div style={{ display: containerViewMode === 'layout' ? 'flex' : 'none', flexDirection: 'column', gap: isBinderType ? '1rem' : '0.6rem' }}>
-              {isBinderType ? (() => {
-                if (compartments.length === 0) return null;
-                const pageProps = (c, i) => ({
-                  compartment: c,
-                  cards: cardsByCompartment.get(c.id) || [],
-                  allowStacking: !!selectedLoc.allow_stacking,
-                  pageColumns: selectedLoc.page_columns,
-                  sortOrder: selectedLoc.sort_order,
-                  setsList,
-                  canRemove: i === compartments.length - 1 && compartments.length > 1 && (cardsByCompartment.get(c.id) || []).length === 0,
-                  moveTargets: compartments,
-                  moveTargetLocations: locations.filter(loc => loc.id !== selectedLoc.id && loc.type === 'Binder' && !loc.locked),
-                  reorderTargets: compartments.filter(page => page.id !== c.id),
-                  onInsertBefore: () => handleAddCompartment({ before_id: c.id }),
-                  onInsertAfter: () => handleAddCompartment({ after_id: c.id }),
-                  onReorderBefore: (targetId) => handleReorderCompartment(c.id, { before_id: targetId }),
-                  onReorderAfter: (targetId) => handleReorderCompartment(c.id, { after_id: targetId }),
-                  onMoveToLocation: (targetLocationId) => handleMoveCompartmentToBinder(c.id, targetLocationId),
-                  onRename: (label) => handleRenameCompartment(c.id, label),
-                  onSetCapacity: (cap) => handleSetCapacity(c.id, cap),
-                  onRemove: () => handleRemoveCompartment(c.id),
-                  onToggleLock: () => handleToggleCompartmentLock(c.id, !c.locked),
-                  containerLocked: !!selectedLoc.locked,
-                  onCardClick: setInspectorCard,
-                  onDeleteCard: handleDeleteCard,
-                  onMoveCard: handleMoveCard,
-                  recommendedSpot: currentRecSpot && currentRecSpot.compartment_id === c.id ? {
-                    index: Math.floor(currentRecSpot.position / 1000) - 1,
-                    image_url: recCard?.image_url,
-                    name: recCard ? displayName(recCard) : undefined,
-                    set_name: recCard?.set_name,
-                    card: recCard
-                  } : null,
-                  focusEntryId,
-                  selectMode: storage.selectMode,
-                  selectedIds: storage.selectedIds,
-                  onCardLongPress: storage.arm,
-                  onCardToggle: storage.toggleSelect,
-                  onEditRules: openCompartmentRules,
-                  placementMode: moveMode,
-                  pickedEntryId,
-                  onPickCard: handlePickCard,
-                  onPlaceSlot: handlePlaceSlot,
-                  dropEnabled: dndEnabled,
-                  activeEntryId: binderActiveEntryId,
-                  onActiveEntryIdChange: setBinderActiveEntryId,
-                  hideFocusedCardInfo: true
-                });
-
-                let binderPages = null;
-                if (isMobile) {
-                  const targetIdx = Math.min(activePageIndex, compartments.length - 1);
-                  const activePage = compartments[targetIdx];
-                  if (!activePage) return null;
-                  binderPages = (
-                    <div
-                      className="binder-page-container"
-                      onTouchStart={handleTouchStart}
-                      onTouchEnd={handleTouchEnd}
-                      style={{ touchAction: 'pan-y' }}
-                    >
-                      <div className="binder-page-left" style={{ width: '100%' }}>
-                        <CompartmentView {...pageProps(activePage, targetIdx)} locationType={selectedLoc.type} />
-                      </div>
-                    </div>
-                  );
-                } else {
-                  const { leftIdx, rightIdx } = binderSpread(Math.min(activePageIndex, compartments.length - 1));
-                  const left = leftIdx >= 0 ? compartments[leftIdx] : null;
-                  const right = compartments[rightIdx];
-
-                  // The missing half of an opening or closing spread still holds
-                  // its side of the binder, so the page that is there stays on
-                  // its own side of the spine instead of sliding across it.
-                  binderPages = (
-                    <div className="binder-page-container">
-                      <div className="binder-page-left">
-                        {left && <CompartmentView {...pageProps(left, leftIdx)} locationType={selectedLoc.type} />}
-                      </div>
-                      <div className="binder-spine" />
-                      <div className="binder-page-right">
-                        {right && <CompartmentView {...pageProps(right, rightIdx)} locationType={selectedLoc.type} />}
-                      </div>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                    {binderPages}
-                    {(() => {
-                      if (!binderActiveEntryId) return null;
-                      const activeCard = cardsInActiveLocation.find(c => c.entry_id === binderActiveEntryId);
-                      if (!activeCard) return null;
-                      const compCards = cardsByCompartment.get(activeCard.compartment_id) || [];
-                      const slotNumber = compCards.findIndex(c => c.entry_id === binderActiveEntryId) + 1;
-                      
-                      const moveSelect = selectedLoc.sort_order === 'custom' && compartments.length > 1 ? (
-                        <select
-                          className="select-control"
-                          value=""
-                          onChange={(e) => { if (e.target.value) handleMoveCard(activeCard.entry_id, parseInt(e.target.value, 10)); }}
-                          style={{ fontSize: '0.65rem', padding: '0.15rem 0.3rem', width: '110px', flexShrink: 0 }}
-                        >
-                          <option value="">{t('compartment.moveTo')}</option>
-                          {compartments.filter(t => t.id !== activeCard.compartment_id).map(t => (
-                            <option key={t.id} value={t.id}>{t.display_label}</option>
-                          ))}
-                        </select>
-                      ) : null;
-                      
-                      return <FocusedCardInfo card={activeCard} slotNumber={slotNumber} moveSelect={moveSelect} />;
-                    })()}
-                  </div>
-                );
-              })() : (() => {
-                if (compartments.length === 0) return <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('loc.noCompartments')}</p>;
-
-                const activeComp = compartments.find(c => c.id === activeCompartmentId) || compartments[0];
-                if (!activeComp) return null;
-                const activeCompIdx = compartments.findIndex(c => c.id === activeComp.id);
-                const activeCompRuleCount = Array.isArray(activeComp.assignedFilters) ? activeComp.assignedFilters.length : (activeComp.rule_config ? 1 : 0);
-                const activeAcceptsLabel = activeCompRuleCount > 0 ? `Rules (${activeCompRuleCount})` : 'Accepts All';
-
-                return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    <div key={activeComp.id} className="row-flash" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', background: 'rgba(0,0,0,0.1)', padding: '0.4rem 0.6rem', borderRadius: 'var(--radius-sm)', flexWrap: 'wrap' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <button className="btn btn-secondary btn-icon-only" disabled={activeCompIdx <= 0} onClick={() => setActiveCompartmentId(compartments[activeCompIdx - 1]?.id)} style={{ width: '24px', height: '24px', padding: 0 }}>
-                          &larr;
-                        </button>
-                        <select
-                          className="select-control"
-                          value={activeComp.id}
-                          onChange={(e) => {
-                            if (e.target.value === '__add_new__') {
-                              handleAddCompartment();
-                            } else {
-                              setActiveCompartmentId(parseInt(e.target.value, 10));
-                            }
-                          }}
-                          style={{ fontSize: '0.8rem', padding: '0.2rem 0.4rem' }}
-                        >
-                          {compartments.map(c => <option key={c.id} value={c.id}>{c.display_label}</option>)}
-                          <option value="__add_new__" disabled={!!selectedLoc.locked}>+ {t('loc.addRow')}</option>
-                        </select>
-                        <button className="btn btn-secondary btn-icon-only" disabled={activeCompIdx >= compartments.length - 1} onClick={() => setActiveCompartmentId(compartments[activeCompIdx + 1]?.id)} style={{ width: '24px', height: '24px', padding: 0 }}>
-                          &rarr;
-                        </button>
-                      </div>
-
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          onClick={() => {
-                            const newLabel = window.prompt(t('loc.promptRename', { name: activeComp.display_label }), activeComp.label || '');
-                            if (newLabel !== null) handleRenameCompartment(activeComp.id, newLabel);
-                          }}
-                          title={t('loc.renameRow')}
-                          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.6rem', padding: '0.2rem 0.5rem' }}
-                        >
-                          <Edit3 size={11} /> {t('common.rename')}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          onClick={() => openCompartmentRules(activeComp)}
-                          title={t('compartment.acceptsHintRow')}
-                          style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem', ...(activeCompRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: 'var(--text-strong)' } : {}) }}
-                        >
-                          {activeAcceptsLabel}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          onClick={() => handleToggleCompartmentLock(activeComp.id, !activeComp.locked)}
-                          disabled={!!selectedLoc.locked}
-                          title={t(selectedLoc.locked ? 'compartment.lockContainerRow' : activeComp.locked ? 'compartment.lockedHintRow' : 'compartment.lockHintRow')}
-                          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.6rem', padding: '0.2rem 0.5rem', opacity: selectedLoc.locked ? 0.5 : 1, ...((activeComp.locked || selectedLoc.locked) ? { borderColor: 'var(--accent-yellow)', color: 'var(--accent-yellow)' } : {}) }}
-                        >
-                          <Lock size={12} /> {t(activeComp.locked ? 'compartment.locked' : 'compartment.lock')}
-                        </button>
-                      </div>
-                    </div>
-                    
-                    <CompartmentView 
-                      hideHeader={true}
-                      compartment={activeComp}
-                      cards={cardsByCompartment.get(activeComp.id) || []}
-                      locationType={selectedLoc.type}
-                      sortOrder={selectedLoc.sort_order}
-                      setsList={setsList}
-                      moveTargets={compartments}
-                      onRename={(label) => handleRenameCompartment(activeComp.id, label)}
-                      onSetCapacity={(cap) => handleSetCapacity(activeComp.id, cap)}
-                      onRemove={() => handleRemoveCompartment(activeComp.id)}
-                      onToggleLock={() => handleToggleCompartmentLock(activeComp.id, !activeComp.locked)}
-                      containerLocked={!!selectedLoc.locked}
-                      onCardClick={setInspectorCard}
-                      onDeleteCard={handleDeleteCard}
-                      onMoveCard={handleMoveCard}
-                      recommendedSpot={currentRecSpot && currentRecSpot.compartment_id === activeComp.id ? {
-                        index: Math.floor(currentRecSpot.position / 1000) - 1,
-                        image_url: recCard?.image_url,
-                        name: recCard ? displayName(recCard) : undefined,
-                        set_name: recCard?.set_name,
-                        card: recCard
-                      } : null}
-                      focusEntryId={focusEntryId}
-                      targetActiveIndex={currentRecSpot && currentRecSpot.compartment_id === activeComp.id ? Math.floor(currentRecSpot.position / 1000) - 1 : null}
-                      canRemove={compartments.length > 1 && (cardsByCompartment.get(activeComp.id) || []).length === 0}
-                      selectMode={storage.selectMode}
-                      selectedIds={storage.selectedIds}
-                      onCardLongPress={storage.arm}
-                      onCardToggle={storage.toggleSelect}
-                      onEditRules={openCompartmentRules}
-                      placementMode={moveMode}
-                      pickedEntryId={pickedEntryId}
-                      onPickCard={handlePickCard}
-                      onPlaceSlot={handlePlaceSlot}
-                    />
-                  </div>
-                );
-              })()}
+            <div style={{ display: viewMode === 'layout' ? 'flex' : 'none', flexDirection: 'column', gap: isBinderType ? '1rem' : '0.6rem' }}>
+              {isBinderType ? (
+                <BinderViewPanel
+                  compartments={compartments}
+                  cardsByCompartment={cardsByCompartment}
+                  cardsInActiveLocation={cardsInActiveLocation}
+                  selectedLoc={selectedLoc}
+                  locations={locations}
+                  setsList={setsList}
+                  isMobile={isMobile}
+                  activePageIndex={activePageIndex}
+                  handleTouchStart={handleTouchStart}
+                  handleTouchEnd={handleTouchEnd}
+                  handleAddCompartment={handleAddCompartment}
+                  handleReorderCompartment={handleReorderCompartment}
+                  handleMoveCompartmentToBinder={handleMoveCompartmentToBinder}
+                  handleRenameCompartment={handleRenameCompartment}
+                  handleSetCapacity={handleSetCapacity}
+                  handleRemoveCompartment={handleRemoveCompartment}
+                  handleToggleCompartmentLock={handleToggleCompartmentLock}
+                  openCompartmentRules={openCompartmentRules}
+                  setInspectorCard={setInspectorCard}
+                  handleDeleteCard={handleDeleteCard}
+                  handleMoveCard={handleMoveCard}
+                  currentRecSpot={currentRecSpot}
+                  recCard={recCard}
+                  focusEntryId={focusEntryId}
+                  storage={storage}
+                  moveMode={moveMode}
+                  pickedEntryId={pickedEntryId}
+                  handlePickCard={handlePickCard}
+                  handlePlaceSlot={handlePlaceSlot}
+                  dndEnabled={dndEnabled}
+                  binderActiveEntryId={binderActiveEntryId}
+                  setBinderActiveEntryId={setBinderActiveEntryId}
+                  artByPage={artByPage}
+                />
+              ) : (
+                <BoxViewPanel
+                  compartments={compartments}
+                  cardsByCompartment={cardsByCompartment}
+                  selectedLoc={selectedLoc}
+                  setsList={setsList}
+                  activeCompartmentId={activeCompartmentId}
+                  setActiveCompartmentId={setActiveCompartmentId}
+                  boxSeek={boxSeek}
+                  boxCursor={boxCursor}
+                  setBoxCursor={setBoxCursor}
+                  seekBox={seekBox}
+                  handleAddCompartment={handleAddCompartment}
+                  handleRenameCompartment={handleRenameCompartment}
+                  handleSetCapacity={handleSetCapacity}
+                  handleRemoveCompartment={handleRemoveCompartment}
+                  handleToggleCompartmentLock={handleToggleCompartmentLock}
+                  openCompartmentRules={openCompartmentRules}
+                  setInspectorCard={setInspectorCard}
+                  handleDeleteCard={handleDeleteCard}
+                  handleMoveCard={handleMoveCard}
+                  currentRecSpot={currentRecSpot}
+                  recCard={recCard}
+                  focusEntryId={focusEntryId}
+                  storage={storage}
+                  moveMode={moveMode}
+                  pickedEntryId={pickedEntryId}
+                  handlePickCard={handlePickCard}
+                  handlePlaceSlot={handlePlaceSlot}
+                />
+              )}
             </div>
           </>
         )}
@@ -1875,503 +1457,79 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       {/* Unsorted queue */}
       <div className="glass-panel location-unsorted-col" style={{ padding: '0.75rem', display: (isStacked && (filingMode || mobilePane !== 'unsorted')) ? 'none' : 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto', maxHeight: (isStacked && !filingMode && mobilePane === 'unsorted') ? 'none' : undefined }}>
         {filingMode ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', height: '100%' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <strong style={{ fontSize: '0.85rem' }}>{t(filingReadOnly ? 'loc.refileGuide' : 'loc.filingMode')}</strong>
-              <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => { setFilingMode(false); setFilingReadOnly(false); refreshAll(); }} style={{ padding: '0.2rem 0.5rem', width: 'auto', fontSize: '0.7rem' }}>
-                {t(filingReadOnly ? 'bulk.done' : 'common.cancel')}
-              </button>
-            </div>
-            {filingReadOnly && (
-              <div style={{ textAlign: 'center', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
-                {t('loc.resortGuideHint')}
-              </div>
-            )}
-            
-            <div style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              {t('loc.filingCardProgress', { current: filingIndex + 1, total: filingQueue.length })}
-            </div>
-            
-            {filingQueue[filingIndex] && (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem' }}>
-                <CardImage card={filingQueue[filingIndex].entry} style={{ width: 'min(120px, 26vh)', borderRadius: '5px', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }} />
-                
-                <div style={{ textAlign: 'center' }}>
-                  <strong style={{ fontSize: '1rem', display: 'block' }}>{displayName(filingQueue[filingIndex].entry)}</strong>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{filingQueue[filingIndex].entry.set_name} • {filingQueue[filingIndex].entry.printing}</span>
-                </div>
-                
-                {(() => {
-                  const rec = filingQueue[filingIndex].recommended;
-                  if (!rec) {
-                    return (
-                      <div style={{ background: 'rgba(255, 71, 71, 0.15)', border: '1px solid #ff4747', borderRadius: 'var(--radius-sm)', padding: '0.75rem', width: '100%', textAlign: 'center' }}>
-                        <strong style={{ fontSize: '0.9rem', color: 'var(--text-strong)' }}>
-                          {filingQueue[filingIndex].rejected ? t('loc.rejectedRule') : t('loc.containerFull')}
-                        </strong>
-                        <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                          {t(filingQueue[filingIndex].rejected ? 'loc.skipRejected' : 'loc.skipNoRoom')}
-                        </div>
-                      </div>
-                    );
-                  }
-                  return (
-                    <div 
-                      style={{ background: 'rgba(255, 193, 7, 0.15)', border: '1px solid #ffc107', borderRadius: 'var(--radius-sm)', padding: '0.75rem', width: '100%', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255, 193, 7, 0.25)'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255, 193, 7, 0.15)'; }}
-                      onClick={() => locateRecommendedSpot(rec)}
-                      title={t('loc.snapToSlot')}
-                    >
-                      <div style={{ fontSize: '0.7rem', color: '#ffc107', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 'bold', marginBottom: '0.25rem' }}>{t('loc.clickToLocate')}</div>
-                      <strong style={{ fontSize: '0.9rem', color: 'var(--text-strong)', display: 'block' }}>{rec.label}</strong>
-                      <strong style={{ fontSize: '1.2rem', color: '#ffc107', display: 'block', marginTop: '0.25rem' }}>{t('loc.slotNumber', { n: Math.floor(rec.position / 1000) })}</strong>
-                      {rec.after ? (
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', marginTop: '0.4rem' }}>
-                          <CardImage card={rec.after} style={{ width: '26px', borderRadius: '3px' }} />
-                          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{t('loc.fileAfter')} <strong style={{ color: 'var(--text-strong)' }}>{displayName(rec.after)}</strong></span>
-                        </div>
-                      ) : rec.before ? (
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>{t('loc.fileBefore')} <strong style={{ color: 'var(--text-strong)' }}>{displayName(rec.before)}</strong></div>
-                      ) : (
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>{t('loc.firstInSection')}</div>
-                      )}
-                    </div>
-                  );
-                })()}
-                
-                <div style={{ display: 'flex', gap: '0.5rem', width: '100%', marginTop: '0.5rem' }}>
-                  <button type="button" className="btn btn-secondary" onClick={advanceFiling} style={{ flex: 1, padding: '0.6rem' }}>
-                    {t('loc.skip')}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    disabled={!filingQueue[filingIndex].recommended}
-                    onClick={() => {
-                      const rec = filingQueue[filingIndex].recommended;
-                      handleFilingPlaced(filingQueue[filingIndex].entry.entry_id, rec.location_id, rec.compartment_id, rec.position);
-                    }}
-                    style={{ flex: 2, padding: '0.6rem', fontSize: '0.9rem', fontWeight: 'bold' }}
-                  >
-                    {filingReadOnly ? t('loc.next') : t('loc.placed')}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
+          <FilingGuidePanel
+            filingQueue={filingQueue}
+            filingIndex={filingIndex}
+            filingReadOnly={filingReadOnly}
+            setFilingMode={setFilingMode}
+            setFilingReadOnly={setFilingReadOnly}
+            refreshAll={refreshAll}
+            locateRecommendedSpot={locateRecommendedSpot}
+            advanceFiling={advanceFiling}
+            handleFilingPlaced={handleFilingPlaced}
+          />
         ) : (
-          <>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <strong style={{ fontSize: '0.85rem' }}>{t('loc.unsortedCount', { count: unsortedCards.length })}</strong>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                <button
-                  type="button"
-                  className={`btn ${unsortedSelectMode ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => (unsortedSelectMode ? exitUnsortedSelectMode() : setUnsortedSelectMode(true))}
-                  style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', height: '24px' }}
-                  title={t('loc.toggleMultiSelect')}
-                >
-                  <MousePointerClick size={12} />
-                  {t(unsortedSelectMode ? 'bulk.done' : 'collection.select')}
-                </button>
-                <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                  <button
-                    type="button"
-                    className={`btn btn-icon-only ${unsortedViewMode === 'grid' ? 'btn-primary' : 'btn-secondary'}`}
-                    onClick={() => setUnsortedViewMode('grid')}
-                    style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-                    title={t('loc.gridView')}
-                  >
-                    <LayoutGrid size={13} />
-                  </button>
-                  <button
-                    type="button"
-                    className={`btn btn-icon-only ${unsortedViewMode === 'detail' ? 'btn-primary' : 'btn-secondary'}`}
-                    onClick={() => setUnsortedViewMode('detail')}
-                    style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-                    title={t('loc.detailView')}
-                  >
-                    <List size={13} />
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {unsortedSelectMode && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', background: 'rgba(0,0,0,0.25)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginTop: '0.25rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-strong)' }}>{t('bulk.selectedCount', { count: unsortedSelectedIds.size })}</span>
-                  <div style={{ display: 'flex', gap: '0.3rem' }}>
-                    <button type="button" className="btn btn-secondary" style={{ fontSize: '0.65rem', padding: '0.15rem 0.4rem' }} onClick={() => setUnsortedSelectedIds(new Set(unsortedCards.map(c => c.entry_id)))}>{t('loc.selectAll')}</button>
-                    <button type="button" className="btn btn-secondary" style={{ fontSize: '0.65rem', padding: '0.15rem 0.4rem' }} onClick={clearUnsortedSelection}>{t('bulk.clear')}</button>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', gap: '0.3rem' }}>
-                  <select
-                    className="select-control"
-                    value={unsortedBulkLocation}
-                    onChange={(e) => setUnsortedBulkLocation(e.target.value)}
-                    style={{ fontSize: '0.7rem', padding: '0.25rem 0.4rem', flex: 1, minWidth: 0 }}
-                  >
-                    <option value="">{t('loc.fileSelectedTo')}</option>
-                    {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                  </select>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    disabled={!unsortedBulkLocation || !unsortedSelectedIds.size}
-                    onClick={() => {
-                      if (!unsortedBulkLocation) return;
-                      const locObj = locations.find(l => String(l.id) === String(unsortedBulkLocation));
-                      runUnsortedBulk('move', unsortedBulkLocation, t('loc.confirmBulkFile', { count: unsortedSelectedIds.size, name: locObj?.name || t('loc.containerLower') }));
-                      setUnsortedBulkLocation('');
-                    }}
-                    style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem', fontWeight: 'bold' }}
-                  >
-                    {t('loc.file')}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger"
-                    disabled={!unsortedSelectedIds.size}
-                    onClick={() => runUnsortedBulk('delete', null, t('bulk.confirmDelete', { count: unsortedSelectedIds.size }))}
-                    style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
-                  >
-                    {t('common.delete')}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
-              <input
-                className="input-control" placeholder={t('loc.searchPlaceholder')} value={unsortedSearch}
-                onChange={(e) => setUnsortedSearch(e.target.value)} style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
-              />
-              <select className="select-control" value={unsortedSort} onChange={(e) => setUnsortedSort(e.target.value)} style={{ fontSize: '0.7rem', padding: '0.3rem 0.5rem' }}>
-                <option value="scanned-desc">{t('collection.sort.scanned-desc')}</option>
-                <option value="scanned-asc">{t('collection.sort.scanned-asc')}</option>
-                <option value="name-asc">{t('loc.sortAZ')}</option>
-                <option value="price-desc">{t('collection.sort.price-desc')}</option>
-                <option value="set-number">{t('loc.sortSetNumber')}</option>
-              </select>
-            </div>
-
-            {unsortedCards.length > 0 && !unsortedSelectMode && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={startFilingMode}
-                  disabled={!activeLocationId}
-                  title={t(activeLocationId ? 'loc.fileWalkHint' : 'loc.selectContainerFirst')}
-                  style={{ fontSize: '0.8rem', padding: '0.45rem', width: '100%' }}
-                >
-                  {t('loc.sortAndFile')}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={handleApplyAll}
-                  disabled={!activeLocationId}
-                  title={t(activeLocationId ? 'loc.autoFileHint' : 'loc.selectContainerFirst')}
-                  style={{ fontSize: '0.7rem', padding: '0.35rem', width: '100%' }}
-                >
-                  {t('loc.autoFileAll')}
-                </button>
-              </div>
-            )}
-
-            {/* Drop a filed card here to take it back out of the container. */}
-            <UnsortedDropZone enabled={dndEnabled}>
-            {unsortedViewMode === 'grid' ? (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '0.6rem', marginTop: '0.25rem' }}>
-                {unsortedCards.map(card => {
-                  const picked = moveMode && pickedEntryId === card.entry_id;
-                  const isSelected = unsortedSelectMode && unsortedSelectedIds.has(card.entry_id);
-                  const isHighlighted = picked || isSelected;
-                  const rarityBorder = getCardRarityBorder(card.rarity);
-                  const foilClass = getFoilOverlayClass(card.printing);
-                  const printingBadgeLabel = getPrintingBadgeLabel(card.printing);
-
-                  return (
-                    <DraggableCard
-                      enabled={dndEnabled}
-                      entryId={card.entry_id}
-                      card={card}
-                      key={card.entry_id}
-                      id={`card-${card.entry_id}`}
-                      className={card.entry_id === focusEntryId ? 'focus-flash' : ''}
-                      {...unsortedPressHandlers(card.entry_id)}
-                      onClick={() => activateUnsortedCard(card)}
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        background: isHighlighted ? 'rgba(255, 71, 71, 0.12)' : 'rgba(255, 255, 255, 0.03)',
-                        border: isHighlighted ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)',
-                        borderRadius: 'var(--radius-sm)',
-                        padding: '0.35rem',
-                        position: 'relative',
-                        cursor: 'pointer',
-                        userSelect: 'none',
-                        transition: 'all 0.15s ease-in-out'
-                      }}
-                    >
-                      {/* Card Thumbnail Box */}
-                      <div
-                        style={{
-                          position: 'relative',
-                          width: '100%',
-                          aspectRatio: 0.718,
-                          borderRadius: 'var(--radius-sm)',
-                          overflow: 'hidden',
-                          ...rarityBorder
-                        }}
-                      >
-                        <CardImage card={card} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-                        {foilClass && <div className={foilClass} style={{ borderRadius: 'var(--radius-sm)' }} />}
-                        
-                        {/* Selected / Picked checkmark badge */}
-                        {isHighlighted && (
-                          <div style={{ position: 'absolute', top: '4px', right: '4px', zIndex: 20, width: '20px', height: '20px', borderRadius: '50%', background: 'var(--accent-red)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-strong)', fontSize: '0.75rem', fontWeight: 900 }}>
-                            ✓
-                          </div>
-                        )}
-
-                        {/* Rarity badge */}
-                        <span style={{
-                          position: 'absolute',
-                          top: '4px',
-                          left: '4px',
-                          fontSize: '0.5rem',
-                          fontWeight: 900,
-                          padding: '1px 3px',
-                          borderRadius: '2px',
-                          zIndex: 10,
-                          textTransform: 'uppercase',
-                          boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                          ...getRarityBadgeStyle(card.rarity)
-                        }}>
-                          {getRarityBadgeLabel(card.rarity)}
-                        </span>
-
-                        {/* Printing badge overlay */}
-                        {printingBadgeLabel && (
-                          <span style={{
-                            position: 'absolute',
-                            bottom: '4px',
-                            right: '4px',
-                            fontSize: '0.5rem',
-                            fontWeight: 900,
-                            padding: '1px 3px',
-                            borderRadius: '2px',
-                            zIndex: 10,
-                            border: '1px solid rgba(255,255,255,0.2)',
-                            boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                            ...getPrintingBadgeStyle(card.printing)
-                          }}>
-                            {printingBadgeLabel}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Card Info */}
-                      <div style={{ marginTop: '0.35rem', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '0.15rem' }}>
-                        <div
-                          style={{
-                            fontSize: '0.72rem',
-                            fontWeight: isHighlighted ? 700 : 600,
-                            color: 'var(--text-primary)',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis'
-                          }}
-                        >
-                          {isHighlighted ? '✓ ' : ''}{displayName(card)}
-                        </div>
-                        <div style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.set_name || ''}</span>
-                          {card.price_trend > 0 && <span style={{ color: 'var(--accent-yellow)', fontWeight: 600, flexShrink: 0 }}>${card.price_trend.toFixed(2)}</span>}
-                        </div>
-                      </div>
-                    </DraggableCard>
-                  );
-                })}
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.25rem' }}>
-                {unsortedCards.map(card => {
-                  const picked = moveMode && pickedEntryId === card.entry_id;
-                  const isSelected = unsortedSelectMode && unsortedSelectedIds.has(card.entry_id);
-                  const isHighlighted = picked || isSelected;
-                  const rarityBorder = getCardRarityBorder(card.rarity);
-                  const foilClass = getFoilOverlayClass(card.printing);
-                  const printingBadgeLabel = getPrintingBadgeLabel(card.printing);
-
-                  return (
-                    <DraggableCard
-                      enabled={dndEnabled}
-                      entryId={card.entry_id}
-                      card={card}
-                      key={card.entry_id}
-                      id={`card-${card.entry_id}`}
-                      className={card.entry_id === focusEntryId ? 'focus-flash' : ''}
-                      {...unsortedPressHandlers(card.entry_id)}
-                      onClick={() => activateUnsortedCard(card)}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        fontSize: '0.72rem',
-                        padding: '0.4rem',
-                        background: isHighlighted ? 'rgba(255,71,71,0.18)' : 'rgba(255, 255, 255, 0.02)',
-                        border: isHighlighted ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)',
-                        borderRadius: 'var(--radius-sm)',
-                        cursor: 'pointer',
-                        userSelect: 'none',
-                        transition: 'all 0.15s ease-in-out'
-                      }}
-                    >
-                      <div
-                        style={{ position: 'relative', width: '42px', flexShrink: 0, overflow: 'hidden', borderRadius: '4px', ...rarityBorder }}
-                      >
-                        <CardImage card={card} loading="lazy" decoding="async" style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', display: 'block' }} />
-                        {foilClass && <div className={foilClass} style={{ borderRadius: '4px' }} />}
-                        {isHighlighted && (
-                          <div style={{ position: 'absolute', inset: 0, background: 'rgba(255, 71, 71, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-strong)', fontWeight: 900, fontSize: '0.8rem' }}>
-                            ✓
-                          </div>
-                        )}
-                      </div>
-
-                      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
-                        <div style={{ fontWeight: isHighlighted ? 700 : 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {isHighlighted ? '✓ ' : ''}{displayName(card)}
-                        </div>
-                        <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.4rem', alignItems: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          <span>{card.set_name || 'Unset'} {card.number ? `#${card.number}` : ''}</span>
-                          {card.condition && (
-                            <span style={{ padding: '1px 3px', borderRadius: '2px', background: 'rgba(0,0,0,0.4)', fontSize: '0.55rem', fontWeight: 700 }}>
-                              {card.condition}
-                            </span>
-                          )}
-                          {printingBadgeLabel && (
-                            <span style={{ padding: '1px 3px', borderRadius: '2px', fontSize: '0.55rem', fontWeight: 700, ...getPrintingBadgeStyle(card.printing) }}>
-                              {printingBadgeLabel}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {card.price_trend > 0 && (
-                        <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--accent-yellow)', flexShrink: 0 }}>
-                          ${card.price_trend.toFixed(2)}
-                        </span>
-                      )}
-                    </DraggableCard>
-                  );
-                })}
-              </div>
-            )}
-
-            {unsortedCards.length === 0 && <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic', marginTop: '0.5rem' }}>{t('loc.nothingUnsorted')}</p>}
-            </UnsortedDropZone>
-          </>
+          <UnsortedQueue
+            unsortedCards={unsortedCards}
+            locations={locations}
+            activeLocationId={activeLocationId}
+            focusEntryId={focusEntryId}
+            unsortedGridRef={unsortedGridRef}
+            unsortedSearch={unsortedSearch}
+            setUnsortedSearch={setUnsortedSearch}
+            unsortedSort={unsortedSort}
+            setUnsortedSort={setUnsortedSort}
+            unsortedViewMode={unsortedViewMode}
+            setUnsortedViewMode={setUnsortedViewMode}
+            unsortedSelectMode={unsortedSelectMode}
+            setUnsortedSelectMode={setUnsortedSelectMode}
+            exitUnsortedSelectMode={exitUnsortedSelectMode}
+            unsortedSelectedIds={unsortedSelectedIds}
+            setUnsortedSelectedIds={setUnsortedSelectedIds}
+            clearUnsortedSelection={clearUnsortedSelection}
+            unsortedPressHandlers={unsortedPressHandlers}
+            runUnsortedBulk={runUnsortedBulk}
+            unsortedBulkLocation={unsortedBulkLocation}
+            setUnsortedBulkLocation={setUnsortedBulkLocation}
+            activateUnsortedCard={activateUnsortedCard}
+            startFilingMode={startFilingMode}
+            handleApplyAll={handleApplyAll}
+            moveMode={moveMode}
+            pickedEntryId={pickedEntryId}
+            dndEnabled={dndEnabled}
+          />
         )}
       </div>
 
-      {/* Filing card (mobile): the container shows the blinking slot; this card
-          shows what to file, where, and which physical card it goes behind, and
-          carries Locate / Placed / Skip. Replaces the full desktop guide so the
-          container and the guide share one screen. */}
+      {/* Filing card (mobile): see FilingBar. */}
       {isStacked && filingMode && filingQueue[filingIndex] && (
-        <div style={{ position: 'fixed', left: 0, right: 0, bottom: 'calc(6rem + max(env(safe-area-inset-bottom, 0px), var(--sab, 0px)))', zIndex: 90, padding: '0 0.6rem' }}>
-          <div className="glass-panel" style={{ padding: '0.7rem 0.8rem', display: 'flex', flexDirection: 'column', gap: '0.6rem', background: 'var(--bg-secondary)', boxShadow: '0 -6px 20px rgba(0,0,0,0.5)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
-              <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700, whiteSpace: 'nowrap' }}>
-                {t(filingReadOnly ? 'loc.refile' : 'loc.filing')} {filingIndex + 1} / {filingQueue.length}
-              </span>
-              {filingBarCollapsed && (
-                <span style={{ flex: 1, minWidth: 0, fontSize: '0.72rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {filingQueue[filingIndex].entry.name}
-                </span>
-              )}
-              <div style={{ display: 'flex', gap: '0.3rem', flexShrink: 0 }}>
-                <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setFilingBarCollapsed(c => !c)} title={t(filingBarCollapsed ? 'loc.expand' : 'loc.collapse')} style={{ width: '26px', height: '26px', padding: 0 }}>
-                  {filingBarCollapsed ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                </button>
-                <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => { setFilingMode(false); setFilingReadOnly(false); refreshAll(); }} title={t('loc.exitFiling')} style={{ width: '26px', height: '26px', padding: 0 }}>
-                  <X size={13} />
-                </button>
-              </div>
-            </div>
+        <FilingBar
+          filingQueue={filingQueue}
+          filingIndex={filingIndex}
+          filingReadOnly={filingReadOnly}
+          filingBarCollapsed={filingBarCollapsed}
+          setFilingBarCollapsed={setFilingBarCollapsed}
+          setFilingMode={setFilingMode}
+          setFilingReadOnly={setFilingReadOnly}
+          refreshAll={refreshAll}
+          currentRecSpot={currentRecSpot}
+          locateRecommendedSpot={locateRecommendedSpot}
+          advanceFiling={advanceFiling}
+          handleFilingPlaced={handleFilingPlaced}
+        />
+      )}
 
-            {!filingBarCollapsed && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-              <CardImage card={filingQueue[filingIndex].entry} style={{ width: '48px', borderRadius: '4px', boxShadow: '0 2px 8px rgba(0,0,0,0.5)', flexShrink: 0 }} />
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: '0.95rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {filingQueue[filingIndex].entry.name}
-                </div>
-                <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {filingQueue[filingIndex].entry.set_name} &middot; {filingQueue[filingIndex].entry.printing}
-                </div>
-              </div>
-            </div>
-            )}
-
-            {currentRecSpot ? (
-              <>
-                <div
-                  onClick={() => locateRecommendedSpot(currentRecSpot)}
-                  title={t('loc.tapToSnap')}
-                  style={{ background: 'rgba(255,193,7,0.14)', border: '1px solid #ffc107', borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.6rem', cursor: 'pointer' }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem' }}>
-                    <span style={{ fontSize: '0.6rem', color: '#ffc107', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>{t('loc.tapToLocate')}</span>
-                    <strong style={{ fontSize: '0.95rem', color: '#ffc107', whiteSpace: 'nowrap' }}>Slot {Math.floor(currentRecSpot.position / 1000)}</strong>
-                  </div>
-                  {!filingBarCollapsed && (<>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-strong)', fontWeight: 600, marginTop: '0.1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {currentRecSpot.label}
-                  </div>
-                  {currentRecSpot.after ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.4rem' }}>
-                      <CardImage card={currentRecSpot.after} style={{ width: '26px', borderRadius: '3px', flexShrink: 0 }} />
-                      <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t('loc.fileAfter')} <strong style={{ color: 'var(--text-strong)' }}>{currentRecSpot.after.name}</strong></span>
-                    </div>
-                  ) : currentRecSpot.before ? (
-                    <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '0.4rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t('loc.fileBefore')} <strong style={{ color: 'var(--text-strong)' }}>{currentRecSpot.before.name}</strong></div>
-                  ) : (
-                    <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>{t('loc.firstInSection')}</div>
-                  )}
-                  </>)}
-                </div>
-
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button type="button" className="btn btn-secondary" onClick={advanceFiling} style={{ flex: 1, padding: '0.55rem', fontSize: '0.8rem' }}>{t('loc.skip')}</button>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={() => handleFilingPlaced(filingQueue[filingIndex].entry.entry_id, currentRecSpot.location_id, currentRecSpot.compartment_id, currentRecSpot.position)}
-                    style={{ flex: 2, padding: '0.55rem', fontSize: '0.85rem', fontWeight: 700 }}
-                  >
-                    {filingReadOnly ? 'Next' : 'Placed'}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={{ fontSize: '0.75rem', color: 'var(--accent-red)', fontWeight: 700, textAlign: 'center' }}>
-                  {filingQueue[filingIndex].rejected ? "Doesn't fit this container's rule" : 'Container full'}
-                </div>
-                <button type="button" className="btn btn-secondary" onClick={advanceFiling} style={{ padding: '0.55rem', fontSize: '0.82rem', fontWeight: 700 }}>{t('loc.skip')}</button>
-              </>
-            )}
-          </div>
-        </div>
+      {artworkOpen && selectedLoc && artworkAvailable && compartments.length > 0 && (
+        <BinderArtworkEditor
+          location={selectedLoc}
+          compartments={compartments}
+          pageIndex={activePageIndex}
+          cardsByCompartment={cardsByCompartment}
+          layers={binderArt.layers}
+          onClose={() => setArtworkOpen(false)}
+          onSaved={binderArt.reload}
+          showToast={showToast}
+        />
       )}
 
       <CardInspectorModal
@@ -2385,4 +1543,5 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   );
 }
 
-export default LocationManager;
+// Memoized: App re-renders on every toast, and its props here are stable.
+export default memo(LocationManager);

@@ -94,9 +94,20 @@ function sunsetNotice(provider, now = Date.now()) {
 // a set listing in this shape and is being retired; callers that need one
 // (catalog.claimedFor, catalog.listLanguages) already route around it and catch.
 async function apiFor(lang) {
-  const provider = await providerFor(lang);
+  return clientFor(await providerFor(lang));
+}
+
+function clientFor(provider) {
   if (provider === POKEMONTCGAPI) return require('../pokemontcgapi');
   return provider === TCGDEX ? require('../tcgdexApi') : require('../tcgApi');
 }
 
-module.exports = { decide, configured, providerFor, usesTcgdex, apiFor, sunsetNotice, POKEMONTCG_SUNSET, TCGDEX, POKEMONTCG, POKEMONTCGAPI };
+// Where the one-off id migration (pokemonMigration.js) re-keys pokemontcg.io cards.
+// Never pokemontcg.io itself, which is what is being left: an install still set to
+// it moves to TCGdex, a new install's default, and one already on pokemontcgapi.com
+// stays there. English, because pokemontcg.io never held anything else.
+function migrationTarget(setting) {
+  return decide(setting === POKEMONTCGAPI ? POKEMONTCGAPI : TCGDEX, 'en');
+}
+
+module.exports = { decide, configured, providerFor, usesTcgdex, apiFor, clientFor, migrationTarget, sunsetNotice, POKEMONTCG_SUNSET, TCGDEX, POKEMONTCG, POKEMONTCGAPI };

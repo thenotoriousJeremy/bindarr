@@ -1,18 +1,28 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, MapPin, Trash2, Star, Maximize2, ExternalLink, Search, Layers, RefreshCw } from 'lucide-react';
+import { X, MapPin, Trash2, Star, Maximize2, ExternalLink, Search, Layers, RefreshCw, FlipHorizontal2 } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { translatedName, setCode, isEnglish, langCode } from '../utils/languages';
 import { formatPrice, priceText } from '../utils/formatPrice';
+import Price from './Price';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
+import { conditionLabel, printingLabel } from '../utils/cardOptions';
 import { tcgplayerUrl, cardmarketUrl, searchUrl, priceSource, noLinkReason } from '../utils/marketplaceLinks';
 import CardImage from './CardImage';
 import CardImageZoom from './CardImageZoom';
 import CardEntryFields from './CardEntryFields';
 import PriceHistoryChart from './PriceHistoryChart';
 import AddToDeckSelect from './AddToDeckSelect';
+import AddToListSelect from './AddToListSelect';
+import WishlistHeart from './WishlistHeart';
+import UsedInDecks from './UsedInDecks';
 import CardArtEditor from './CardArtEditor';
-import { useBackGuard } from '../utils/useBackGuard';
+import Modal from './Modal';
+import { onActivateKey } from '../utils/a11y';
 import { useT } from '../utils/i18n';
+import { undoToast } from '../utils/undo';
+import RiotNotice from './RiotNotice';
+import { isLandscape } from '../utils/riftbound';
+import { apiErrorText } from '../utils/apiError';
 
 // MTG color identity pip colors (WUBRG), approximating the printed mana colors.
 const MTG_COLOR_BG = {
@@ -21,6 +31,10 @@ const MTG_COLOR_BG = {
 const MTG_COLOR_FG = {
   White: '#3a3520', Blue: '#fff', Black: '#fff', Red: '#fff', Green: '#fff'
 };
+
+// "Change printing" renders this many printings at a time. Sol Ring and the basic
+// lands have hundreds, and every tile is an image request.
+const PRINTINGS_PAGE = 60;
 
 function getSlotNumber(c) {
   if (!c) return null;
@@ -60,20 +74,34 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
   const [localizedCard, setLocalizedCard] = useState(null);
   const [prevTargetId, setPrevTargetId] = useState(card?.entry_id || card?.id || null);
   const [isFullScreen, setIsFullScreen] = useState(false);
+  // Showing the back face of a double-faced Magic card (#103).
+  const [showBack, setShowBack] = useState(false);
   // Other printings of this card, for re-filing a copy saved under the wrong set.
   const [printings, setPrintings] = useState(null);
   const [findingPrintings, setFindingPrintings] = useState(false);
+  // How many of them are rendered, a set/number filter over them, and how many
+  // exist when the server stopped short of all of them.
+  const [printingsShown, setPrintingsShown] = useState(PRINTINGS_PAGE);
+  const [printingsFilter, setPrintingsFilter] = useState('');
+  const [printingsTotal, setPrintingsTotal] = useState(null);
   const hasToggledRef = useRef(false);
 
-  useBackGuard(isFullScreen, () => setIsFullScreen(false));
 
   const targetEntryId = card?.entry_id || card?.id;
   if (targetEntryId !== prevTargetId) {
     setPrevTargetId(targetEntryId);
     if (localizedCard) setLocalizedCard(null);
+    // A new card opens on its front, not on whichever side the last one was left.
+    if (showBack) setShowBack(false);
   }
 
   const activeCard = card ? (localizedCard || card) : null;
+  const flipped = showBack && !!activeCard?.image_url_back;
+  // The back face as a card of its own for CardImage. No id on purpose: contributed
+  // art is keyed by card id and is front art, so it must not cover the back.
+  const faceCard = flipped
+    ? { name: activeCard.name, game: activeCard.game, image_url: activeCard.image_url_back }
+    : activeCard;
 
   useEffect(() => {
     fetch('/api/locations')
@@ -138,7 +166,6 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     onClose && onClose();
   };
 
-  useBackGuard(!!card, handleClose);
 
   if (!card || !activeCard) return null;
 
@@ -155,8 +182,10 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
           // absolute number of copies owned and adds or removes rows to match,
           // and some screens open this popup on a single row whose quantity is
           // not the whole stack — so an untouched field must not be able to
-          // trim copies the user never asked to lose.
-          ...(qNum !== (card.quantity ?? 1) ? { quantity: qNum } : {}),
+          // trim copies the user never asked to lose. With it go the rows the
+          // number on screen stands for (a stacked tile's member_ids, else this
+          // one row), so the server changes those and no others.
+          ...(qNum !== (card.quantity ?? 1) ? { quantity: qNum, stack_entry_ids: card.member_ids || [targetEntryId] } : {}),
           condition,
           printing,
           language,
@@ -195,7 +224,13 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         // The server resolves this per printing on the next fetch; mirror it here so
         // a screen still holding this object does not show the old printing's price.
         card.price_trend = resolveCardPrice(card, printing);
-        showToast && showToast(t('inspector.entryUpdated'));
+        const saved = await res.json().catch(() => ({}));
+        // The rows the tile holds now, for a screen that keeps this object (the
+        // scanner's recent strip) and edits it again without a refetch.
+        if (Array.isArray(saved.stack_entry_ids)) card.member_ids = saved.stack_entry_ids;
+        // A move into a full container saves everything else and leaves the card
+        // where it was, so say that rather than a plain "updated".
+        showToast && showToast(t(saved.container_full ? 'inspector.savedContainerFull' : 'inspector.entryUpdated'));
         onUpdate && onUpdate();
         onClose();
       } else {
@@ -203,7 +238,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         // card already holding it, which a generic failure toast would throw away
         // and leave the user re-typing a number that was never the problem.
         const body = await res.json().catch(() => null);
-        showToast && showToast(body?.error || t('inspector.errUpdate'));
+        showToast && showToast(apiErrorText(t, body, 'inspector.errUpdate'));
       }
     } catch (err) {
       console.error(err);
@@ -291,7 +326,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         body: JSON.stringify({ entry_ids: [targetEntryId], action: 'add_to_deck', value: deckId })
       });
       const data = await res.json().catch(() => ({}));
-      showToast && showToast(res.ok ? (data.message || t('inspector.addedToDeck')) : (data.error || t('inspector.errAddDeck')));
+      showToast && showToast(res.ok ? (data.message || t('inspector.addedToDeck')) : apiErrorText(t, data, 'inspector.errAddDeck'));
     } catch (err) {
       console.error(err);
       showToast && showToast(t('inspector.errAddDeckGeneric'));
@@ -317,8 +352,14 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         scope: 'internet',
       });
       const res = await fetch(`/api/search?${p.toString()}`);
-      const found = (res.ok ? await res.json() : [])
-        .filter(c => c.id !== activeCard.card_id && sameName(c, activeCard));
+      const all = res.ok ? await res.json() : [];
+      const found = all.filter(c => c.id !== activeCard.card_id && sameName(c, activeCard));
+      // The server pages through about a thousand printings at most; past that
+      // the list is not every printing, and it says so.
+      const total = parseInt(res.headers.get('X-Total-Count'), 10);
+      setPrintingsTotal(Number.isFinite(total) && total > all.length ? total : null);
+      setPrintingsShown(PRINTINGS_PAGE);
+      setPrintingsFilter('');
       if (found.length === 0) showToast && showToast(t('scan.noOtherPrintings'));
       setPrintings(found.length ? found : null);
     } catch {
@@ -342,7 +383,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         onClose();
       } else {
         const body = await res.json().catch(() => null);
-        showToast && showToast(body?.error || t('inspector.errUpdate'));
+        showToast && showToast(apiErrorText(t, body, 'inspector.errUpdate'));
       }
     } catch (err) {
       console.error(err);
@@ -356,7 +397,11 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     try {
       const res = await fetch(`/api/collection/${targetEntryId}`, { method: 'DELETE' });
       if (res.ok) {
-        showToast && showToast(t('collection.cardRemoved', { name: card.name }));
+        const data = await res.json().catch(() => ({}));
+        showToast && showToast(t('collection.cardRemoved', { name: card.name }), undoToast(
+          data.trash_batch && { kind: 'trash', batch: data.trash_batch },
+          { showToast, t, onDone: () => onUpdate && onUpdate() }
+        ));
         onDeleted && onDeleted(targetEntryId);
         onUpdate && onUpdate();
         onClose();
@@ -377,8 +422,13 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
   // respond to the foil type". Same resolution order as the server.
   const displayPrice = resolveCardPrice(activeCard, printing);
 
+  const printingsQuery = printingsFilter.trim().toLowerCase();
+  const visiblePrintings = (printings || []).filter(p => !printingsQuery
+    || [p.set_name, p.set_id, p.number].some(v => String(v || '').toLowerCase().includes(printingsQuery)));
+
   return (
-    <div className="modal-overlay" style={{
+    <>
+    <Modal onClose={handleClose} label={activeCard.name} closeOnBackdrop={mode !== 'edit'} overlayStyle={{
       position: 'fixed',
       top: 0, left: 0, right: 0, bottom: 0,
       backgroundColor: 'rgba(0,0,0,0.75)',
@@ -387,9 +437,8 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
       alignItems: 'center',
       justifyContent: 'center',
       zIndex: 999
-    }} onClick={handleClose}>
-      <div className={`glass-panel card-inspector ${mode === 'edit' ? 'mode-edit' : ''}`} onClick={(e) => e.stopPropagation()}>
-        <button className="btn btn-secondary btn-icon-only" onClick={handleClose} style={{
+    }} className={`glass-panel card-inspector ${mode === 'edit' ? 'mode-edit' : ''}`}>
+        <button className="btn btn-secondary btn-icon-only" onClick={handleClose} aria-label={t('common.close')} style={{
           position: 'absolute',
           top: '1rem',
           right: '1rem',
@@ -403,9 +452,13 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         <div className="ci-image-col" style={{ flex: '1 1 260px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <div
             className="ci-image-wrap"
+            role="button"
+            tabIndex={0}
+            aria-label={t('inspector.fullScreen')}
             onClick={() => setIsFullScreen(true)}
+            onKeyDown={onActivateKey(() => setIsFullScreen(true))}
             title={t('inspector.zoomHint')}
-            style={{ position: 'relative', width: '100%', maxWidth: '300px', cursor: 'pointer' }}
+            style={{ position: 'relative', width: '100%', maxWidth: isLandscape(faceCard) ? '420px' : '300px', cursor: 'pointer' }}
           >
             {/* CardImage, not a bare <img>: this was the last call site still
                 reading card.image_url directly, so contributed art uploaded
@@ -413,10 +466,11 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 uploads it, and a card with no provider art rendered as a broken
                 image icon here alone. */}
             <CardImage
-              card={activeCard}
+              card={faceCard}
               style={{
                 width: '100%',
-                aspectRatio: 0.718,
+                // A battlefield is shown the way it is printed: sideways.
+                aspectRatio: isLandscape(faceCard) ? 1 / 0.718 : 0.718,
                 objectFit: 'cover',
                 borderRadius: 'var(--radius-md)',
                 boxShadow: '0 12px 36px rgba(0,0,0,0.6), 0 0 20px rgba(255,255,255,0.05)',
@@ -443,6 +497,20 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               <Maximize2 size={12} />
               <span>{t('inspector.fullScreen')}</span>
             </div>
+            {activeCard.image_url_back && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-icon-only"
+                // The art itself opens full screen; flipping must not.
+                onClick={(e) => { e.stopPropagation(); setShowBack(b => !b); }}
+                aria-label={t('inspector.flipCard')}
+                aria-pressed={flipped}
+                title={t('inspector.flipCard')}
+                style={{ position: 'absolute', bottom: '0.6rem', left: '0.6rem', borderRadius: '50%' }}
+              >
+                <FlipHorizontal2 size={16} />
+              </button>
+            )}
           </div>
           <CardArtEditor
             card={activeCard}
@@ -508,6 +576,27 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 {Array.isArray(activeCard.subtypes) && activeCard.subtypes.length > 0 && (
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{activeCard.subtypes.join(' ')}</span>
                 )}
+              </div>
+            )}
+            {/* Riftbound: domains, type, stats, the official rules text, artist, and
+                the notice Riot requires next to its cards. */}
+            {activeCard.game === 'riftbound' && (
+              <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  {(Array.isArray(activeCard.types) ? activeCard.types : []).map(d => (
+                    <span key={d} style={{ fontSize: '0.6rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.15rem 0.45rem', borderRadius: '999px', background: 'var(--surface-2, rgba(255,255,255,0.1))', color: 'var(--text-strong)' }}>{d}</span>
+                  ))}
+                  <span>{[activeCard.supertype, ...(Array.isArray(activeCard.subtypes) ? activeCard.subtypes : [])].filter(Boolean).join(' · ')}</span>
+                </div>
+                {(() => {
+                  let stats = activeCard.attributes;
+                  if (typeof stats === 'string') { try { stats = JSON.parse(stats); } catch { stats = null; } }
+                  const parts = stats ? ['energy', 'might', 'power'].filter(k => stats[k] != null).map(k => `${t(`riftbound.${k}`)} ${stats[k]}`) : [];
+                  return parts.length ? <div style={{ fontSize: '0.78rem', color: 'var(--text-strong)', fontWeight: 600 }}>{parts.join(' · ')}</div> : null;
+                })()}
+                {activeCard.card_text && <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0, whiteSpace: 'pre-line' }}>{activeCard.card_text}</p>}
+                {activeCard.artist && <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{t('riftbound.artist', { artist: activeCard.artist })}</div>}
+                <RiotNotice style={{ marginTop: '0.25rem' }} />
               </div>
             )}
           </div>
@@ -602,7 +691,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 <div>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>{t('inspector.marketPrice')}</div>
                   <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--accent-yellow)', marginTop: '0.15rem' }}>
-                    {priceText(displayPrice, activeCard.price_currency)}
+                    <Price value={displayPrice} currency={activeCard.price_currency} />
                   </div>
                   {/* Say where a non-English price came from and in what currency —
                       it is Cardmarket's EUR figure rendered with the app's $. */}
@@ -636,7 +725,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                       the same styling as a real one. */}
                   {!(activeCard.market_value > 0) && condition && condition !== 'Near Mint' && (
                     <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '0.1rem', lineHeight: 1.35 }}>
-                      {t('inspector.priceNearMintOnly', { condition })}
+                      {t('inspector.priceNearMintOnly', { condition: conditionLabel(t, condition) })}
                     </div>
                   )}
                 </div>
@@ -703,36 +792,110 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 {activeCard.grader && activeCard.grader !== 'Raw' ? (
                   <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specGrade')}</span> <span style={{ color: 'var(--accent-yellow)', fontWeight: 700 }}>{activeCard.grader}{activeCard.grade != null ? ` ${activeCard.grade}` : ''}</span></div>
                 ) : (
-                  <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specCondition')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.condition}</span></div>
+                  <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specCondition')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{conditionLabel(t, activeCard.condition)}</span></div>
                 )}
                 {activeCard.cert_number && (
                   <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specCert')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.cert_number}</span></div>
                 )}
-                <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specPrinting')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.printing}</span></div>
+                <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specPrinting')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{printingLabel(t, activeCard.printing, activeCard.game || activeCard.supertype)}</span></div>
                 <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specLanguage')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.language}</span></div>
                 <div><span style={{ color: 'var(--text-muted)' }}>{t('inspector.specSupertype')}</span> <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCard.supertype}</span></div>
               </div>
+
+              {activeCard.sealed_unit_id != null && activeCard.sealed_product_name && (
+                <div style={{ display: 'flex', gap: '0.75rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.75rem' }}>
+                  {activeCard.sealed_product_image_url && (
+                    <img
+                      src={activeCard.sealed_product_image_url}
+                      alt=""
+                      style={{ width: '64px', height: '64px', objectFit: 'contain', borderRadius: 'var(--radius-sm)', flexShrink: 0 }}
+                    />
+                  )}
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
+                      {t('inspector.sealedProduct')}
+                    </div>
+                    <div style={{ color: 'var(--text-strong)', fontWeight: 700, marginTop: '0.15rem' }}>
+                      {activeCard.sealed_product_name}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem 0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+                      {activeCard.sealed_product_type && <span>{activeCard.sealed_product_type}</span>}
+                      {activeCard.sealed_product_set_name && <span>{activeCard.sealed_product_set_name}</span>}
+                      {activeCard.sealed_product_game && <span>{activeCard.sealed_product_game}</span>}
+                      {activeCard.sealed_unit_number && <span>{t('inspector.sealedUnit', { n: activeCard.sealed_unit_number })}</span>}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem 0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                      {activeCard.sealed_product_store && <span>{activeCard.sealed_product_store}</span>}
+                      {activeCard.sealed_product_date && <span>{activeCard.sealed_product_date}</span>}
+                      {activeCard.sealed_product_unit_price != null && <span>{t('inspector.sealedUnitPrice', { price: priceText(activeCard.sealed_product_unit_price) })}</span>}
+                    </div>
+                    {activeCard.sealed_product_contents_note && (
+                      <div style={{ color: 'var(--text-secondary)', marginTop: '0.35rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {activeCard.sealed_product_contents_note}
+                      </div>
+                    )}
+                    {activeCard.sealed_product_notes && (
+                      <div style={{ color: 'var(--text-secondary)', marginTop: '0.35rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {activeCard.sealed_product_notes}
+                      </div>
+                    )}
+                    {activeCard.sealed_product_id != null && (
+                      <a
+                        href={`https://www.tcgplayer.com/product/${activeCard.sealed_product_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ display: 'inline-block', marginTop: '0.4rem', color: 'var(--accent-blue)', fontSize: '0.7rem' }}
+                      >
+                        {t('inspector.viewSealedProduct')}
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <UsedInDecks cardId={activeCard.card_id || activeCard.id} />
 
               {/* Right card, wrong set: re-file this copy under another printing. */}
               {printings ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                    {t('scan.allPrintings', { n: printings.length, name: activeCard.name })}
+                    {printingsTotal
+                      ? t('inspector.printingsCapped', { n: printings.length, total: printingsTotal, name: activeCard.name })
+                      : t('scan.allPrintings', { n: printings.length, name: activeCard.name })}
                   </div>
+                  {printings.length > PRINTINGS_PAGE && (
+                    <input
+                      type="search"
+                      className="input-control"
+                      value={printingsFilter}
+                      onChange={(e) => { setPrintingsFilter(e.target.value); setPrintingsShown(PRINTINGS_PAGE); }}
+                      placeholder={t('inspector.filterPrintings')}
+                      aria-label={t('inspector.filterPrintings')}
+                      style={{ fontSize: '0.75rem', padding: '0.35rem 0.5rem' }}
+                    />
+                  )}
+                  {visiblePrintings.length === 0 && (
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{t('scan.noSetMatches')}</div>
+                  )}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '0.6rem', maxHeight: '280px', overflowY: 'auto', padding: '0.25rem' }}>
-                    {printings.map(p => (
-                      <div key={p.id} className="tcg-card" onClick={() => handleChangePrinting(p)} style={{ cursor: 'pointer' }}>
+                    {visiblePrintings.slice(0, printingsShown).map(p => (
+                      <div key={p.id} className="tcg-card" role="button" tabIndex={0} onClick={() => handleChangePrinting(p)} onKeyDown={onActivateKey(() => handleChangePrinting(p))} style={{ cursor: 'pointer' }}>
                         <div className="tcg-card-inner" style={{ border: '1px solid var(--border-glass-hover)' }}>
-                          <CardImage card={p} className="tcg-card-image" />
+                          <CardImage card={p} className="tcg-card-image" loading="lazy" decoding="async" />
                         </div>
                         <div className="tcg-card-info" style={{ textAlign: 'center', marginTop: '0.35rem' }}>
                           <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>#{p.number}</div>
                           <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{p.set_name}</div>
-                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-yellow)' }}>{priceText(p.price_trend, p.price_currency)}</div>
+                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-yellow)' }}><Price value={p.price_trend} currency={p.price_currency} /></div>
                         </div>
                       </div>
                     ))}
                   </div>
+                  {visiblePrintings.length > printingsShown && (
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPrintingsShown(n => n + PRINTINGS_PAGE)}>
+                      {t('scan.seeMoreMatches', { n: Math.min(PRINTINGS_PAGE, visiblePrintings.length - printingsShown) })}
+                    </button>
+                  )}
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPrintings(null)}>{t('common.cancel')}</button>
                 </div>
               ) : (
@@ -750,8 +913,11 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
 
               {/* Storage Container details (clickable to view in storage) */}
               {activeCard.list_type !== 'wishlist' && (
-                <div 
+                <div
+                  role={onViewStorage ? 'button' : undefined}
+                  tabIndex={onViewStorage ? 0 : undefined}
                   onClick={() => onViewStorage && activeCard.list_type !== 'wishlist' && onViewStorage(activeCard)}
+                  onKeyDown={onViewStorage ? onActivateKey(() => onViewStorage(activeCard)) : undefined}
                   style={{
                     display: 'flex', alignItems: 'center', gap: '0.5rem',
                     background: 'rgba(255, 71, 71, 0.03)', padding: '0.65rem 0.75rem',
@@ -778,7 +944,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               )}
 
               {activeCard.notes && (
-                <div style={{ background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '0.6rem 0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                <div style={{ background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.6rem 0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                   {activeCard.notes}
                 </div>
               )}
@@ -792,6 +958,18 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 <AddToDeckSelect
                   onAdd={handleAddToDeck}
                   placeholder={t('inspector.addToDeck')}
+                  style={{ fontSize: '0.8rem', padding: '0.45rem 0.5rem', maxWidth: '140px' }}
+                />
+                <WishlistHeart
+                  card={{ id: activeCard.card_id || activeCard.id, name: activeCard.name }}
+                  showToast={showToast}
+                  variant="button"
+                  size={14}
+                />
+                <AddToListSelect
+                  cardIds={[activeCard.card_id || activeCard.id]}
+                  game={activeCard.game}
+                  showToast={showToast}
                   style={{ fontSize: '0.8rem', padding: '0.45rem 0.5rem', maxWidth: '140px' }}
                 />
 
@@ -829,12 +1007,12 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
             </>
           )}
         </div>
-      </div>
+    </Modal>
 
       {isFullScreen && (
-        <CardImageZoom card={activeCard} onClose={() => setIsFullScreen(false)} />
+        <CardImageZoom card={faceCard} onClose={() => setIsFullScreen(false)} />
       )}
-    </div>
+    </>
   );
 }
 

@@ -1,7 +1,12 @@
-import { useState, useEffect, useMemo } from 'react';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { priceText } from '../utils/formatPrice';
+import { useState, useEffect, useMemo, Suspense } from 'react';
+import { lazyWithReload } from '../utils/lazyWithReload';
+import { useFx } from '../utils/useFx';
 import { useT } from '../utils/i18n';
+
+// recharts is the largest dependency in the app, and every view that can open a
+// card's inspector reaches this component, so the chart itself is code-split:
+// the header and range buttons draw at once and the plot follows.
+const PriceAreaChart = lazyWithReload(() => import('./charts/PriceAreaChart'));
 
 // Selectable chart windows. Default is 1 Year so price movement is visible; a
 // 30-day window is usually too short to show meaningful change.
@@ -17,14 +22,16 @@ const RANGE_KEYS = ['30d', 'all'];
 // room and let the YAxis reserve enough width for "$1,234" style ticks.
 export default function PriceHistoryChart({
   cardId,
-  // The card's own currency. Stored prices are never converted, so the axis and the
-  // tooltip have to read in whatever marketplace quoted them (see utils/formatPrice).
+  // The card's own currency: every stored point is in it. The axis and tooltip
+  // convert into the display currency like every other price (utils/useFx), and
+  // stay in this one when no rate is known.
   currency,
   height = 150,
   defaultRange = '30d',
   titlePrefix,
 }) {
-  const { t, locale } = useT();
+  const { t } = useT();
+  const { show } = useFx();
   const [range, setRange] = useState(defaultRange);
   const [data, setData] = useState([]);
   const [insufficientHistory, setInsufficientHistory] = useState(false);
@@ -97,7 +104,7 @@ export default function PriceHistoryChart({
         </span>
         {pctChange !== null && (
           <span style={{ fontSize: '0.7rem', fontWeight: 800, color: trendColor }}>
-            {up ? '▲' : '▼'} {up ? '+' : ''}{priceText(Math.abs(absChange), currency)} ({up ? '+' : '−'}{Math.abs(pctChange).toFixed(1)}%)
+            {up ? '▲' : '▼'} {up ? '+' : ''}{show(Math.abs(absChange), currency).text} ({up ? '+' : '−'}{Math.abs(pctChange).toFixed(1)}%)
           </span>
         )}
       </div>
@@ -153,32 +160,9 @@ export default function PriceHistoryChart({
             {t('priceHistory.noData')}
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="priceGlow" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--accent-yellow)" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="var(--accent-yellow)" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-              <XAxis dataKey="ts" type="number" scale="time" domain={['dataMin', 'dataMax']} hide />
-              <YAxis
-                domain={['auto', 'auto']}
-                stroke="var(--text-secondary)"
-                style={{ fontSize: '0.6rem' }}
-                width={48}
-                tickFormatter={(v) => priceText(v, currency)}
-              />
-              <Tooltip
-                contentStyle={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)', borderRadius: '8px', fontSize: '0.75rem' }}
-                labelStyle={{ color: 'var(--text-secondary)' }}
-                formatter={(val) => [priceText(val, currency), t('priceHistory.market')]}
-                labelFormatter={(label) => (label ? new Date(label).toLocaleDateString(locale) : '')}
-              />
-              <Area type="monotone" dataKey="price" stroke="var(--accent-yellow)" strokeWidth={1.75} fillOpacity={1} fill="url(#priceGlow)" />
-            </AreaChart>
-          </ResponsiveContainer>
+          <Suspense fallback={<div className="spinner" style={{ height: '30px', margin: `${Math.max(0, height / 2 - 15)}px auto` }} />}>
+            <PriceAreaChart data={chartData} currency={currency} />
+          </Suspense>
         )}
       </div>
     </div>

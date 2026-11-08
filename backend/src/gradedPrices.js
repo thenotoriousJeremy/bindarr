@@ -88,8 +88,10 @@ function pickCard(cards, number) {
 function providerError(err) {
   const status = err.response?.status;
   const detail = err.response?.data?.message || err.response?.data?.error;
+  // 403, not the provider's 401: a 401 from Bindarr means the caller's own
+  // session is gone, and the app signs out on it. This is a key in Settings.
   if (status === 401 || status === 403) {
-    return new GradedPriceError(401, 'The graded-price API key was rejected. Check it in Settings.');
+    return new GradedPriceError(403, 'The graded-price API key was rejected. Check it in Settings.');
   }
   if (status === 429) {
     return new GradedPriceError(429, detail || 'Graded-price API limit reached. Enter the value by hand, or try again tomorrow.');
@@ -115,7 +117,7 @@ async function query(params, apiKey) {
 // `game` gates this: the provider covers Pokémon only, and an MTG slab must be
 // told that plainly instead of getting a silent miss that reads as "no data".
 async function fetchGradedPrice({ game, name, setName, number, grader, grade, tcgPlayerId, apiKey }) {
-  if (game && game !== 'pokemon') {
+  if (game && !require('./utils/games').hasFeature(game, 'gradedPrices')) {
     throw new GradedPriceError(400, 'Automatic graded prices cover Pokémon only. Enter the value by hand for this card.');
   }
   const key = gradeKey(grader, grade);

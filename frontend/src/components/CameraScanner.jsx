@@ -1,159 +1,37 @@
-import { useState, useEffect, useRef } from 'react';
-import { Camera, RefreshCw, AlertTriangle, X, Zap, ZapOff, Settings, ScanLine, ListFilter, Layers, Search, SwitchCamera } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Camera, RefreshCw, AlertTriangle, X, Zap, ZapOff, Settings, ScanLine, ListFilter, Layers, SwitchCamera } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
-import { priceText } from '../utils/formatPrice';
+import Price from './Price';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
-import { CONDITIONS, getPrintings } from '../utils/cardOptions';
 import CardEntryFields from './CardEntryFields';
 import CardInspectorModal from './CardInspectorModal';
 import { useBackGuard } from '../utils/useBackGuard';
+import { onActivateKey, useEscape } from '../utils/a11y';
 import { useMultiSelect } from '../utils/useMultiSelect';
 import { langName, langCode, getLanguagesForGame, isLanguageSupported } from '../utils/languages';
-import { requestDetect, stopDetect, smoothQuad, meanCornerDrift, DETECT_W } from '../utils/cardDetector';
 import { getPerspectiveTransform, warpPerspective } from '../../../shared/imgproc.mjs';
-import { shouldCapture, shouldRearm, autoStatusKey } from '../utils/autoCapture';
-import { zoomRange, initialZoom } from '../utils/cameraZoom';
-import { pickPreferredCamera, nextCamera } from '../utils/cameraPick';
+import { nextCamera } from '../utils/cameraPick';
 import { defaultGame, gameOptions, showGamePicker, isGameEnabled } from '../utils/games';
 import { isNative } from '../apiBase';
 import { useT } from '../utils/i18n';
 import SetTree from './SetTree';
-// Centered card-shaped guide box, styled in CSS (.scan-card-guide): card ratio
-// with margin, centered by the overlay's flex. The crop maps the box's on-screen
-// rect (getBoundingClientRect) into the frame, so its size is driven by CSS.
-// Confidence gates for the server match. When ORB geometric verification ran
-// (verified=true), gate on inlier count; otherwise on CLIP cosine similarity.
-// Below the gate the scan shows the candidates for manual selection.
-const SCAN_MATCH_MIN_SCORE = 0.55;
-const SCAN_MATCH_MIN_INLIERS = 12;
-// Minimum cosine gap between the top two embedding matches. Below it the model
-// is saying "one of these", not "this one", and the picker is the right answer.
-const SCAN_MATCH_MIN_MARGIN = 0.02;
-// Margin around the guide box when cropping. The box is an aim hint and a card
-// can overhang it, so the crop runs slightly wider than the box itself.
-const CROP_PAD = 0.05;
-// milo's input, and so the size of the crop the client uploads. Must match
-// cvScan's EMBED_SIZE — the catalog was embedded at this size.
-const EMBED_SIZE = 448;
-// Live-outline cadence. Detection is local, so this is bounded by CPU rather
-// than by a network round trip: ~80ms per frame on a desktop, ~300ms on a phone.
-// The loop is self-pacing, so a slower device simply updates less often.
-// Detection costs ~50-70ms of real work per frame (a neural corner model, not a
-// contour scan), and the loop schedules from the END of that work — the next
-// frame is grabbed when the worker ANSWERS, not on a timer running underneath it.
-// It used to reschedule 16ms after SUBMITTING, so while one detection was in
-// flight the loop kept waking up and drawing the video into the detect canvas
-// several times over, throwing every one of those frames away. That is a GPU
-// readback and a full canvas draw per wasted tick, which is most of what makes
-// the fan spin — and it got worse the slower detection was, so a degraded
-// install burned the most CPU.
-//
-// So this is one frame's grace after a result, not a pacing budget.
-const DETECT_INTERVAL_MS = 16;
-// Nothing to detect yet (video not ready, or a scan owns the pipeline). Retrying
-// at DETECT_INTERVAL_MS would spin at 60Hz doing DOM lookups for nothing.
-const DETECT_IDLE_MS = 150;
-// How still the corners must be, in normalised units, to count a frame as steady.
-const STEADY_DRIFT = 0.012;
-// Consecutive steady frames before auto-capture will fire.
-const STEADY_FRAMES_NEEDED = 3;   // default; adjustable in scan settings
-// How much of the guide crop the detected card must cover before auto-scan will
-// take the picture. This was 0.7 against the contour detector, where `fill` meant
-// how solidly a quad filled its own contour and a good detection scored ~0.9.
-// Cornelius has no contour, so `fill` is now the quad's area as a fraction of the
-// crop — a DIFFERENT quantity with a lower ceiling: the crop runs CROP_PAD wider
-// than the guide box on each side, so a card aligned perfectly with the box tops
-// out near 0.83. Carrying 0.7 across would have demanded near-perfect framing.
-// Measured: card small in the frame scores 0.076, so this still rejects that by
-// a wide margin. The real "there is no card" case is handled by `none`, not here.
-const MIN_FILL = 0.55;            // default; adjustable in scan settings
-// Scan-detail presets (quick↔accurate slider). Higher index = more upload
-// resolution, deeper server CLIP recall + more ORB features, longer cooldown:
-// slower but more accurate. Lower = faster, less accurate. Turbo keeps ORB
-// verify but with the fewest recall candidates + features — leanest ORB pass.
-const SCAN_PROFILES = [
-  // uploadW floors at 720 even on the fastest preset: the guide crop is already
-  // most of the way down from the capture, so a 400px upload delivered a ~250px
-  // card, and exact-printing measures 76.0% at 250px against 91.0% at 420px.
-  // That is 15 points given away for a few KB of JPEG, not a speed/accuracy
-  // trade — recallK and orb below are where the real trade lives.
-  //
-  // `cooldown` and `cadence` are gone. Both existed to pace a clock-driven
-  // auto-scan, and auto-scan is now driven by the detector: a card is scanned
-  // when it is present and still, and not again until it is replaced. Waiting
-  // out a preset delay after that only made the scanner feel slow. `countdown`
-  // stays — it is the auto-ADD confirm window, which is a different decision.
-  { label: 'Turbo',    uploadW: 720,  countdown: 0, recallK: 28,  orb: 240 },
-  { label: 'Fast',     uploadW: 800,  countdown: 1, recallK: 60,  orb: 300 },
-  { label: 'Balanced', uploadW: 900,  countdown: 2, recallK: 120, orb: 400 },
-  { label: 'Accurate', uploadW: 1280, countdown: 2, recallK: 250, orb: 500 },
-];
-
-// deviceId of the lens to scan with (the user's pick, or the main lens the
-// heuristic in startCamera moved to). Absent: let facingMode choose.
-const CAMERA_KEY = 'scan_camera_id';
-
-const stopTracks = (s) => s?.getTracks().forEach(track => track.stop());
-
-// One place for the stream constraints, so a picked lens gets the same
-// resolution and zoom request as the default one.
-const openCamera = (deviceId) => navigator.mediaDevices.getUserMedia({
-  video: {
-    // A picked lens is exact; otherwise use the back camera on phones.
-    ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'environment' }),
-    // 1080p, not 720p. The guide box crops to roughly a third of the frame,
-    // so 720p delivered a ~250px-wide card to a pipeline whose reference
-    // images are 500px — and accuracy falls off a cliff right there.
-    // Measured on 100 MTG cards: exact-printing 76.0% at a 250px card,
-    // 91.0% at 420px, 90.0% at 800px. `ideal` rather than `min` so a camera
-    // that cannot manage it degrades instead of failing getUserMedia.
-    width: { ideal: 1920 },
-    height: { ideal: 1080 },
-    // Chrome only reports caps.zoom (and honours zoom constraints) when the
-    // stream was requested with it. Browsers that don't know it ignore it.
-    zoom: true
-  },
-  audio: false
-});
-
-// Cameras for the lens picker. Never fails the camera open over it: a browser
-// without enumerateDevices just gets no picker.
-const listVideoInputs = async () => {
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices?.();
-    return (devices || []).filter(d => d.kind === 'videoinput' && d.deviceId);
-  } catch (err) {
-    console.warn('enumerateDevices failed:', err);
-    return [];
-  }
-};
-
-// The right card in the wrong language. Korean, Japanese and Chinese Pokémon sets
-// are their own releases rather than localised editions of the English ones, so no
-// localised row exists to swap to and the scan answers with the English printing —
-// correct card, English art, English name. Said out loud wherever a scanned card
-// is shown, because the alternative is passing that off as an English card. The
-// copy itself is still filed in the language being scanned.
-function LangFallbackNote({ card, style }) {
-  const { t } = useT();
-  if (!card || !card.langFallback) return null;
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: '0.3rem', justifyContent: 'center',
-      fontSize: '0.65rem', lineHeight: 1.25, color: '#ffc107', marginTop: '0.25rem',
-      ...style,
-    }}>
-      <AlertTriangle size={11} style={{ flexShrink: 0 }} />
-      <span>{t('scan.langFallbackArt', { lang: card.langFallback })}</span>
-    </div>
-  );
-}
-
+import LangFallbackNote from './scanner/LangFallbackNote';
+import { useCameraStream } from './scanner/useCameraStream';
+import { useScanPipeline } from './scanner/useScanPipeline';
+import { useStableCallback, useStableHandlers } from './scanner/useStableCallback';
+import AutoAddModal from './scanner/AutoAddModal';
+import DupConfirmModal from './scanner/DupConfirmModal';
+import ScanMatchesModal from './scanner/ScanMatchesModal';
+import RecentScans from './scanner/RecentScans';
+import { DetectOutline, AutoStatePill, AutoTuningPanel } from './scanner/LiveOverlays';
+import {
+  SCAN_MATCH_MIN_SCORE, SCAN_MATCH_MIN_INLIERS, SCAN_MATCH_MIN_MARGIN, CROP_PAD, EMBED_SIZE,
+  STEADY_FRAMES_NEEDED, MIN_FILL, SCAN_PROFILES,
+} from './scanner/scanConstants';
 function CameraScanner({ onAddSuccess, showToast }) {
   const { t } = useT();
 
-  const [stream, setStream] = useState(null);
   const [loading, setLoading] = useState(false);
   const [scanStatus, setScanStatus] = useState('');
   const [scanMatches, setScanMatches] = useState([]);
@@ -176,52 +54,16 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [scanFlash, setScanFlash] = useState(null); // 'capture', 'error', or null
   // Fixed-cadence capture countdown (Turbo): ms remaining until the next photo,
   // or null when the metronome isn't running. Drives the countdown ring.
-  // What auto-scan is waiting for, shown as a small pill. Without the old
-  // countdown ring there is otherwise no feedback at all when it declines to
-  // fire, and "nothing happens" is indistinguishable from "it is broken".
-  const [autoState, setAutoState] = useState(null);
   // Draggable/rotatable scan guide: translate (px, relative to centered) + angle
   // (deg). Lets the user aim the crop at an off-center or tilted card.
-  // Latest detector result for the live outline, or null. Kept small on purpose:
-  // { detected, quad(0..1 of the CROP), pick }.
-  const [detectQuad, setDetectQuad] = useState(null);
   const [showDetectOutline, setShowDetectOutline] = useState(() => localStorage.getItem('scan_outline') !== '0');
-  const outlineCanvas = useRef(null);   // one canvas, reused every update
   const dewarpCanvas = useRef(null);    // reused for client dewarp
-  const smoothed = useRef(null);        // eased corners, what actually gets drawn
-  const lastRawQuad = useRef(null);     // previous RAW detection, for drift
-  const steadyFrames = useRef(0);       // consecutive low-drift detections
-  const degradedWarned = useRef(false); // logged the detector fallback once
-  // No live detector at all (the worker itself failed to load), so auto-scan can
-  // never fire. A manual shutter appears instead; the server finds the card.
-  const [detectorDown, setDetectorDown] = useState(false);
-  const showSettingsRef = useRef(false); // the readout is only rendered while open
-  const autoArmed = useRef(true);       // auto-capture is ready to fire
-  const emptyFrames = useRef(0);        // consecutive "no card" detections
-  const capturedQuad = useRef(null);    // quad at the last auto-capture
-  const lastCaptureAt = useRef(0);      // debounce floor, not a cadence
-  const autoScanRef = useRef(false);    // autoScan for the detection callback
-  const minFillRef = useRef(MIN_FILL);  // gates, read from the detection callback
-  const minSteadyRef = useRef(STEADY_FRAMES_NEEDED); // which outlives any render
-  const lastDrift = useRef(null);       // raw numbers behind the readout
-  const lastCorners = useRef(null);
-  const lastEngine = useRef(null);
-  // Wall time of one detection, worker round trip included. The engine name alone
-  // could not explain a crawling outline — cornelius on a phone without WebGPU
-  // and the contour fallback both just say "slow".
-  const detectStart = useRef(0);
-  const lastDetectMs = useRef(null);
-  const lastRunMs = useRef(null);   // inference alone, without the JS around it
-  const bestFrame = useRef(null);       // latest { sharp, fill, steady } for capture gating
   const [guideOffset, setGuideOffset] = useState({ x: 0, y: 0 });
   const [guideAngle, setGuideAngle] = useState(0);
   const [guideScale, setGuideScale] = useState(1);
   const guidePtrs = useRef(new Map());     // active pointerId -> {x,y}
   const guideGesture = useRef(null);        // snapshot taken at each pointer-count change
   
-  // Camera active states
-  const [cameraActive, setCameraActive] = useState(false);
-  const [cameraErrorKey, setCameraErrorKey] = useState('');
   // Scanning is the DEFAULT and only mode: point the camera at a card and it is
   // captured when the detector says it is there and still. There is no manual
   // shutter — the toggle in the action row pauses scanning instead. Deliberately
@@ -248,29 +90,12 @@ function CameraScanner({ onAddSuccess, showToast }) {
     const v = parseInt(localStorage.getItem('scan_min_steady'), 10);
     return Number.isInteger(v) && v >= 1 && v <= 10 ? v : STEADY_FRAMES_NEEDED;
   });
-  // Latest raw detector numbers, for the readout. Kept separate from bestFrame
-  // so rendering never depends on a ref the detection loop mutates in place.
-  const [detectStats, setDetectStats] = useState(null);
   // Scan detail level: index into SCAN_PROFILES. Persisted; default Balanced.
   const [scanDetail, setScanDetail] = useState(() => {
     const v = parseInt(localStorage.getItem('scan_detail'), 10);
     return Number.isInteger(v) && v >= 0 && v < SCAN_PROFILES.length ? v : 2;
   });
   const profile = SCAN_PROFILES[scanDetail];
-  // Torch/Flashlight control
-  const [isTorchOn, setIsTorchOn] = useState(false);
-  // Manual exposure: caps ({min,max,step}) if the track exposes
-  // exposureCompensation, else null (slider hidden). value = current setting.
-  const [exposureCaps, setExposureCaps] = useState(null);
-  const [exposure, setExposure] = useState(0);
-  // Camera zoom: same shape as exposure, from caps.zoom. Hidden when unsupported.
-  const [zoomCaps, setZoomCaps] = useState(null);
-  const [zoom, setZoom] = useState(1);
-  // Every camera the device has (enumerateDevices `videoinput`), for the lens
-  // picker. Filled after the first open: labels only exist once permission is
-  // granted. The picker stays hidden with fewer than two.
-  const [videoInputs, setVideoInputs] = useState([]);
-  const switchingCamera = useRef(false); // one lens switch at a time
   // Which game is being fed in — the user's pick, not an inference. Persisted:
   // a scanning run is one game at a time, and re-picking it on every camera open
   // was friction for nothing. Falls back to the Settings default game if the
@@ -373,8 +198,6 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [debugCandidates, setDebugCandidates] = useState([]);
   const [debugScoped, setDebugScoped] = useState(null); // set code if set-scoped, false if global, null if n/a
 
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
   const currentScanId = useRef(0);
   const lastScanImgRef = useRef(null);
   const lastScanCroppedRef = useRef(false);
@@ -539,16 +362,29 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [dupConfirmCard, setDupConfirmCard] = useState(null);
   const [dupQty, setDupQty] = useState(1);
 
-  useBackGuard(scanMatches.length > 0, () => {
+  // Back / Esc on the match picker and the duplicate prompt (their <Modal>s
+  // own the back guard).
+  const dismissMatches = () => {
     setScanMatches([]);
     autoArmed.current = true;
     capturedQuad.current = null;
     resolvedDupIdRef.current = null;
-  });
-  useBackGuard(!!dupConfirmCard, () => {
+  };
+  const dismissDupConfirm = () => {
     setDupConfirmCard(null);
     resolvedDupIdRef.current = null;
-  });
+  };
+  // Cancel, Back or Esc on the auto-add popup: drop the card and re-arm.
+  const cancelAutoAdd = () => {
+    setAutoAddTargetCard(null);
+    setAutoAddCountdown(null);
+    setAutoAddAlternatives([]);
+    setAutoAddEditing(false);
+    autoArmed.current = true;
+    capturedQuad.current = null;
+    resolvedDupIdRef.current = null;
+    showToast(t('scan.autoAddCancelled'));
+  };
   useBackGuard(!!inspectorEntry, () => setInspectorEntry(null));
   useBackGuard(recentSelect.selectMode, recentSelect.exitSelectMode);
   
@@ -561,23 +397,6 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [language, setLanguage] = useState(() => langName(localStorage.getItem('scanner_lang') || 'en'));
   const [purchasePrice, setPurchasePrice] = useState(0);
 
-  // Keep a ref mirroring the latest stream so the unmount cleanup below (whose
-  // closure is fixed from the first render) can always stop the live tracks.
-  useEffect(() => {
-    streamRef.current = stream;
-  }, [stream]);
-
-  // Clean up camera stream on unmount. `unmounted` lets a camera open that is
-  // still in flight (startCamera/switchCamera await getUserMedia, sometimes
-  // twice) release the stream it gets instead of leaving the camera on.
-  const unmounted = useRef(false);
-  useEffect(() => {
-    unmounted.current = false;
-    return () => {
-      unmounted.current = true;
-      streamRef.current?.getTracks().forEach(track => track.stop());
-    };
-  }, []);
 
   // On game switch: restore that game's remembered set filter and load its set
   // tree (families + subsets).
@@ -627,42 +446,6 @@ function CameraScanner({ onAddSuccess, showToast }) {
   // at the same latency, where the old path made the user wait for an index build
   // first.
 
-  // Detect manual-exposure support on the live track. Present on most Android
-  // Chrome back cameras; absent on iOS Safari and many desktop webcams (slider
-  // then stays hidden). Reads the current value so the slider starts in place.
-  // Zoom is detected the same way and restored from the last session: a phone
-  // mounted over the cards wants the same framing every time.
-  useEffect(() => {
-    const track = stream?.getVideoTracks?.()[0];
-    if (!track || typeof track.getCapabilities !== 'function') { setExposureCaps(null); setZoomCaps(null); return; }
-    const caps = track.getCapabilities();
-    const ec = caps.exposureCompensation;
-    if (ec && typeof ec.min === 'number' && typeof ec.max === 'number') {
-      setExposureCaps({ min: ec.min, max: ec.max, step: ec.step || (ec.max - ec.min) / 100 || 0.1 });
-      const cur = track.getSettings?.().exposureCompensation;
-      setExposure(typeof cur === 'number' ? cur : 0);
-    } else {
-      setExposureCaps(null);
-    }
-    const range = zoomRange(caps.zoom);
-    setZoomCaps(range);
-    if (range) {
-      const { zoom: z, restore } = initialZoom(range, localStorage.getItem('scan_zoom'), track.getSettings?.().zoom);
-      setZoom(z);
-      if (restore) updateAdvancedConstraints(track, { zoom: z });
-    }
-  }, [stream]);
-
-  // Bind the camera stream to the video element when both are ready
-  useEffect(() => {
-    if (cameraActive && stream && videoRef.current) {
-      videoRef.current.srcObject = stream;
-      // Explicitly call play to ensure the stream plays on all mobile browsers
-      videoRef.current.play().catch(err => {
-        console.error('Error playing video stream:', err);
-      });
-    }
-  }, [cameraActive, stream]);
 
   // Auto-Add Countdown Effect
   useEffect(() => {
@@ -686,309 +469,15 @@ function CameraScanner({ onAddSuccess, showToast }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoAddCountdown, autoAddTargetCard, autoAddEditing]);
 
-  // Is this moment worth taking the picture?
-  //
-  // Auto-scan used to fire on a clock and send whatever frame the tick landed
-  // on — including motion-blurred ones, which measurably produced confident
-  // WRONG answers that no amount of recall tuning could rescue. It is now driven
-  // by the detector instead: the card decides when the photo happens.
-  //
-  // Deliberately NOT permissive about the no-card case. The old version answered
-  // "yes" whenever it had no opinion, which was safe only because the contour
-  // detector always returned something. A detector that can say "there is no
-  // card" has to be believed, or auto-scan photographs empty desks.
-  // Gate inputs, assembled once so the trigger and the badge read the same state.
-  const autoArgs = () => ({
-    armed: autoArmed.current,
-    busy: loadingRef.current,
-    blocked: captureBlockedRef.current,
-    reading: bestFrame.current,
-    now: Date.now(),
-    lastCaptureAt: lastCaptureAt.current,
-    minSteady: minSteadyRef.current,
-    minFill: minFillRef.current,
-  });
 
-  const frameWorthCapturing = () => shouldCapture(autoArgs());
-
-  // Auto-capture, edge triggered.
-  //
-  // The rule is "one scan per card presented", not "a scan every N ms". Firing
-  // on an interval meant a card sitting under the camera got scanned over and
-  // over while the user was still reaching for the next one, and a card placed
-  // just after a tick waited out the rest of the beat for no reason.
-  //
-  // So: arm -> the detector reports a steady, well-framed card -> capture ->
-  // disarm. Re-arm only once the scene has actually changed, which is either the
-  // card leaving the frame or a visibly different quad appearing in it (swapping
-  // one card for another without a gap in between). MIN_RECAPTURE_MS is a floor
-  // against double-firing on the same card, not a cadence.
-  // One place that decides what auto-scan is doing, so the pill and the trigger
-  // can never disagree about why nothing is happening.
-  const AUTO_BADGE = {
-    scanning: { key: 'scan.autoScanning', color: 'var(--accent-red)' },
-    waiting: { key: 'scan.autoWaiting', color: '#fbbf24' },
-    lift: { key: 'scan.autoLiftCard', color: '#fbbf24' },
-    nocard: { key: 'scan.autoNoCard', color: 'rgba(255,255,255,0.55)' },
-    closer: { key: 'scan.autoCloser', color: '#fbbf24' },
-    hold: { key: 'scan.autoHoldStill', color: '#fbbf24' },
-    ready: { key: 'scan.autoReady', color: 'var(--type-grass)' },
-  };
-
-  // Called on every detection, so it only sets state that actually changed: each
-  // set re-renders this whole component, and per-frame renders of a badge that
-  // says the same thing are pure main-thread cost on a phone.
-  const refreshAutoState = () => {
-    const b = AUTO_BADGE[autoStatusKey(autoArgs())];
-    const label = t(b.key);
-    setAutoState(prev => (prev && prev.label === label && prev.color === b.color ? prev : { label, color: b.color }));
-    // The numeric readout is only on screen while scan settings are open.
-    if (!showSettingsRef.current) return;
-    const r = bestFrame.current;
-    setDetectStats({
-      none: !r || !!r.none,
-      fill: r?.fill ?? 0,
-      steady: r?.steady ?? 0,
-      drift: lastDrift.current,
-      corners: lastCorners.current,
-      engine: lastEngine.current,
-      ms: lastDetectMs.current,
-      runMs: lastRunMs.current,
-      armed: autoArmed.current,
-    });
-  };
-
-  const tryAutoCapture = () => {
-    refreshAutoState();
-    if (!autoScanRef.current || !cameraActive) return;
-    if (!frameWorthCapturing()) return;
-    autoArmed.current = false;
-    lastCaptureAt.current = Date.now();
-    capturedQuad.current = lastRawQuad.current;
-    handleCaptureRef.current?.();
-  };
-
-  // Live "where does the scanner think the card is" outline.
-  //
-  // Every crop failure used to be invisible until after the shutter: you framed a
-  // card, got a wrong answer, and had no way to see the detector had locked onto a
-  // sleeve edge or nothing at all. This closes that loop.
-  //
-  // The cost model is the entire design, because the first attempt at this froze
-  // the app. Per update it does exactly one canvas draw and one async encode:
-  //   · ONE canvas, reused (allocating per frame exhausts mobile canvas memory,
-  //     after which new canvases come back blank rather than failing)
-  //   · toBlob, not toDataURL — the latter is a SYNCHRONOUS JPEG encode
-  //   · no getImageData anywhere — each call is a GPU readback
-  //   · self-pacing: the next request is scheduled after the last one lands, so a
-  //     slow phone or a slow network stretches the interval instead of queueing
-  //   · paused entirely while a real scan is running; that result is what matters
-  // Roughly 1.5 requests/second of small JPEGs, and nothing synchronous.
-  // Runs whenever the camera is on AND something needs it: the outline to draw,
-  // or auto-scan to decide when to fire. Gating it on the outline alone meant
-  // hiding the outline silently disabled auto-scan, since the detector is what
-  // triggers a capture now.
-  useEffect(() => {
-    // Scanning off means the detector stops too. It exists to decide when to take
-    // the picture; the outline is a readout of that same work, so drawing it while
-    // nothing can fire would be paying ~1.5 inferences a second to animate a box.
-    if (!cameraActive || !autoScan) { setDetectQuad(null); setAutoState(null); return; }
-    refreshAutoState();
-    let stopped = false;
-    let timer;
-    let cancelFrame = null;
-    const schedule = (ms) => { if (!stopped) { clearTimeout(timer); timer = setTimeout(tick, ms); } };
-    // After a result, wait for the camera's NEXT frame rather than a fixed delay:
-    // a frame is never detected twice and none sits waiting on a timer. The
-    // timeout is a guard for a video that stops presenting frames.
-    const scheduleFrame = () => {
-      const v = videoRef.current;
-      if (stopped || !v?.requestVideoFrameCallback) { schedule(DETECT_INTERVAL_MS); return; }
-      const id = v.requestVideoFrameCallback(() => tick());
-      cancelFrame = () => v.cancelVideoFrameCallback(id);
-      schedule(500);
-    };
-
-    // Applied when the worker answers, not when the frame was submitted.
-    const onDetectResult = (found) => {
-      if (stopped) return;
-      // The pacing lives here, not after the submit: one frame in flight, and the
-      // next grabbed only once this one has landed.
-      scheduleFrame();
-      // Say so, once, when the neural detector could not be loaded and the
-      // contour fallback is carrying the outline. Silent degradation here looks
-      // exactly like "the scanner got worse for no reason".
-      if (found.runMs != null) lastRunMs.current = found.runMs;
-      if (detectStart.current) {
-        lastDetectMs.current = Math.round(performance.now() - detectStart.current);
-        detectStart.current = 0;
-      }
-      if (found.degraded && !degradedWarned.current) {
-        degradedWarned.current = true;
-        console.warn(`Card detector degraded to contour fallback: ${found.degraded}`);
-      }
-      if (found.error) console.warn(`Card detector (${found.engine || 'none'}): ${found.error}`);
-      if (found.fatal) setDetectorDown(true);
-      if (!found.detected) {
-        steadyFrames.current = 0;
-        smoothed.current = null;
-        lastRawQuad.current = null;
-        // A DEFINITE "no card", not an absence of information. The old contour
-        // detector always returned some quad and a bad one simply scored low, so
-        // "no answer" and "no card" were the same state and nulling this was
-        // harmless. Cornelius declines outright, and a null here reads as "the
-        // detector has not spoken yet", which frameWorthCapturing treats as
-        // permission to fire — auto-scan then photographed an empty desk.
-        bestFrame.current = { at: Date.now(), sharp: 0, fill: 0, steady: 0, none: true };
-        // The frame emptying is the normal way a card is "finished": the user
-        // lifts it off the mat. Require a few consecutive empty frames so a
-        // hand passing over the card does not re-arm mid-scan.
-        emptyFrames.current += 1;
-        if (shouldRearm({ armed: autoArmed.current, emptyFrames: emptyFrames.current, quad: null, capturedQuad: capturedQuad.current })) {
-          autoArmed.current = true;
-          capturedQuad.current = null;
-          resolvedDupIdRef.current = null;
-        }
-        lastDrift.current = null;
-        lastCorners.current = found.corners ?? null;
-        lastEngine.current = found.engine || 'none';
-        setDetectQuad(q => q && null);   // already empty: no re-render
-        refreshAutoState();
-        return;
-      }
-      emptyFrames.current = 0;
-      // Drift is measured between RAW results; the smoothed quad is only what
-      // gets drawn, and easing it would make everything look steady.
-      const drift = meanCornerDrift(lastRawQuad.current, found.quad);
-      lastDrift.current = Number.isFinite(drift) ? drift : null;
-      lastCorners.current = found.corners ?? null;
-      lastEngine.current = found.engine || 'none';
-      lastRawQuad.current = found.quad;
-      smoothed.current = smoothQuad(smoothed.current, found.quad);
-      steadyFrames.current = drift < STEADY_DRIFT ? steadyFrames.current + 1 : 0;
-      bestFrame.current = {
-        at: Date.now(),
-        sharp: found.sharp || 0,
-        fill: found.pick?.fill ?? 0,
-        steady: steadyFrames.current,
-      };
-      // Card swapped without the frame ever emptying — a different quad in the
-      // same place counts as a new card, otherwise feeding cards edge-to-edge
-      // would only ever scan the first one.
-      if (shouldRearm({ armed: autoArmed.current, emptyFrames: 0, quad: found.quad, capturedQuad: capturedQuad.current })) {
-        autoArmed.current = true;
-        capturedQuad.current = null;
-        resolvedDupIdRef.current = null;
-      }
-      setDetectQuad({ ...found, quad: smoothed.current });
-      tryAutoCapture();
-    };
-
-    const tick = () => {
-      if (stopped) return;
-      clearTimeout(timer);
-      cancelFrame?.();
-      cancelFrame = null;
-      try {
-        const guideElement = document.querySelector('.scan-card-guide');
-        // Skip while a scan owns the pipeline, or before the video has a frame to
-        // copy: videoWidth is set at metadata, but there are no pixels until
-        // readyState reaches HAVE_CURRENT_DATA, and drawing early yields black.
-        const v = videoRef.current;
-        if (!loadingRef.current && guideElement && v?.videoWidth && v.readyState >= 2) {
-          if (!outlineCanvas.current) outlineCanvas.current = document.createElement('canvas');
-          const c = buildFramedCanvas(v, guideElement, DETECT_W, outlineCanvas.current, true);
-          // Fire-and-forget: the worker answers on its own schedule and a frame
-          // is skipped rather than queued while one is in flight. Queueing would
-          // only produce results describing a scene that has already moved.
-          if (c && requestDetect(c, onDetectResult)) {
-            detectStart.current = performance.now();
-            return;   // onDetectResult schedules the next one
-          }
-        }
-      } catch {
-        // A dropped preview frame is not worth surfacing; the next tick retries.
-        if (!stopped) setDetectQuad(q => q && null);
-      }
-      // Nothing was submitted, so nothing will call back. Idle poll.
-      schedule(DETECT_IDLE_MS);
-    };
-    timer = setTimeout(tick, 400);   // let the camera settle before the first look
-    return () => { stopped = true; clearTimeout(timer); cancelFrame?.(); stopDetect(); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraActive, autoScan]);
-
-  const updateAdvancedConstraints = (track, newAdvancedProps) => {
-    try {
-      const currentConstraints = track.getConstraints();
-      let advanced = currentConstraints.advanced ? [...currentConstraints.advanced] : [];
-      let advObj = advanced.length > 0 ? { ...advanced[0] } : {};
-      
-      for (const [key, value] of Object.entries(newAdvancedProps)) {
-        if (value === null || value === undefined) {
-          delete advObj[key];
-        } else {
-          advObj[key] = value;
-        }
-      }
-      
-      // Apply ONLY the advanced set. Re-sending the top-level resolution
-      // constraints (facingMode/width/height) makes many Android Chrome builds
-      // reset the track and silently drop torch/focus. applyConstraints leaves
-      // any field we don't name untouched, so the resolution stays put.
-      track.applyConstraints({
-        advanced: [advObj]
-      }).catch(err => console.warn('applyConstraints error:', err));
-    } catch (e) {
-      console.warn('updateAdvancedConstraints error:', e);
-    }
-  };
-
-  // Torch gets its own path (not the shared merge) so it applies the bare
-  // `advanced: [{ torch }]` constraint and surfaces the real reason on-screen —
-  // the user can't open a phone console. iOS Safari never reports caps.torch,
-  // so those users get a clear "not supported" instead of a dead button.
-  const toggleTorch = async () => {
-    const track = stream?.getVideoTracks()[0];
-    if (!track) { showToast(t('scan.errCameraNotReady')); return; }
-    const caps = typeof track.getCapabilities === 'function' ? track.getCapabilities() : {};
-    if (!caps.torch) {
-      showToast(t('scan.errNoTorch'));
-      return;
-    }
-    const next = !isTorchOn;
-    try {
-      await track.applyConstraints({ advanced: [{ torch: next }] });
-      setIsTorchOn(next);
-    } catch (err) {
-      showToast(t('scan.errTorch', { error: err.name || err.message || t('scan.unknownError') }));
-    }
-  };
-
-  // Exposure bias. exposureCompensation is an EV offset on top of continuous
-  // auto-exposure; in 'manual' mode the camera drives exposure by exposureTime/ISO
-  // and ignores the compensation, so the slider must stay in continuous mode.
-  const changeExposure = (val) => {
-    setExposure(val);
-    const track = stream?.getVideoTracks?.()[0];
-    if (track) updateAdvancedConstraints(track, { exposureMode: 'continuous', exposureCompensation: val });
-  };
-
-  // Hardware zoom, not a CSS scale: the frames themselves are zoomed, so the
-  // guide-box crop maths stays correct and the crop gets more real pixels.
-  const changeZoom = (val) => {
-    setZoom(val);
-    localStorage.setItem('scan_zoom', String(val));
-    const track = stream?.getVideoTracks?.()[0];
-    if (track) updateAdvancedConstraints(track, { zoom: val });
-  };
-
-  const startCamera = async () => {
+  // What a fresh camera open resets in the scanner itself. These were the first
+  // lines of startCamera before the camera moved to useCameraStream, which calls
+  // this at the same point.
+  const resetForCameraOpen = () => {
     // Create/unlock the scan cue here: this call is inside a click handler, and a
     // context first created without a gesture starts suspended with no promise of
     // ever being allowed to resume. Every capture after this is gesture-less.
     beepCtx();
-    setCameraErrorKey('');
     setScanMatches([]);
     setScanStatus('');
     setDebugHashImg('');
@@ -998,107 +487,13 @@ function CameraScanner({ onAddSuccess, showToast }) {
     resolvedDupIdRef.current = null;
     autoArmed.current = true;
     capturedQuad.current = null;
-    // getUserMedia only exists in a secure context. Served over plain HTTP on a
-    // LAN address (the usual Docker setup, http://host:3001) navigator.mediaDevices
-    // is undefined, and the browser never shows a permission prompt at all — so
-    // "check your permissions" sends people hunting for a setting that is fine.
-    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-      setCameraErrorKey('scan.errCameraInsecure');
-      showToast(t('scan.errCameraInsecure', { origin: window.location.origin, port: window.location.port || '80' }));
-      return;
-    }
-    // A retry must release whatever is still open: Android cannot hold two
-    // cameras at once, and a second open would fail as NotReadableError.
-    stopTracks(streamRef.current);
-    try {
-      // The lens picked last time (by the user or by the heuristic below). Exact,
-      // so the browser can't swap in another lens; a camera that has gone (new
-      // phone, cleared site data rotates deviceIds) falls back to the default.
-      const saved = localStorage.getItem(CAMERA_KEY);
-      let mediaStream = null;
-      if (saved) {
-        try {
-          mediaStream = await openCamera(saved);
-        } catch (err) {
-          if (err?.name !== 'OverconstrainedError' && err?.name !== 'NotFoundError') throw err;
-          localStorage.removeItem(CAMERA_KEY);
-        }
-      }
-      const usedSaved = !!mediaStream;
-      if (!mediaStream) mediaStream = await openCamera(null);
-      if (unmounted.current) { stopTracks(mediaStream); return; }
-
-      const inputs = await listVideoInputs();
-      if (unmounted.current) { stopTracks(mediaStream); return; }
-      setVideoInputs(inputs);
-
-      // facingMode 'environment' lets the browser open ANY back lens, and on
-      // multi-lens Android phones it often opens the macro one, which cannot
-      // focus on a card at arm's length. Nothing saved: move to the main lens
-      // once, and remember it so the next open goes straight there.
-      if (!usedSaved) {
-        const track = mediaStream.getVideoTracks()[0];
-        const better = pickPreferredCamera(inputs, { deviceId: track?.getSettings?.().deviceId, label: track?.label });
-        if (better) {
-          stopTracks(mediaStream);
-          try {
-            mediaStream = await openCamera(better);
-            localStorage.setItem(CAMERA_KEY, better);
-          } catch (err) {
-            console.warn('Preferred camera failed, keeping the default:', err);
-            mediaStream = await openCamera(null);
-          }
-          if (unmounted.current) { stopTracks(mediaStream); return; }
-        }
-      }
-
-      streamRef.current = mediaStream;
-      setIsTorchOn(false);
-      setStream(mediaStream);
-      setCameraActive(true);
-    } catch (err) {
-      console.error('Error opening camera:', err);
-      setCameraErrorKey('scan.errCameraPermissions');
-      showToast(t('scan.errCameraAccess'));
-    }
   };
-
-  // Lens picker / quick-switch. The old tracks stop BEFORE the new open (Android
-  // cannot hold two cameras), which also turns the torch off — so its state is
-  // reset. Zoom and exposure are re-read from the new track by the [stream]
-  // effect, which restores the saved zoom when this lens can do it.
-  const switchCamera = async (deviceId) => {
-    const current = stream?.getVideoTracks?.()[0]?.getSettings?.().deviceId;
-    if (!deviceId || deviceId === current || switchingCamera.current) return;
-    switchingCamera.current = true;
-    stopTracks(streamRef.current);
-    setIsTorchOn(false);
-    let next = null;
-    try {
-      next = await openCamera(deviceId);
-      localStorage.setItem(CAMERA_KEY, deviceId);
-    } catch (err) {
-      console.warn('Camera switch failed:', err);
-      showToast(t('scan.errCameraSwitch', { error: err?.name || err?.message || t('scan.unknownError') }));
-      // Don't leave the preview dead: go back to whatever the browser picks.
-      try { next = await openCamera(null); } catch (e) { console.error('Error reopening camera:', e); }
-    }
-    switchingCamera.current = false;
-    if (unmounted.current) { stopTracks(next); return; }
-    if (!next) {
-      setStream(null);
-      setCameraActive(false);
-      setCameraErrorKey('scan.errCameraPermissions');
-      return;
-    }
-    streamRef.current = next;
-    setStream(next);
-  };
-
-  // What the picker calls a camera: its own label, or "Camera N" while labels
-  // are withheld (no permission yet) or the device reports none.
-  const cameraLabel = (d, i) => d.label || t('scan.cameraN', { n: i + 1 });
-  const activeCameraId = stream?.getVideoTracks?.()[0]?.getSettings?.().deviceId || '';
+  const {
+    stream, cameraActive, cameraErrorKey, isTorchOn,
+    exposureCaps, exposure, setExposure, zoomCaps, zoom, videoInputs,
+    videoRef, updateAdvancedConstraints, toggleTorch, changeExposure, changeZoom,
+    startCamera, switchCamera, cameraLabel, activeCameraId,
+  } = useCameraStream({ showToast, t, onBeforeOpen: resetForCameraOpen });
 
   // No stopCamera: the stop button is gone. The camera lives exactly as long as
   // this component — leaving the scan tab unmounts it, and the unmount cleanup
@@ -1149,9 +544,10 @@ function CameraScanner({ onAddSuccess, showToast }) {
 
         // Append to recent scans history log. entry_id (the last inserted row)
         // lets the recent-scans price splitter target these exact entries and the
-        // inspector edit/delete the entry. Carry the entry fields it was saved with.
+        // inspector edit/delete the entry; member_ids (every row this add made)
+        // is what the tile's quantity stands for. Carry the entry fields it was saved with.
         setRecentScans(prev => [{
-          ...card, card_id: card.id, placementLabel, entry_id: data.id,
+          ...card, card_id: card.id, placementLabel, entry_id: data.id, member_ids: data.ids,
           quantity: qty, condition: autoCondition, printing: autoPrinting,
           language: autoLanguage, purchase_price: resolveCardPrice(card, autoPrinting), location_id: null,
         }, ...prev].slice(0, 10));
@@ -1418,6 +814,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
     autoArmed.current = false;
     lastCaptureAt.current = Date.now();
     capturedQuad.current = lastRawQuad.current;
+    capturedSig.current = lastSig.current;
+    changedFrames.current = 0;
 
     setLoading(true);
     const scanId = ++currentScanId.current;
@@ -1601,15 +999,31 @@ function CameraScanner({ onAddSuccess, showToast }) {
   // Keep the ref pointing at the latest handleCapture so timers (metronome /
   // cooldown) always invoke the current closure, never a stale one.
   handleCaptureRef.current = handleCapture;
-  frameWorthCaptureRef.current = frameWorthCapturing;
   // Metronome reads this (not effect deps) to decide whether to fire a capture,
   // so a modal/picker/drawer pauses the beat without restarting the interval.
   captureBlockedRef.current = isDrawerOpen || scanMatches.length > 0 || !!autoAddTargetCard || !!dupConfirmCard;
   loadingRef.current = loading;
+  const {
+    detectQuadStore, autoStateStore, detectStatsStore, detectorDown,
+    autoArmed, capturedQuad, lastRawQuad, lastSig, capturedSig, changedFrames,
+    lastCaptureAt, bestFrame, autoScanRef, minFillRef, minSteadyRef, showSettingsRef,
+    frameWorthCapturing, refreshAutoState,
+  } = useScanPipeline({
+    cameraActive, autoScan, videoRef, buildFramedCanvas,
+    handleCaptureRef, loadingRef, captureBlockedRef, resolvedDupIdRef, t,
+  });
+  frameWorthCaptureRef.current = frameWorthCapturing;
   autoScanRef.current = autoScan;
   showSettingsRef.current = showScanSettings;
   minFillRef.current = minFill;
   minSteadyRef.current = minSteady;
+  // The "Next card" tap on the auto-scan pill: re-arm on whatever is in frame.
+  const rearmFromPill = useStableCallback(() => {
+    autoArmed.current = true;
+    capturedQuad.current = null;
+    resolvedDupIdRef.current = null;
+    refreshAutoState();
+  });
 
   // What language a scanned copy gets filed as.
   //
@@ -1620,10 +1034,12 @@ function CameraScanner({ onAddSuccess, showToast }) {
   // copy contradicts both the card in your hand and the language you chose to scan
   // in. The row stays the English printing (it is the only one the provider could
   // give us); the COPY is recorded in the language being scanned.
-  const addLanguage = (card) => {
+  // Memoized on scanLang alone (all it reads), because the panels call it while
+  // rendering and a new identity every render would re-render them every time.
+  const addLanguage = useCallback((card) => {
     const own = card?.language;
     return own && langCode(own) !== 'en' ? own : langName(scanLang);
-  };
+  }, [scanLang]);
 
   const openQuickAdd = (card) => {
     setScanMatches([]);
@@ -1781,6 +1197,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
       startCamera();
     }
   };
+  useEscape(isDrawerOpen, closeDrawer);
 
   const removeRecentTile = (entryId) => setRecentScans(prev => prev.filter(s => s.entry_id !== entryId));
   // Tap: open the inspector, unless a long-press just armed selection or we're
@@ -1825,7 +1242,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
         // Append to recent scans history. Carry entry_id + saved fields so the
         // strip supports tap-to-edit / long-press-delete like the auto-add path.
         setRecentScans(prev => [{
-          ...selectedCard, card_id: selectedCard.id, placementLabel, entry_id: data.id,
+          ...selectedCard, card_id: selectedCard.id, placementLabel, entry_id: data.id, member_ids: data.ids,
           quantity: parseInt(quantity, 10), condition, printing, language,
           purchase_price: parseFloat(purchasePrice) || 0, location_id: null,
         }, ...prev].slice(0, 10));
@@ -1851,6 +1268,13 @@ function CameraScanner({ onAddSuccess, showToast }) {
     }
   };
 
+  // Handlers for the memoized panels below, stable across renders so a scanner
+  // render does not re-render a panel whose own props did not change.
+  const stable = useStableHandlers({
+    cancelAutoAdd, autoAddCard, openQuickAdd, dismissDupConfirm, showToast,
+    dismissMatches, startCamera, handleManualSearch, activateRecent,
+  });
+
   return (
     <div className="scanner-container">
 
@@ -1861,7 +1285,10 @@ function CameraScanner({ onAddSuccess, showToast }) {
         <div 
           className="camera-preview-wrapper" 
           style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+          role="button"
+          tabIndex={0}
           onClick={startCamera}
+          onKeyDown={onActivateKey(startCamera)}
         >
           {cameraErrorKey ? (
             <div style={{ textAlign: 'center', padding: '2rem' }}>
@@ -1953,12 +1380,11 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 clock to show any more — what the user needs to know is whether the
                 scanner is waiting on them (no card / hold still) or on itself
                 (scanning / lift the card), because those need opposite reactions. */}
-            {autoScan && autoState && (
-              <div style={{ position: 'absolute', top: '1rem', left: '1rem', zIndex: 20, display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.3rem 0.6rem', borderRadius: 999, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)', filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.6))' }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: autoState.color, flexShrink: 0 }} />
-                <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#fff', whiteSpace: 'nowrap' }}>{autoState.label}</span>
-              </div>
-            )}
+            {/* "Next card" is also a button: the one state the scanner can sit in
+                with nothing left to wait for is a card swapped so fast that no
+                detection saw the mat empty and the new one landed where the old one
+                was. A tap re-arms on whatever is in frame now. */}
+            {autoScan && <AutoStatePill store={autoStateStore} onRearm={rearmFromPill} />}
 
             {/* Shutter flash. Mounted only for the length of the cue, so each
                 capture restarts the animation instead of a repeat firing into an
@@ -2000,29 +1426,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                     Green = the detector has a card-like quad and the scan will
                     work from it. No outline = it has nothing, which is the state
                     worth seeing before pressing the shutter rather than after. */}
-                {showDetectOutline && detectQuad?.detected && detectQuad.quad && (
-                  <svg
-                    viewBox="0 0 100 100"
-                    preserveAspectRatio="none"
-                    style={{
-                      position: 'absolute',
-                      left: `${-CROP_PAD * 100}%`,
-                      top: `${-CROP_PAD * 100}%`,
-                      width: `${(1 + 2 * CROP_PAD) * 100}%`,
-                      height: `${(1 + 2 * CROP_PAD) * 100}%`,
-                      pointerEvents: 'none',
-                      overflow: 'visible',
-                    }}
-                  >
-                    <polygon
-                      points={detectQuad.quad.map(p => `${p.x * 100},${p.y * 100}`).join(' ')}
-                      fill="rgba(74,222,128,0.15)"
-                      stroke="rgb(74,222,128)"
-                      strokeWidth="2"
-                      vectorEffect="non-scaling-stroke"
-                    />
-                  </svg>
-                )}
+                {showDetectOutline && <DetectOutline store={detectQuadStore} />}
               </div>
               {(guideOffset.x !== 0 || guideOffset.y !== 0 || guideAngle !== 0 || guideScale !== 1) && (
                 <button
@@ -2223,43 +1627,11 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 the point: each gate shows its current reading next to its
                 threshold, so a card that will not trigger says why. */}
             {autoScan && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t('scan.autoTuning')}</span>
-                  <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
-                    {detectStats?.engine || '—'}{detectStats?.ms != null ? ` · ${detectStats.ms}ms` : ''}{detectStats?.runMs != null ? ` (run ${detectStats.runMs})` : ''}{detectStats?.armed === false ? ' · held' : ''}
-                  </span>
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>{t('scan.autoFillGate')}</span>
-                  <span style={{ fontWeight: 700, color: detectStats && !detectStats.none && detectStats.fill >= minFill ? 'var(--type-grass)' : 'var(--accent-red)' }}>
-                    {detectStats && !detectStats.none ? detectStats.fill.toFixed(2) : '—'} / {minFill.toFixed(2)}
-                  </span>
-                </div>
-                <input
-                  type="range" min="0.2" max="0.9" step="0.01" value={minFill}
-                  onChange={(e) => { const v = parseFloat(e.target.value); setMinFill(v); localStorage.setItem('scan_min_fill', String(v)); }}
-                  style={{ width: '100%', accentColor: 'var(--accent-red)' }}
-                />
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>{t('scan.autoSteadyGate')}</span>
-                  <span style={{ fontWeight: 700, color: detectStats && detectStats.steady >= minSteady ? 'var(--type-grass)' : 'var(--accent-red)' }}>
-                    {detectStats ? detectStats.steady : '—'} / {minSteady}
-                  </span>
-                </div>
-                <input
-                  type="range" min="1" max="10" step="1" value={minSteady}
-                  onChange={(e) => { const v = parseInt(e.target.value, 10); setMinSteady(v); localStorage.setItem('scan_min_steady', String(v)); }}
-                  style={{ width: '100%', accentColor: 'var(--accent-red)' }}
-                />
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem', color: 'var(--text-muted)' }}>
-                  <span>{t('scan.autoDrift')}: {detectStats?.drift != null ? detectStats.drift.toFixed(3) : '—'} / {STEADY_DRIFT}</span>
-                  <span>{t('scan.autoCorners')}: {detectStats?.corners != null ? detectStats.corners.toFixed(3) : '—'}</span>
-                </div>
-              </div>
+              <AutoTuningPanel
+                store={detectStatsStore}
+                minFill={minFill} setMinFill={setMinFill}
+                minSteady={minSteady} setMinSteady={setMinSteady}
+              />
             )}
 
             {/* Scan Detail. What it still controls: upload resolution and the
@@ -2431,7 +1803,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                   capturedQuad.current = null;
                   resolvedDupIdRef.current = null;
                 } else {
-                  setAutoState(null);
+                  autoStateStore.set(null);
                   if (loading) handleCancelScan();
                 }
               }}
@@ -2516,510 +1888,40 @@ function CameraScanner({ onAddSuccess, showToast }) {
       {/* Auto Add Countdown Overlay. Tap the card (before the countdown ends) to
           pause auto-add and adjust condition/printing before it's saved. */}
       {autoAddTargetCard && (autoAddCountdown !== null || autoAddEditing) && (
-        <div
-          className="modal-backdrop"
-          style={{
-            position: 'fixed',
-            top: 0, left: 0, right: 0, bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.85)',
-            backdropFilter: 'blur(5px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1100,
-            padding: '1rem'
-          }}
-        >
-          <div className="glass-panel animate-fade-in scan-confirm-modal" style={{ maxWidth: '420px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: '1.25rem', alignItems: 'center', textAlign: 'center', border: '1px solid var(--accent-red)' }}>
-            <div>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 800 }}>{t(autoAddEditing ? 'scan.adjustAndAdd' : 'scan.exactMatch')}</span>
-              {/* The name AS PRINTED when the provider gave one, so a Japanese
-                  scan reads as the Japanese card it is. Falls back to English. */}
-              <h3 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-strong)', margin: '0.25rem 0 0.35rem 0' }}>{getCardDisplayName(autoAddTargetCard.name, addLanguage(autoAddTargetCard), autoAddTargetCard.printed_name)}</h3>
-              <p style={{ color: 'var(--text-primary)', fontSize: '1rem', fontWeight: 700, margin: 0 }}>#{autoAddTargetCard.number}</p>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: 0 }}>{autoAddTargetCard.set_name}</p>
-              <LangFallbackNote card={autoAddTargetCard} />
-            </div>
-
-            <div
-              onClick={() => {
-                if (autoAddEditing) return;
-                // Pause and open the editor with sensible defaults.
-                setAutoAddCond('Near Mint');
-                setAutoAddPrint((autoAddTargetCard.rarity || '').toLowerCase().includes('holo') ? 'Holofoil' : 'Normal');
-                setAutoAddEditing(true);
-              }}
-              style={{ position: 'relative', width: '115px', aspectRatio: 0.718, margin: '0.5rem 0', cursor: autoAddEditing ? 'default' : 'pointer' }}
-              title={autoAddEditing ? undefined : 'Tap to change condition/foil'}
-            >
-              <img src={autoAddTargetCard.image_url} alt={getCardDisplayName(autoAddTargetCard.name, addLanguage(autoAddTargetCard), autoAddTargetCard.printed_name)} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '6px', boxShadow: 'var(--shadow-glow)' }} />
-              {!autoAddEditing && (
-                <div style={{
-                  position: 'absolute',
-                  top: '-10px',
-                  right: '-10px',
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '50%',
-                  backgroundColor: 'var(--accent-red)',
-                  border: '2px solid #fff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'var(--text-strong)',
-                  fontWeight: 900,
-                  fontSize: '1rem',
-                  boxShadow: '0 4px 10px rgba(0,0,0,0.5)'
-                }}>
-                  {autoAddCountdown}
-                </div>
-              )}
-            </div>
-
-            {autoAddEditing ? (
-              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                <div style={{ display: 'flex', gap: '0.6rem' }}>
-                  <div className="form-group" style={{ marginBottom: 0, flex: 1, textAlign: 'left' }}>
-                    <label>{t('card.condition')}</label>
-                    <select className="select-control" value={autoAddCond} onChange={(e) => setAutoAddCond(e.target.value)}>
-                      {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </div>
-                  <div className="form-group" style={{ marginBottom: 0, flex: 1, textAlign: 'left' }}>
-                    <label>{t('card.printing')}</label>
-                    <select className="select-control" value={autoAddPrint} onChange={(e) => setAutoAddPrint(e.target.value)}>
-                      {getPrintings(autoAddTargetCard.game || autoAddTargetCard.supertype).map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={() => {
-                      const card = autoAddTargetCard;
-                      const overrides = { condition: autoAddCond, printing: autoAddPrint };
-                      setAutoAddTargetCard(null);
-                      setAutoAddCountdown(null);
-                      setAutoAddEditing(false);
-                      autoAddCard(card, 1, overrides);
-                    }}
-                    style={{ flex: 1.5, fontSize: '0.75rem', padding: '0.45rem 0' }}
-                  >
-                    {t('search.addToCollection')}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      setAutoAddTargetCard(null);
-                      setAutoAddCountdown(null);
-                      setAutoAddEditing(false);
-                      autoArmed.current = true;
-                      capturedQuad.current = null;
-                      resolvedDupIdRef.current = null;
-                      showToast(t('scan.autoAddCancelled'));
-                    }}
-                    style={{ flex: 1, fontSize: '0.75rem', padding: '0.45rem 0' }}
-                  >
-                    {t('common.cancel')}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{t('scan.autoAddingIn', { seconds: autoAddCountdown })}</span>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{t('scan.tapToChange')}</span>
-                <div style={{ display: 'flex', gap: '0.5rem', width: '100%', marginTop: '0.5rem' }}>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={() => {
-                      const card = autoAddTargetCard;
-                      setAutoAddTargetCard(null);
-                      setAutoAddCountdown(null);
-                      setAutoAddAlternatives([]);
-                      autoAddCard(card);
-                    }}
-                    style={{ flex: 1.5, fontSize: '0.75rem', padding: '0.45rem 0' }}
-                  >
-                    {t('scan.addNow')}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      setAutoAddTargetCard(null);
-                      setAutoAddCountdown(null);
-                      setAutoAddAlternatives([]);
-                      autoArmed.current = true;
-                      capturedQuad.current = null;
-                      resolvedDupIdRef.current = null;
-                      showToast(t('scan.autoAddCancelled'));
-                    }}
-                    style={{ flex: 1, fontSize: '0.75rem', padding: '0.45rem 0' }}
-                  >
-                    {t('common.cancel')}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* The rest of the ORB list, in ORB's order.
-                Auto-add commits to the strongest match, and within a single set
-                — many cards, one frame, near-identical art — that is regularly
-                not the card in hand. Showing the runners-up here turns a wrong
-                guess into one tap instead of an add-then-undo. Hidden while
-                editing condition/foil, where the choice has already been made. */}
-            {!autoAddEditing && autoAddAlternatives.length > 0 && (
-              <div style={{ width: '100%', borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>
-                  {t('scan.notThisOne')}
-                </span>
-                <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', paddingBottom: '0.25rem' }}>
-                  {autoAddAlternatives.map(alt => (
-                    <button
-                      key={alt.id}
-                      type="button"
-                      onClick={() => {
-                        // Cancel the countdown and hand this card to the normal
-                        // add flow, so condition/quantity work exactly as usual.
-                        setAutoAddTargetCard(null);
-                        setAutoAddCountdown(null);
-                        setAutoAddAlternatives([]);
-                        openQuickAdd(alt);
-                      }}
-                      title={`${getCardDisplayName(alt.name, addLanguage(alt), alt.printed_name)} · ${alt.set_name} #${alt.number}`}
-                      style={{ flex: '0 0 auto', width: '68px', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'center' }}
-                    >
-                      <img
-                        src={alt.image_url}
-                        alt={getCardDisplayName(alt.name, addLanguage(alt), alt.printed_name)}
-                        style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '4px', border: '1px solid var(--border-glass-hover)' }}
-                      />
-                      <div style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', marginTop: '0.2rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        #{alt.number}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-                {/* The strip is a quick pick; this opens the full list in the
-                    normal picker. Offered even on a confident match, because
-                    "confident" is a score, not a promise — and when the whole set
-                    looks alike it is regularly the wrong card. */}
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => {
-                    const all = [autoAddTargetCard, ...autoAddAlternatives];
-                    setAutoAddTargetCard(null);
-                    setAutoAddCountdown(null);
-                    setAutoAddAlternatives([]);
-                    setScanMatches(all);
-                    setShowAllMatches(true);
-                  }}
-                  style={{ alignSelf: 'center', fontSize: '0.7rem', padding: '0.3rem 0.7rem' }}
-                >
-                  {t('scan.seeAllMatches', { n: autoAddAlternatives.length + 1 })}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+        <AutoAddModal
+          cancelAutoAdd={stable.cancelAutoAdd} autoAddTargetCard={autoAddTargetCard} addLanguage={addLanguage} autoAddEditing={autoAddEditing}
+          setAutoAddCond={setAutoAddCond} setAutoAddPrint={setAutoAddPrint} setAutoAddEditing={setAutoAddEditing} autoAddCountdown={autoAddCountdown}
+          autoAddCond={autoAddCond} autoAddPrint={autoAddPrint} setAutoAddTargetCard={setAutoAddTargetCard} setAutoAddCountdown={setAutoAddCountdown}
+          autoAddCard={stable.autoAddCard} setAutoAddAlternatives={setAutoAddAlternatives} autoAddAlternatives={autoAddAlternatives} openQuickAdd={stable.openQuickAdd}
+          setScanMatches={setScanMatches} setShowAllMatches={setShowAllMatches}
+        />
       )}
 
       {/* Duplicate-Scan Confirm Overlay: the just-added card was scanned again. */}
       {dupConfirmCard && (
-        <div
-          className="modal-backdrop"
-          style={{
-            position: 'fixed',
-            top: 0, left: 0, right: 0, bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.85)',
-            backdropFilter: 'blur(5px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1100,
-            padding: '1rem'
-          }}
-        >
-          <div className="glass-panel animate-fade-in scan-confirm-modal" style={{ maxWidth: '420px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: '1.25rem', alignItems: 'center', textAlign: 'center', border: '1px solid var(--accent-yellow)' }}>
-            <div>
-              <span style={{ fontSize: '0.75rem', color: 'var(--accent-yellow)', textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 800 }}>{t('scan.sameCardAgain')}</span>
-              <h3 style={{ fontSize: '1.25rem', color: 'var(--text-strong)', margin: '0.25rem 0 0.5rem 0' }}>{getCardDisplayName(dupConfirmCard.name, addLanguage(dupConfirmCard), dupConfirmCard.printed_name)}</h3>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: 0 }}>{dupConfirmCard.set_name} • #{dupConfirmCard.number}</p>
-            </div>
-
-            <img src={dupConfirmCard.image_url} alt={getCardDisplayName(dupConfirmCard.name, addLanguage(dupConfirmCard), dupConfirmCard.printed_name)} style={{ width: '110px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '6px', boxShadow: 'var(--shadow-glow)' }} />
-
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0 }}>
-              {t('scan.repeatHint')}
-            </p>
-
-            {/* Quantity stepper: number of ADDITIONAL copies to add now. */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setDupQty(q => Math.max(1, q - 1))}
-                style={{ width: '36px', padding: '0.35rem 0', fontSize: '1rem', fontWeight: 800 }}
-              >−</button>
-              <span style={{ minWidth: '2.5rem', fontSize: '1.4rem', fontWeight: 900, color: 'var(--text-strong)' }}>{dupQty}</span>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setDupQty(q => Math.min(99, q + 1))}
-                style={{ width: '36px', padding: '0.35rem 0', fontSize: '1rem', fontWeight: 800 }}
-              >+</button>
-            </div>
-
-            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => {
-                  const card = dupConfirmCard;
-                  const qty = dupQty;
-                  // Mark handled so the same card lingering in frame won't re-prompt.
-                  resolvedDupIdRef.current = card.id;
-                  setDupConfirmCard(null);
-                  autoAddCard(card, qty);
-                }}
-                style={{ width: '100%', fontSize: '0.85rem', padding: '0.55rem 0' }}
-              >
-                Add {dupQty} more {dupQty === 1 ? 'copy' : 'copies'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => {
-                  resolvedDupIdRef.current = dupConfirmCard.id;
-                  setDupConfirmCard(null);
-                  showToast(t('scan.discardedRepeat'));
-                }}
-                style={{ width: '100%', fontSize: '0.8rem', padding: '0.45rem 0' }}
-              >
-                Discard — same card, keep scanning
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => {
-                  resolvedDupIdRef.current = dupConfirmCard.id;
-                  setDupConfirmCard(null);
-                  setAutoScan(false);
-                  showToast(t('scan.secondPhoto'));
-                }}
-                style={{ width: '100%', fontSize: '0.8rem', padding: '0.45rem 0' }}
-              >
-                Done — that was another photo of the same card
-              </button>
-            </div>
-          </div>
-        </div>
+        <DupConfirmModal
+          dismissDupConfirm={stable.dismissDupConfirm} dupConfirmCard={dupConfirmCard} addLanguage={addLanguage} setDupQty={setDupQty}
+          dupQty={dupQty} resolvedDupIdRef={resolvedDupIdRef} setDupConfirmCard={setDupConfirmCard} autoAddCard={stable.autoAddCard}
+          showToast={stable.showToast} setAutoScan={setAutoScan}
+        />
       )}
 
       {/* Scan Results Suggestions Popup Modal */}
       {scanMatches.length > 0 && (
-        <div style={{
-          position: 'fixed',
-          top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.85)',
-          backdropFilter: 'blur(5px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-          padding: '1rem'
-        }}>
-          <div className="glass-panel scan-suggestions-modal" style={{ maxWidth: '560px', width: '100%', display: 'flex', flexDirection: 'column', gap: '1.25rem', maxHeight: '90vh', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
-              <h3 style={{ fontSize: '1.1rem', color: 'var(--text-strong)', margin: 0 }}>{t('scan.identifiedTitle')}</h3>
-              <button 
-                className="btn btn-secondary btn-icon-only" 
-                onClick={() => {
-                  setScanMatches([]);
-                  setScanStatus('');
-                  autoArmed.current = true;
-                  capturedQuad.current = null;
-                  resolvedDupIdRef.current = null;
-                  if (!stream || !cameraActive) startCamera();
-                }} 
-                style={{ borderRadius: '50%' }}
-                title={t('scan.closeRescan')}
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0 }}>
-                {t('scan.selectCorrect')}
-              </p>
-              
-              {/* Manual search fallback within the modal */}
-              <form onSubmit={handleManualSearch} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
-                  <input 
-                    type="text" 
-                    placeholder={t('scan.manualSearchPlaceholder')} 
-                    className="input-control"
-                    value={manualSearchText}
-                    onChange={(e) => setManualSearchText(e.target.value)}
-                    style={{ width: '100%', padding: '0.4rem 2rem 0.4rem 0.6rem', fontSize: '0.8rem' }}
-                  />
-                  {manualSearchText && (
-                    <button
-                      type="button"
-                      onClick={() => setManualSearchText('')}
-                      style={{
-                        position: 'absolute',
-                        right: '0.4rem',
-                        background: 'none',
-                        border: 'none',
-                        color: 'var(--text-muted)',
-                        cursor: 'pointer',
-                        padding: '0.2rem',
-                        display: 'flex',
-                        alignItems: 'center'
-                      }}
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
-                <button
-                  type="submit"
-                  className="btn btn-secondary btn-sm"
-                  disabled={manualSearching || !manualSearchText.trim()}
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.4rem 0.75rem', fontSize: '0.8rem' }}
-                >
-                  {manualSearching ? <RefreshCw size={14} className="spin" /> : <Search size={14} />}
-                  <span>{t('search.submit') || 'Search'}</span>
-                </button>
-              </form>
-            </div>
-
-            {/* Strongest matches first — the same order, and the same cards, as
-                the ORB match list. Only the first few are shown: eight cards at
-                once is a wall to read while holding the card you are trying to
-                identify, and the answer is usually near the top. */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '0.75rem', maxHeight: '350px', overflowY: 'auto', padding: '0.25rem' }}>
-              {(showAllMatches ? scanMatches : scanMatches.slice(0, PICKER_PREVIEW)).map(card => (
-                <div key={card.id} className="tcg-card" onClick={() => openQuickAdd(card)} style={{ cursor: 'pointer' }}>
-                  <div className="tcg-card-inner" style={{ border: '1px solid var(--border-glass-hover)' }}>
-                    <img src={card.image_url} alt={getCardDisplayName(card.name, addLanguage(card), card.printed_name)} className="tcg-card-image" />
-                  </div>
-                  {/* Name and number are what the choice is actually made on —
-                      the picture is already on screen above them, and at 0.75/0.65rem
-                      the two lines that say WHICH printing this is were the smallest
-                      text in the modal. */}
-                  <div className="tcg-card-info" style={{ textAlign: 'center', marginTop: '0.5rem' }}>
-                    <div className="tcg-card-name" style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--text-strong)', lineHeight: 1.2 }}>{getCardDisplayName(card.name, addLanguage(card), card.printed_name)}</div>
-                    <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)' }}>#{card.number}</div>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{card.set_name}</div>
-                    <LangFallbackNote card={card} />
-                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-yellow)', marginTop: '0.2rem' }}>{priceText(card.price_trend, card.price_currency)}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {scanMatches.length > PICKER_PREVIEW && (
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => setShowAllMatches(v => !v)}
-                style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-              >
-                {showAllMatches
-                  ? t('scan.showFewer')
-                  : t('scan.seeMoreMatches', { n: scanMatches.length - PICKER_PREVIEW })}
-              </button>
-            )}
-
-            <div style={{ display: 'flex', gap: '0.75rem', borderTop: '1px solid var(--border-glass)', paddingTop: '1rem' }}>
-              <button 
-                className="btn btn-primary" 
-                onClick={() => {
-                  setScanMatches([]);
-                  setScanStatus('');
-                  autoArmed.current = true;
-                  capturedQuad.current = null;
-                  resolvedDupIdRef.current = null;
-                  if (!stream || !cameraActive) startCamera();
-                }} 
-                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
-              >
-                <RefreshCw size={14} />
-                <span>{t('scan.rescan')}</span>
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={() => {
-                  setScanMatches([]);
-                  setScanStatus('');
-                  setAutoScan(false);
-                  if (!stream || !cameraActive) startCamera();
-                }}
-                style={{ flex: 1 }}
-              >
-                {t('common.cancel')}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ScanMatchesModal
+          dismissMatches={stable.dismissMatches} setScanMatches={setScanMatches} setScanStatus={setScanStatus} autoArmed={autoArmed}
+          capturedQuad={capturedQuad} resolvedDupIdRef={resolvedDupIdRef} stream={stream} cameraActive={cameraActive}
+          startCamera={stable.startCamera} handleManualSearch={stable.handleManualSearch} manualSearchText={manualSearchText} setManualSearchText={setManualSearchText}
+          manualSearching={manualSearching} showAllMatches={showAllMatches} scanMatches={scanMatches} PICKER_PREVIEW={PICKER_PREVIEW}
+          openQuickAdd={stable.openQuickAdd} addLanguage={addLanguage} setShowAllMatches={setShowAllMatches} setAutoScan={setAutoScan}
+        />
       )}
 
       {/* Recent Scans History Panel */}
       {recentScans.length > 0 && (
-        <div className="glass-panel" style={{ width: '100%', marginTop: '1rem' }}>
-          <h3 style={{ fontSize: '1rem', color: 'var(--text-strong)', marginBottom: '0.85rem', borderLeft: '3px solid var(--accent-red)', paddingLeft: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span>{t('scan.recentScans')}</span>
-            {recentSelect.selectMode
-              ? <button className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={recentSelect.exitSelectMode}>{t('bulk.done')}</button>
-              : <button className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={() => setRecentScans([])}>{t('scan.clearHistory')}</button>}
-          </h3>
-
-          {/* Bulk action bar (select mode). Same actions/endpoint as the collection page. */}
-          {recentSelect.selectMode && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center', marginBottom: '0.6rem' }}>
-              <span style={{ fontWeight: 800, color: 'var(--text-strong)', fontSize: '0.8rem', marginRight: '0.25rem' }}>{recentSelect.selectedIds.size} selected</span>
-              <button className="btn btn-danger" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!recentSelect.selectedIds.size} onClick={() => recentSelect.runBulk('delete', null, t('bulk.confirmDelete', { count: recentSelect.selectedIds.size }))}>{t('bulk.delete')}</button>
-              <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!recentSelect.selectedIds.size} onClick={() => recentSelect.runBulk('trade', null)}>{t('bulk.markTrade')}</button>
-              <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!recentSelect.selectedIds.size} onClick={() => recentSelect.runBulk('list_type', 'wishlist')}>{t('bulk.moveToWishlist')}</button>
-            </div>
-          )}
-
-          {/* Horizontal strip of recent scans, card-shaped like the box tiles.
-              Tap = edit; long-press = multi-select (shared with collection page). */}
-          <div style={{ display: 'flex', gap: '0.6rem', overflowX: 'auto', paddingBottom: '0.4rem' }}>
-            {recentScans.map((item, idx) => {
-              const selected = recentSelect.selectMode && recentSelect.selectedIds.has(item.entry_id);
-              return (
-              <div
-                key={idx}
-                onClick={() => activateRecent(item)}
-                {...recentSelect.pressHandlers(item.entry_id)}
-                title={t('scan.tapEditHoldSelect')}
-                style={{ flex: '0 0 auto', width: '76px', display: 'flex', flexDirection: 'column', gap: '0.25rem', cursor: 'pointer', userSelect: 'none', WebkitTouchCallout: 'none', opacity: recentSelect.selectMode && !selected ? 0.55 : 1 }}
-              >
-                <img
-                  src={item.image_url}
-                  alt={getCardDisplayName(item.name, item.language, item.printed_name)}
-                  draggable={false}
-                  style={{ width: '76px', height: '106px', objectFit: 'cover', borderRadius: '4px', border: selected ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)', boxShadow: selected ? '0 0 12px var(--accent-red-glow)' : '0 2px 6px rgba(0,0,0,0.3)', pointerEvents: 'none' }}
-                />
-                <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--accent-yellow)', textAlign: 'center' }}>{priceText(item.price_trend, item.price_currency)}</div>
-                {item.placementLabel && (
-                  <div style={{ fontSize: '0.55rem', color: '#ffc107', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={item.placementLabel}>{item.placementLabel}</div>
-                )}
-              </div>
-              );
-            })}
-          </div>
-        </div>
+        <RecentScans
+          recentSelect={recentSelect} setRecentScans={setRecentScans} recentScans={recentScans} activateRecent={stable.activateRecent}
+        />
       )}
 
       {inspectorEntry && (
@@ -3033,7 +1935,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
       )}
 
       {/* Drawer Overlay for Selected Card */}
-      <div className={`drawer-backdrop ${isDrawerOpen ? 'open' : ''}`} onClick={closeDrawer}></div>
+      {/* Pointer-only dismissal; Esc is the keyboard twin (useEscape above). */}
+      <div role="presentation" className={`drawer-backdrop ${isDrawerOpen ? 'open' : ''}`} onClick={closeDrawer}></div>
       <div className={`quick-add-drawer ${isDrawerOpen ? 'open' : ''}`}>
         {selectedCard && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', width: '100%', maxWidth: '100%', boxSizing: 'border-box', overflow: 'hidden' }}>
@@ -3049,7 +1952,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: 0, wordBreak: 'break-word' }}>{selectedCard.set_name}</p>
                 <LangFallbackNote card={selectedCard} style={{ justifyContent: 'flex-start' }} />
               </div>
-              <button className="btn btn-secondary btn-icon-only" onClick={closeDrawer} style={{ borderRadius: '50%', flexShrink: 0 }}>
+              <button type="button" className="btn btn-secondary btn-icon-only" onClick={closeDrawer} aria-label={t('common.close')} style={{ borderRadius: '50%', flexShrink: 0 }}>
                 <X size={18} />
               </button>
             </div>
@@ -3068,7 +1971,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                   <div className="quick-add-preview-info">
                     <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>TCG Market ({printing})</div>
                     <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--accent-yellow)', margin: '0.1rem 0' }}>
-                      {priceText(resolveCardPrice(selectedCard, printing), selectedCard.price_currency)}
+                      <Price value={resolveCardPrice(selectedCard, printing)} currency={selectedCard.price_currency} />
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
                       Rarity: <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{selectedCard.rarity || 'Common'}</span>

@@ -1,7 +1,8 @@
 const express = require('express');
 const db = require('../db');
 const cardArt = require('../cardArt');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { sendFileAt } = require('../utils/sendFileAt');
 
 const router = express.Router();
 
@@ -28,11 +29,13 @@ router.get('/:cardId.png', (req, res) => {
   const file = cardArt.resolve(req.params.cardId);
   if (!file) return res.status(404).json({ error: 'No art for this card' });
   res.set('Cache-Control', 'public, max-age=0, must-revalidate');
-  res.sendFile(file);
+  sendFileAt(res, file);
 });
 
-// Everything below changes files on disk.
-router.use(authenticateToken);
+// Everything below changes files on disk. Admin-only: the art is instance-wide
+// and shown to every user (and on public share pages), so a member replacing it
+// would be editing what everybody else sees.
+router.use(authenticateToken, requireAdmin);
 
 // Upload art for a card. Body: { image: "data:image/png;base64,..." }.
 router.post('/:cardId', async (req, res) => {
@@ -56,7 +59,9 @@ router.post('/:cardId', async (req, res) => {
     res.json({ success: true, url: `/api/card-art/${cardId}.png`, ...saved });
   } catch (error) {
     console.error('Card art upload failed:', error.message);
-    res.status(400).json({ error: 'Could not read that image', message: error.message });
+    // The sharp/decoder detail stays in the log: it names internals, not anything
+    // the uploader can act on.
+    res.status(400).json({ error: 'Could not read that image' });
   }
 });
 

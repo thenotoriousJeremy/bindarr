@@ -2,7 +2,8 @@ import { useState, useMemo, useEffect } from 'react';
 import { X, Check, Minus, MapPin, Package, AlertTriangle } from 'lucide-react';
 import CompartmentView from './CompartmentView';
 import { sortCardsByOrder } from '../utils/cardSort';
-import { useBackGuard } from '../utils/useBackGuard';
+import Modal from './Modal';
+import { onActivateKey } from '../utils/a11y';
 import { useT } from '../utils/i18n';
 
 // Slot number a stored position encodes (positions are slot * 1000).
@@ -28,7 +29,6 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose, onCanc
   const [setsList, setSetsList] = useState([]);
   const [grids, setGrids] = useState({}); // page.key -> { compartment, cards, locationType, sortOrder, pageColumns }
 
-  useBackGuard(true, cancel);
 
   // Flatten to pulls, then build container -> page tree plus a flat page list.
   const { containers, pagesFlat, missing, totalPulls, allEntryIds } = useMemo(() => {
@@ -37,7 +37,8 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose, onCanc
     for (const card of locationsData || []) {
       for (const loc of card.locations || []) pulls.push({ ...loc, card_id: card.card_id });
       if (card.missing > 0) {
-        const name = card.locations?.[0]?.card_name || card.card_id;
+        // The deck card's own name: a card with no copy at all has no location to read it from.
+        const name = card.card_name || card.locations?.[0]?.card_name || card.card_id;
         missing.push({ card_id: card.card_id, name, qty: card.missing });
       }
     }
@@ -231,16 +232,14 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose, onCanc
   };
 
   return (
-    <div
-      className="modal-overlay"
-      style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
-      onClick={cancel}
+    <Modal
+      onClose={cancel}
+      label={t(`wizard.${kind}.title`)}
+      dirty={done.size > 0}
+      overlayStyle={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+      className="glass-panel"
+      style={{ maxWidth: '640px', width: '100%', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
     >
-      <div
-        className="glass-panel"
-        style={{ maxWidth: '640px', width: '100%', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
-        onClick={e => e.stopPropagation()}
-      >
         {/* Header */}
         <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border-glass)', flexShrink: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
@@ -293,7 +292,11 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose, onCanc
                 {/* Container header (with container-level select-all) */}
                 <div
                   style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: complete ? 'pointer' : 'default' }}
+                  role={complete ? 'button' : undefined}
+                  tabIndex={complete ? 0 : undefined}
+                  aria-expanded={complete ? !collapsed : undefined}
                   onClick={complete ? toggleExpand : undefined}
+                  onKeyDown={complete ? onActivateKey(toggleExpand) : undefined}
                 >
                   <div style={{ width: '32px', height: '32px', borderRadius: '8px', flexShrink: 0, background: complete ? 'var(--accent-green)' : container.unassigned ? 'rgba(148,163,184,0.15)' : 'rgba(59,130,246,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: complete ? '#000' : container.unassigned ? 'var(--text-muted)' : 'var(--accent-blue)' }}>
                     {complete ? <Check size={16} strokeWidth={3} /> : container.unassigned ? <Package size={16} /> : <MapPin size={16} />}
@@ -336,8 +339,7 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose, onCanc
         <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid var(--border-glass)', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', flexShrink: 0 }}>
           <button className="btn btn-primary" onClick={onClose} disabled={totalPulls > 0 && !allComplete}>{t('bulk.done')}</button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 };
 

@@ -16,6 +16,7 @@ process.env.DB_PATH = tmpDb;
 const port = '3019';
 const base = `http://localhost:${port}`;
 const db = require('../../src/db');
+const { hashSessionToken } = require('../../src/utils/authHelpers');
 
 const report = [];
 const log = (line) => { report.push(line); console.log(line); };
@@ -55,7 +56,7 @@ async function main() {
     const adminId = await waitFor(async () => (await db.get(`SELECT id FROM users WHERE username = 'admin'`))?.id, 'admin');
     const token = 'live-token';
     const exp = new Date(Date.now() + 86400000).toISOString();
-    await db.run(`INSERT OR REPLACE INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`, [token, adminId, exp]);
+    await db.run(`INSERT OR REPLACE INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`, [hashSessionToken(token), adminId, exp]);
     const H = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
     const get = (p) => fetch(base + p, { headers: H });
     const json = async (r) => { const t = await r.text(); try { return JSON.parse(t); } catch { throw new Error(`${r.status} ${t.slice(0, 200)}`); } };
