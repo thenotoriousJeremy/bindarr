@@ -3928,3 +3928,78 @@ button, input, select, textarea {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
+
+/* The heart on a card image (WishlistHeart.jsx): on the default Wishlist or not.
+   Always over artwork, so a dark disc whatever the theme. 32px: a fingertip. */
+.wish-heart {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 15;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid var(--border-glass-hover);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+.wish-heart-bottom {
+  top: auto;
+  bottom: 6px;
+}
+.wish-heart:hover {
+  transform: scale(1.08);
+}
+.wish-heart.on {
+  color: var(--accent-red);
+  border-color: var(--accent-red);
+}
+.wish-heart:focus-visible {
+  outline: 2px solid var(--accent-red);
+  outline-offset: 2px;
+}
+
+/* Selection bubble on a card in select mode (Browse). */
+.select-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 20;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  border: 2px solid #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+.select-check.on {
+  background: var(--accent-red);
+}
+
+/* Collection's sub-views (CollectionViews.jsx): Cards | Browse | Lists | Sealed. */
+.collection-views {
+  max-width: 560px;
+}
+.collection-views .sub-nav-tab {
+  padding: 0.55rem 0.5rem;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+@media (max-width: 480px) {
+  .collection-views .sub-nav-tab {
+    font-size: 0.78rem;
+    gap: 0.3rem;
+    padding: 0.5rem 0.25rem;
+  }
+}

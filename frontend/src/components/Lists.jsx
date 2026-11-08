@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, ChevronLeft, Search, ListChecks, Copy, Pencil, X } from 'lucide-react';
+import { Plus, Trash2, ChevronLeft, Search, ListChecks, Copy, Pencil, X, Heart, Library } from 'lucide-react';
 import CardImage from './CardImage';
-import { useTabParam, setTabParam } from '../utils/router';
+import { useTabParam, setTabParam, goToTab } from '../utils/router';
+import { wishlist } from '../utils/wishlist';
 import { gameOptions, showGamePicker, gameLabel, defaultGame } from '../utils/games';
 import { displayName, setReference, langCode } from '../utils/languages';
 import { translateJapaneseName } from '../utils/langHelper';
@@ -149,6 +150,7 @@ function Lists({ showToast, active = true, statsTrigger }) {
     showToast(t('lists.deleted', { name: list.name }));
     setOpenId(null);
     loadLists();
+    if (list.is_default) wishlist.load({ force: true });
   };
 
   const saveEdit = async (e) => {
@@ -177,6 +179,8 @@ function Lists({ showToast, active = true, statsTrigger }) {
         showToast(data.error || t('lists.errUpdate'));
       }
       await loadDetail(detail.id);
+      // The hearts show the default Wishlist; keep them in step with edits here.
+      if (detail.is_default) wishlist.load({ force: true });
     } catch (err) {
       console.error(err);
       showToast(t('lists.errUpdate'));
@@ -264,6 +268,20 @@ function Lists({ showToast, active = true, statsTrigger }) {
           </form>
         </div>
 
+        {/* The default Wishlist is made by the first heart; until then, say how. */}
+        {!loading && !lists.some(l => l.is_default) && (
+          <div className="glass-panel" style={{ display: 'flex', alignItems: 'center', gap: '0.9rem', flexWrap: 'wrap', borderStyle: 'dashed' }}>
+            <Heart size={22} style={{ color: 'var(--accent-red)', flexShrink: 0 }} />
+            <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+              <strong style={{ color: 'var(--text-strong)' }}>{t('wishlist.defaultName')}</strong>
+              <p style={{ margin: '0.2rem 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{t('wishlist.startHint')}</p>
+            </div>
+            <button type="button" className="btn btn-secondary" onClick={() => goToTab('sets')} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+              <Library size={15} /> {t('wishlist.browseSets')}
+            </button>
+          </div>
+        )}
+
         {loading ? <div className="spinner" /> : lists.length === 0 ? (
           <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem 1.5rem', color: 'var(--text-secondary)' }}>
             <ListChecks size={36} style={{ opacity: 0.4 }} />
@@ -274,9 +292,12 @@ function Lists({ showToast, active = true, statsTrigger }) {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '1rem' }}>
             {lists.map(list => (
               <button key={list.id} type="button" className="glass-panel" onClick={() => openList(list)}
-                style={{ textAlign: 'left', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '0.5rem', color: 'inherit', font: 'inherit' }}>
+                style={{ textAlign: 'left', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '0.5rem', color: 'inherit', font: 'inherit', ...(list.is_default ? { borderColor: 'var(--accent-red)' } : {}) }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'baseline' }}>
-                  <strong style={{ color: 'var(--text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{list.name}</strong>
+                  <strong style={{ color: 'var(--text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                    {list.is_default ? <Heart size={14} fill="currentColor" style={{ color: 'var(--accent-red)', flexShrink: 0 }} aria-label={t('wishlist.defaultBadge')} /> : null}
+                    {list.name}
+                  </strong>
                   <span style={{ fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                     {t(`lists.kind.${list.kind}`)}{list.game ? ` · ${gameLabel(list.game, true)}` : ''}
                   </span>

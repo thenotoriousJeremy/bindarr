@@ -146,7 +146,7 @@ const touch = (listId) => db.run(`UPDATE card_lists SET updated_at = CURRENT_TIM
 router.get('/lists', async (req, res) => {
   try {
     const lists = await db.all(
-      `SELECT * FROM card_lists WHERE user_id = ? ORDER BY updated_at DESC, id DESC`, [req.user.id]
+      `SELECT * FROM card_lists WHERE user_id = ? ORDER BY is_default DESC, updated_at DESC, id DESC`, [req.user.id]
     );
     const items = await evaluatedItems(req.user.id, lists.map(l => l.id));
     res.json(lists.map(l => ({ ...l, summary: summarize(items.filter(i => i.list_id === l.id)) })));
@@ -168,6 +168,92 @@ router.post('/lists', async (req, res) => {
   } catch (err) {
     console.error('lists: create failed', err);
     res.status(500).json({ error: 'Failed to create list' });
+  }
+});
+
+// --- The default Wishlist ---
+//
+// The list the heart on a card adds to, so wanting a card needs no setup: it is
+// made on the first add, named Wishlist, takes any game, and is otherwise an
+// ordinary list (rename it, add to it from the Lists view, delete it -- the next
+// heart makes a new one). At most one per user (idx_card_lists_default). Declared
+// before /lists/:id so 'default' is never read as an id.
+
+const DEFAULT_WISHLIST_NAME = 'Wishlist';
+const BULK_MAX = 500;
+
+const defaultList = (userId) =>
+  db.get(`SELECT * FROM card_lists WHERE user_id = ? AND is_default = 1`, [userId]);
+
+async function ensureDefaultList(userId) {
+  // OR IGNORE: a second request racing this one finds the row the first made.
+  await db.run(
+    `INSERT OR IGNORE INTO card_lists (user_id, name, kind, game, is_default) VALUES (?, ?, 'wishlist', NULL, 1)`,
+    [userId, DEFAULT_WISHLIST_NAME]
+  );
+  return defaultList(userId);
+}
+
+const defaultCardIds = async (listId) => (listId == null ? [] :
+  (await db.all(`SELECT card_id FROM card_list_items WHERE list_id = ? ORDER BY id`, [listId])).map(r => r.card_id));
+
+// Which cards are on it, for the hearts. Reading never creates the list.
+router.get('/lists/default', async (req, res) => {
+  try {
+    const list = await defaultList(req.user.id);
+    res.json({ list: list || null, card_ids: await defaultCardIds(list && list.id) });
+  } catch (error) {
+    console.error('lists: default wishlist read failed', error);
+    res.status(500).json({ error: 'Failed to load wishlist' });
+  }
+});
+
+// Add cards ({ card_ids: [...] }). A card already on it stays as it is -- a heart
+// means "I want this", not "one more" -- and is reported as already there.
+router.post('/lists/default/items', async (req, res) => {
+  const raw = (req.body || {}).card_ids;
+  if (!Array.isArray(raw) || raw.length === 0) return res.status(400).json({ error: 'card_ids must be a non-empty list' });
+  if (raw.length > BULK_MAX) return res.status(400).json({ error: `At most ${BULK_MAX} cards at a time` });
+  if (raw.some(id => typeof id !== 'string' || !id.trim() || id.length > 200)) {
+    return res.status(400).json({ error: 'card_ids must be card id strings' });
+  }
+  const ids = [...new Set(raw.map(id => id.trim()))];
+  try {
+    const list = await ensureDefaultList(req.user.id);
+    let added = 0;
+    let already = 0;
+    const failed = [];
+    for (const cardId of ids) {
+      const card = await ensureCard(cardId, req.user);
+      if (!card) { failed.push(cardId); continue; }
+      const result = await db.run(
+        `INSERT INTO card_list_items (list_id, card_id, quantity_wanted) VALUES (?, ?, 1)
+         ON CONFLICT(list_id, card_id) DO NOTHING`,
+        [list.id, cardId]
+      );
+      if (result.changes) added++; else already++;
+    }
+    if (added) await touch(list.id);
+    res.status(added ? 201 : 200).json({ list, added, already, failed, card_ids: await defaultCardIds(list.id) });
+  } catch (error) {
+    console.error('lists: default wishlist add failed', error);
+    res.status(500).json({ error: 'Failed to add to wishlist' });
+  }
+});
+
+// Take a card off it (the heart tapped again).
+router.delete('/lists/default/items/:cardId', async (req, res) => {
+  try {
+    const list = await defaultList(req.user.id);
+    let removed = 0;
+    if (list) {
+      removed = (await db.run(`DELETE FROM card_list_items WHERE list_id = ? AND card_id = ?`, [list.id, req.params.cardId])).changes;
+      if (removed) await touch(list.id);
+    }
+    res.json({ removed, card_ids: await defaultCardIds(list && list.id) });
+  } catch (error) {
+    console.error('lists: default wishlist remove failed', error);
+    res.status(500).json({ error: 'Failed to remove from wishlist' });
   }
 });
 

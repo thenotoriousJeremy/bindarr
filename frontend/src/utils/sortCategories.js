@@ -60,7 +60,7 @@ export function getSortCategories(card, sortOrder, setsList = []) {
     dividerFields = dividerFieldsOf(sortOrder);
   } else if (typeof sortOrder === 'string' && sortOrder.startsWith('[')) {
     try { dividerFields = dividerFieldsOf(JSON.parse(sortOrder)); }
-    catch (e) { dividerFields = []; }
+    catch { dividerFields = []; }
   } else if (typeof sortOrder === 'string') {
     if (sortOrder.startsWith('name')) dividerFields = [{ field: 'name', color: '#6b7280' }];
     else if (sortOrder.startsWith('set')) dividerFields = [{ field: 'set', color: '#6b7280' }];
@@ -84,7 +84,7 @@ export function getPrimaryCategory(card, sortOrder, setsList = []) {
   let field = null;
   if (Array.isArray(sortOrder)) field = sortOrder[0]?.by || null;
   else if (typeof sortOrder === 'string' && sortOrder.startsWith('[')) {
-    try { field = JSON.parse(sortOrder)[0]?.by || null; } catch (e) { field = null; }
+    try { field = JSON.parse(sortOrder)[0]?.by || null; } catch { field = null; }
   } else if (typeof sortOrder === 'string') {
     if (sortOrder.startsWith('name')) field = 'name';
     else if (sortOrder.startsWith('set')) field = 'set';

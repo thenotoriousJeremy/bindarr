@@ -4,6 +4,7 @@ const db = require('../db');
 const { authenticateToken, authLimiter } = require('../middleware/auth');
 const { verifyPassword, generateSession, revokeSessions } = require('../utils/authHelpers');
 const oidc = require('../utils/oidc');
+const { parseNavTabs, readNavTabs } = require('../utils/navTabs');
 
 const router = express.Router();
 
@@ -283,7 +284,10 @@ function sessionUser(user) {
     has_tcg_api_key: !!user.tcg_api_key,
     has_psa_api_token: !!user.psa_api_token,
     has_graded_price_api_key: !!user.graded_price_api_key,
-    has_api_key: !!user.api_key
+    has_api_key: !!user.api_key,
+    // The nav-bar tabs this user chose (null: the default set). Not a secret, and
+    // carried here so the bar is right from the first frame after sign-in.
+    nav_tabs: readNavTabs(user.nav_tabs)
   };
 }
 
@@ -487,6 +491,13 @@ const PROVIDER_KEY_UPDATES = {
 router.put('/settings', authenticateToken, async (req, res) => {
   const { current_password, password, share_enabled, share_locations, regenerate_share_token } = req.body;
 
+  let navTabs;
+  if (req.body.nav_tabs !== undefined) {
+    const parsed = parseNavTabs(req.body.nav_tabs);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    navTabs = parsed.value;
+  }
+
   // Provider keys are write-only: a string sets one, '' (or null) clears it, and
   // leaving the field out leaves the key alone -- the client never has the current
   // value to send back. Checked before anything is written, so a bad field cannot
@@ -538,6 +549,10 @@ router.put('/settings', authenticateToken, async (req, res) => {
       await db.run(sql, [value, req.user.id]);
     }
 
+    if (navTabs !== undefined) {
+      await db.run(`UPDATE users SET nav_tabs = ? WHERE id = ?`, [navTabs, req.user.id]);
+    }
+
     let newShareToken = req.user.share_token;
     if (regenerate_share_token) {
       newShareToken = crypto.randomBytes(16).toString('hex');
@@ -545,7 +560,7 @@ router.put('/settings', authenticateToken, async (req, res) => {
     }
 
     // Retrieve updated info
-    const updatedUser = await db.get(`SELECT username, role, share_token, share_enabled, share_locations, tcg_api_key, psa_api_token, graded_price_api_key, api_key FROM users WHERE id = ?`, [req.user.id]);
+    const updatedUser = await db.get(`SELECT username, role, share_token, share_enabled, share_locations, tcg_api_key, psa_api_token, graded_price_api_key, api_key, nav_tabs FROM users WHERE id = ?`, [req.user.id]);
     res.json({
       message: 'Settings updated successfully',
       user: sessionUser(updatedUser)
