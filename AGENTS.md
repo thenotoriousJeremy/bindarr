@@ -25,6 +25,7 @@ Bindarr is a self-hosted, multi-user collection manager for Pokémon, Magic: The
 - `frontend/src/` — React app, components, utilities, global CSS, and locales.
 - `frontend/src/locales/` — BCP-47 JSON dictionaries; loaded dynamically by `utils/i18n.jsx`.
 - `frontend/scripts/` — frontend build/locale helpers. `frontend/android/` and `frontend/ios/` are Capacitor native shells.
+- `frontend/native-detector/` — the app's own Capacitor plugin (Java + Swift): the live scanner's corner model on native ONNX Runtime. A local `file:` dependency; `npx cap sync` wires it in. See MOBILE.md.
 - `shared/` — runtime JSON tables/assets consumed by backend; not an npm workspace package.
 - `backend/scripts/` — operator maintenance tasks, not normal development hooks.
 

@@ -1,0 +1,15 @@
+{
+  "name": "bindarr-native-detector",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Runs the scanner's corner model (cornelius / fastweb-single) through native ONNX Runtime in the Bindarr app, instead of single-threaded wasm in the WebView.",
+  "license": "MIT",
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  }
+}

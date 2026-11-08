@@ -17,8 +17,16 @@ export const SIG_ROWS = 14;
 // Inset from the quad's edges, so the detector's corner jitter and whatever is
 // under the card do not leak into the outer cells.
 const INSET = 0.08;
-// Sub-samples per cell side, averaged, so one noisy pixel does not decide a cell.
-const SUB = 3;
+// Sub-samples per cell side, averaged, so a cell is the mean of its AREA rather
+// than of a few points. It was 3: nine point samples ~9 px apart in a ~26 px cell,
+// and the detector's normal corner jitter (~0.012, about 5 px) moved them onto
+// different pixels of the art. On real card scans the same card then wobbled by up
+// to 0.19 between two detections — over REARM_SIG_STABLE about a third of the time
+// — so the three settled frames a re-arm needs rarely came in a row, and a card
+// dropped on the last one (a card slinger, a pile) sat on "Next card". At 8 the
+// same card stays under 0.06 and different cards stay apart; noise and blur were
+// never the problem. 140 cells x 64 samples is still well under a millisecond.
+const SUB = 8;
 
 // `quad` is [TL, TR, BR, BL] in normalised 0..1 frame coordinates. Returns a
 // Float32Array of SIG_COLS * SIG_ROWS z-scored values, or null when there is no

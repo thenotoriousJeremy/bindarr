@@ -14,8 +14,14 @@
 // Why a worker: detection is ~80ms on a desktop and ~300ms on a phone. On the
 // main thread that is a third of a second per frame with no rendering, no touch
 // handling and no animation, which is what made the camera freeze the app.
+//
+// In the app the worker is the fallback, not the first choice: the native
+// detector plugin (nativeDetector.js) runs the same model through native ONNX
+// Runtime on all the phone's cores. Any failure there drops this scanner session
+// back to the worker, frame included, so the outline never just stops.
 import { isNative, getServerUrl, isDeviceMode } from '../apiBase';
 import { modelUrl } from './detectorModel.js';
+import { nativeDetectorAvailable, loadNativeDetector, detectNative } from './nativeDetector.js';
 
 // Matches cornelius's 384x384 input, so the preview frame is fed at the model's
 // native resolution instead of being upscaled inside the worker.
@@ -126,6 +132,37 @@ function ensureWorker(onResult) {
   return wk;
 }
 
+// The native plugin failed this scanner session; stopDetect clears it, so the
+// next open tries native again.
+let nativeOff = false;
+// Bumped by stopDetect, so a native answer landing after the scanner closed (or
+// reopened) cannot clear the next session's in-flight flag.
+let generation = 0;
+
+function submitNative(canvas, onResult) {
+  const gen = generation;
+  const mySeq = ++seq;
+  pending = true;
+  loadNativeDetector(loadModel)
+    .then(engine => detectNative(canvas, mySeq, engine))
+    .then((result) => {
+      if (gen !== generation) return;
+      pending = false;
+      onResult(result);
+    }, (err) => {
+      if (gen !== generation) return;
+      console.warn('[cardDetector] Native detector failed, using the wasm worker for this scanner session:', err?.message || err);
+      nativeOff = true;
+      pending = false;
+      // Same frame, other engine: the caller waits on this answer before it
+      // draws the next frame into the canvas, so the pixels are still the ones
+      // this request was for.
+      if (!requestDetect(canvas, onResult)) {
+        onResult({ seq: mySeq, detected: false, engine: 'none', error: String(err?.message || err) });
+      }
+    });
+}
+
 // Submit a canvas for detection. Returns false if a frame is already in flight —
 // the caller should simply skip, not queue: a queue of stale frames is worse than
 // a lower frame rate, because every result would describe a scene that has moved.
@@ -133,6 +170,10 @@ export function requestDetect(canvas, onResult) {
   const w = canvas.width, h = canvas.height;
   if (!w || !h) return false;
   if (pending || dead) return false;
+  if (!nativeOff && nativeDetectorAvailable()) {
+    submitNative(canvas, onResult);
+    return true;
+  }
   const wk = ensureWorker(onResult);
   // getImageData allocates a fresh buffer every call, so it is simply transferred
   // (zero-copy) rather than copied into a recycled one — that copy was pure extra
@@ -146,8 +187,10 @@ export function requestDetect(canvas, onResult) {
 
 export function stopDetect() {
   if (worker) { worker.terminate(); worker = null; }
+  generation += 1;
   pending = false;
   dead = false;
+  nativeOff = false;
 }
 
 // Exponential smoothing of the quad between detections.

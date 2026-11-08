@@ -35,30 +35,8 @@
 import * as ort from 'onnxruntime-web/wasm';
 import { sharpness } from './sharpness.js';
 import { quadSignature } from './cardSignature.js';
+import { cornerResult, quadArea } from './detectResult.js';
 import { createDetector } from '../../../shared/cardDetectPure.mjs';
-
-// Order 4 points into [TL, TR, BR, BL] in perimeter clockwise order.
-// Sorts by polar angle around the centroid so the resulting polygon is convex
-// and mathematically guaranteed to never cross itself (eliminates hourglass/bowtie).
-function orderQuad(pts) {
-  if (!pts || pts.length !== 4) return pts;
-  const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
-  const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
-  const sorted = [...pts].sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
-  let tlIdx = 0, minScore = Infinity;
-  for (let i = 0; i < 4; i++) {
-    const score = sorted[i].x + sorted[i].y;
-    if (score < minScore) { minScore = score; tlIdx = i; }
-  }
-  const pTL = sorted[tlIdx];
-  const pNext = sorted[(tlIdx + 1) % 4];
-  const pPrev = sorted[(tlIdx + 3) % 4];
-  if (pNext.x - pTL.x > pPrev.x - pTL.x || pPrev.y - pTL.y > pNext.y - pTL.y) {
-    return [sorted[tlIdx], sorted[(tlIdx + 1) % 4], sorted[(tlIdx + 2) % 4], sorted[(tlIdx + 3) % 4]];
-  } else {
-    return [sorted[tlIdx], sorted[(tlIdx + 3) % 4], sorted[(tlIdx + 2) % 4], sorted[(tlIdx + 1) % 4]];
-  }
-}
 
 // The wasm binaries ship with the frontend bundle (scripts/copy-ort.mjs), so
 // /ort/ resolves on the web AND inside the native app's bundled assets.
@@ -77,21 +55,6 @@ ort.env.wasm.numThreads = 1;
 const CORN_SIZE = 384;
 const MEAN = [0.485, 0.456, 0.406];
 const STD = [0.229, 0.224, 0.225];
-// Below this the SimCC peaks are flat: the model is not looking at a card.
-const SHARPNESS_GATE = 0.02;
-
-// Shoelace area of a quad in normalised (0..1) coordinates, so the result is the
-// fraction of the frame it covers. Absolute value: corner order decides the sign
-// and a mirrored detection is still a detection.
-function quadArea(q) {
-  let a = 0;
-  for (let i = 0; i < 4; i++) {
-    const p = q[i], n = q[(i + 1) % 4];
-    a += p.x * n.y - n.x * p.y;
-  }
-  return Math.abs(a) / 2;
-}
-
 // Cornelius is preferred, but it is a 4 MB fetch from a route the server has to
 // actually expose. When that fails — an older backend, a proxy that swallows
 // /models, a browser with no working wasm — the answer must NOT be "no detector".
@@ -220,40 +183,12 @@ self.onmessage = async (e) => {
     const tRun = performance.now();
     const out = await session.run({ image: tensor });
     const runMs = Math.round(performance.now() - tRun);
-    const c = out.corners.data;
-    const sharp = out.sharpness ? out.sharpness.data[0] : 1;
-
-    if (sharp > SHARPNESS_GATE) {
-      // Order points topologically around the centroid so the quad is guaranteed
-      // to be in perimeter clockwise [TL, TR, BR, BL] order with no self-intersections (hourglasses).
-      const pts = [];
-      for (let i = 0; i < 4; i++) pts.push({ x: c[i * 2], y: c[i * 2 + 1] });
-      const quad = orderQuad(pts);
-      result = {
-        seq,
-        detected: true,
-        engine,
-        runMs,
-        quad,
-        // `pick.fill` gates auto-capture (>= 0.7). The old contour detector meant
-        // "how solidly the quad fills its own contour"; cornelius has no contour,
-        // so the equivalent question is how much of the guide crop the card
-        // covers — which is what the gate was really protecting against, a
-        // detection that is too small or too skewed to be the card being aimed.
-        pick: { fill: quadArea(quad) },
-        // The model's corner confidence, not image focus. Both matter and they
-        // are not the same thing, so both are reported.
-        corners: sharp,
-        // Computed here, where the pixels already are — sending them back for
-        // the main thread to score would undo the point of the transfer.
-        sharp: sharpness(rgba, w, h),
-        // What the card looks like, so auto-scan can tell a new card laid on the
-        // old one from the old one still sitting there (autoCapture.nextChangedFrames).
-        sig: quadSignature(rgba, w, h, quad),
-      };
-    } else {
-      result = { seq, detected: false, engine, runMs, corners: sharp };
-    }
+    result = cornerResult({
+      seq, engine, runMs,
+      corners: out.corners.data,
+      score: out.sharpness ? out.sharpness.data[0] : undefined,
+      rgba, w, h,
+    });
   } catch (err) {
     // Inference itself failed on this frame. Answer from the contour detector
     // rather than with nothing, and say why.
