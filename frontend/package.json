@@ -29,6 +29,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "axios": "^1.21.0",
+    "bindarr-native-detector": "file:native-detector",
     "canvas-confetti": "^1.9.3",
     "lucide-react": "^0.378.0",
     "onnxruntime-web": "^1.27.0",

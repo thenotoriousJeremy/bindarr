@@ -19,3 +19,6 @@ project(':capacitor-share').projectDir = new File('../node_modules/@capacitor/sh
 
 include ':capacitor-status-bar'
 project(':capacitor-status-bar').projectDir = new File('../node_modules/@capacitor/status-bar/android')
+
+include ':bindarr-native-detector'
+project(':bindarr-native-detector').projectDir = new File('../native-detector/android')

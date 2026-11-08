@@ -16,8 +16,40 @@ The sign-in screen (native app only) offers two ways to run:
 - `frontend/capacitor.config.json` — app id (`com.bindarr.app`), name, `CapacitorHttp` on, SQLite plugin config.
 - `frontend/src/apiBase.js` — native fetch shim: prepends the server URL, or hands `/api` to the device backend.
 - `frontend/src/device/` — device mode's runtime (the bundled backend lands in `generated/`).
+- `frontend/native-detector/` — the app's own Capacitor plugin: the live scanner's corner model on native ONNX Runtime. See [Native card detection](#native-card-detection).
 - `backend/src/embedded/` — the backend's composition root for device mode, and its stand-ins for Node modules.
 - `frontend/android/`, `frontend/ios/` — native projects (committed; build output is git-ignored).
+
+## Native card detection
+
+The scanner's live outline comes from the corner model (fastweb-single, stored as
+`cornelius.onnx`), run on every camera frame. On the web it runs in
+onnxruntime-web on ONE wasm thread: the WebView is never cross-origin isolated,
+so wasm gets no threads, and wasm costs about twice native code on the same core.
+That was ~150 ms a frame on a phone.
+
+In the app it runs through native ONNX Runtime instead, in the
+`bindarr-native-detector` plugin (`frontend/native-detector/`, a local `file:`
+dependency that `npx cap sync` wires into both projects like any other plugin):
+
+- Android: `onnxruntime-android` (Java API), CPU EP on up to 4 threads, or XNNPACK.
+- iOS: `onnxruntime-swift-package-manager`, CPU EP on up to 4 threads, or CoreML.
+- On first load the plugin times each engine on the phone itself and keeps the
+  fastest; the console logs the timings, and the scanner's debug row (scan
+  settings) shows `native-cpu`, `native-xnnpack` or `native-coreml`. To pin one
+  for comparison, set `localStorage['bindarr.nativeDetectorEngine']` to `cpu`,
+  `xnnpack` or `coreml` (`auto` is the default) and reopen the scanner.
+- Frames cross the bridge as a ~30 KB JPEG of the 384×384 crop, not raw pixels.
+  Everything after inference (the confidence gate, corner order, focus score, card
+  signature) is `src/utils/detectResult.js`, shared with the wasm worker.
+- `src/utils/cardDetector.js` uses the plugin whenever it is present, and drops
+  to the wasm worker for the rest of that scanner session if it fails. On the
+  web, and in app builds without the plugin, the worker is all there is.
+
+The model still comes from the same place (the server's `/models/cornelius.onnx`,
+or device mode's download), handed to the plugin once per app launch and kept
+for the next scanner open. Capture-time dewarping and device mode's milo pass
+(`src/device/scanEngine.js`) still run in wasm.
 
 ## Device mode (no server)
 

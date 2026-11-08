@@ -1,0 +1,39 @@
+// Library module for the native detector. Included by the app through
+// capacitor.settings.gradle, which `npx cap sync` writes from package.json.
+ext {
+    junitVersion = project.hasProperty('junitVersion') ? rootProject.ext.junitVersion : '4.13.2'
+    // Pinned to what the backend's onnxruntime-node and the Python tooling run, so
+    // a model that loads on the server loads here.
+    onnxruntimeVersion = '1.31.1'
+}
+
+apply plugin: 'com.android.library'
+
+android {
+    namespace = "com.bindarr.nativedetector"
+    compileSdk = project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 36
+    defaultConfig {
+        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 24
+        targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 36
+    }
+    lintOptions {
+        abortOnError = false
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation project(':capacitor-android')
+    // The full Android build: CPU EP plus XNNPACK, ~6 MB of native code per ABI
+    // (an .aab ships only the phone's own ABI).
+    implementation "com.microsoft.onnxruntime:onnxruntime-android:$onnxruntimeVersion"
+    testImplementation "junit:junit:$junitVersion"
+}
