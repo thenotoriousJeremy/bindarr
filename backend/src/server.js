@@ -699,7 +699,7 @@ if (metrics.prometheusEnabled) {
       res.status(500).type('text/plain').send('Failed to collect metrics\n');
     }
   });
-  prometheusApp.all('*', (req, res) => res.sendStatus(404));
+  prometheusApp.use((req, res) => res.sendStatus(404));
 
   const prometheusServer = prometheusApp.listen(prometheusPort, '0.0.0.0', () => {
     console.log(`Prometheus metrics listener running on port ${prometheusPort}`);
