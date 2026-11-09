@@ -144,6 +144,11 @@ jobs:
           </plist>
           EOF
 
+      # The profile goes in BINDARR_PROVISIONING_PROFILE, which only the App
+      # target's Release config reads (project.pbxproj), NOT in
+      # PROVISIONING_PROFILE_SPECIFIER: a command-line build setting applies to
+      # every target, and Swift packages' resource bundles (ZIPFoundation's, via
+      # the SQLite plugin) refuse a provisioning profile and fail the archive.
       - name: Archive
         if: steps.gate.outputs.ready == 'true'
         working-directory: frontend/ios/App
@@ -157,7 +162,7 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
             DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }} \
-            PROVISIONING_PROFILE_SPECIFIER="${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}" \
+            BINDARR_PROVISIONING_PROFILE="${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}" \
             archive
 
       - name: Export IPA
