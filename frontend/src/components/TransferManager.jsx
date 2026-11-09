@@ -720,7 +720,7 @@ export default function TransferManager({
                       {getRarityBadgeLabel(item.rarity)}
                     </span>
                   )}
-                  {item.type === 'card' && item.printing !== 'Normal' && getPrintingBadgeLabel(item.printing) && (
+                  {item.type === 'card' && item.printing !== 'Normal' && getPrintingBadgeLabel(item.printing, t) && (
                     <span style={{
                       position: 'absolute',
                       right: '3px',
@@ -733,7 +733,7 @@ export default function TransferManager({
                       border: '1px solid rgba(255, 255, 255, 0.2)',
                       ...getPrintingBadgeStyle(item.printing)
                     }}>
-                      {getPrintingBadgeLabel(item.printing)}
+                      {getPrintingBadgeLabel(item.printing, t)}
                     </span>
                   )}
                 </div>
