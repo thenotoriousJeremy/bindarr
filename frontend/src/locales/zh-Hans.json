@@ -879,7 +879,7 @@
   "login.taglineRegister": "创建你的训练家账号",
   "login.username": "用户名",
   "login.usernamePlaceholder": "输入用户名",
-  "nav.addCards": "添加卡牌",
+  "nav.addCards": "添加/移除卡牌",
   "nav.admin": "管理",
   "nav.collection": "收藏",
   "nav.dashboard": "概览",

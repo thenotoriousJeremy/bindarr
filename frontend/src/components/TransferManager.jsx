@@ -879,7 +879,7 @@ export default function TransferManager({
 
       {error && <div role="alert" className="glass-panel" style={{ padding: '0.75rem', color: 'var(--accent-red)' }}>{error}</div>}
 
-      <nav role="tablist" aria-label={t('transfer.title')} onKeyDown={handleTabKeyDown} style={{ display: 'flex', gap: '0.45rem', overflowX: 'auto', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.65rem' }}>
+      <div role="tablist" aria-label={t('transfer.title')} tabIndex={0} onKeyDown={handleTabKeyDown} style={{ display: 'flex', gap: '0.45rem', overflowX: 'auto', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.65rem' }}>
         {[
           { id: 'new', label: t('transfer.newTab') },
           { id: 'offers', label: t('transfer.offersTab'), count: pendingIncoming.length + pendingOutgoing.length },
@@ -901,7 +901,7 @@ export default function TransferManager({
             {page.count > 0 && <span style={{ marginLeft: '0.4rem', opacity: 0.8 }}>{page.count}</span>}
           </button>
         ))}
-      </nav>
+      </div>
 
       <div id="transfer-panel-new" role="tabpanel" aria-labelledby="transfer-tab-new" tabIndex={0} hidden={activePage !== 'new'}>
       {!countering && (

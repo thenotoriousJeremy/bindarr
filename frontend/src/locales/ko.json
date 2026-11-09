@@ -878,7 +878,7 @@
   "login.taglineRegister": "트레이너 계정을 만드세요",
   "login.username": "사용자 이름",
   "login.usernamePlaceholder": "사용자 이름 입력",
-  "nav.addCards": "카드 추가",
+  "nav.addCards": "카드 추가/제거",
   "nav.admin": "관리",
   "nav.collection": "컬렉션",
   "nav.dashboard": "대시보드",

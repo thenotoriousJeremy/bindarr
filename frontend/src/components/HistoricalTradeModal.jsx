@@ -279,9 +279,16 @@ export default function HistoricalTradeModal({
     <div
       className="modal-overlay"
       style={{ position: 'fixed', inset: 0, zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(0,0,0,0.75)' }}
-      onClick={event => { if (event.target === event.currentTarget && !saving) onClose(); }}
     >
-      <div className="glass-panel" role="dialog" aria-modal="true" aria-labelledby="historical-trade-title" style={{ width: 'min(900px, 100%)', maxHeight: '90vh', overflowY: 'auto', padding: '1rem' }}>
+      <button
+        type="button"
+        aria-hidden="true"
+        tabIndex={-1}
+        disabled={saving}
+        onClick={onClose}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'transparent' }}
+      />
+      <div className="glass-panel" role="dialog" aria-modal="true" aria-labelledby="historical-trade-title" style={{ position: 'relative', zIndex: 1, width: 'min(900px, 100%)', maxHeight: '90vh', overflowY: 'auto', padding: '1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
           <h3 id="historical-trade-title" style={{ margin: 0, color: 'var(--text-strong)' }}>
             {reviewing ? t('historical.reviewTitle', { user: trade.creator_id === user.id ? trade.recipient_username : trade.creator_username }) : t('historical.createTitle')}

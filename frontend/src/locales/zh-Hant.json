@@ -879,7 +879,7 @@
   "login.taglineRegister": "建立你的訓練家帳號",
   "login.username": "使用者名稱",
   "login.usernamePlaceholder": "輸入使用者名稱",
-  "nav.addCards": "新增卡牌",
+  "nav.addCards": "新增／移除卡牌",
   "nav.admin": "管理",
   "nav.collection": "收藏",
   "nav.dashboard": "總覽",

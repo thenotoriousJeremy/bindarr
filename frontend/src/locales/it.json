@@ -913,7 +913,7 @@
   "login.taglineRegister": "Crea il tuo account da allenatore",
   "login.username": "Nome utente",
   "login.usernamePlaceholder": "Inserisci il nome utente",
-  "nav.addCards": "Aggiungi carte",
+  "nav.addCards": "Aggiungi/rimuovi carte",
   "nav.admin": "Amministrazione",
   "nav.collection": "Collezione",
   "nav.dashboard": "Panoramica",

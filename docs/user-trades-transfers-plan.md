@@ -60,6 +60,11 @@ Let users propose and complete one-way transfers (gifts) and reciprocal trades o
 - Apply the agreed gift and trade purchase-cost rules to the local user's incoming items. Capture optional source-product details for unopened packs received from outside the instance.
 - Keep these records visible only to the local user.
 
+### Navigation placement
+
+- Keep Trades & Gifts out of the top-level navigation. Place it inside the Add/Remove Cards area alongside the existing card-add workflows.
+- Card-inspector trade actions and history links should navigate directly to the Trades & Gifts subview.
+
 ## Relevant existing behavior
 
 - Decks store card requirements by `card_id` and quantity; they are not bound to particular collection rows. Deck details compare those requirements with current collection quantities. Checked-out decks reserve quantities when determining what is available. See [decks.js](./backend/src/routes/decks.js) and [deckRules.js](./backend/src/utils/deckRules.js).
@@ -114,8 +119,8 @@ Let users propose and complete one-way transfers (gifts) and reciprocal trades o
 
 ## Branch and integration approach
 
-- Leave `feat/tcgcsv-daily-sync` and `feat/sealed-product-purchases` unchanged.
-- Develop the transfer feature on its own branch, based on `feat/sealed-product-purchases` because sealed-product transfers depend on its model.
+- Keep the daily-sync, sealed-product, and integration branches unchanged.
+- Develop the transfer feature on its own branch based on `main`. As requested, this branch also includes the sealed-product implementation so sealed transfers can be built and tested here; keep that implementation separate from its existing branch and MR.
 - Keep `integration/all` as a combined-testing branch; merge the feature into it only for integration testing, not as the source of the feature work.
 - Keep the uncommitted user-agent override local-only and out of feature commits. A separate worktree or careful local-only reapplication can keep it available for testing without coupling it to the feature.
 - Adjust MR targeting or rebasing later as the prerequisite MRs progress.
@@ -126,10 +131,10 @@ The product-level behavior decisions above are finalized. Implementation should 
 
 ## Implementation progress
 
-- Created the isolated `feat/user-trades-transfers` worktree from `feat/sealed-product-purchases`; the `integration/all` checkout and its local-only changes remain separate.
-- Added persistent transfer and item-history records, including snapshots that preserve history when source collection rows or sealed purchases change.
+- Created the isolated `feat/user-trades-transfers-next` branch from `main`, then included the sealed-product implementation because this feature supports sealed transfers; the other feature branches and the integration checkout remain separate.
+- Ported persistent transfer and item-history records, including snapshots that preserve history when source collection rows or sealed purchases change.
 - Implemented authenticated proposal, counterproposal, trade-marked discovery, accept, reject, cancel, and transfer-history APIs. Acceptance revalidates assets and applies ownership and cost changes atomically.
-- Added the Trades UI for proposing gifts and trades, marking sealed units, responding to proposals, and viewing pending and completed history.
+- Ported the Trades UI for proposing gifts and trades, marking sealed units, responding to proposals, and viewing pending and completed history. Added Trades & Gifts under Add/Remove Cards, with card-inspector actions routing directly to that subview.
 - Added private reusable external contacts and a completed-deal workflow that updates only the local user's inventory and keeps its history separate from live proposals.
-- Docker validation passes: 63/63 backend unit test files, 6/6 E2E suites (43 cases), frontend lint, all 24 frontend utility tests, locale validation, and production build.
-- Still to do: test the feature together with both prerequisite changes on `integration/all`; this branch remains isolated and no commits have been made.
+- Validation on this assembled branch passes: 117/117 backend unit test files, 16/16 E2E suites (168 cases), frontend utility tests, locale validation, ESLint, and production build.
+- Still to do: test the feature together with the prerequisite changes on `integration/all`; this branch remains isolated and the current implementation changes are uncommitted.

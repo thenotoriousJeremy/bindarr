@@ -878,7 +878,7 @@
   "login.taglineRegister": "トレーナーアカウントを作成",
   "login.username": "ユーザー名",
   "login.usernamePlaceholder": "ユーザー名を入力",
-  "nav.addCards": "カード追加",
+  "nav.addCards": "カード追加／削除",
   "nav.admin": "管理",
   "nav.collection": "コレクション",
   "nav.dashboard": "ダッシュボード",

@@ -912,7 +912,7 @@
   "login.taglineRegister": "Crie sua conta de treinador",
   "login.username": "Nome de usuário",
   "login.usernamePlaceholder": "Digite o nome de usuário",
-  "nav.addCards": "Adicionar cartas",
+  "nav.addCards": "Adicionar/remover cartas",
   "nav.admin": "Administração",
   "nav.collection": "Coleção",
   "nav.dashboard": "Painel",
