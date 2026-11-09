@@ -1466,6 +1466,85 @@ button, input, select, textarea {
   }
 }
 
+.sealed-purchase-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.sealed-purchase-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.sealed-purchase-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.sealed-purchase-card-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.sealed-purchase-card-image {
+  width: 32px;
+  height: 44px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.sealed-purchase-card-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.sealed-purchase-card-values {
+  text-align: right;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+.sealed-purchase-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.sealed-purchase-card-tile .sealed-purchase-card-header {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.sealed-purchase-card-tile .sealed-purchase-card-identity {
+  flex: 1 0 100%;
+  align-items: flex-start;
+}
+
+.sealed-purchase-card-tile .sealed-purchase-card-image {
+  width: 42px;
+  height: 58px;
+}
+
+.sealed-purchase-card-tile .sealed-purchase-card-values {
+  flex: 1 1 150px;
+  text-align: left;
+}
+
+.sealed-purchase-card-tile .sealed-purchase-card-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
 /* TCG Card Flip/Hover Premium Look */
 .tcg-card {
   perspective: 1000px;

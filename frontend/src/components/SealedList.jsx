@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal } from 'lucide-react';
+import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal, LayoutGrid, List } from 'lucide-react';
 import { useT } from '../utils/i18n';
 import { gameLabel, gameOptions } from '../utils/games';
 import { formatPrice } from '../utils/formatPrice';
@@ -233,7 +233,7 @@ function LinkedCardsPanel({ unitId, expectedCards, refreshKey, showToast, onChan
   );
 }
 
-function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSelectionChange, showClaimedByOthers }) {
+function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSelectionChange, showClaimedByOthers, viewMode }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
   const [units, setUnits] = useState(null);
@@ -342,8 +342,9 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
   const unopenedMarketValue = purchase.market_value == null ? null : purchase.market_value * (purchase.sealed_count || 0);
 
   return (
-    <div className="glass-panel" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+    <div className={`glass-panel sealed-purchase-card ${viewMode === 'gallery' ? 'sealed-purchase-card-tile' : ''}`} style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      <div className="sealed-purchase-card-header">
+        <div className="sealed-purchase-card-identity">
         {purchase.is_owner && (
           <input
             type="checkbox"
@@ -353,9 +354,9 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
           />
         )}
         {purchase.image_url
-          ? <img src={purchase.image_url} alt="" style={{ width: '32px', height: '44px', objectFit: 'contain' }} />
-          : <Package size={28} style={{ color: 'var(--text-secondary)' }} />}
-        <div style={{ flex: 1, minWidth: 0 }}>
+          ? <img src={purchase.image_url} alt="" className="sealed-purchase-card-image" />
+          : <Package size={viewMode === 'gallery' ? 34 : 28} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />}
+        <div className="sealed-purchase-card-details">
           <div style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{purchase.product_name}</div>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
             {gameLabel(purchase.game)} · {purchase.sealed_type || t('sealed.otherType')}
@@ -390,7 +391,8 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
             </div>
           )}
         </div>
-        <div style={{ textAlign: 'right', fontSize: '0.8rem' }}>
+        </div>
+        <div className="sealed-purchase-card-values">
           <div style={{ color: 'var(--text-strong)', fontWeight: 600 }}>
             {t('sealed.totalSpent')}: {total == null ? '—' : `$${formatPrice(total)}`}
           </div>
@@ -402,6 +404,7 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
             {purchase.sealed_count} {t('sealed.sealedLabel')} · {purchase.opened_count} {t('sealed.openedLabel')}
           </div>
         </div>
+        <div className="sealed-purchase-card-actions">
         {purchase.is_owner && (purchase.sealed_count || 0) > 0 && (
           <button type="button" className="btn btn-secondary btn-icon-only" title={t('sealed.refreshMarketValue')} aria-label={t('sealed.refreshMarketValue')}
             onClick={refreshMarketValue} disabled={!purchase.product_id || refreshingValue}>
@@ -427,6 +430,7 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
             </button>
           </>
         )}
+        </div>
       </div>
 
       {open && (
@@ -509,6 +513,7 @@ export default function SealedList({ showToast }) {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingPurchase, setEditingPurchase] = useState(null);
+  const [viewMode, setViewMode] = useState('gallery');
   const [showFilters, setShowFilters] = useState(false);
   const [search, setSearch] = useState('');
   const [gameFilter, setGameFilter] = useState('');
@@ -642,7 +647,7 @@ export default function SealedList({ showToast }) {
       </div>
 
       <div className="glass-panel" style={{ marginBottom: '1rem', padding: '1rem 1.25rem' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '0.75rem', alignItems: 'flex-end' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: '0.75rem', alignItems: 'flex-end' }}>
           <SealedFilterField label={t('sealed.searchLabel')}>
             <div style={{ position: 'relative' }}>
               <input
@@ -671,6 +676,29 @@ export default function SealedList({ showToast }) {
               </span>
             )}
           </button>
+
+          <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+            <button
+              type="button"
+              className={`btn btn-icon-only ${viewMode === 'gallery' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setViewMode('gallery')}
+              style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
+              title={t('collection.galleryView')}
+              aria-label={t('collection.galleryView')}
+            >
+              <LayoutGrid size={14} />
+            </button>
+            <button
+              type="button"
+              className={`btn btn-icon-only ${viewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setViewMode('list')}
+              style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
+              title={t('collection.listView')}
+              aria-label={t('collection.listView')}
+            >
+              <List size={14} />
+            </button>
+          </div>
         </div>
 
         {showFilters && (
@@ -785,11 +813,11 @@ export default function SealedList({ showToast }) {
           {t('sealed.noFilterMatches')}
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+        <div className={viewMode === 'gallery' ? 'sealed-purchase-grid' : 'sealed-purchase-list'}>
           {filteredPurchases.map(p => (
             <PurchaseCard key={p.id} purchase={p} onChanged={load} onEdit={setEditingPurchase} showToast={showToast}
               selected={selectedPurchaseIds.has(p.id)} onSelectionChange={setPurchaseSelected}
-              showClaimedByOthers={showClaimedByOthers} />
+              showClaimedByOthers={showClaimedByOthers} viewMode={viewMode} />
           ))}
         </div>
       )}
