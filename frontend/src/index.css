@@ -1545,11 +1545,25 @@ button, input, select, textarea {
   gap: 0.75rem;
 }
 
-.sealed-purchase-card-tile .sealed-purchase-card-identity {
-  flex: none;
+.sealed-purchase-card-tile-summary {
+  display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: 0.65rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sealed-purchase-card-tile-summary:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .sealed-purchase-card-tile .sealed-purchase-card-visual {
@@ -1559,13 +1573,6 @@ button, input, select, textarea {
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   overflow: hidden;
-}
-
-.sealed-purchase-card-tile .sealed-purchase-card-select {
-  position: absolute;
-  top: 0.6rem;
-  left: 0.6rem;
-  z-index: 1;
 }
 
 .sealed-purchase-card-tile .sealed-purchase-card-image {
@@ -1616,6 +1623,11 @@ button, input, select, textarea {
   width: 100%;
   padding-top: 0.35rem;
   border-top: 1px solid var(--border-glass);
+}
+
+.sealed-share-start {
+  color: var(--type-grass);
+  border-color: var(--type-grass);
 }
 
 /* TCG Card Flip/Hover Premium Look */

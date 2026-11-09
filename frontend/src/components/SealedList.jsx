@@ -350,6 +350,37 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
 
   const total = purchase.unit_price == null ? null : Number(purchase.unit_price) * Number(purchase.quantity);
   const unopenedMarketValue = purchase.market_value == null ? null : purchase.market_value * (purchase.sealed_count || 0);
+  const hasSealedUnits = (purchase.sealed_count || 0) > 0;
+  const canShare = purchase.is_owner && hasSealedUnits;
+  const purchaseSelection = canShare && (
+    <input
+      type="checkbox"
+      className="sealed-purchase-card-select"
+      checked={selected}
+      aria-label={t('sealed.selectPurchase', { product: purchase.product_name })}
+      onChange={event => onSelectionChange?.(purchase.id, event.target.checked)}
+    />
+  );
+  const purchaseImage = purchase.image_url
+    ? <img src={purchase.image_url} alt="" className="sealed-purchase-card-image" />
+    : <Package size={viewMode === 'gallery' ? 56 : 28} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />;
+  const purchaseCounts = (
+    <div className="sealed-purchase-card-counts">
+      <span>{purchase.sealed_count} {t('sealed.sealedLabel')}</span>
+      <span>{purchase.opened_count} {t('sealed.openedLabel')}</span>
+    </div>
+  );
+  const purchaseFinancials = (
+    <div className="sealed-purchase-card-financials">
+      <div style={{ color: 'var(--text-strong)', fontWeight: 600 }}>
+        {t('sealed.totalSpent')}: {total == null ? '—' : `$${formatPrice(total)}`}
+      </div>
+      <div style={{ color: 'var(--text-secondary)' }}>
+        {t('sealed.unopenedMarketValue')}: {unopenedMarketValue == null ? '—' : `$${formatPrice(unopenedMarketValue)}`}
+      </div>
+      {purchase.market_value != null && <div style={{ color: 'var(--text-secondary)' }}>{t('sealed.marketValuePerUnit')}: ${formatPrice(purchase.market_value)}</div>}
+    </div>
+  );
 
   const toggleDetails = () => {
     if (viewMode === 'gallery') setOpen(true);
@@ -435,93 +466,89 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
   return (
     <div className={`glass-panel sealed-purchase-card ${viewMode === 'gallery' ? 'sealed-purchase-card-tile' : ''}`} style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
       <div className="sealed-purchase-card-header">
-        <div className="sealed-purchase-card-identity">
-          <div className="sealed-purchase-card-visual">
-            {purchase.is_owner && (
-              <input
-                type="checkbox"
-                className="sealed-purchase-card-select"
-                checked={selected}
-                aria-label={t('sealed.selectPurchase', { product: purchase.product_name })}
-                onChange={event => onSelectionChange?.(purchase.id, event.target.checked)}
-              />
-            )}
-            {purchase.image_url
-              ? <img src={purchase.image_url} alt="" className="sealed-purchase-card-image" />
-              : <Package size={viewMode === 'gallery' ? 56 : 28} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />}
-          </div>
-          <div className="sealed-purchase-card-details">
-            <div className="sealed-purchase-card-title" style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{purchase.product_name}</div>
-            <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-              {gameLabel(purchase.game)} · {purchase.sealed_type || t('sealed.otherType')}
-              {` · ${t('sealed.quantity')}: ${purchase.quantity}`}
-              {purchase.store ? ` · ${purchase.store}` : ''}{purchase.purchase_date ? ` · ${purchase.purchase_date}` : ''}
-              {purchase.buyer_username ? ` · ${t('sealed.buyer')}: ${purchase.buyer_username}` : ''}
+        {viewMode === 'gallery' ? (
+          <button type="button" className="sealed-purchase-card-tile-summary"
+            onClick={toggleDetails} aria-label={`${t('sealed.purchaseDetails')}: ${purchase.product_name}`}>
+            <div className="sealed-purchase-card-visual">{purchaseImage}</div>
+            <div className="sealed-purchase-card-details">
+              <div className="sealed-purchase-card-title" style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{purchase.product_name}</div>
             </div>
-            {purchase.available_to_all ? (
-              <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--accent-blue, var(--text-secondary))' }}>{t('sealed.availableToAll')}</div>
-            ) : purchase.is_claimed ? (
-              <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--accent-blue, var(--text-secondary))' }}>{t('sealed.claimedFromShared')}</div>
-            ) : null}
-            {(purchase.expected_cards_per_unit > 0 || purchase.contents_note) && (
-              <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                {purchase.expected_cards_per_unit > 0 ? t('sealed.nCards', { n: purchase.expected_cards_per_unit }) : ''}
-                {purchase.expected_cards_per_unit > 0 && purchase.contents_note ? ' + ' : ''}
-                {purchase.contents_note ? ` (${purchase.contents_note})` : ''}
+            <div className="sealed-purchase-card-values">{purchaseCounts}</div>
+          </button>
+        ) : (
+          <div className="sealed-purchase-card-identity">
+            {purchaseSelection}
+            <div className="sealed-purchase-card-visual">{purchaseImage}</div>
+            <div className="sealed-purchase-card-details">
+              <div className="sealed-purchase-card-title" style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{purchase.product_name}</div>
+              <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                {gameLabel(purchase.game)} · {purchase.sealed_type || t('sealed.otherType')}
+                {` · ${t('sealed.quantity')}: ${purchase.quantity}`}
+                {purchase.store ? ` · ${purchase.store}` : ''}{purchase.purchase_date ? ` · ${purchase.purchase_date}` : ''}
+                {purchase.buyer_username ? ` · ${t('sealed.buyer')}: ${purchase.buyer_username}` : ''}
               </div>
-            )}
-            {recipe && recipe.components?.length > 0 && (
-              <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                {t('sealed.recipeLabel')}: {recipe.components.map(c =>
-                  `${c.quantity}x ${c.component_type === 'card' ? (c.card_id || t('sealed.componentCard')) : c.product_name}`
-                ).join(' + ')}
-              </div>
-            )}
-            {purchase.source_unit_id && (
-              <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                {purchase.source_product_name
-                  ? t('sealed.unboxedFromProduct', { product: purchase.source_product_name, unit: purchase.source_unit_number })
-                  : t('sealed.unboxedNote')}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="sealed-purchase-card-values">
-          <div className="sealed-purchase-card-financials">
-            <div style={{ color: 'var(--text-strong)', fontWeight: 600 }}>
-              {t('sealed.totalSpent')}: {total == null ? '—' : `$${formatPrice(total)}`}
+              {hasSealedUnits && (purchase.available_to_all || purchase.is_claimed) && (
+                <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--accent-blue, var(--text-secondary))' }}>
+                  {purchase.available_to_all ? t('sealed.availableToAll') : t('sealed.claimedFromShared')}
+                </div>
+              )}
+              {(purchase.expected_cards_per_unit > 0 || purchase.contents_note) && (
+                <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                  {purchase.expected_cards_per_unit > 0 ? t('sealed.nCards', { n: purchase.expected_cards_per_unit }) : ''}
+                  {purchase.expected_cards_per_unit > 0 && purchase.contents_note ? ' + ' : ''}
+                  {purchase.contents_note ? ` (${purchase.contents_note})` : ''}
+                </div>
+              )}
+              {recipe && recipe.components?.length > 0 && (
+                <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                  {t('sealed.recipeLabel')}: {recipe.components.map(c =>
+                    `${c.quantity}x ${c.component_type === 'card' ? (c.card_id || t('sealed.componentCard')) : c.product_name}`
+                  ).join(' + ')}
+                </div>
+              )}
+              {purchase.source_unit_id && (
+                <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                  {purchase.source_product_name
+                    ? t('sealed.unboxedFromProduct', { product: purchase.source_product_name, unit: purchase.source_unit_number })
+                    : t('sealed.unboxedNote')}
+                </div>
+              )}
             </div>
-            <div style={{ color: 'var(--text-secondary)' }}>
-              {t('sealed.unopenedMarketValue')}: {unopenedMarketValue == null ? '—' : `$${formatPrice(unopenedMarketValue)}`}
-            </div>
-            {purchase.market_value != null && <div style={{ color: 'var(--text-secondary)' }}>{t('sealed.marketValuePerUnit')}: ${formatPrice(purchase.market_value)}</div>}
           </div>
-          <div className="sealed-purchase-card-counts">
-            <span>{purchase.sealed_count} {t('sealed.sealedLabel')}</span>
-            <span>{purchase.opened_count} {t('sealed.openedLabel')}</span>
+        )}
+        {viewMode === 'list' && (
+          <div className="sealed-purchase-card-values">
+            {purchaseFinancials}
+            {purchaseCounts}
           </div>
-        </div>
+        )}
         <div className="sealed-purchase-card-actions">
-          {purchase.is_owner && (purchase.sealed_count || 0) > 0 && (
+          {viewMode === 'gallery' && purchaseSelection}
+          {purchase.is_owner && hasSealedUnits && (
             <button type="button" className="btn btn-secondary btn-icon-only" title={t('sealed.refreshMarketValue')} aria-label={t('sealed.refreshMarketValue')}
               onClick={refreshMarketValue} disabled={!purchase.product_id || refreshingValue}>
               <RefreshCw size={14} className={refreshingValue ? 'spin-animation' : ''} />
             </button>
           )}
-          <button type="button" className="btn btn-secondary btn-icon-only"
-            title={t('sealed.purchaseDetails')}
-            aria-label={`${t('sealed.purchaseDetails')}: ${purchase.product_name}`}
-            onClick={toggleDetails}>
-            {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </button>
+          {viewMode === 'list' && (
+            <button type="button" className="btn btn-secondary btn-icon-only"
+              title={t('sealed.purchaseDetails')}
+              aria-label={`${t('sealed.purchaseDetails')}: ${purchase.product_name}`}
+              onClick={toggleDetails}>
+              {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            </button>
+          )}
+          {canShare && (
+            <button type="button"
+              className={`btn btn-icon-only ${purchase.available_to_all ? 'btn-primary' : 'btn-secondary sealed-share-start'}`}
+              title={t(purchase.available_to_all ? 'sealed.stopSharing' : 'sealed.sharePurchase')}
+              aria-label={t(purchase.available_to_all ? 'sealed.stopSharing' : 'sealed.sharePurchase')}
+              disabled={savingAvailability} onClick={toggleSharing}>
+              {purchase.available_to_all ? <Lock size={14} /> : <Share2 size={14} />}
+            </button>
+          )}
           {purchase.is_owner && (
             <>
-              <button type="button" className="btn btn-secondary btn-icon-only"
-                title={t(purchase.available_to_all ? 'sealed.stopSharing' : 'sealed.sharePurchase')}
-                aria-label={t(purchase.available_to_all ? 'sealed.stopSharing' : 'sealed.sharePurchase')}
-                disabled={savingAvailability} onClick={toggleSharing}>
-                <Share2 size={14} />
-              </button>
               <button type="button" className="btn btn-secondary btn-icon-only" title={t('common.edit')} aria-label={t('common.edit')} onClick={() => onEdit?.(purchase)}>
                 <Pencil size={14} />
               </button>
@@ -609,7 +636,7 @@ export default function SealedList({ showToast }) {
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     setSelectedPurchaseIds(current => {
-      const ownedIds = new Set(purchases.filter(purchase => purchase.is_owner
+      const ownedIds = new Set(purchases.filter(purchase => purchase.is_owner && (purchase.sealed_count || 0) > 0
         && (showClaimedByOthers || purchase.visible_unit_count > 0)).map(purchase => purchase.id));
       const next = new Set([...current].filter(id => ownedIds.has(id)));
       return next.size === current.size ? current : next;
@@ -640,9 +667,9 @@ export default function SealedList({ showToast }) {
     if (expansionFilter.length && !expansionFilter.some(expansion => (purchase.expansions || []).includes(expansion))) return false;
     return true;
   });
-  const filteredOwnedPurchases = filteredPurchases.filter(purchase => purchase.is_owner);
+  const filteredOwnedPurchases = filteredPurchases.filter(purchase => purchase.is_owner && (purchase.sealed_count || 0) > 0);
   const selectedOwnedPurchases = visiblePurchases.filter(
-    purchase => purchase.is_owner && selectedPurchaseIds.has(purchase.id)
+    purchase => purchase.is_owner && (purchase.sealed_count || 0) > 0 && selectedPurchaseIds.has(purchase.id)
   );
   const allFilteredOwnedSelected = filteredOwnedPurchases.length > 0
     && filteredOwnedPurchases.every(purchase => selectedPurchaseIds.has(purchase.id));
