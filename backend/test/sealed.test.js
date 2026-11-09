@@ -50,8 +50,12 @@ async function main() {
     `INSERT INTO users (username, password_hash, role, share_token) VALUES (?, ?, ?, ?)`,
     ['sealed-bob', db.hashPassword('x'), 'admin', `share-b-${process.pid}`]
   )).lastID;
+  const charlie = (await db.run(
+    `INSERT INTO users (username, password_hash, role, share_token) VALUES (?, ?, ?, ?)`,
+    ['sealed-charlie', db.hashPassword('x'), 'admin', `share-c-${process.pid}`]
+  )).lastID;
 
-  const base = await startApp(new Map([[alice, { id: alice }], [bob, { id: bob }]]));
+  const base = await startApp(new Map([[alice, { id: alice }], [bob, { id: bob }], [charlie, { id: charlie }]]));
   const asUser = (userId) => ({ 'Content-Type': 'application/json', 'x-user-id': String(userId) });
   let res;
 
@@ -145,8 +149,34 @@ async function main() {
   const sharedOpen = await res.json();
   assert.strictEqual(sharedOpen.unit.claimed_by_user_id, bob);
   const bobDetails = await fetch(`${base}/api/sealed/purchases/${sharedPurchase.id}`, { headers: asUser(bob) }).then(r => r.json());
+  assert.strictEqual(bobDetails.units.length, 2, 'the opener can see their opened unit and remaining shared sealed units');
   assert.strictEqual(bobDetails.units[0].claimed_by_username, 'sealed-bob',
     'shared purchase history must identify who claimed each unit');
+  const aliceAfterOpen = await fetch(`${base}/api/sealed/purchases/${sharedPurchase.id}`, { headers: asUser(alice) }).then(r => r.json());
+  assert.deepStrictEqual(aliceAfterOpen.units.map(unit => unit.id), [sharedUnits[1].id],
+    'the buyer can see the remaining sealed unit but not the unit opened by another user');
+  const aliceSharedAfterOpen = (await fetch(`${base}/api/sealed/purchases`, { headers: asUser(alice) }).then(r => r.json()))
+    .purchases.find(p => p.id === sharedPurchase.id);
+  assert.strictEqual(aliceSharedAfterOpen.visible_unit_count, 1);
+  assert.strictEqual(aliceSharedAfterOpen.opened_count, 0,
+    'shared purchase counts must not reveal units opened by another user');
+  const aliceWithClaimed = (await fetch(`${base}/api/sealed/purchases?show_claimed_by_others=1`, { headers: asUser(alice) }).then(r => r.json()))
+    .purchases.find(p => p.id === sharedPurchase.id);
+  assert.strictEqual(aliceWithClaimed.visible_unit_count, 2);
+  assert.strictEqual(aliceWithClaimed.opened_count, 1);
+  const aliceClaimDetails = await fetch(`${base}/api/sealed/purchases/${sharedPurchase.id}?show_claimed_by_others=1`, {
+    headers: asUser(alice),
+  }).then(r => r.json());
+  const claimedByBob = aliceClaimDetails.units.find(unit => unit.id === sharedUnits[0].id);
+  assert.strictEqual(claimedByBob.claimed_by_username, 'sealed-bob',
+    'the buyer can opt in to seeing who claimed each unit');
+  assert.strictEqual(claimedByBob.can_view_cards, false,
+    'showing claimed units must not reveal the opener\'s linked cards');
+  const charlieShared = (await fetch(`${base}/api/sealed/purchases?show_claimed_by_others=1`, {
+    headers: asUser(charlie),
+  }).then(r => r.json())).purchases.find(p => p.id === sharedPurchase.id);
+  assert.strictEqual(charlieShared.visible_unit_count, 1,
+    'the opt-in must not reveal another user\'s claimed unit to non-buyers');
   const bobPromo = await db.get(
     `SELECT * FROM collection WHERE card_id = 'shared-promo' AND user_id = ? AND sealed_unit_id = ?`,
     [bob, sharedUnits[0].id]
@@ -174,7 +204,7 @@ async function main() {
   res = await fetch(`${base}/api/sealed/units/${sharedUnits[0].id}/open`, {
     method: 'PUT', headers: asUser(alice), body: JSON.stringify({ opened: false }),
   });
-  assert.strictEqual(res.status, 409, 'the original purchaser must not reseal a unit claimed by another user');
+  assert.strictEqual(res.status, 404, 'the original purchaser cannot view or reseal a unit claimed by another user');
   res = await fetch(`${base}/api/sealed/units/${sharedUnits[0].id}/open`, {
     method: 'PUT', headers: asUser(bob), body: JSON.stringify({ opened: false }),
   });
@@ -192,7 +222,13 @@ async function main() {
   assert.strictEqual(visibleShared.is_claimed, true);
   assert.strictEqual(visibleShared.store, 'Private Shop', 'the claimant retains shared purchase details after availability is disabled');
   const aliceDetails = await fetch(`${base}/api/sealed/purchases/${sharedPurchase.id}`, { headers: asUser(alice) }).then(r => r.json());
-  assert.strictEqual(aliceDetails.units.length, 2, 'the buyer must retain the complete purchase history');
+  assert.deepStrictEqual(aliceDetails.units.map(unit => unit.id), [sharedUnits[1].id],
+    'the buyer must not see the unit opened by another user, even after sharing is disabled');
+  const aliceClaimedDetails = await fetch(`${base}/api/sealed/purchases/${sharedPurchase.id}?show_claimed_by_others=1`, {
+    headers: asUser(alice),
+  }).then(r => r.json());
+  assert.deepStrictEqual(aliceClaimedDetails.units.map(unit => unit.id), sharedUnits.map(unit => unit.id),
+    'the buyer can still opt into claimed-unit history after sharing is disabled');
   res = await fetch(`${base}/api/sealed/purchases/${sharedPurchase.id}`, { method: 'DELETE', headers: asUser(alice) });
   assert.strictEqual(res.status, 409, 'the original purchase cannot be deleted while another user owns a claimed unit');
   console.log('PASS: shared sealed units are claimed by the opener and stay theirs when resealed');
@@ -216,6 +252,22 @@ async function main() {
     `SELECT COUNT(*) AS count FROM sealed_units WHERE purchase_id = ? AND claimed_by_user_id = ? AND opened_at IS NOT NULL`,
     [sharedBulkPurchase.id, bob]
   )).count, 2, 'bulk-opened shared units must be claimed by the user who opened them');
+  const aliceBulkDefaultView = (await fetch(`${base}/api/sealed/purchases`, { headers: asUser(alice) }).then(r => r.json()))
+    .purchases.find(p => p.id === sharedBulkPurchase.id);
+  assert.strictEqual(aliceBulkDefaultView.visible_unit_count, 0,
+    'the buyer receives purchase history without any claimed unit details by default');
+  assert.strictEqual(aliceBulkDefaultView.opened_count, 0);
+  const aliceBulkView = (await fetch(`${base}/api/sealed/purchases?show_claimed_by_others=1`, { headers: asUser(alice) }).then(r => r.json()))
+    .purchases.find(p => p.id === sharedBulkPurchase.id);
+  assert.strictEqual(aliceBulkView.visible_unit_count, 2,
+    'the purchase includes both claimed units after the buyer opts into claimed-unit history');
+  assert.strictEqual(aliceBulkView.opened_count, 2);
+  const aliceBulkDetails = await fetch(`${base}/api/sealed/purchases/${sharedBulkPurchase.id}?show_claimed_by_others=1`, {
+    headers: asUser(alice),
+  }).then(r => r.json());
+  assert.strictEqual(aliceBulkDetails.units.length, 2);
+  assert.ok(aliceBulkDetails.units.every(unit => unit.claimed_by_username === 'sealed-bob' && !unit.can_view_cards),
+    'the buyer sees who claimed bulk-opened units without seeing their linked cards');
   assert.strictEqual(sharedBulkUnits.length, 2);
   await db.run(`DELETE FROM sealed_purchases WHERE id = ?`, [sharedBulkPurchase.id]);
   console.log('PASS: bulk opening shared units assigns them to the opener');

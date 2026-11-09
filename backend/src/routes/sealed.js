@@ -286,6 +286,15 @@ function sanitizeSharedPurchase(purchase, userId) {
   return purchase;
 }
 
+function purchaseUnitVisibility(userId, showClaimedByOthers) {
+  return {
+    where: showClaimedByOthers
+      ? `(${VISIBLE_UNIT_WHERE} OR (p.user_id = ? AND u.claimed_by_user_id IS NOT NULL AND u.claimed_by_user_id != ?))`
+      : VISIBLE_UNIT_WHERE,
+    params: showClaimedByOthers ? [userId, userId, userId, userId] : [userId, userId],
+  };
+}
+
 // Search the TCGplayer/TCGCSV sealed-product catalog for the "pick from catalog"
 // UI. Sealed rows are the ones tcgplayerCatalog.js writes with number IS NULL;
 // carded rows are excluded here on purpose.
@@ -315,6 +324,8 @@ router.get('/sealed/catalog/search', async (req, res) => {
 // One row per purchase, with how many of its units are still sealed vs opened.
 router.get('/sealed/purchases', async (req, res) => {
   try {
+    const showClaimedByOthers = req.query.show_claimed_by_others === '1';
+    const unitVisibility = purchaseUnitVisibility(req.user.id, showClaimedByOthers);
     const purchases = await db.all(
       `SELECT p.*, buyer.username AS buyer_username,
               CASE WHEN p.user_id = ? THEN 1 ELSE 0 END AS is_owner,
@@ -324,17 +335,17 @@ router.get('/sealed/purchases', async (req, res) => {
                 WHERE earlier_unit.purchase_id = source_purchase.id AND earlier_unit.id <= source_unit.id) AS source_unit_number,
               COUNT(u.id) AS unit_count,
               COUNT(u.id) AS visible_unit_count,
-              SUM(CASE WHEN u.opened_at IS NULL THEN 1 ELSE 0 END) AS sealed_count,
-              SUM(CASE WHEN u.opened_at IS NOT NULL THEN 1 ELSE 0 END) AS opened_count
+              SUM(CASE WHEN u.id IS NOT NULL AND u.opened_at IS NULL THEN 1 ELSE 0 END) AS sealed_count,
+              SUM(CASE WHEN u.id IS NOT NULL AND u.opened_at IS NOT NULL THEN 1 ELSE 0 END) AS opened_count
          FROM sealed_purchases p
          JOIN users buyer ON buyer.id = p.user_id
          LEFT JOIN sealed_units source_unit ON source_unit.id = p.source_unit_id
          LEFT JOIN sealed_purchases source_purchase ON source_purchase.id = source_unit.purchase_id
-         JOIN sealed_units u ON u.purchase_id = p.id
-        WHERE ${VISIBLE_UNIT_WHERE}
+         LEFT JOIN sealed_units u ON u.purchase_id = p.id AND ${unitVisibility.where}
+        WHERE p.user_id = ? OR u.id IS NOT NULL
         GROUP BY p.id
         ORDER BY p.purchase_date DESC, p.created_at DESC`,
-      [req.user.id, req.user.id, req.user.id, req.user.id]
+      [req.user.id, req.user.id, ...unitVisibility.params, req.user.id]
     );
     for (const purchase of purchases) sanitizeSharedPurchase(purchase, req.user.id);
 
@@ -385,17 +396,22 @@ router.get('/sealed/purchases', async (req, res) => {
 
 router.get('/sealed/purchases/:id', async (req, res) => {
   try {
+    const showClaimedByOthers = req.query.show_claimed_by_others === '1';
+    const unitVisibility = purchaseUnitVisibility(req.user.id, showClaimedByOthers);
     const purchase = await db.get(
       `SELECT p.*, buyer.username AS buyer_username,
               CASE WHEN p.user_id = ? THEN 1 ELSE 0 END AS is_owner
          FROM sealed_purchases p
          JOIN users buyer ON buyer.id = p.user_id
         WHERE p.id = ?
-          AND EXISTS (
-            SELECT 1 FROM sealed_units u
-             WHERE u.purchase_id = p.id AND ${VISIBLE_UNIT_WHERE}
+          AND (
+            p.user_id = ?
+            OR EXISTS (
+              SELECT 1 FROM sealed_units u
+               WHERE u.purchase_id = p.id AND ${unitVisibility.where}
+            )
           )`,
-      [req.user.id, req.params.id, req.user.id, req.user.id]
+      [req.user.id, req.params.id, req.user.id, ...unitVisibility.params]
     );
     if (!purchase) return res.status(404).json({ error: 'Purchase not found' });
     const units = await db.all(
@@ -407,9 +423,9 @@ router.get('/sealed/purchases/:id', async (req, res) => {
          FROM sealed_units u
          JOIN sealed_purchases p ON p.id = u.purchase_id
          LEFT JOIN users claimant ON claimant.id = u.claimed_by_user_id
-        WHERE u.purchase_id = ? AND ${VISIBLE_UNIT_WHERE}
+        WHERE u.purchase_id = ? AND ${unitVisibility.where}
         ORDER BY u.id ASC`,
-      [req.user.id, purchase.id, req.user.id, req.user.id]
+      [req.user.id, purchase.id, ...unitVisibility.params]
     );
     purchase.unit_count = units.length;
     purchase.visible_unit_count = units.length;

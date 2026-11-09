@@ -2,8 +2,13 @@ const db = require('../db');
 
 const VISIBLE_UNIT_WHERE = `(
   u.claimed_by_user_id = ?
-  OR p.user_id = ?
-  OR p.available_to_all = 1
+  OR (
+    u.claimed_by_user_id IS NULL
+    AND (
+      p.user_id = ?
+      OR (p.available_to_all = 1 AND u.opened_at IS NULL)
+    )
+  )
 )`;
 
 const OWNED_UNIT_WHERE = `(

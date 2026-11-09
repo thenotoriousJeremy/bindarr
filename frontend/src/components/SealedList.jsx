@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2 } from 'lucide-react';
+import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal } from 'lucide-react';
 import { useT } from '../utils/i18n';
 import { gameLabel, gameOptions } from '../utils/games';
 import { formatPrice } from '../utils/formatPrice';
@@ -17,6 +17,17 @@ const setsMatch = (a, b) => {
   const na = normSet(a), nb = normSet(b);
   return !!na && !!nb && (na === nb || na.includes(nb) || nb.includes(na));
 };
+
+const filterLabelStyle = { fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' };
+
+function SealedFilterField({ label, children }) {
+  return (
+    <div className="form-group" style={{ marginBottom: 0 }}>
+      <label style={filterLabelStyle}>{label}</label>
+      {children}
+    </div>
+  );
+}
 
 // A single opened unit's "link cards from this pack" panel: pick from the most
 // recently added, still-unlinked collection entries and hand them to
@@ -222,7 +233,7 @@ function LinkedCardsPanel({ unitId, expectedCards, refreshKey, showToast, onChan
   );
 }
 
-function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSelectionChange }) {
+function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSelectionChange, showClaimedByOthers }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
   const [units, setUnits] = useState(null);
@@ -243,13 +254,13 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
   }, [purchase.template_id]);
 
   const loadUnits = () => {
-    fetch(`/api/sealed/purchases/${purchase.id}`)
+    fetch(`/api/sealed/purchases/${purchase.id}${showClaimedByOthers ? '?show_claimed_by_others=1' : ''}`)
       .then(r => r.json())
       .then(d => setUnits(d.units || []))
       .catch(() => showToast?.(t('sealed.errLoad')));
   };
 
-  useEffect(() => { if (open && units == null) loadUnits(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open) loadUnits(); }, [open, showClaimedByOthers]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleUnit = async (unit) => {
     const opening = !unit.opened_at;
@@ -498,17 +509,19 @@ export default function SealedList({ showToast }) {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingPurchase, setEditingPurchase] = useState(null);
+  const [showFilters, setShowFilters] = useState(false);
   const [search, setSearch] = useState('');
   const [gameFilter, setGameFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [expansionFilter, setExpansionFilter] = useState([]);
+  const [showClaimedByOthers, setShowClaimedByOthers] = useState(false);
   const [selectedPurchaseIds, setSelectedPurchaseIds] = useState(() => new Set());
   const [savingSharing, setSavingSharing] = useState(false);
 
-  const load = () => {
+  const load = (includeClaimedByOthers = showClaimedByOthers) => {
     setLoading(true);
-    fetch('/api/sealed/purchases')
+    fetch(`/api/sealed/purchases${includeClaimedByOthers ? '?show_claimed_by_others=1' : ''}`)
       .then(r => r.json())
       .then(d => setPurchases(d.purchases || []))
       .catch(() => showToast?.(t('sealed.errLoad')))
@@ -518,21 +531,25 @@ export default function SealedList({ showToast }) {
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     setSelectedPurchaseIds(current => {
-      const ownedIds = new Set(purchases.filter(purchase => purchase.is_owner).map(purchase => purchase.id));
+      const ownedIds = new Set(purchases.filter(purchase => purchase.is_owner
+        && (showClaimedByOthers || purchase.visible_unit_count > 0)).map(purchase => purchase.id));
       const next = new Set([...current].filter(id => ownedIds.has(id)));
       return next.size === current.size ? current : next;
     });
-  }, [purchases]);
+  }, [purchases, showClaimedByOthers]);
 
-  const totalSpent = purchases.reduce((s, p) => s + (p.is_owner ? (p.unit_price || 0) * (p.visible_unit_count ?? p.quantity) : 0), 0);
-  const unopenedMarketValue = purchases.reduce((sum, p) => sum + (p.market_value || 0) * (p.sealed_count || 0), 0);
-  const hasMarketValue = purchases.some(p => p.market_value != null && p.sealed_count > 0);
-  const totalSealed = purchases.reduce((s, p) => s + (p.sealed_count || 0), 0);
-  const totalOpened = purchases.reduce((s, p) => s + (p.opened_count || 0), 0);
-  const productTypes = [...new Set(purchases.map(p => p.sealed_type).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  const expansions = [...new Set(purchases.flatMap(p => p.expansions || []))].sort((a, b) => a.localeCompare(b));
+  const visiblePurchases = purchases.filter(
+    purchase => showClaimedByOthers || !purchase.is_owner || purchase.visible_unit_count > 0
+  );
+  const totalSpent = purchases.reduce((s, p) => s + (p.is_owner ? (p.unit_price || 0) * p.quantity : 0), 0);
+  const unopenedMarketValue = visiblePurchases.reduce((sum, p) => sum + (p.market_value || 0) * (p.sealed_count || 0), 0);
+  const hasMarketValue = visiblePurchases.some(p => p.market_value != null && p.sealed_count > 0);
+  const totalSealed = visiblePurchases.reduce((s, p) => s + (p.sealed_count || 0), 0);
+  const totalOpened = visiblePurchases.reduce((s, p) => s + (p.opened_count || 0), 0);
+  const productTypes = [...new Set(visiblePurchases.map(p => p.sealed_type).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const expansions = [...new Set(visiblePurchases.flatMap(p => p.expansions || []))].sort((a, b) => a.localeCompare(b));
   const query = search.trim().toLocaleLowerCase();
-  const filteredPurchases = purchases.filter(purchase => {
+  const filteredPurchases = visiblePurchases.filter(purchase => {
     const searchable = [
       purchase.product_name, purchase.set_name, purchase.sealed_type, purchase.store,
       purchase.notes, purchase.contents_note, ...(purchase.expansions || []),
@@ -546,18 +563,22 @@ export default function SealedList({ showToast }) {
     return true;
   });
   const filteredOwnedPurchases = filteredPurchases.filter(purchase => purchase.is_owner);
-  const selectedOwnedPurchases = purchases.filter(
+  const selectedOwnedPurchases = visiblePurchases.filter(
     purchase => purchase.is_owner && selectedPurchaseIds.has(purchase.id)
   );
   const allFilteredOwnedSelected = filteredOwnedPurchases.length > 0
     && filteredOwnedPurchases.every(purchase => selectedPurchaseIds.has(purchase.id));
-  const hasFilters = !!(search || gameFilter || typeFilter || statusFilter || expansionFilter.length);
+  const activeFilterCount = (gameFilter ? 1 : 0) + (typeFilter ? 1 : 0) + (statusFilter ? 1 : 0)
+    + (expansionFilter.length ? 1 : 0) + (showClaimedByOthers ? 1 : 0);
+  const hasFilters = !!(search || gameFilter || typeFilter || statusFilter || expansionFilter.length || showClaimedByOthers);
   const clearFilters = () => {
     setSearch('');
     setGameFilter('');
     setTypeFilter('');
     setStatusFilter('');
     setExpansionFilter([]);
+    setShowClaimedByOthers(false);
+    load(false);
   };
   const toggleFilteredSelection = () => {
     const filteredIds = filteredOwnedPurchases.map(purchase => purchase.id);
@@ -620,48 +641,103 @@ export default function SealedList({ showToast }) {
         <span>{t('sealed.openedLabel')}: <strong style={{ color: 'var(--text-strong)' }}>{totalOpened}</strong></span>
       </div>
 
-      {purchases.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 2fr) repeat(auto-fit, minmax(145px, 1fr))', gap: '0.6rem', alignItems: 'center' }}>
-          <input
-            type="search"
-            className="input-control"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder={t('sealed.searchPlaceholder')}
-            aria-label={t('sealed.searchPlaceholder')}
-          />
-          <select className="select-control" value={gameFilter} onChange={e => setGameFilter(e.target.value)} aria-label={t('sealed.filterGame')}>
-            <option value="">{t('sealed.allGames')}</option>
-            {gameOptions().map(game => <option key={game.value} value={game.value}>{game.label}</option>)}
-          </select>
-          <select className="select-control" value={typeFilter} onChange={e => setTypeFilter(e.target.value)} aria-label={t('sealed.filterType')}>
-            <option value="">{t('sealed.allTypes')}</option>
-            {productTypes.map(type => <option key={type} value={type}>{type}</option>)}
-          </select>
-          <select className="select-control" value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label={t('sealed.filterStatus')}>
-            <option value="">{t('sealed.allStatuses')}</option>
-            <option value="sealed">{t('sealed.hasSealedUnits')}</option>
-            <option value="opened">{t('sealed.hasOpenedUnits')}</option>
-          </select>
-          <MultiSelectDropdown
-            label={t('sealed.filterExpansion')}
-            allLabel={t('sealed.allExpansions')}
-            value={expansionFilter}
-            onChange={setExpansionFilter}
-            options={expansions.map(expansion => ({ value: expansion, label: expansion }))}
-          />
-          {hasFilters && (
-            <button type="button" className="btn btn-secondary" onClick={clearFilters}>
-              <X size={14} /> {t('collection.clearFilters')}
-            </button>
-          )}
-          {filteredOwnedPurchases.length > 0 && (
-            <button type="button" className="btn btn-secondary btn-sm" onClick={toggleFilteredSelection}>
-              {t(allFilteredOwnedSelected ? 'sealed.deselectFiltered' : 'sealed.selectFiltered', { count: filteredOwnedPurchases.length })}
-            </button>
-          )}
+      <div className="glass-panel" style={{ marginBottom: '1rem', padding: '1rem 1.25rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '0.75rem', alignItems: 'flex-end' }}>
+          <SealedFilterField label={t('sealed.searchLabel')}>
+            <div style={{ position: 'relative' }}>
+              <input
+                type="text"
+                className="input-control"
+                placeholder={t('sealed.searchPlaceholder')}
+                value={search}
+                onChange={event => setSearch(event.target.value)}
+                style={{ width: '100%', paddingLeft: '2.5rem' }}
+              />
+              <Search size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            </div>
+          </SealedFilterField>
+
+          <button
+            type="button"
+            className={`btn ${showFilters ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setShowFilters(current => !current)}
+            style={{ padding: '0.5rem 0.9rem', height: '40px', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', whiteSpace: 'nowrap' }}
+          >
+            <SlidersHorizontal size={15} />
+            {t('collection.filters')}
+            {activeFilterCount > 0 && (
+              <span style={{ background: 'var(--accent-red)', color: 'var(--text-strong)', fontSize: '0.65rem', fontWeight: 900, borderRadius: '999px', padding: '1px 7px', minWidth: '18px', textAlign: 'center' }}>
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
         </div>
-      )}
+
+        {showFilters && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-glass)' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.75rem' }}>
+              <SealedFilterField label={t('sealed.filterGame')}>
+                <select className="select-control" value={gameFilter} onChange={event => setGameFilter(event.target.value)}>
+                  <option value="">{t('sealed.allGames')}</option>
+                  {gameOptions().map(game => <option key={game.value} value={game.value}>{game.label}</option>)}
+                </select>
+              </SealedFilterField>
+              <SealedFilterField label={t('sealed.filterType')}>
+                <select className="select-control" value={typeFilter} onChange={event => setTypeFilter(event.target.value)}>
+                  <option value="">{t('sealed.allTypes')}</option>
+                  {productTypes.map(type => <option key={type} value={type}>{type}</option>)}
+                </select>
+              </SealedFilterField>
+              <SealedFilterField label={t('sealed.filterStatus')}>
+                <select className="select-control" value={statusFilter} onChange={event => setStatusFilter(event.target.value)}>
+                  <option value="">{t('sealed.allStatuses')}</option>
+                  <option value="sealed">{t('sealed.hasSealedUnits')}</option>
+                  <option value="opened">{t('sealed.hasOpenedUnits')}</option>
+                </select>
+              </SealedFilterField>
+              <SealedFilterField label={t('sealed.filterExpansion')}>
+                <MultiSelectDropdown
+                  label={t('sealed.filterExpansion')}
+                  allLabel={t('sealed.allExpansions')}
+                  value={expansionFilter}
+                  onChange={setExpansionFilter}
+                  options={expansions.map(expansion => ({ value: expansion, label: expansion }))}
+                />
+              </SealedFilterField>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  id="showClaimedByOthers"
+                  checked={showClaimedByOthers}
+                  onChange={event => {
+                    const checked = event.target.checked;
+                    setShowClaimedByOthers(checked);
+                    load(checked);
+                  }}
+                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                />
+                <label htmlFor="showClaimedByOthers" style={{ cursor: 'pointer', margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  {t('sealed.showClaimedByOthers')}
+                </label>
+              </div>
+
+              {hasFilters && (
+                <button type="button" className="btn btn-secondary" onClick={clearFilters} style={{ fontSize: '0.72rem', padding: '0.3rem 0.7rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <X size={13} /> {t('collection.clearFilters')}
+                </button>
+              )}
+              {filteredOwnedPurchases.length > 0 && (
+                <button type="button" className="btn btn-secondary btn-sm" onClick={toggleFilteredSelection}>
+                  {t(allFilteredOwnedSelected ? 'sealed.deselectFiltered' : 'sealed.selectFiltered', { count: filteredOwnedPurchases.length })}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
 
       {selectedOwnedPurchases.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', padding: '0.25rem 0' }}>
@@ -712,7 +788,8 @@ export default function SealedList({ showToast }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
           {filteredPurchases.map(p => (
             <PurchaseCard key={p.id} purchase={p} onChanged={load} onEdit={setEditingPurchase} showToast={showToast}
-              selected={selectedPurchaseIds.has(p.id)} onSelectionChange={setPurchaseSelected} />
+              selected={selectedPurchaseIds.has(p.id)} onSelectionChange={setPurchaseSelected}
+              showClaimedByOthers={showClaimedByOthers} />
           ))}
         </div>
       )}
