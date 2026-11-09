@@ -1494,6 +1494,19 @@ button, input, select, textarea {
   min-width: 0;
 }
 
+.sealed-purchase-card-visual {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  flex-shrink: 0;
+}
+
+.sealed-purchase-card-select {
+  flex-shrink: 0;
+}
+
 .sealed-purchase-card-image {
   width: 32px;
   height: 44px;
@@ -1512,6 +1525,13 @@ button, input, select, textarea {
   flex-shrink: 0;
 }
 
+.sealed-purchase-card-counts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+}
+
 .sealed-purchase-card-actions {
   display: flex;
   align-items: center;
@@ -1520,29 +1540,82 @@ button, input, select, textarea {
 }
 
 .sealed-purchase-card-tile .sealed-purchase-card-header {
-  flex-wrap: wrap;
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.75rem;
 }
 
 .sealed-purchase-card-tile .sealed-purchase-card-identity {
-  flex: 1 0 100%;
-  align-items: flex-start;
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.65rem;
+}
+
+.sealed-purchase-card-tile .sealed-purchase-card-visual {
+  width: 100%;
+  height: 190px;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.sealed-purchase-card-tile .sealed-purchase-card-select {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  z-index: 1;
 }
 
 .sealed-purchase-card-tile .sealed-purchase-card-image {
-  width: 42px;
-  height: 58px;
+  width: 100%;
+  height: 100%;
+  padding: 0.5rem;
+  box-sizing: border-box;
+}
+
+.sealed-purchase-card-tile .sealed-purchase-card-details {
+  width: 100%;
+  flex: none;
+}
+
+.sealed-purchase-card-tile .sealed-purchase-card-title {
+  font-size: 1rem;
+}
+
+.sealed-purchase-card-tile .sealed-purchase-card-secondary,
+.sealed-purchase-card-tile .sealed-purchase-card-financials {
+  display: none;
 }
 
 .sealed-purchase-card-tile .sealed-purchase-card-values {
-  flex: 1 1 150px;
-  text-align: left;
+  width: 100%;
+  flex: none;
+  text-align: center;
+}
+
+.sealed-purchase-card-tile .sealed-purchase-card-counts {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.sealed-purchase-card-tile .sealed-purchase-card-counts span {
+  border: 1px solid var(--border-glass);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  padding: 0.2rem 0.65rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
 }
 
 .sealed-purchase-card-tile .sealed-purchase-card-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
-  margin-left: auto;
+  width: 100%;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border-glass);
 }
 
 /* TCG Card Flip/Hover Premium Look */
