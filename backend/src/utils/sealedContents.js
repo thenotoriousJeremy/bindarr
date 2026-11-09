@@ -6,13 +6,13 @@ const MAX_DEPTH = 6;
 async function findTemplate(productId, productName, game) {
   if (productId) {
     return db.get(
-      `SELECT id FROM sealed_templates WHERE product_id = ? AND (? IS NULL OR game = ?) ORDER BY id LIMIT 1`,
+      `SELECT id, expected_cards FROM sealed_templates WHERE product_id = ? AND (? IS NULL OR game = ?) ORDER BY id LIMIT 1`,
       [productId, game || null, game || null]
     );
   }
   if (!productName) return null;
   return db.get(
-    `SELECT id FROM sealed_templates
+    `SELECT id, expected_cards FROM sealed_templates
       WHERE product_id IS NULL AND product_name = ? COLLATE NOCASE
         AND (? IS NULL OR game = ?)
       ORDER BY id LIMIT 1`,
@@ -25,7 +25,8 @@ async function findTemplate(productId, productName, game) {
 async function templateCardCount(userId, templateId, depth = 0, seen = new Set()) {
   if (!templateId || depth > MAX_DEPTH || seen.has(templateId)) return 0;
   const nextSeen = new Set(seen).add(templateId);
-  const template = await db.get(`SELECT game FROM sealed_templates WHERE id = ?`, [templateId]);
+  const template = await db.get(`SELECT game, expected_cards FROM sealed_templates WHERE id = ?`, [templateId]);
+  if (template?.expected_cards != null) return Math.max(0, Number(template.expected_cards) || 0);
   const components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [templateId]);
   let total = 0;
   for (const c of components) {
@@ -43,6 +44,7 @@ async function templateCardCount(userId, templateId, depth = 0, seen = new Set()
 
 async function productCardCount(userId, productId, productName, expectedCards, depth = 0, seen = new Set(), game = null) {
   const template = await findTemplate(productId, productName, game);
+  if (template?.expected_cards != null) return Math.max(0, Number(template.expected_cards) || 0);
   const fromRecipe = template ? await templateCardCount(userId, template.id, depth, seen) : 0;
   return fromRecipe || Math.max(1, Number(expectedCards) || 1);
 }
@@ -51,7 +53,7 @@ async function unitCardProgress(userId, unitId) {
   const unit = await getVisibleUnit(userId, unitId);
   if (!unit) return null;
   const template = unit.template_id
-    ? await db.get(`SELECT id FROM sealed_templates WHERE id = ?`, [unit.template_id])
+    ? await db.get(`SELECT id, expected_cards FROM sealed_templates WHERE id = ?`, [unit.template_id])
     : await findTemplate(unit.product_id, unit.product_name, unit.game);
   const recipeCardCount = template ? await templateCardCount(userId, template.id) : 0;
   const linkedCards = await db.get(
@@ -76,9 +78,9 @@ async function unitCardProgress(userId, unitId) {
     [unitId]
   );
   return {
-    expected_cards: unit.expected_cards == null
-      ? (recipeCardCount || null)
-      : Number(unit.expected_cards),
+    expected_cards: template?.expected_cards != null
+      ? Number(template.expected_cards)
+      : (recipeCardCount || (unit.expected_cards == null ? null : Number(unit.expected_cards))),
     linked_cards: Number(linkedCards?.count) || 0
   };
 }

@@ -22,7 +22,6 @@ export default function SealedPurchaseForm({ initial, onSaved, onCancel, showToa
   const [marketValueChanged, setMarketValueChanged] = useState(false);
   const [notes, setNotes] = useState(initial?.notes || '');
   const [availableToAll, setAvailableToAll] = useState(Boolean(initial?.available_to_all));
-  const [expectedCards, setExpectedCards] = useState(initial?.expected_cards ?? '');
   const [contentsNote, setContentsNote] = useState(initial?.contents_note || '');
   const [busy, setBusy] = useState(false);
 
@@ -34,7 +33,6 @@ export default function SealedPurchaseForm({ initial, onSaved, onCancel, showToa
         ? {
           store, purchase_date: purchaseDate, unit_price: parseFloat(unitPrice) || 0, quantity: parseInt(quantity, 10) || 1, notes,
           market_value: marketValue === '' ? null : parseFloat(marketValue),
-          expected_cards: expectedCards === '' ? null : parseInt(expectedCards, 10),
           contents_note: contentsNote,
           available_to_all: availableToAll,
         }
@@ -44,7 +42,6 @@ export default function SealedPurchaseForm({ initial, onSaved, onCancel, showToa
           store, purchase_date: purchaseDate, unit_price: parseFloat(unitPrice) || 0,
           quantity: parseInt(quantity, 10) || 1, notes,
           market_value: marketValue === '' ? null : parseFloat(marketValue),
-          expected_cards: expectedCards === '' ? null : parseInt(expectedCards, 10),
           contents_note: contentsNote,
           available_to_all: availableToAll,
         };
@@ -105,10 +102,6 @@ export default function SealedPurchaseForm({ initial, onSaved, onCancel, showToa
           <label>{t('sealed.marketValuePerUnit')}</label>
           <input type="number" step="0.01" min="0" className="input-control" value={marketValue}
             onChange={(e) => { setMarketValue(e.target.value); setMarketValueChanged(true); }} placeholder="0.00" />
-        </div>
-        <div className="form-group">
-          <label>{t('sealed.expectedCards')}</label>
-          <input type="number" min="0" className="input-control" value={expectedCards} onChange={(e) => setExpectedCards(e.target.value)} placeholder={t('sealed.perUnitHint')} />
         </div>
       </div>
       <div className="form-group">

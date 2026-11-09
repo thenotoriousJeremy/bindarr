@@ -454,7 +454,11 @@ async function migrateSealedTemplatesToShared() {
         }
       }
     }
-    groups.push({ canonical: rows[0], rows, components: [...merged.values()] });
+    const expectedCards = rows.reduce((max, template) =>
+      template.expected_cards == null
+        ? max
+        : Math.max(max ?? 0, Number(template.expected_cards)), null);
+    groups.push({ canonical: rows[0], rows, components: [...merged.values()], expectedCards });
   }
 
   await run(`PRAGMA foreign_keys = OFF`);
@@ -467,15 +471,18 @@ async function migrateSealedTemplatesToShared() {
         product_id INTEGER,
         product_name TEXT NOT NULL,
         game TEXT NOT NULL DEFAULT 'pokemon',
+        expected_cards INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
     for (const group of groups) {
       const template = group.canonical;
       await run(
-        `INSERT INTO sealed_templates_shared (id, user_id, product_id, product_name, game, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [template.id, template.user_id, template.product_id, template.product_name, template.game, template.created_at]
+        `INSERT INTO sealed_templates_shared
+           (id, user_id, product_id, product_name, game, expected_cards, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [template.id, template.user_id, template.product_id, template.product_name, template.game,
+          group.expectedCards, template.created_at]
       );
       const ids = group.rows.map(row => row.id);
       if (ids.length > 1) {
@@ -875,6 +882,7 @@ async function initDb() {
       product_id INTEGER,
       product_name TEXT NOT NULL,
       game TEXT NOT NULL DEFAULT 'pokemon',
+      expected_cards INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
     )
@@ -1436,9 +1444,8 @@ async function initDb() {
   // What's actually inside a sealed unit (a Build & Battle Box is 4 boosters plus
   // a 40-card preconstructed deck), so opening one can show "how many of the
   // expected cards have I linked so far" instead of leaving that to memory.
-  // TCGCSV/TCGplayer publishes no contents data, so these are typed in by whoever
-  // adds the purchase; all three are optional, per the manual-entry choice made
-  // for this feature.
+  // The expected total belongs to the shared product recipe; the purchase column
+  // remains as a legacy fallback for older records and clients.
   const sealedPurchaseCols = await all(`PRAGMA table_info(sealed_purchases)`);
   if (!sealedPurchaseCols.some(c => c.name === 'expected_packs')) {
     await run(`ALTER TABLE sealed_purchases ADD COLUMN expected_packs INTEGER`);
@@ -1480,6 +1487,22 @@ async function initDb() {
   const sealedTemplateComponentCols = await all(`PRAGMA table_info(sealed_template_components)`);
   if (!sealedTemplateComponentCols.some(c => c.name === 'expected_cards')) {
     await run(`ALTER TABLE sealed_template_components ADD COLUMN expected_cards INTEGER`);
+  }
+  const sealedTemplateCols = await all(`PRAGMA table_info(sealed_templates)`);
+  if (!sealedTemplateCols.some(c => c.name === 'expected_cards')) {
+    await run(`ALTER TABLE sealed_templates ADD COLUMN expected_cards INTEGER`);
+    await run(
+      `UPDATE sealed_templates
+          SET expected_cards = (
+            SELECT MAX(p.expected_cards) FROM sealed_purchases p
+             WHERE p.template_id = sealed_templates.id AND p.expected_cards IS NOT NULL
+          )
+        WHERE expected_cards IS NULL
+          AND EXISTS (
+            SELECT 1 FROM sealed_purchases p
+             WHERE p.template_id = sealed_templates.id AND p.expected_cards IS NOT NULL
+          )`
+    );
   }
   await migrateSealedTemplatesToShared();
   await run(`CREATE INDEX IF NOT EXISTS idx_sealed_templates_user ON sealed_templates(user_id)`);

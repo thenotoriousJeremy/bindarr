@@ -52,14 +52,55 @@ async function main() {
 
   const base = await startApp(new Map([[alice, { id: alice }], [bob, { id: bob }]]));
   const asUser = (userId) => ({ 'Content-Type': 'application/json', 'x-user-id': String(userId) });
+  let res;
 
   await db.run(
     `INSERT OR REPLACE INTO card_cache (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend, game)
      VALUES ('promo-1', 'Guaranteed Promo', 'Pok\u00e9mon', '[]', '[]', 'Promo', 'bnb', 'Build & Battle', 'P1', '', 5, 'pokemon')`
   );
 
+  res = await fetch(`${base}/api/sealed/templates`, {
+    method: 'POST', headers: asUser(alice),
+    body: JSON.stringify({ product_name: 'Empty Recipe', game: 'pokemon', components: [] }),
+  });
+  assert.strictEqual(res.status, 400, 'an empty recipe needs a cards-per-unit total');
+
+  res = await fetch(`${base}/api/sealed/templates`, {
+    method: 'POST', headers: asUser(alice),
+    body: JSON.stringify({ product_name: 'Standalone Booster', game: 'pokemon', expected_cards: 11, components: [] }),
+  });
+  assert.strictEqual(res.status, 201, 'a count-only recipe must be allowed for products without child items');
+  let countTemplate = (await res.json()).template;
+  assert.strictEqual(countTemplate.expected_cards, 11);
+  assert.deepStrictEqual(countTemplate.components, []);
+  const countOnlyPurchase = await fetch(`${base}/api/sealed/purchases`, {
+    method: 'POST', headers: asUser(alice),
+    body: JSON.stringify({ product_name: 'Standalone Booster', game: 'pokemon', quantity: 3 }),
+  }).then(r => r.json()).then(data => data.purchase);
+  assert.strictEqual(countOnlyPurchase.expected_cards, null,
+    'cards per unit should be stored on the recipe, not copied into each purchase');
+  let countOnlyDetails = await fetch(`${base}/api/sealed/purchases/${countOnlyPurchase.id}`, {
+    headers: asUser(alice),
+  }).then(r => r.json());
+  assert.ok(countOnlyDetails.units.every(unit => unit.expected_cards === 11),
+    'the recipe count must apply to every unit in a purchase');
+  res = await fetch(`${base}/api/sealed/templates`, {
+    method: 'POST', headers: asUser(bob),
+    body: JSON.stringify({ product_name: 'Standalone Booster', game: 'pokemon', expected_cards: 12, components: [] }),
+  });
+  assert.strictEqual(res.status, 201);
+  countTemplate = (await res.json()).template;
+  assert.strictEqual(countTemplate.expected_cards, 12,
+    'the shared recipe must let any user update the total cards per unit');
+  countOnlyDetails = await fetch(`${base}/api/sealed/purchases/${countOnlyPurchase.id}`, {
+    headers: asUser(alice),
+  }).then(r => r.json());
+  assert.ok(countOnlyDetails.units.every(unit => unit.expected_cards === 12),
+    'changing the recipe total must update existing purchases');
+  console.log('PASS: cards per unit live on shared recipes, including count-only products');
+
   // A Build & Battle Box: 1 guaranteed promo card + 4 Booster Packs + 1 Precon Deck.
-  let res = await fetch(`${base}/api/sealed/templates`, {
+  res = await fetch(`${base}/api/sealed/templates`, {
     method: 'POST', headers: asUser(alice),
     body: JSON.stringify({
       product_name: 'Build & Battle Box', game: 'pokemon',
@@ -347,6 +388,7 @@ async function main() {
     method: 'POST', headers: asUser(alice),
     body: JSON.stringify({
       product_name: 'Fully Linked Box', game: 'pokemon',
+      expected_cards: 145,
       components: [
         { component_type: 'card', quantity: 1, card_id: 'promo-1' },
         { component_type: 'product', quantity: 1, product_name: 'Bulk Booster', expected_cards: 99 },
@@ -356,10 +398,12 @@ async function main() {
   assert.strictEqual(res.status, 201);
   res = await fetch(`${base}/api/sealed/purchases`, {
     method: 'POST', headers: asUser(alice),
-    body: JSON.stringify({ product_name: 'Fully Linked Box', game: 'pokemon', expected_cards: 145 }),
+    body: JSON.stringify({ product_name: 'Fully Linked Box', game: 'pokemon' }),
   });
   assert.strictEqual(res.status, 201);
   const linkedBox = (await res.json()).purchase;
+  assert.strictEqual(linkedBox.expected_cards, null,
+    'cards per unit should no longer need to be entered when creating a purchase');
   const [linkedBoxUnit] = await db.all(`SELECT * FROM sealed_units WHERE purchase_id = ?`, [linkedBox.id]);
   res = await fetch(`${base}/api/sealed/units/${linkedBoxUnit.id}/open`, {
     method: 'PUT', headers: asUser(alice), body: JSON.stringify({ opened: true }),
@@ -405,6 +449,7 @@ async function main() {
   console.log('PASS: linked progress includes child-product cards and completed units leave the picker');
 
   const existingTemplates = await db.all(`SELECT * FROM sealed_templates ORDER BY id`);
+  await db.run(`UPDATE sealed_purchases SET expected_cards = 145 WHERE id = ?`, [linkedBox.id]);
   await db.run(`PRAGMA foreign_keys = OFF`);
   await db.run(`DROP INDEX IF EXISTS idx_sealed_templates_global_product`);
   await db.run(`DROP INDEX IF EXISTS idx_sealed_templates_global_name`);
@@ -436,8 +481,8 @@ async function main() {
     [duplicate.lastID, duplicate.lastID]
   );
   const legacyPurchase = await db.run(
-    `INSERT INTO sealed_purchases (user_id, product_name, game, quantity, template_id)
-     VALUES (?, 'Build & Battle Box', 'pokemon', 1, ?)`,
+    `INSERT INTO sealed_purchases (user_id, product_name, game, quantity, expected_cards, template_id)
+     VALUES (?, 'Build & Battle Box', 'pokemon', 1, 145, ?)`,
     [bob, duplicate.lastID]
   );
   await db.run(`PRAGMA foreign_keys = ON`);
@@ -450,6 +495,9 @@ async function main() {
   )).count, 1, 'duplicate per-user recipes must consolidate into one shared recipe');
   const migratedPurchase = await db.get(`SELECT template_id FROM sealed_purchases WHERE id = ?`, [legacyPurchase.lastID]);
   assert.strictEqual(migratedPurchase.template_id, template.id, 'purchases attached to duplicate recipes must point to the canonical shared recipe');
+  const migratedExpectedCards = await db.get(`SELECT expected_cards FROM sealed_templates WHERE id = ?`, [template.id]);
+  assert.strictEqual(migratedExpectedCards.expected_cards, 145,
+    'legacy per-purchase card totals must migrate to the shared recipe using the highest existing total');
   const migratedCards = await db.all(
     `SELECT card_id, quantity FROM sealed_template_components WHERE template_id = ? AND component_type = 'card'`,
     [template.id]

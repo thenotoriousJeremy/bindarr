@@ -11,6 +11,7 @@ import SealedCatalogPicker from './SealedCatalogPicker';
 export default function SealedTemplateEditor({ productId, productName, game, showToast }) {
   const { t } = useT();
   const [components, setComponents] = useState([]);
+  const [expectedCards, setExpectedCards] = useState('');
   const [existingId, setExistingId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -35,10 +36,15 @@ export default function SealedTemplateEditor({ productId, productName, game, sho
       .then(d => {
         if (d.template) {
           setExistingId(d.template.id);
+          setExpectedCards(d.template.expected_cards ?? '');
           setComponents(d.template.components.map(c => ({
             ...c,
             label: c.component_type === 'card' ? (c.card_id || '') : c.product_name,
           })));
+        } else {
+          setExistingId(null);
+          setExpectedCards('');
+          setComponents([]);
         }
       })
       .catch(() => {})
@@ -56,6 +62,11 @@ export default function SealedTemplateEditor({ productId, productName, game, sho
             if (c.product_id) byId[c.product_id] = c.expected_cards;
             if (c.product_name) byName[c.product_name.toLowerCase()] = c.expected_cards;
           }
+        }
+        for (const tpl of d.templates || []) {
+          if (tpl.expected_cards == null) continue;
+          if (tpl.product_id) byId[tpl.product_id] = tpl.expected_cards;
+          if (tpl.product_name) byName[tpl.product_name.toLowerCase()] = tpl.expected_cards;
         }
         setKnownCounts({ byId, byName });
       })
@@ -110,13 +121,21 @@ export default function SealedTemplateEditor({ productId, productName, game, sho
   const removeComponent = (idx) => setComponents(c => c.filter((_, i) => i !== idx));
 
   const save = async () => {
-    if (components.length === 0) { showToast?.(t('sealed.errNoComponents')); return; }
+    if (components.length === 0 && (expectedCards === '' || expectedCards == null)) {
+      showToast?.(t('sealed.errNoComponents')); return;
+    }
     setSaving(true);
     try {
       const res = await fetch('/api/sealed/templates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ product_id: productId || null, product_name: productName, game, components: components.map(c => ({ ...c, quantity: Math.max(1, parseInt(c.quantity, 10) || 1) })) }),
+        body: JSON.stringify({
+          product_id: productId || null,
+          product_name: productName,
+          game,
+          expected_cards: expectedCards === '' ? null : expectedCards,
+          components: components.map(c => ({ ...c, quantity: Math.max(1, parseInt(c.quantity, 10) || 1) })),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { showToast?.(data.error || t('sealed.errSave')); return; }
@@ -138,6 +157,12 @@ export default function SealedTemplateEditor({ productId, productName, game, sho
         {t(existingId ? 'sealed.recipeExisting' : 'sealed.recipeDefine')}
       </div>
       <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0 }}>{t('sealed.recipeHint')}</p>
+      <div className="form-group">
+        <label>{t('sealed.expectedCards')}</label>
+        <input type="number" min="0" step="1" className="input-control" value={expectedCards}
+          onChange={event => setExpectedCards(event.target.value)} placeholder={t('sealed.perUnitHint')} />
+        <small style={{ color: 'var(--text-secondary)' }}>{t('sealed.recipeCardsPerUnitHint')}</small>
+      </div>
 
       {components.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
@@ -148,7 +173,7 @@ export default function SealedTemplateEditor({ productId, productName, game, sho
                 {c.component_type === 'product' && (
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', marginLeft: '0.5rem' }}>
                     <label htmlFor={`expected-cards-${i}`} style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>{t('sealed.expectedCardsPerPack')}</label>
-                    <input id={`expected-cards-${i}`} aria-label={t('sealed.expectedCardsPerPack')} type="number" min="0" className="input-control"
+                    <input id={`expected-cards-${i}`} aria-label={t('sealed.expectedCardsPerPack')} type="number" min="0" step="1" className="input-control"
                       value={c.expected_cards ?? ''} onChange={e => setComponents(rows => rows.map((row, index) => index === i ? { ...row, expected_cards: e.target.value } : row))}
                       placeholder="?" style={{ width: '3.5rem', padding: '0.2rem' }} />
                   </span>

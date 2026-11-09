@@ -30,22 +30,27 @@ async function allocateSealedUnitCost(unitId, userId, total, method = 'equal') {
   const componentCount = cardCount + childCardCount;
   if (componentCount === 0) return { linkedRows, cardCount, componentCount };
 
-  let boxCardCount = Math.max(0, Number(source.expected_cards) || 0);
-  if (boxCardCount === 0) {
-    let templateId = source.template_id;
-    if (!templateId) {
-      const template = source.product_id
-        ? await db.get(
-          `SELECT id FROM sealed_templates WHERE product_id = ? AND game = ?`,
-          [source.product_id, source.game]
-        )
-        : await db.get(
-          `SELECT id FROM sealed_templates WHERE product_id IS NULL AND product_name = ? COLLATE NOCASE AND game = ?`,
-          [source.product_name, source.game]
-        );
-      templateId = template?.id;
-    }
-    if (templateId) boxCardCount = await templateCardCount(userId, templateId);
+  let templateId = source.template_id;
+  if (!templateId) {
+    const template = source.product_id
+      ? await db.get(
+        `SELECT id FROM sealed_templates WHERE product_id = ? AND game = ?`,
+        [source.product_id, source.game]
+      )
+      : await db.get(
+        `SELECT id FROM sealed_templates WHERE product_id IS NULL AND product_name = ? COLLATE NOCASE AND game = ?`,
+        [source.product_name, source.game]
+      );
+    templateId = template?.id;
+  }
+  const template = templateId
+    ? await db.get(`SELECT expected_cards FROM sealed_templates WHERE id = ?`, [templateId])
+    : null;
+  let boxCardCount = template
+    ? await templateCardCount(userId, templateId)
+    : 0;
+  if (template?.expected_cards == null && boxCardCount === 0) {
+    boxCardCount = Math.max(0, Number(source.expected_cards) || 0);
   }
   // When the box has no known total, preserve the previous behavior by treating
   // its linked contents as the full allocation basis. Never allocate more than

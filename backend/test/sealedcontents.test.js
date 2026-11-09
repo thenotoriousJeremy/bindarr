@@ -18,8 +18,11 @@ async function cleanup() {
   }
 }
 
-async function addTemplate(userId, name, components) {
-  const t = await db.run(`INSERT INTO sealed_templates (user_id, product_name, game) VALUES (?, ?, 'pokemon')`, [userId, name]);
+async function addTemplate(userId, name, components, expectedCards = null) {
+  const t = await db.run(
+    `INSERT INTO sealed_templates (user_id, product_name, game, expected_cards) VALUES (?, ?, 'pokemon', ?)`,
+    [userId, name, expectedCards]
+  );
   for (const c of components) {
     await db.run(
       `INSERT INTO sealed_template_components (template_id, component_type, quantity, card_id, product_name, expected_cards)
@@ -59,10 +62,10 @@ async function addTemplate(userId, name, components) {
     await addTemplate(user, 'Progress ETB', [
       { type: 'product', quantity: 9, name: 'Progress Pack', expected_cards: 10 },
       { type: 'card', quantity: 1, card_id: 'promo-card' },
-    ]);
+    ], 145);
     const purchase = await db.run(
-      `INSERT INTO sealed_purchases (user_id, product_name, game, quantity, expected_cards)
-       VALUES (?, 'Progress ETB', 'pokemon', 1, 145)`,
+      `INSERT INTO sealed_purchases (user_id, product_name, game, quantity)
+       VALUES (?, 'Progress ETB', 'pokemon', 1)`,
       [user]
     );
     const unit = await db.run(`INSERT INTO sealed_units (purchase_id) VALUES (?)`, [purchase.lastID]);

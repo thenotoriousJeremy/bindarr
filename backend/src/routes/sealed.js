@@ -328,6 +328,7 @@ router.get('/sealed/purchases', async (req, res) => {
     const unitVisibility = purchaseUnitVisibility(req.user.id, showClaimedByOthers);
     const purchases = await db.all(
       `SELECT p.*, buyer.username AS buyer_username,
+              COALESCE(recipe.expected_cards, p.expected_cards) AS expected_cards_per_unit,
               CASE WHEN p.user_id = ? THEN 1 ELSE 0 END AS is_owner,
               SUM(CASE WHEN u.claimed_by_user_id = ? THEN 1 ELSE 0 END) AS claimed_by_me,
               source_purchase.product_name AS source_product_name,
@@ -339,6 +340,7 @@ router.get('/sealed/purchases', async (req, res) => {
               SUM(CASE WHEN u.id IS NOT NULL AND u.opened_at IS NOT NULL THEN 1 ELSE 0 END) AS opened_count
          FROM sealed_purchases p
          JOIN users buyer ON buyer.id = p.user_id
+         LEFT JOIN sealed_templates recipe ON recipe.id = p.template_id
          LEFT JOIN sealed_units source_unit ON source_unit.id = p.source_unit_id
          LEFT JOIN sealed_purchases source_purchase ON source_purchase.id = source_unit.purchase_id
          LEFT JOIN sealed_units u ON u.purchase_id = p.id AND ${unitVisibility.where}
@@ -1075,24 +1077,29 @@ router.get('/sealed/templates', async (req, res) => {
 
 const COMPONENT_TYPES = ['card', 'product'];
 
-// Create (or replace, if one already exists for this product) a template and
-// its components in one call — the editor always sends the full component
-// list, so wholesale delete+reinsert is simpler and no less correct than a diff.
+// Create or replace a product's shared card total and components in one call.
+// The editor sends the full component list, so wholesale delete+reinsert is
+// simpler and no less correct than a diff.
 router.post('/sealed/templates', async (req, res) => {
-  const { product_id = null, product_name, game = 'pokemon', components = [] } = req.body || {};
+  const { product_id = null, product_name, game = 'pokemon', expected_cards: expectedCardsInput, components = [] } = req.body || {};
+  const hasExpectedCards = Object.prototype.hasOwnProperty.call(req.body || {}, 'expected_cards');
   if (!product_name || !String(product_name).trim()) {
     return res.status(400).json({ error: 'product_name is required' });
   }
-  if (!Array.isArray(components) || components.length === 0) {
-    return res.status(400).json({ error: 'At least one component is required' });
+  if (!Array.isArray(components)) {
+    return res.status(400).json({ error: 'components must be an array' });
   }
   if (components.length > MAX_TEMPLATE_COMPONENTS) {
     return res.status(400).json({ error: `A recipe can have at most ${MAX_TEMPLATE_COMPONENTS} components` });
   }
-  let templateGame;
+  let templateGame, expectedCards;
   const parsedComponents = [];
   try {
     templateGame = parseGame(game);
+    expectedCards = hasExpectedCards ? parseAmount(expectedCardsInput, 'expected_cards', { integer: true }) : undefined;
+    if (components.length === 0 && expectedCards == null) {
+      throw new ValidationError('A recipe needs at least one component or a cards-per-unit total');
+    }
     for (const c of components) {
       if (!c || !COMPONENT_TYPES.includes(c.component_type)) {
         throw new ValidationError(`Invalid component_type. One of: ${COMPONENT_TYPES.join(', ')}`);
@@ -1121,11 +1128,15 @@ router.post('/sealed/templates', async (req, res) => {
       );
       let templateId = existing?.id;
       if (templateId) {
+        if (hasExpectedCards) {
+          await db.run(`UPDATE sealed_templates SET expected_cards = ? WHERE id = ?`, [expectedCards, templateId]);
+        }
         await db.run(`DELETE FROM sealed_template_components WHERE template_id = ?`, [templateId]);
       } else {
         const result = await db.run(
-          `INSERT INTO sealed_templates (user_id, product_id, product_name, game) VALUES (?, ?, ?, ?)`,
-          [req.user.id, product_id || null, String(product_name).trim(), templateGame]
+          `INSERT INTO sealed_templates (user_id, product_id, product_name, game, expected_cards)
+           VALUES (?, ?, ?, ?, ?)`,
+          [req.user.id, product_id || null, String(product_name).trim(), templateGame, expectedCards ?? null]
         );
         templateId = result.lastID;
       }
@@ -1147,6 +1158,21 @@ router.post('/sealed/templates', async (req, res) => {
         await db.run(
           `UPDATE sealed_purchases SET template_id = ? WHERE template_id IS NULL AND product_id IS NULL AND product_name = ? COLLATE NOCASE AND game = ?`,
           [templateId, String(product_name).trim(), game]
+        );
+      }
+      if (!existing && expectedCards == null) {
+        await db.run(
+          `UPDATE sealed_templates
+              SET expected_cards = (
+                SELECT MAX(p.expected_cards) FROM sealed_purchases p
+                 WHERE p.template_id = ? AND p.expected_cards IS NOT NULL
+              )
+            WHERE id = ? AND expected_cards IS NULL
+              AND EXISTS (
+                SELECT 1 FROM sealed_purchases p
+                 WHERE p.template_id = ? AND p.expected_cards IS NOT NULL
+              )`,
+          [templateId, templateId, templateId]
         );
       }
       return db.get(`SELECT * FROM sealed_templates WHERE id = ?`, [templateId]);

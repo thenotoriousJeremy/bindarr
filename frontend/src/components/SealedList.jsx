@@ -368,10 +368,10 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
           ) : purchase.is_claimed ? (
             <div style={{ fontSize: '0.72rem', color: 'var(--accent-blue, var(--text-secondary))' }}>{t('sealed.claimedFromShared')}</div>
           ) : null}
-          {(purchase.expected_cards > 0 || purchase.contents_note) && (
+          {(purchase.expected_cards_per_unit > 0 || purchase.contents_note) && (
             <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-              {purchase.expected_cards > 0 ? t('sealed.nCards', { n: purchase.expected_cards }) : ''}
-              {purchase.expected_cards > 0 && purchase.contents_note ? ' + ' : ''}
+              {purchase.expected_cards_per_unit > 0 ? t('sealed.nCards', { n: purchase.expected_cards_per_unit }) : ''}
+              {purchase.expected_cards_per_unit > 0 && purchase.contents_note ? ' + ' : ''}
               {purchase.contents_note ? ` (${purchase.contents_note})` : ''}
             </div>
           )}
