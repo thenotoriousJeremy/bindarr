@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal, LayoutGrid, List } from 'lucide-react';
+import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal, LayoutGrid, List, MousePointerClick } from 'lucide-react';
 import { useT } from '../utils/i18n';
 import { gameLabel, gameOptions } from '../utils/games';
 import { formatPrice } from '../utils/formatPrice';
 import { printingLabel } from '../utils/cardOptions';
+import { useLongPress } from '../utils/useLongPress';
 import SealedPurchaseForm from './SealedPurchaseForm';
 import Modal from './Modal';
 import PackPriceSplitter from './PackPriceSplitter';
@@ -234,7 +235,7 @@ function LinkedCardsPanel({ unitId, expectedCards, refreshKey, showToast, onChan
   );
 }
 
-function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSelectionChange, showClaimedByOthers, viewMode }) {
+function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSelectionChange, showClaimedByOthers, viewMode, selectMode, pressHandlers, longPressFired }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
   const [units, setUnits] = useState(null);
@@ -352,15 +353,17 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
   const unopenedMarketValue = purchase.market_value == null ? null : purchase.market_value * (purchase.sealed_count || 0);
   const hasSealedUnits = (purchase.sealed_count || 0) > 0;
   const canShare = purchase.is_owner && hasSealedUnits;
-  const purchaseSelection = canShare && (
+  const purchaseSelection = (
     <input
       type="checkbox"
       className="sealed-purchase-card-select"
-      checked={selected}
+      checked={canShare && selected}
+      disabled={!canShare}
       aria-label={t('sealed.selectPurchase', { product: purchase.product_name })}
       onChange={event => onSelectionChange?.(purchase.id, event.target.checked)}
     />
   );
+  const tilePressHandlers = canShare ? pressHandlers?.(purchase.id) : {};
   const purchaseImage = purchase.image_url
     ? <img src={purchase.image_url} alt="" className="sealed-purchase-card-image" />
     : <Package size={viewMode === 'gallery' ? 56 : 28} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />;
@@ -385,6 +388,18 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
   const toggleDetails = () => {
     if (viewMode === 'gallery') setOpen(true);
     else setOpen(current => !current);
+  };
+
+  const activateTile = () => {
+    if (longPressFired?.current) {
+      longPressFired.current = false;
+      return;
+    }
+    if (selectMode && canShare) {
+      onSelectionChange?.(purchase.id, !selected);
+      return;
+    }
+    toggleDetails();
   };
 
   const renderPurchaseDetails = () => (
@@ -468,8 +483,17 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
       <div className="sealed-purchase-card-header">
         {viewMode === 'gallery' ? (
           <button type="button" className="sealed-purchase-card-tile-summary"
-            onClick={toggleDetails} aria-label={`${t('sealed.purchaseDetails')}: ${purchase.product_name}`}>
-            <div className="sealed-purchase-card-visual">{purchaseImage}</div>
+            onClick={activateTile} {...tilePressHandlers}
+            aria-label={`${t(selectMode && canShare ? 'collection.select' : 'sealed.purchaseDetails')}: ${purchase.product_name}`}
+            aria-pressed={selectMode && canShare ? selected : undefined}>
+            <div className="sealed-purchase-card-visual">
+              {purchaseImage}
+              {selectMode && canShare && (
+                <div className={`sealed-purchase-card-selection-mark${selected ? ' is-selected' : ''}`} aria-hidden="true">
+                  {selected ? '✓' : ''}
+                </div>
+              )}
+            </div>
             <div className="sealed-purchase-card-details">
               <div className="sealed-purchase-card-title" style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{purchase.product_name}</div>
             </div>
@@ -523,7 +547,6 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
           </div>
         )}
         <div className="sealed-purchase-card-actions">
-          {viewMode === 'gallery' && purchaseSelection}
           {purchase.is_owner && hasSealedUnits && (
             <button type="button" className="btn btn-secondary btn-icon-only" title={t('sealed.refreshMarketValue')} aria-label={t('sealed.refreshMarketValue')}
               onClick={refreshMarketValue} disabled={!purchase.product_id || refreshingValue}>
@@ -622,7 +645,20 @@ export default function SealedList({ showToast }) {
   const [expansionFilter, setExpansionFilter] = useState([]);
   const [showClaimedByOthers, setShowClaimedByOthers] = useState(false);
   const [selectedPurchaseIds, setSelectedPurchaseIds] = useState(() => new Set());
+  const [selectMode, setSelectMode] = useState(false);
   const [savingSharing, setSavingSharing] = useState(false);
+
+  const armPurchaseSelection = (id) => {
+    const purchase = purchases.find(item => item.id === id);
+    if (!purchase || !purchase.is_owner || (purchase.sealed_count || 0) <= 0) return;
+    setSelectMode(true);
+    setSelectedPurchaseIds(current => new Set(current).add(id));
+  };
+  const { handlers: purchasePressHandlers, fired: purchaseLongPressFired } = useLongPress(armPurchaseSelection);
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedPurchaseIds(new Set());
+  };
 
   const load = (includeClaimedByOthers = showClaimedByOthers) => {
     setLoading(true);
@@ -687,6 +723,7 @@ export default function SealedList({ showToast }) {
   };
   const toggleFilteredSelection = () => {
     const filteredIds = filteredOwnedPurchases.map(purchase => purchase.id);
+    if (viewMode === 'gallery') setSelectMode(true);
     setSelectedPurchaseIds(current => {
       const next = new Set(current);
       if (allFilteredOwnedSelected) filteredIds.forEach(id => next.delete(id));
@@ -734,9 +771,18 @@ export default function SealedList({ showToast }) {
         <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-strong)' }}>
           <Package size={20} /> {t('nav.sealed')}
         </h2>
-        <button type="button" className="btn btn-primary" onClick={() => setShowForm(true)}>
-          <Plus size={16} /> {t('sealed.addPurchase')}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {viewMode === 'gallery' && (
+            <button type="button" className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+              title={t('collection.selectHint')}>
+              <MousePointerClick size={14} /> {t(selectMode ? 'bulk.done' : 'collection.select')}
+            </button>
+          )}
+          <button type="button" className="btn btn-primary" onClick={() => setShowForm(true)}>
+            <Plus size={16} /> {t('sealed.addPurchase')}
+          </button>
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
@@ -917,7 +963,8 @@ export default function SealedList({ showToast }) {
           {filteredPurchases.map(p => (
             <PurchaseCard key={p.id} purchase={p} onChanged={load} onEdit={setEditingPurchase} showToast={showToast}
               selected={selectedPurchaseIds.has(p.id)} onSelectionChange={setPurchaseSelected}
-              showClaimedByOthers={showClaimedByOthers} viewMode={viewMode} />
+              showClaimedByOthers={showClaimedByOthers} viewMode={viewMode} selectMode={selectMode}
+              pressHandlers={purchasePressHandlers} longPressFired={purchaseLongPressFired} />
           ))}
         </div>
       )}

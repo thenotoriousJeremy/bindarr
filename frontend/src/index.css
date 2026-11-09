@@ -1575,6 +1575,29 @@ button, input, select, textarea {
   overflow: hidden;
 }
 
+.sealed-purchase-card-selection-mark {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--text-strong);
+  font-size: 0.8rem;
+  font-weight: 900;
+  pointer-events: none;
+}
+
+.sealed-purchase-card-selection-mark.is-selected {
+  background: var(--accent-red);
+}
+
 .sealed-purchase-card-tile .sealed-purchase-card-image {
   width: 100%;
   height: 100%;
