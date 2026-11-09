@@ -6,9 +6,8 @@ import SealedCatalogPicker from './SealedCatalogPicker';
 // A product's "recipe": specific guaranteed cards (an alt-art promo, an
 // oversized card — NOT a whole decklist, since quantity multiplies ONE
 // card_id) plus sub-products (a 40-card precon deck is its own sealed item,
-// opened and linked later, not 40 enumerated cards). Saved once per product
-// (GET/POST /api/sealed/templates) and reused automatically by every future
-// purchase of the same product.
+// opened and linked later, not 40 enumerated cards). Recipes are shared across
+// this instance and remain live for existing purchases.
 export default function SealedTemplateEditor({ productId, productName, game, showToast }) {
   const { t } = useT();
   const [components, setComponents] = useState([]);
@@ -23,13 +22,13 @@ export default function SealedTemplateEditor({ productId, productName, game, sho
   const [cardSearchBusy, setCardSearchBusy] = useState(false);
   const [showCardSearch, setShowCardSearch] = useState(false);
   const [showProductPicker, setShowProductPicker] = useState(false);
-  // Cards-per-pack already entered on this user's other recipes, keyed by product,
+  // Cards-per-pack already entered on other recipes, keyed by product,
   // so a repeated component (e.g. the same booster pack) starts pre-filled.
   const [knownCounts, setKnownCounts] = useState({ byId: {}, byName: {} });
 
   useEffect(() => {
     if (!productName) { setLoading(false); return; }
-    const params = new URLSearchParams({ product_name: productName });
+    const params = new URLSearchParams({ product_name: productName, game: game || 'pokemon' });
     if (productId) params.set('product_id', productId);
     fetch(`/api/sealed/templates/match?${params}`)
       .then(r => r.json())
@@ -44,7 +43,7 @@ export default function SealedTemplateEditor({ productId, productName, game, sho
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [productId, productName]);
+  }, [productId, productName, game]);
 
   const loadKnownCounts = () => {
     fetch('/api/sealed/templates')

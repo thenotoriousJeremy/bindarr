@@ -21,6 +21,7 @@ export default function SealedPurchaseForm({ initial, onSaved, onCancel, showToa
   const [marketValue, setMarketValue] = useState(initial?.market_value ?? '');
   const [marketValueChanged, setMarketValueChanged] = useState(false);
   const [notes, setNotes] = useState(initial?.notes || '');
+  const [availableToAll, setAvailableToAll] = useState(Boolean(initial?.available_to_all));
   const [expectedCards, setExpectedCards] = useState(initial?.expected_cards ?? '');
   const [contentsNote, setContentsNote] = useState(initial?.contents_note || '');
   const [busy, setBusy] = useState(false);
@@ -35,6 +36,7 @@ export default function SealedPurchaseForm({ initial, onSaved, onCancel, showToa
           market_value: marketValue === '' ? null : parseFloat(marketValue),
           expected_cards: expectedCards === '' ? null : parseInt(expectedCards, 10),
           contents_note: contentsNote,
+          available_to_all: availableToAll,
         }
         : {
           product_id: product.product_id || null, product_name: product.name, set_name: product.group_name,
@@ -44,6 +46,7 @@ export default function SealedPurchaseForm({ initial, onSaved, onCancel, showToa
           market_value: marketValue === '' ? null : parseFloat(marketValue),
           expected_cards: expectedCards === '' ? null : parseInt(expectedCards, 10),
           contents_note: contentsNote,
+          available_to_all: availableToAll,
         };
       if (editing && !marketValueChanged) delete body.market_value;
       const res = await fetch(editing ? `/api/sealed/purchases/${initial.id}` : '/api/sealed/purchases', {
@@ -116,6 +119,15 @@ export default function SealedPurchaseForm({ initial, onSaved, onCancel, showToa
         <label>{t('sealed.notes')}</label>
         <textarea className="input-control" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
       </div>
+      <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', color: 'var(--text-strong)' }}>
+        <input type="checkbox" checked={availableToAll} onChange={e => setAvailableToAll(e.target.checked)} />
+        <span>
+          <strong>{t('sealed.availableToAll')}</strong>
+          <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+            {t('sealed.availableToAllHint')}
+          </span>
+        </span>
+      </label>
       <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
         <button type="button" className="btn btn-secondary" onClick={onCancel}>{t('common.cancel')}</button>
         <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>

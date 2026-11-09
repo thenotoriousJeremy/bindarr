@@ -4,6 +4,7 @@
 const db = require('../../db');
 const cardApi = require('../../utils/cardApi');
 const tcgdexApi = require('../../tcgdexApi');
+const { getOwnedUnit } = require('../../utils/sealedOwnership');
 
 async function conflictingSealedLinks(ids, userId, unitId) {
   if (!unitId) return [];
@@ -56,13 +57,7 @@ const PRINTINGS = ['Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition', 'Pro
 // same user. Shared by every write path (single add, bulk add, edit), so none of
 // them can link a card to, and then read through, another user's purchase.
 async function ownsSealedUnit(unitId, userId) {
-  const row = await db.get(
-    `SELECT u.id FROM sealed_units u
-       JOIN sealed_purchases p ON p.id = u.purchase_id
-      WHERE u.id = ? AND p.user_id = ?`,
-    [unitId, userId]
-  );
-  return !!row;
+  return !!(await getOwnedUnit(userId, unitId));
 }
 
 // The card a copy should reference once its language is `language`: that

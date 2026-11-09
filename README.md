@@ -414,7 +414,11 @@ A price only exists once something fetched it. The Pokémon price sweep covers t
 
 ### Sealed products
 
-The **Sealed** page tracks purchases as individual units, so opening one booster box does not mark every identical box as opened. Pick products from the TCGplayer catalog or enter a name manually. For products with guaranteed contents, save a reusable recipe of cards and child products; opening a unit creates those components, and child products can be tracked and opened separately. Link cards to the opened unit they came from, then use the collection's Sealed Product filter to view unlinked cards or cards linked to selected units.
+The **Sealed** page tracks purchases as individual units, so opening one booster box does not mark every identical box as opened. Pick products from the TCGplayer catalog or enter a name manually. For products with guaranteed contents, save a recipe of cards and child products; recipes are shared across the Bindarr instance, any user can create or edit them, and edits update existing as well as future purchases.
+
+A purchase can be made available to all users. While shared, everyone can see its purchase details—including store, date, quantity, cost, and buyer—and the first user to open each unit claims it and receives its recipe contents. The buyer remains recorded as the original purchaser and is the only one who can edit purchase details. Sharing can be toggled on an individual purchase or changed for selected purchases. Resealing a claimed unit does not return it to the shared pool. In a multi-unit purchase, the bulk-open control is above the individual unit actions.
+
+Link-card progress counts the actual linked cards on a unit and its child products. The expected-card total can include cards outside the recipe, such as energies added later. Once the linked count reaches or exceeds that total, the opened product no longer appears in the collection's picker for linking cards. Use the collection's Sealed Product filter to view unlinked cards or cards linked to selected units.
 
 Search purchases by product, set, store, notes, or expansion. Filters narrow the list by game, product type, purchases with sealed or opened units, and expansion. Expansions include the purchase's own set and the sets of cards or products in its recipe.
 

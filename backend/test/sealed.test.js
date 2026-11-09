@@ -53,10 +53,176 @@ async function main() {
 
   const base = await startApp(new Map([[alice, { id: alice }], [bob, { id: bob }]]));
   const asUser = (userId) => ({ 'Content-Type': 'application/json', 'x-user-id': String(userId) });
+  let res;
+
+  const bulkPurchases = [];
+  for (const product_name of ['Bulk Share One', 'Bulk Share Two']) {
+    res = await fetch(`${base}/api/sealed/purchases`, {
+      method: 'POST', headers: asUser(alice), body: JSON.stringify({ product_name }),
+    });
+    assert.strictEqual(res.status, 201);
+    bulkPurchases.push((await res.json()).purchase);
+  }
+  const bulkPurchaseIds = bulkPurchases.map(purchase => purchase.id);
+  res = await fetch(`${base}/api/sealed/purchases/bulk-sharing`, {
+    method: 'PUT', headers: asUser(alice),
+    body: JSON.stringify({ purchase_ids: bulkPurchaseIds, available_to_all: true }),
+  });
+  assert.strictEqual(res.status, 200, 'the owner can bulk-share selected purchases');
+  assert.strictEqual((await res.json()).updated, bulkPurchaseIds.length);
+  for (const id of bulkPurchaseIds) {
+    assert.strictEqual((await db.get(`SELECT available_to_all FROM sealed_purchases WHERE id = ?`, [id])).available_to_all, 1);
+  }
+  res = await fetch(`${base}/api/sealed/purchases/bulk-sharing`, {
+    method: 'PUT', headers: asUser(bob),
+    body: JSON.stringify({ purchase_ids: bulkPurchaseIds, available_to_all: false }),
+  });
+  assert.strictEqual(res.status, 404, 'bulk sharing cannot update another user\'s purchases');
+  res = await fetch(`${base}/api/sealed/purchases/bulk-sharing`, {
+    method: 'PUT', headers: asUser(alice),
+    body: JSON.stringify({ purchase_ids: [], available_to_all: true }),
+  });
+  assert.strictEqual(res.status, 400, 'bulk sharing requires at least one purchase');
+  res = await fetch(`${base}/api/sealed/purchases/bulk-sharing`, {
+    method: 'PUT', headers: asUser(alice),
+    body: JSON.stringify({ purchase_ids: bulkPurchaseIds, available_to_all: false }),
+  });
+  assert.strictEqual(res.status, 200, 'the owner can bulk-disable sharing');
+  for (const id of bulkPurchaseIds) {
+    assert.strictEqual((await db.get(`SELECT available_to_all FROM sealed_purchases WHERE id = ?`, [id])).available_to_all, 0);
+    await db.run(`DELETE FROM sealed_purchases WHERE id = ?`, [id]);
+  }
+  console.log('PASS: owners can bulk-enable and disable sharing for selected purchases');
+
+  await db.run(
+    `INSERT OR REPLACE INTO card_cache (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend, game)
+     VALUES ('shared-promo', 'Shared Promo', 'Pok\u00e9mon', '[]', '[]', 'Promo', 'shared', 'Shared Set', 'S1', '', 0, 'pokemon')`
+  );
+  res = await fetch(`${base}/api/sealed/templates`, {
+    method: 'POST', headers: asUser(alice),
+    body: JSON.stringify({
+      product_name: 'Shared Trainer Box', game: 'pokemon',
+      components: [
+        { component_type: 'card', quantity: 1, card_id: 'shared-promo' },
+        { component_type: 'product', quantity: 1, product_name: 'Shared Booster', expected_cards: 5, game: 'pokemon' },
+      ],
+    }),
+  });
+  assert.strictEqual(res.status, 201);
+
+  res = await fetch(`${base}/api/sealed/purchases`, {
+    method: 'POST', headers: asUser(alice),
+    body: JSON.stringify({
+      product_name: 'Shared Trainer Box', game: 'pokemon', quantity: 2, unit_price: 12,
+      expected_cards: 6, store: 'Private Shop', purchase_date: '2026-11-09',
+      notes: 'Shared purchase note', available_to_all: true,
+    }),
+  });
+  assert.strictEqual(res.status, 201, 'a purchase can be made available to all users');
+  const sharedPurchase = (await res.json()).purchase;
+  const sharedUnits = await db.all(`SELECT id FROM sealed_units WHERE purchase_id = ? ORDER BY id`, [sharedPurchase.id]);
+
+  let bobPurchases = (await fetch(`${base}/api/sealed/purchases`, { headers: asUser(bob) }).then(r => r.json())).purchases;
+  let visibleShared = bobPurchases.find(p => p.id === sharedPurchase.id);
+  assert.ok(visibleShared, 'other users must see a shared sealed purchase');
+  assert.strictEqual(visibleShared.visible_unit_count, 2);
+  assert.strictEqual(visibleShared.is_owner, false);
+  assert.strictEqual(visibleShared.quantity, 2, 'shared views must retain the original purchase quantity');
+  assert.strictEqual(visibleShared.store, 'Private Shop', 'shared views must include the original store');
+  assert.strictEqual(visibleShared.purchase_date, '2026-11-09', 'shared views must include the purchase date');
+  assert.strictEqual(visibleShared.unit_price, 12, 'shared views must include the original unit cost');
+  assert.strictEqual(visibleShared.buyer_username, 'sealed-alice', 'shared views must identify the original buyer');
+  assert.strictEqual(visibleShared.notes, 'Shared purchase note', 'shared views must retain purchase notes');
+  res = await fetch(`${base}/api/sealed/purchases/${sharedPurchase.id}`, {
+    method: 'PUT', headers: asUser(bob), body: JSON.stringify({ store: 'Changed by Bob' }),
+  });
+  assert.strictEqual(res.status, 404, 'only the buyer can edit shared purchase details');
+
+  res = await fetch(`${base}/api/sealed/units/${sharedUnits[0].id}/open`, {
+    method: 'PUT', headers: asUser(bob), body: JSON.stringify({ opened: true }),
+  });
+  assert.strictEqual(res.status, 200, 'a user can claim a shared unit by opening it');
+  const sharedOpen = await res.json();
+  assert.strictEqual(sharedOpen.unit.claimed_by_user_id, bob);
+  const bobDetails = await fetch(`${base}/api/sealed/purchases/${sharedPurchase.id}`, { headers: asUser(bob) }).then(r => r.json());
+  assert.strictEqual(bobDetails.units[0].claimed_by_username, 'sealed-bob',
+    'shared purchase history must identify who claimed each unit');
+  const bobPromo = await db.get(
+    `SELECT * FROM collection WHERE card_id = 'shared-promo' AND user_id = ? AND sealed_unit_id = ?`,
+    [bob, sharedUnits[0].id]
+  );
+  assert.ok(bobPromo, 'recipe cards from a shared unit must belong to the user who claims it');
+  assert.strictEqual(await db.get(
+    `SELECT id FROM collection WHERE card_id = 'shared-promo' AND user_id = ? AND sealed_unit_id = ?`,
+    [alice, sharedUnits[0].id]
+  ), undefined, 'shared recipe cards must not be added to the original purchaser');
+  res = await fetch(`${base}/api/sealed/units/${sharedUnits[0].id}/cards`, { headers: asUser(bob) });
+  assert.strictEqual(res.status, 200, 'the claimant can view cards linked to their unit');
+  res = await fetch(`${base}/api/sealed/units/${sharedUnits[0].id}/cards`, { headers: asUser(alice) });
+  assert.strictEqual(res.status, 404, 'the original purchaser cannot view another user\'s claimed unit');
+  res = await fetch(`${base}/api/collection`, {
+    method: 'POST', headers: asUser(alice),
+    body: JSON.stringify({ card_id: 'shared-promo', sealed_unit_id: sharedUnits[0].id }),
+  });
+  assert.strictEqual(res.status, 404, 'collection mutations cannot attach cards to another user\'s claimed unit');
+  const bobChild = await db.get(
+    `SELECT * FROM sealed_purchases WHERE source_unit_id = ? AND product_name = 'Shared Booster'`,
+    [sharedUnits[0].id]
+  );
+  assert.strictEqual(bobChild.user_id, bob, 'generated child products must belong to the user who opened the shared unit');
+
+  res = await fetch(`${base}/api/sealed/units/${sharedUnits[0].id}/open`, {
+    method: 'PUT', headers: asUser(alice), body: JSON.stringify({ opened: false }),
+  });
+  assert.strictEqual(res.status, 409, 'the original purchaser must not reseal a unit claimed by another user');
+  res = await fetch(`${base}/api/sealed/units/${sharedUnits[0].id}/open`, {
+    method: 'PUT', headers: asUser(bob), body: JSON.stringify({ opened: false }),
+  });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual((await res.json()).unit.claimed_by_user_id, bob,
+    'resealing a claimed unit must not return it to the shared pool');
+
+  res = await fetch(`${base}/api/sealed/purchases/${sharedPurchase.id}`, {
+    method: 'PUT', headers: asUser(alice), body: JSON.stringify({ available_to_all: false }),
+  });
+  assert.strictEqual(res.status, 200, 'the owner can stop sharing the remaining unopened units');
+  bobPurchases = (await fetch(`${base}/api/sealed/purchases`, { headers: asUser(bob) }).then(r => r.json())).purchases;
+  visibleShared = bobPurchases.find(p => p.id === sharedPurchase.id);
+  assert.strictEqual(visibleShared.visible_unit_count, 1, 'a claimed unit remains visible to its owner after sharing is disabled');
+  assert.strictEqual(visibleShared.is_claimed, true);
+  assert.strictEqual(visibleShared.store, 'Private Shop', 'the claimant retains shared purchase details after availability is disabled');
+  const aliceDetails = await fetch(`${base}/api/sealed/purchases/${sharedPurchase.id}`, { headers: asUser(alice) }).then(r => r.json());
+  assert.strictEqual(aliceDetails.units.length, 2, 'the buyer must retain the complete purchase history');
+  res = await fetch(`${base}/api/sealed/purchases/${sharedPurchase.id}`, { method: 'DELETE', headers: asUser(alice) });
+  assert.strictEqual(res.status, 409, 'the original purchase cannot be deleted while another user owns a claimed unit');
+  console.log('PASS: shared sealed units are claimed by the opener and stay theirs when resealed');
+  await db.run(`DELETE FROM sealed_purchases WHERE id = ?`, [sharedPurchase.id]);
+  await db.run(`DELETE FROM sealed_purchases WHERE id = ?`, [bobChild.id]);
+  await db.run(`DELETE FROM collection WHERE user_id = ? AND card_id = 'shared-promo'`, [bob]);
+
+  res = await fetch(`${base}/api/sealed/purchases`, {
+    method: 'POST', headers: asUser(alice),
+    body: JSON.stringify({ product_name: 'Shared Bulk Box', quantity: 2, available_to_all: true }),
+  });
+  assert.strictEqual(res.status, 201);
+  const sharedBulkPurchase = (await res.json()).purchase;
+  const sharedBulkUnits = await db.all(`SELECT id FROM sealed_units WHERE purchase_id = ?`, [sharedBulkPurchase.id]);
+  res = await fetch(`${base}/api/sealed/purchases/${sharedBulkPurchase.id}/open-all`, {
+    method: 'PUT', headers: asUser(bob),
+  });
+  assert.strictEqual(res.status, 200, 'a user can bulk-open units shared with the instance');
+  assert.strictEqual((await res.json()).opened, 2);
+  assert.strictEqual((await db.get(
+    `SELECT COUNT(*) AS count FROM sealed_units WHERE purchase_id = ? AND claimed_by_user_id = ? AND opened_at IS NOT NULL`,
+    [sharedBulkPurchase.id, bob]
+  )).count, 2, 'bulk-opened shared units must be claimed by the user who opened them');
+  assert.strictEqual(sharedBulkUnits.length, 2);
+  await db.run(`DELETE FROM sealed_purchases WHERE id = ?`, [sharedBulkPurchase.id]);
+  console.log('PASS: bulk opening shared units assigns them to the opener');
 
   // Create a purchase of 3 identical units (a Build & Battle Box: 4 boosters +
   // a 40-card preconstructed deck, per unit).
-  let res = await fetch(`${base}/api/sealed/purchases`, {
+  res = await fetch(`${base}/api/sealed/purchases`, {
     method: 'POST',
     headers: asUser(alice),
     body: JSON.stringify({
@@ -183,6 +349,20 @@ async function main() {
   } finally {
     tcgcsv.getPrices = realGetPrices;
   }
+
+  res = await fetch(`${base}/api/sealed/purchases/${marketPurchase.id}/open-all`, {
+    method: 'PUT', headers: asUser(alice),
+  });
+  assert.strictEqual(res.status, 200, 'opening all units in a purchase must succeed');
+  const bulkOpen = await res.json();
+  assert.strictEqual(bulkOpen.opened, 2, 'bulk opening must open every currently sealed unit');
+  const bulkUnits = await db.all(`SELECT opened_at FROM sealed_units WHERE purchase_id = ?`, [marketPurchase.id]);
+  assert.ok(bulkUnits.every(unit => unit.opened_at), 'all units must be marked opened');
+  res = await fetch(`${base}/api/sealed/purchases/${marketPurchase.id}/open-all`, {
+    method: 'PUT', headers: asUser(alice),
+  });
+  assert.strictEqual((await res.json()).opened, 0, 'repeating bulk open must leave already-open units unchanged');
+  console.log('PASS: bulk opening affects only units that are still sealed');
 
   // Delete the purchase: units cascade away, the linked card survives with its
   // link cleared.

@@ -2,8 +2,14 @@ const express = require('express');
 const db = require('../db');
 const { withTransaction } = require('../db');
 const tcgcsv = require('../tcgcsvApi');
-const { productCardCount } = require('../utils/sealedContents');
+const { productCardCount, unitCardProgress } = require('../utils/sealedContents');
 const { allocateSealedUnitCost } = require('../utils/sealedCostAllocation');
+const {
+  VISIBLE_UNIT_WHERE,
+  OWNED_UNIT_WHERE,
+  getVisibleUnit,
+  getOwnedUnit,
+} = require('../utils/sealedOwnership');
 
 const router = express.Router();
 
@@ -54,16 +60,86 @@ function fail(res, error, fallbackStatus, message) {
   return res.status(fallbackStatus).json({ error: message });
 }
 
+function assertCanToggleUnit(unit, userId, opened) {
+  if (unit.claimed_by_user_id != null && Number(unit.claimed_by_user_id) !== Number(userId)) {
+    throw Object.assign(new Error('This sealed unit was claimed by another user'), { status: 409 });
+  }
+  const isPurchaseOwner = Number(unit.purchase_owner_id) === Number(userId);
+  const isUnitClaimant = Number(unit.claimed_by_user_id) === Number(userId);
+  if (!isPurchaseOwner && !isUnitClaimant && !unit.available_to_all) {
+    throw Object.assign(new Error('Unit not found'), { status: 404 });
+  }
+  if (!opened && !isPurchaseOwner && !isUnitClaimant) {
+    throw Object.assign(new Error('Only the buyer or claimant can reseal this unit'), { status: 403 });
+  }
+}
+
 // A product's contents the user already matches by product identity: by
 // product_id when the purchase is catalog-linked, else an exact product_name
 // match. Returns the template plus its components, or null.
-async function matchTemplate(userId, productId, productName) {
+async function matchTemplate(userId, productId, productName, game) {
   const template = productId
-    ? await db.get(`SELECT * FROM sealed_templates WHERE user_id = ? AND product_id = ?`, [userId, productId])
-    : await db.get(`SELECT * FROM sealed_templates WHERE user_id = ? AND product_id IS NULL AND product_name = ?`, [userId, productName]);
+    ? await db.get(`SELECT * FROM sealed_templates WHERE product_id = ? AND game = ?`, [productId, game || 'pokemon'])
+    : await db.get(`SELECT * FROM sealed_templates WHERE product_id IS NULL AND product_name = ? COLLATE NOCASE AND game = ?`, [productName, game || 'pokemon']);
   if (!template) return null;
   const components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
   return { ...template, components };
+}
+
+async function assertNoRecipeCycle(productId, productName, game, existingTemplateId, candidateComponents) {
+  const templates = await db.all(`SELECT id, product_id, product_name, game FROM sealed_templates`);
+  const components = await db.all(`SELECT * FROM sealed_template_components`);
+  const componentsByTemplate = new Map();
+  for (const component of components) {
+    const list = componentsByTemplate.get(component.template_id) || [];
+    list.push(component);
+    componentsByTemplate.set(component.template_id, list);
+  }
+  const rootProductId = productId == null || productId === '' ? null : Number(productId);
+  const rootName = String(productName).trim().toLowerCase();
+  const findTemplate = (childProductId, childProductName, childGame) => {
+    const resolvedGame = childGame || game;
+    if (childProductId != null) {
+      return templates.find(template =>
+        Number(template.product_id) === Number(childProductId) && template.game === resolvedGame);
+    }
+    const normalizedName = String(childProductName || '').trim().toLowerCase();
+    return templates.find(template => template.product_id == null
+      && template.product_name.toLocaleLowerCase() === normalizedName
+      && template.game === resolvedGame);
+  };
+  const matchesRoot = (childProductId, childProductName, childGame) => {
+    if ((childGame || game) !== game) return false;
+    if (rootProductId != null) {
+      return childProductId != null && Number(childProductId) === rootProductId;
+    }
+    return childProductId == null
+      && String(childProductName || '').trim().toLowerCase() === rootName;
+  };
+  const visited = new Set();
+  const visit = (childProductId, childProductName, childGame) => {
+    if (matchesRoot(childProductId, childProductName, childGame)) {
+      throw new ValidationError('A recipe cannot contain itself through child products');
+    }
+    const childTemplate = findTemplate(childProductId, childProductName, childGame);
+    if (!childTemplate) return;
+    if (Number(childTemplate.id) === Number(existingTemplateId)) {
+      throw new ValidationError('A recipe cannot contain itself through child products');
+    }
+    if (visited.has(childTemplate.id)) return;
+    visited.add(childTemplate.id);
+    for (const child of componentsByTemplate.get(childTemplate.id) || []) {
+      if (child.component_type === 'product') {
+        visit(child.product_id, child.product_name, child.game || childTemplate.game);
+      }
+    }
+  };
+
+  for (const component of candidateComponents) {
+    if (component.component_type === 'product') {
+      visit(component.product_id, component.product_name, component.game || game);
+    }
+  }
 }
 
 // Create every component a template defines for one unit: card components go
@@ -71,11 +147,14 @@ async function matchTemplate(userId, productId, productName) {
 // brand-new sealed purchases (their own units, not priced individually — cost
 // basis stays on the parent) that can be opened and linked later like any other
 // sealed product. Idempotent via sealed_units.components_applied_at.
-//
 // Runs inside the open-unit write transaction, so it must not touch the network:
 // every card component arrives already resolved in `resolvedCards` (card_id ->
 // resolveCardForAdd result), fetched before the transaction began.
-async function applyTemplateComponents(unit, purchase, template, { includeCards = true, resolvedCards = new Map() } = {}) {
+async function applyTemplateComponents(unit, purchase, template, {
+  includeCards = true,
+  ownerUserId = purchase.user_id,
+  resolvedCards = new Map(),
+} = {}) {
   const { addCardToCollection } = require('./collection');
   const productComponentsByKey = new Map();
   for (const component of template.components) {
@@ -92,7 +171,7 @@ async function applyTemplateComponents(unit, purchase, template, { includeCards 
   const productComponents = [...productComponentsByKey.values()];
   for (const component of productComponents) {
     component.cardCount = await productCardCount(
-      purchase.user_id, component.product_id, component.product_name, component.expected_cards);
+      ownerUserId, component.product_id, component.product_name, component.expected_cards, 0, new Set(), component.game || purchase.game);
   }
   const productCards = productComponents.reduce((sum, component) =>
     sum + component.quantity * component.cardCount, 0);
@@ -109,7 +188,7 @@ async function applyTemplateComponents(unit, purchase, template, { includeCards 
       if (!includeCards || !c.card_id) continue;
       const resolved = resolvedCards.get(c.card_id);
       if (!resolved) throw new Error(`recipe card ${c.card_id} was not resolved before the transaction`);
-      await addCardToCollection({ id: purchase.user_id }, {
+      await addCardToCollection({ id: ownerUserId }, {
         card_id: c.card_id, quantity: c.quantity || 1, game: c.game || purchase.game,
         sealed_unit_id: unit.id, purchase_price: componentUnitPrice,
       }, { resolvedCard: resolved });
@@ -135,12 +214,12 @@ async function applyTemplateComponents(unit, purchase, template, { includeCards 
         ? await db.all(
           `SELECT id, quantity, unit_price FROM sealed_purchases
             WHERE user_id = ? AND source_unit_id = ? AND game = ? AND product_id = ?`,
-          [purchase.user_id, unit.id, c.game, c.product_id]
+          [ownerUserId, unit.id, c.game, c.product_id]
         )
         : await db.all(
           `SELECT id, quantity, unit_price FROM sealed_purchases
             WHERE user_id = ? AND source_unit_id = ? AND game = ? AND product_id IS NULL AND product_name = ?`,
-          [purchase.user_id, unit.id, c.game, name || c.product_name]
+          [ownerUserId, unit.id, c.game, name || c.product_name]
         );
       for (const row of existingRows) {
         if (row.unit_price == null && componentUnitPrice != null) {
@@ -155,7 +234,7 @@ async function applyTemplateComponents(unit, purchase, template, { includeCards 
         `INSERT INTO sealed_purchases
            (user_id, product_id, product_name, set_name, sealed_type, game, image_url, store, purchase_date, unit_price, quantity, expected_cards, source_unit_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [purchase.user_id, c.product_id || null, name || c.product_name, setName, type, c.game || purchase.game,
+        [ownerUserId, c.product_id || null, name || c.product_name, setName, type, c.game || purchase.game,
           image, `Unboxed from: ${purchase.product_name}`, unit.opened_at,
           componentUnitPrice == null ? null : componentUnitPrice * c.cardCount, qty,
           c.expected_cards == null || c.expected_cards === '' ? null : Number(c.expected_cards), unit.id]
@@ -167,6 +246,44 @@ async function applyTemplateComponents(unit, purchase, template, { includeCards 
   }
   await db.run(`UPDATE sealed_units SET components_applied_at = COALESCE(components_applied_at, CURRENT_TIMESTAMP) WHERE id = ?`, [unit.id]);
   return applied;
+}
+
+async function setUnitOpenState(unit, opened, ownerUserId, resolvedCards = new Map()) {
+  await db.run(
+    `UPDATE sealed_units SET opened_at = ? WHERE id = ?`,
+    [opened ? new Date().toISOString() : null, unit.id]
+  );
+  if (!opened) return null;
+
+  const purchase = await db.get(`SELECT * FROM sealed_purchases WHERE id = ?`, [unit.purchase_id]);
+  let template = purchase?.template_id
+    ? await db.get(`SELECT * FROM sealed_templates WHERE id = ?`, [purchase.template_id])
+    : null;
+  if (template) {
+    template.components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
+  } else if (purchase) {
+    template = await matchTemplate(purchase.user_id, purchase.product_id, purchase.product_name, purchase.game);
+    if (template) {
+      await db.run(`UPDATE sealed_purchases SET template_id = ? WHERE id = ?`, [template.id, purchase.id]);
+    }
+  }
+  if (!template) return null;
+
+  const freshUnit = await db.get(`SELECT * FROM sealed_units WHERE id = ?`, [unit.id]);
+  const applied = await applyTemplateComponents(freshUnit, purchase, template, {
+    includeCards: !unit.components_applied_at,
+    ownerUserId: ownerUserId || unit.claimed_by_user_id || purchase.user_id,
+    resolvedCards,
+  });
+  return applied.length ? applied : null;
+}
+
+function sanitizeSharedPurchase(purchase, userId) {
+  purchase.is_owner = Number(purchase.user_id) === Number(userId);
+  purchase.is_claimed = !purchase.is_owner && Boolean(purchase.claimed_by_me);
+  delete purchase.user_id;
+  delete purchase.claimed_by_me;
+  return purchase;
 }
 
 // Search the TCGplayer/TCGCSV sealed-product catalog for the "pick from catalog"
@@ -199,49 +316,58 @@ router.get('/sealed/catalog/search', async (req, res) => {
 router.get('/sealed/purchases', async (req, res) => {
   try {
     const purchases = await db.all(
-      `SELECT p.*,
+      `SELECT p.*, buyer.username AS buyer_username,
+              CASE WHEN p.user_id = ? THEN 1 ELSE 0 END AS is_owner,
+              SUM(CASE WHEN u.claimed_by_user_id = ? THEN 1 ELSE 0 END) AS claimed_by_me,
               source_purchase.product_name AS source_product_name,
               (SELECT COUNT(*) FROM sealed_units earlier_unit
                 WHERE earlier_unit.purchase_id = source_purchase.id AND earlier_unit.id <= source_unit.id) AS source_unit_number,
               COUNT(u.id) AS unit_count,
+              COUNT(u.id) AS visible_unit_count,
               SUM(CASE WHEN u.opened_at IS NULL THEN 1 ELSE 0 END) AS sealed_count,
               SUM(CASE WHEN u.opened_at IS NOT NULL THEN 1 ELSE 0 END) AS opened_count
          FROM sealed_purchases p
+         JOIN users buyer ON buyer.id = p.user_id
          LEFT JOIN sealed_units source_unit ON source_unit.id = p.source_unit_id
-         LEFT JOIN sealed_purchases source_purchase ON source_purchase.id = source_unit.purchase_id AND source_purchase.user_id = p.user_id
-         LEFT JOIN sealed_units u ON u.purchase_id = p.id
-        WHERE p.user_id = ?
+         LEFT JOIN sealed_purchases source_purchase ON source_purchase.id = source_unit.purchase_id
+         JOIN sealed_units u ON u.purchase_id = p.id
+        WHERE ${VISIBLE_UNIT_WHERE}
         GROUP BY p.id
         ORDER BY p.purchase_date DESC, p.created_at DESC`,
-      [req.user.id]
-    );
-    const expansionRows = await db.all(
-      `SELECT p.id AS purchase_id, NULLIF(TRIM(p.set_name), '') AS expansion
-         FROM sealed_purchases p
-        WHERE p.user_id = ? AND NULLIF(TRIM(p.set_name), '') IS NOT NULL
-       UNION
-       SELECT parent.id AS purchase_id, NULLIF(TRIM(child.set_name), '') AS expansion
-         FROM sealed_purchases parent
-         JOIN sealed_units unit ON unit.purchase_id = parent.id
-         JOIN sealed_purchases child ON child.source_unit_id = unit.id AND child.user_id = parent.user_id
-        WHERE parent.user_id = ? AND NULLIF(TRIM(child.set_name), '') IS NOT NULL
-       UNION
-       SELECT p.id AS purchase_id, NULLIF(TRIM(card.set_name), '') AS expansion
-         FROM sealed_purchases p
-         JOIN sealed_templates template ON template.id = p.template_id
-         JOIN sealed_template_components component ON component.template_id = template.id AND component.component_type = 'card'
-         JOIN card_cache card ON card.id = component.card_id
-        WHERE p.user_id = ? AND NULLIF(TRIM(card.set_name), '') IS NOT NULL
-       UNION
-       SELECT p.id AS purchase_id, NULLIF(TRIM(catalog.group_name), '') AS expansion
-         FROM sealed_purchases p
-         JOIN sealed_templates template ON template.id = p.template_id
-         JOIN sealed_template_components component ON component.template_id = template.id
-          AND component.component_type = 'product' AND component.product_id IS NOT NULL
-         JOIN tcgplayer_catalog catalog ON catalog.product_id = component.product_id
-        WHERE p.user_id = ? AND NULLIF(TRIM(catalog.group_name), '') IS NOT NULL`,
       [req.user.id, req.user.id, req.user.id, req.user.id]
     );
+    for (const purchase of purchases) sanitizeSharedPurchase(purchase, req.user.id);
+
+    const purchaseIds = purchases.map(purchase => purchase.id);
+    const expansionRows = purchaseIds.length
+      ? await db.all(
+        `SELECT p.id AS purchase_id, NULLIF(TRIM(p.set_name), '') AS expansion
+           FROM sealed_purchases p
+          WHERE p.id IN (${purchaseIds.map(() => '?').join(',')}) AND NULLIF(TRIM(p.set_name), '') IS NOT NULL
+         UNION
+         SELECT parent.id AS purchase_id, NULLIF(TRIM(child.set_name), '') AS expansion
+           FROM sealed_purchases parent
+           JOIN sealed_units unit ON unit.purchase_id = parent.id
+           JOIN sealed_purchases child ON child.source_unit_id = unit.id
+          WHERE parent.id IN (${purchaseIds.map(() => '?').join(',')}) AND NULLIF(TRIM(child.set_name), '') IS NOT NULL
+         UNION
+         SELECT p.id AS purchase_id, NULLIF(TRIM(card.set_name), '') AS expansion
+           FROM sealed_purchases p
+           JOIN sealed_templates template ON template.id = p.template_id
+           JOIN sealed_template_components component ON component.template_id = template.id AND component.component_type = 'card'
+           JOIN card_cache card ON card.id = component.card_id
+          WHERE p.id IN (${purchaseIds.map(() => '?').join(',')}) AND NULLIF(TRIM(card.set_name), '') IS NOT NULL
+         UNION
+         SELECT p.id AS purchase_id, NULLIF(TRIM(catalog.group_name), '') AS expansion
+           FROM sealed_purchases p
+           JOIN sealed_templates template ON template.id = p.template_id
+           JOIN sealed_template_components component ON component.template_id = template.id
+            AND component.component_type = 'product' AND component.product_id IS NOT NULL
+           JOIN tcgplayer_catalog catalog ON catalog.product_id = component.product_id
+          WHERE p.id IN (${purchaseIds.map(() => '?').join(',')}) AND NULLIF(TRIM(catalog.group_name), '') IS NOT NULL`,
+        [...purchaseIds, ...purchaseIds, ...purchaseIds, ...purchaseIds]
+      )
+      : [];
     const expansionsByPurchase = new Map();
     for (const row of expansionRows) {
       const expansions = expansionsByPurchase.get(row.purchase_id) || new Set();
@@ -260,14 +386,45 @@ router.get('/sealed/purchases', async (req, res) => {
 router.get('/sealed/purchases/:id', async (req, res) => {
   try {
     const purchase = await db.get(
-      `SELECT * FROM sealed_purchases WHERE id = ? AND user_id = ?`,
-      [req.params.id, req.user.id]
+      `SELECT p.*, buyer.username AS buyer_username,
+              CASE WHEN p.user_id = ? THEN 1 ELSE 0 END AS is_owner
+         FROM sealed_purchases p
+         JOIN users buyer ON buyer.id = p.user_id
+        WHERE p.id = ?
+          AND EXISTS (
+            SELECT 1 FROM sealed_units u
+             WHERE u.purchase_id = p.id AND ${VISIBLE_UNIT_WHERE}
+          )`,
+      [req.user.id, req.params.id, req.user.id, req.user.id]
     );
     if (!purchase) return res.status(404).json({ error: 'Purchase not found' });
     const units = await db.all(
-      `SELECT id, opened_at, created_at FROM sealed_units WHERE purchase_id = ? ORDER BY id ASC`,
-      [purchase.id]
+      `SELECT u.id, u.opened_at, u.created_at, u.claimed_by_user_id,
+              claimant.username AS claimed_by_username,
+              (SELECT COUNT(*) FROM sealed_units earlier_unit
+                WHERE earlier_unit.purchase_id = p.id AND earlier_unit.id <= u.id) AS unit_number,
+              CASE WHEN u.claimed_by_user_id = ? THEN 1 ELSE 0 END AS claimed_by_me
+         FROM sealed_units u
+         JOIN sealed_purchases p ON p.id = u.purchase_id
+         LEFT JOIN users claimant ON claimant.id = u.claimed_by_user_id
+        WHERE u.purchase_id = ? AND ${VISIBLE_UNIT_WHERE}
+        ORDER BY u.id ASC`,
+      [req.user.id, purchase.id, req.user.id, req.user.id]
     );
+    purchase.unit_count = units.length;
+    purchase.visible_unit_count = units.length;
+    purchase.claimed_by_me = units.some(unit => unit.claimed_by_me);
+    sanitizeSharedPurchase(purchase, req.user.id);
+    for (const unit of units) {
+      const progress = await unitCardProgress(req.user.id, unit.id);
+      unit.expected_cards = progress?.expected_cards ?? null;
+      unit.linked_cards = progress?.linked_cards ?? 0;
+      unit.can_toggle = unit.claimed_by_user_id == null
+        ? Boolean(purchase.is_owner || purchase.available_to_all)
+        : Boolean(unit.claimed_by_me);
+      unit.can_view_cards = Boolean(unit.claimed_by_me
+        || (unit.claimed_by_user_id == null && purchase.is_owner));
+    }
     res.json({ purchase, units });
   } catch (error) {
     fail(res, error, 500, 'Failed to fetch sealed purchase');
@@ -333,6 +490,7 @@ router.post('/sealed/purchases', async (req, res) => {
     product_id, product_name, set_name, sealed_type, game = 'pokemon',
     image_url, store = '', purchase_date = '', unit_price = null, quantity = 1, notes = '',
     expected_packs = null, expected_cards = null, contents_note = '', market_value = null,
+    available_to_all = false,
   } = req.body || {};
 
   let qty, gameValue, unitPrice, expectedPacks, expectedCards, marketValue;
@@ -349,6 +507,9 @@ router.post('/sealed/purchases', async (req, res) => {
   let name = product_name, setName = set_name, type = sealed_type, image = image_url;
 
   try {
+    if (![true, false, 0, 1].includes(available_to_all)) {
+      return res.status(400).json({ error: 'available_to_all must be a boolean' });
+    }
     if (product_id) {
       const catalogRow = await db.get(
         `SELECT name, group_name, sealed_type, image_url FROM tcgplayer_catalog WHERE product_id = ?`,
@@ -365,21 +526,22 @@ router.post('/sealed/purchases', async (req, res) => {
       return res.status(400).json({ error: 'product_name is required' });
     }
     const trimmedName = String(name).trim();
-    const template = await matchTemplate(req.user.id, product_id || null, trimmedName);
+    const template = await matchTemplate(req.user.id, product_id || null, trimmedName, game);
 
     const purchase = await withTransaction(async () => {
       const result = await db.run(
         `INSERT INTO sealed_purchases
            (user_id, product_id, product_name, set_name, sealed_type, game, image_url, store, purchase_date, unit_price, quantity, notes,
-            expected_packs, expected_cards, contents_note, template_id, market_value, market_value_source, market_value_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)`,
+            expected_packs, expected_cards, contents_note, template_id, market_value, market_value_source, market_value_at, available_to_all)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END, ?)`,
         [req.user.id, product_id || null, trimmedName, setName || null, type || null, gameValue,
           image || null, store, purchase_date, unitPrice, qty, notes,
           expectedPacks, expectedCards, contents_note,
-           template ? template.id : null,
-           marketValue,
-           marketValue == null ? null : 'manual',
-           marketValue]
+          template ? template.id : null,
+          marketValue,
+          marketValue == null ? null : 'manual',
+          marketValue,
+          available_to_all ? 1 : 0]
       );
       for (let i = 0; i < qty; i++) {
         await db.run(`INSERT INTO sealed_units (purchase_id) VALUES (?)`, [result.lastID]);
@@ -392,12 +554,54 @@ router.post('/sealed/purchases', async (req, res) => {
   }
 });
 
+router.put('/sealed/purchases/bulk-sharing', async (req, res) => {
+  const { purchase_ids: purchaseIds, available_to_all: availableToAll } = req.body || {};
+  if (!Array.isArray(purchaseIds) || purchaseIds.length === 0) {
+    return res.status(400).json({ error: 'purchase_ids must be a non-empty array' });
+  }
+  if (![true, false, 0, 1].includes(availableToAll)) {
+    return res.status(400).json({ error: 'available_to_all must be a boolean' });
+  }
+
+  const ids = [...new Set(purchaseIds.map(id => Number(id)))];
+  if (ids.some(id => !Number.isSafeInteger(id) || id < 1)) {
+    return res.status(400).json({ error: 'purchase_ids must contain positive integers' });
+  }
+
+  try {
+    await withTransaction(async () => {
+      const chunkSize = 500;
+      for (let offset = 0; offset < ids.length; offset += chunkSize) {
+        const chunk = ids.slice(offset, offset + chunkSize);
+        const placeholders = chunk.map(() => '?').join(', ');
+        const owned = await db.all(
+          `SELECT id FROM sealed_purchases WHERE user_id = ? AND id IN (${placeholders})`,
+          [req.user.id, ...chunk]
+        );
+        if (owned.length !== chunk.length) {
+          throw Object.assign(new Error('One or more purchases were not found'), { status: 404 });
+        }
+        await db.run(
+          `UPDATE sealed_purchases SET available_to_all = ? WHERE user_id = ? AND id IN (${placeholders})`,
+          [availableToAll ? 1 : 0, req.user.id, ...chunk]
+        );
+      }
+    });
+    res.json({ updated: ids.length, available_to_all: Boolean(availableToAll) });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      error: error.status ? error.message : 'Failed to update sharing status',
+      message: error.message,
+    });
+  }
+});
+
 // Edit purchase-level fields. Changing `quantity` adds or removes units:
 // removing is only allowed while enough sealed, unlinked units exist to drop —
 // a unit that's been opened or linked to a card carries history that a quantity
 // edit must not silently delete.
 router.put('/sealed/purchases/:id', async (req, res) => {
-  const { store, purchase_date, unit_price, notes, quantity, expected_packs, expected_cards, contents_note, market_value } = req.body || {};
+  const { store, purchase_date, unit_price, notes, quantity, expected_packs, expected_cards, contents_note, market_value, available_to_all } = req.body || {};
   try {
     const purchase = await db.get(
       `SELECT * FROM sealed_purchases WHERE id = ? AND user_id = ?`,
@@ -414,6 +618,13 @@ router.put('/sealed/purchases/:id', async (req, res) => {
     if (contents_note !== undefined) { sets.push('contents_note = ?'); params.push(contents_note); }
     if (unit_price !== undefined) { sets.push('unit_price = ?'); params.push(parseAmount(unit_price, 'unit_price')); }
     if (notes !== undefined) { sets.push('notes = ?'); params.push(notes); }
+    if (available_to_all !== undefined) {
+      if (![true, false, 0, 1].includes(available_to_all)) {
+        return res.status(400).json({ error: 'available_to_all must be a boolean' });
+      }
+      sets.push('available_to_all = ?');
+      params.push(available_to_all ? 1 : 0);
+    }
     const newQty = quantity !== undefined ? parseQuantity(quantity, 'quantity', purchase.quantity) : null;
     if (market_value !== undefined) {
       const value = parseAmount(market_value, 'market_value');
@@ -432,10 +643,11 @@ router.put('/sealed/purchases/:id', async (req, res) => {
           const removable = await db.all(
             `SELECT id FROM sealed_units
                WHERE purchase_id = ? AND opened_at IS NULL
+                 AND (claimed_by_user_id IS NULL OR claimed_by_user_id = ?)
                  AND id NOT IN (SELECT sealed_unit_id FROM collection
                                  WHERE sealed_unit_id IS NOT NULL AND user_id = ?)
                LIMIT ?`,
-            [purchase.id, req.user.id, -delta]
+            [purchase.id, req.user.id, req.user.id, -delta]
           );
           if (removable.length < -delta) {
             throw Object.assign(new Error('Not enough unopened, unlinked units to remove'), { clientStatus: 400 });
@@ -478,14 +690,10 @@ router.put('/sealed/purchases/:id/source-unit', async (req, res) => {
 
     let sourceUnit = null;
     if (sourceUnitId != null) {
-      sourceUnit = await db.get(
-        `SELECT u.id, parent.id AS purchase_id
-           FROM sealed_units u
-           JOIN sealed_purchases parent ON parent.id = u.purchase_id
-          WHERE u.id = ? AND parent.user_id = ? AND u.opened_at IS NOT NULL`,
-        [Number(sourceUnitId), req.user.id]
-      );
-      if (!sourceUnit) return res.status(400).json({ error: 'Source unit must belong to you and be opened' });
+      sourceUnit = await getOwnedUnit(req.user.id, Number(sourceUnitId));
+      if (!sourceUnit || sourceUnit.opened_at == null) {
+        return res.status(400).json({ error: 'Source unit must belong to you and be opened' });
+      }
       if (Number(sourceUnit.purchase_id) === Number(purchase.id)) {
         return res.status(400).json({ error: 'A purchase cannot be linked to one of its own units' });
       }
@@ -530,12 +738,7 @@ router.put('/sealed/purchases/:id/source-unit', async (req, res) => {
 
       const affectedUnits = new Set([purchase.source_unit_id, newSourceUnitId].filter(Boolean));
       for (const unitId of affectedUnits) {
-        const source = await db.get(
-          `SELECT u.id, p.unit_price
-             FROM sealed_units u JOIN sealed_purchases p ON p.id = u.purchase_id
-            WHERE u.id = ? AND p.user_id = ?`,
-          [unitId, req.user.id]
-        );
+        const source = await getOwnedUnit(req.user.id, unitId);
         if (source?.unit_price != null) {
           await allocateSealedUnitCost(source.id, req.user.id, source.unit_price);
         }
@@ -555,6 +758,18 @@ router.put('/sealed/purchases/:id/source-unit', async (req, res) => {
 // those units keep the card, just losing the link (ON DELETE SET NULL).
 router.delete('/sealed/purchases/:id', async (req, res) => {
   try {
+    const purchase = await db.get(
+      `SELECT id FROM sealed_purchases WHERE id = ? AND user_id = ?`,
+      [req.params.id, req.user.id]
+    );
+    if (!purchase) return res.status(404).json({ error: 'Purchase not found' });
+    const claimedByOthers = await db.get(
+      `SELECT 1 FROM sealed_units WHERE purchase_id = ? AND claimed_by_user_id IS NOT NULL AND claimed_by_user_id != ? LIMIT 1`,
+      [purchase.id, req.user.id]
+    );
+    if (claimedByOthers) {
+      return res.status(409).json({ error: 'This purchase has units claimed by other users and cannot be deleted' });
+    }
     const result = await db.run(
       `DELETE FROM sealed_purchases WHERE id = ? AND user_id = ?`,
       [req.params.id, req.user.id]
@@ -571,13 +786,10 @@ router.delete('/sealed/purchases/:id', async (req, res) => {
 router.put('/sealed/units/:id/open', async (req, res) => {
   const opened = req.body?.opened !== false;
   try {
-    const unit = await db.get(
-      `SELECT u.* FROM sealed_units u
-         JOIN sealed_purchases p ON p.id = u.purchase_id
-        WHERE u.id = ? AND p.user_id = ?`,
-      [req.params.id, req.user.id]
-    );
+    const visibleUnit = await getVisibleUnit(req.user.id, req.params.id);
+    const unit = visibleUnit;
     if (!unit) return res.status(404).json({ error: 'Unit not found' });
+    assertCanToggleUnit(unit, req.user.id, opened);
 
     // Everything that can reach a card provider happens here, BEFORE the write
     // transaction: resolving the recipe and hydrating/fetching each of its card
@@ -585,20 +797,19 @@ router.put('/sealed/units/:id/open', async (req, res) => {
     // request inside it would stall every other query in the process for as long
     // as the provider takes. A card that cannot be resolved fails the request
     // here, before anything is written, which keeps the open all-or-nothing.
-    let purchase = null;
+    const purchase = await db.get(`SELECT * FROM sealed_purchases WHERE id = ?`, [unit.purchase_id]);
     let template = null;
     let attachTemplate = false;
     const resolvedCards = new Map();
     const includeCards = !unit.components_applied_at;
     if (opened) {
-      purchase = await db.get(`SELECT * FROM sealed_purchases WHERE id = ? AND user_id = ?`, [unit.purchase_id, req.user.id]);
       template = purchase?.template_id
-        ? await db.get(`SELECT * FROM sealed_templates WHERE id = ? AND user_id = ?`, [purchase.template_id, req.user.id])
+        ? await db.get(`SELECT * FROM sealed_templates WHERE id = ?`, [purchase.template_id])
         : null;
       if (template) {
         template.components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
       } else if (purchase) {
-        template = await matchTemplate(purchase.user_id, purchase.product_id, purchase.product_name);
+        template = await matchTemplate(purchase.user_id, purchase.product_id, purchase.product_name, purchase.game);
         attachTemplate = !!template;
       }
       if (template && includeCards) {
@@ -612,25 +823,105 @@ router.put('/sealed/units/:id/open', async (req, res) => {
     }
 
     let applied = null;
+    let updated = null;
     await withTransaction(async () => {
-      await db.run(
-        `UPDATE sealed_units SET opened_at = ? WHERE id = ?`,
-        [opened ? new Date().toISOString() : null, unit.id]
-      );
-      if (opened && template) {
-        if (attachTemplate) await db.run(`UPDATE sealed_purchases SET template_id = ? WHERE id = ?`, [template.id, purchase.id]);
-        const freshUnit = await db.get(`SELECT * FROM sealed_units WHERE id = ?`, [unit.id]);
-        const newlyApplied = await applyTemplateComponents(freshUnit, purchase, template, { includeCards, resolvedCards });
-        if (newlyApplied.length > 0) applied = newlyApplied;
+      let unit = await getVisibleUnit(req.user.id, req.params.id);
+      if (!unit) throw Object.assign(new Error('Unit not found'), { status: 404 });
+      assertCanToggleUnit(unit, req.user.id, opened);
+      if (unit.claimed_by_user_id == null
+        && (opened || (Number(unit.purchase_owner_id) === Number(req.user.id) && unit.opened_at != null))) {
+        const claim = await db.run(
+          `UPDATE sealed_units SET claimed_by_user_id = ?
+            WHERE id = ? AND claimed_by_user_id IS NULL`,
+          [req.user.id, unit.id]
+        );
+        if (claim.changes !== 1) {
+          throw Object.assign(new Error('This sealed unit was claimed by another user'), { status: 409 });
+        }
+        unit = await getVisibleUnit(req.user.id, unit.id);
       }
+      if (opened && attachTemplate) {
+        await db.run(`UPDATE sealed_purchases SET template_id = ? WHERE id = ?`, [template.id, unit.purchase_id]);
+      }
+      applied = await setUnitOpenState(unit, opened, req.user.id, resolvedCards);
+      updated = await db.get(`SELECT * FROM sealed_units WHERE id = ?`, [unit.id]);
     });
 
-    const updated = await db.get(`SELECT * FROM sealed_units WHERE id = ?`, [unit.id]);
     res.json({ unit: updated, applied });
   } catch (error) {
     const { AddCardError } = require('./collection');
     if (AddCardError && error instanceof AddCardError) return res.status(error.status).json({ error: error.message });
+    if (error.status) return res.status(error.status).json({ error: error.message, message: error.message });
     fail(res, error, 500, 'Failed to update sealed unit');
+  }
+});
+
+router.put('/sealed/purchases/:id/open-all', async (req, res) => {
+  try {
+    const purchase = await db.get(
+      `SELECT * FROM sealed_purchases WHERE id = ?`,
+      [req.params.id]
+    );
+    if (!purchase || (Number(purchase.user_id) !== Number(req.user.id) && !purchase.available_to_all)) {
+      return res.status(404).json({ error: 'Purchase not found' });
+    }
+
+    const candidateUnits = await db.all(
+      `SELECT * FROM sealed_units
+        WHERE purchase_id = ? AND opened_at IS NULL
+          AND (claimed_by_user_id IS NULL OR claimed_by_user_id = ?)
+        ORDER BY id`,
+      [purchase.id, req.user.id]
+    );
+    const resolvedCards = new Map();
+    if (candidateUnits.some(unit => !unit.components_applied_at)) {
+      let template = purchase.template_id
+        ? await db.get(`SELECT * FROM sealed_templates WHERE id = ?`, [purchase.template_id])
+        : await matchTemplate(purchase.user_id, purchase.product_id, purchase.product_name, purchase.game);
+      if (template) {
+        template.components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
+        const { resolveCardForAdd } = require('./collection');
+        const user = { id: req.user.id, tcg_api_key: req.user.tcg_api_key };
+        for (const component of template.components) {
+          if (component.component_type !== 'card' || !component.card_id || resolvedCards.has(component.card_id)) continue;
+          resolvedCards.set(component.card_id, await resolveCardForAdd(user, {
+            card_id: component.card_id,
+            game: component.game || purchase.game,
+          }));
+        }
+      }
+    }
+
+    const result = await withTransaction(async () => {
+      const currentPurchase = await db.get(`SELECT * FROM sealed_purchases WHERE id = ?`, [purchase.id]);
+      if (!currentPurchase
+        || (Number(currentPurchase.user_id) !== Number(req.user.id) && !currentPurchase.available_to_all)) {
+        throw Object.assign(new Error('Purchase not found'), { status: 404 });
+      }
+      const units = await db.all(
+        `SELECT * FROM sealed_units
+          WHERE purchase_id = ? AND opened_at IS NULL
+            AND (claimed_by_user_id IS NULL OR claimed_by_user_id = ?)
+          ORDER BY id`,
+        [purchase.id, req.user.id]
+      );
+      const applied = [];
+      for (const unit of units) {
+        if (unit.claimed_by_user_id == null) {
+          await db.run(`UPDATE sealed_units SET claimed_by_user_id = ? WHERE id = ?`, [req.user.id, unit.id]);
+        }
+        const claimedUnit = await db.get(`SELECT * FROM sealed_units WHERE id = ?`, [unit.id]);
+        const components = await setUnitOpenState(claimedUnit, true, req.user.id, resolvedCards);
+        if (components) applied.push(...components);
+      }
+      return { opened: units.length, applied };
+    });
+    res.json(result);
+  } catch (error) {
+    const { AddCardError } = require('./collection');
+    if (AddCardError && error instanceof AddCardError) return res.status(error.status).json({ error: error.message });
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    fail(res, error, 500, 'Failed to open all sealed units');
   }
 });
 
@@ -638,10 +929,7 @@ router.put('/sealed/units/:id/open', async (req, res) => {
 // answerable without hunting through the whole collection.
 router.get('/sealed/units/:id/cards', async (req, res) => {
   try {
-    const unit = await db.get(
-      `SELECT u.id FROM sealed_units u JOIN sealed_purchases p ON p.id = u.purchase_id WHERE u.id = ? AND p.user_id = ?`,
-      [req.params.id, req.user.id]
-    );
+    const unit = await getOwnedUnit(req.user.id, req.params.id);
     if (!unit) return res.status(404).json({ error: 'Unit not found' });
     const cards = await db.all(
       `SELECT c.id AS entry_id, c.quantity, c.condition, c.printing, c.purchase_price,
@@ -651,7 +939,8 @@ router.get('/sealed/units/:id/cards', async (req, res) => {
         ORDER BY c.added_at DESC`,
       [unit.id, req.user.id]
     );
-    res.json({ cards });
+    const progress = await unitCardProgress(req.user.id, unit.id);
+    res.json({ cards, progress });
   } catch (error) {
     fail(res, error, 500, 'Failed to fetch linked cards');
   }
@@ -661,32 +950,43 @@ router.get('/sealed/units/:id/cards', async (req, res) => {
 // picker — joined with their purchase for display (store, date, product name).
 router.get('/sealed/units', async (req, res) => {
   const { opened, unlinked } = req.query;
-  const where = [`p.user_id = ?`];
-  const params = [req.user.id];
+  const where = [OWNED_UNIT_WHERE];
+  const params = [req.user.id, req.user.id];
   if (opened === '1') where.push(`u.opened_at IS NOT NULL`);
   if (opened === '0') where.push(`u.opened_at IS NULL`);
-  if (unlinked === '1') where.push(`(
-    p.expected_cards IS NULL
-      AND u.id NOT IN (SELECT c.sealed_unit_id FROM collection c
-                        WHERE c.sealed_unit_id IS NOT NULL AND c.user_id = p.user_id)
-    OR p.expected_cards IS NOT NULL
-      AND COALESCE((SELECT SUM(c.quantity) FROM collection c WHERE c.sealed_unit_id = u.id AND c.user_id = p.user_id), 0) < p.expected_cards
-  )`);
   try {
     const units = await db.all(
-      `SELECT u.id, u.opened_at, u.created_at,
+      `SELECT u.id, u.opened_at, u.created_at, u.claimed_by_user_id,
+              claimant.username AS claimed_by_username,
+              CASE WHEN u.claimed_by_user_id = ? THEN 1 ELSE 0 END AS claimed_by_me,
+              p.user_id AS purchase_owner_id,
+              buyer.username AS buyer_username,
               (SELECT COUNT(*) FROM sealed_units earlier_unit
                 WHERE earlier_unit.purchase_id = p.id AND earlier_unit.id <= u.id) AS unit_number,
               p.id AS purchase_id, p.product_name, p.set_name, p.game, p.image_url,
-              p.store, p.purchase_date, p.unit_price, p.expected_cards,
-              COALESCE((SELECT SUM(c.quantity) FROM collection c WHERE c.sealed_unit_id = u.id AND c.user_id = p.user_id), 0) AS linked_cards
+              p.store, p.purchase_date, p.unit_price, p.quantity, p.expected_cards,
+              p.available_to_all
          FROM sealed_units u
          JOIN sealed_purchases p ON p.id = u.purchase_id
+         JOIN users buyer ON buyer.id = p.user_id
+         LEFT JOIN users claimant ON claimant.id = u.claimed_by_user_id
         WHERE ${where.join(' AND ')}
         ORDER BY u.opened_at DESC`,
-      params
+      [req.user.id, ...params]
     );
-    res.json({ units });
+    for (const unit of units) {
+      const progress = await unitCardProgress(req.user.id, unit.id);
+      unit.expected_cards = progress?.expected_cards ?? null;
+      unit.linked_cards = progress?.linked_cards ?? 0;
+      delete unit.purchase_owner_id;
+    }
+    res.json({
+      units: unlinked === '1'
+        ? units.filter(unit => unit.expected_cards == null
+          ? unit.linked_cards === 0
+          : unit.linked_cards < unit.expected_cards)
+        : units,
+    });
   } catch (error) {
     fail(res, error, 500, 'Failed to fetch sealed units');
   }
@@ -736,9 +1036,9 @@ router.get('/sealed/stats', async (req, res) => {
 // Does this product already have a saved recipe? Used by the purchase form to
 // show "this product has a saved recipe" instead of a blank "define contents".
 router.get('/sealed/templates/match', async (req, res) => {
-  const { product_id, product_name } = req.query;
+  const { product_id, product_name, game } = req.query;
   try {
-    const template = await matchTemplate(req.user.id, product_id ? Number(product_id) : null, product_name || '');
+    const template = await matchTemplate(req.user.id, product_id ? Number(product_id) : null, product_name || '', game);
     res.json({ template });
   } catch (error) {
     fail(res, error, 500, 'Failed to match template');
@@ -747,7 +1047,7 @@ router.get('/sealed/templates/match', async (req, res) => {
 
 router.get('/sealed/templates', async (req, res) => {
   try {
-    const templates = await db.all(`SELECT * FROM sealed_templates WHERE user_id = ? ORDER BY product_name ASC`, [req.user.id]);
+    const templates = await db.all(`SELECT * FROM sealed_templates ORDER BY product_name ASC`);
     for (const t of templates) {
       t.components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [t.id]);
     }
@@ -798,8 +1098,11 @@ router.post('/sealed/templates', async (req, res) => {
     return fail(res, error, 400, 'Invalid recipe');
   }
   try {
-    const existing = await matchTemplate(req.user.id, product_id, String(product_name).trim());
     const template = await withTransaction(async () => {
+      const existing = await matchTemplate(req.user.id, product_id, String(product_name).trim(), templateGame);
+      await assertNoRecipeCycle(
+        product_id, String(product_name).trim(), templateGame, existing?.id, parsedComponents
+      );
       let templateId = existing?.id;
       if (templateId) {
         await db.run(`DELETE FROM sealed_template_components WHERE template_id = ?`, [templateId]);
@@ -821,13 +1124,13 @@ router.post('/sealed/templates', async (req, res) => {
       // Attach purchases made before this recipe existed (e.g. imports).
       if (product_id) {
         await db.run(
-          `UPDATE sealed_purchases SET template_id = ? WHERE user_id = ? AND template_id IS NULL AND product_id = ?`,
-          [templateId, req.user.id, product_id]
+          `UPDATE sealed_purchases SET template_id = ? WHERE template_id IS NULL AND product_id = ? AND game = ?`,
+          [templateId, product_id, game]
         );
       } else {
         await db.run(
-          `UPDATE sealed_purchases SET template_id = ? WHERE user_id = ? AND template_id IS NULL AND product_id IS NULL AND product_name = ?`,
-          [templateId, req.user.id, String(product_name).trim()]
+          `UPDATE sealed_purchases SET template_id = ? WHERE template_id IS NULL AND product_id IS NULL AND product_name = ? COLLATE NOCASE AND game = ?`,
+          [templateId, String(product_name).trim(), game]
         );
       }
       return db.get(`SELECT * FROM sealed_templates WHERE id = ?`, [templateId]);
@@ -842,7 +1145,7 @@ router.post('/sealed/templates', async (req, res) => {
 // One template by id, for displaying "this purchase's recipe" on a purchase card.
 router.get('/sealed/templates/:id', async (req, res) => {
   try {
-    const template = await db.get(`SELECT * FROM sealed_templates WHERE id = ? AND user_id = ?`, [req.params.id, req.user.id]);
+    const template = await db.get(`SELECT * FROM sealed_templates WHERE id = ?`, [req.params.id]);
     if (!template) return res.status(404).json({ error: 'Template not found' });
     template.components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
     res.json({ template });
@@ -853,7 +1156,7 @@ router.get('/sealed/templates/:id', async (req, res) => {
 
 router.delete('/sealed/templates/:id', async (req, res) => {
   try {
-    const result = await db.run(`DELETE FROM sealed_templates WHERE id = ? AND user_id = ?`, [req.params.id, req.user.id]);
+    const result = await db.run(`DELETE FROM sealed_templates WHERE id = ?`, [req.params.id]);
     if (result.changes === 0) return res.status(404).json({ error: 'Template not found' });
     res.json({ success: true });
   } catch (error) {
