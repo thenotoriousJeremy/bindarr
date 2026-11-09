@@ -1311,6 +1311,7 @@
   "sealed.reseal": "Undo",
   "sealed.linkCards": "Link cards",
   "sealed.viewLinkedCards": "View linked cards",
+  "sealed.purchaseDetails": "Purchase details",
   "sealed.noLinkedCards": "No cards linked to this unit yet.",
   "sealed.unlink": "Unlink",
   "sealed.contains": "Contains",

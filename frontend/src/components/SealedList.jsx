@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal, LayoutGrid, List } from 'lucide-react';
 import { useT } from '../utils/i18n';
 import { gameLabel, gameOptions } from '../utils/games';
@@ -237,6 +238,7 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
   const { t } = useT();
   const [open, setOpen] = useState(false);
   const [units, setUnits] = useState(null);
+  const [unitsError, setUnitsError] = useState(false);
   const [linkingUnit, setLinkingUnit] = useState(null);
   const [viewingUnit, setViewingUnit] = useState(null);
   const [cardsVersion, setCardsVersion] = useState(0);
@@ -254,10 +256,18 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
   }, [purchase.template_id]);
 
   const loadUnits = () => {
+    setUnits(null);
+    setUnitsError(false);
     fetch(`/api/sealed/purchases/${purchase.id}${showClaimedByOthers ? '?show_claimed_by_others=1' : ''}`)
-      .then(r => r.json())
-      .then(d => setUnits(d.units || []))
-      .catch(() => showToast?.(t('sealed.errLoad')));
+      .then(async response => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || t('sealed.errLoad'));
+        setUnits(data.units || []);
+      })
+      .catch(() => {
+        setUnitsError(true);
+        showToast?.(t('sealed.errLoad'));
+      });
   };
 
   useEffect(() => { if (open) loadUnits(); }, [open, showClaimedByOthers]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -341,6 +351,87 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
   const total = purchase.unit_price == null ? null : Number(purchase.unit_price) * Number(purchase.quantity);
   const unopenedMarketValue = purchase.market_value == null ? null : purchase.market_value * (purchase.sealed_count || 0);
 
+  const toggleDetails = () => {
+    if (viewMode === 'gallery') setOpen(true);
+    else setOpen(current => !current);
+  };
+
+  const renderPurchaseDetails = () => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.5rem' }}>
+      {unitsError ? (
+        <div style={{ color: 'var(--text-secondary)' }}>{t('sealed.errLoad')}</div>
+      ) : units === null ? (
+        <div style={{ color: 'var(--text-secondary)' }}>{t('common.loading')}</div>
+      ) : (
+        <>
+          {units.filter(unit => !unit.opened_at && (unit.claimed_by_user_id == null || unit.claimed_by_me)).length > 1 && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button type="button" className="btn btn-secondary btn-sm"
+                disabled={openingAll} onClick={openAll}>
+                <Unlock size={12} /> {openingAll ? t('common.loading') : t('sealed.markAllOpen')}
+              </button>
+            </div>
+          )}
+          {units.map((u, i) => (
+            <div key={u.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text-secondary)', width: '4.5rem' }}>{t('sealed.unitLabel', { n: u.unit_number || i + 1 })}</span>
+                <span style={{ color: u.opened_at ? 'var(--type-fire)' : 'var(--type-grass)', flex: 1 }}>
+                  {u.opened_at ? t('sealed.opened') : t('sealed.sealed')}
+                </span>
+                {u.claimed_by_username && (
+                  <span style={{ color: 'var(--text-secondary)' }}>
+                    {t('sealed.claimedBy', { user: u.claimed_by_username })}
+                  </span>
+                )}
+                {u.expected_cards > 0 && (
+                  <span style={{ color: u.linked_cards >= u.expected_cards ? 'var(--type-grass)' : 'var(--text-secondary)' }}>
+                    {t('sealed.cardProgress', { linked: u.linked_cards || 0, expected: u.expected_cards })}
+                  </span>
+                )}
+                {u.can_toggle && (
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => toggleUnit(u)}>
+                    {u.opened_at ? <><Lock size={12} /> {t('sealed.reseal')}</> : <><Unlock size={12} /> {t(!purchase.is_owner && !u.claimed_by_me ? 'sealed.openAndClaim' : 'sealed.markOpened')}</>}
+                  </button>
+                )}
+                {u.opened_at && u.can_view_cards && (
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setLinkingUnit(linkingUnit === u.id ? null : u.id)}>
+                    {t('sealed.linkCards')}
+                  </button>
+                )}
+                {u.can_view_cards && (
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setViewingUnit(viewingUnit === u.id ? null : u.id)}>
+                    {t('sealed.viewLinkedCards')}
+                  </button>
+                )}
+              </div>
+              {linkingUnit === u.id && (
+                <LinkCardsPanel unit={{ ...u, unit_price: purchase.unit_price }} purchase={purchase} showToast={showToast}
+                  onLinked={() => { loadUnits(); setCardsVersion(v => v + 1); }} />
+              )}
+              {viewingUnit === u.id && (
+                <LinkedCardsPanel unitId={u.id} expectedCards={u.expected_cards} refreshKey={cardsVersion} showToast={showToast}
+                  onChanged={() => setCardsVersion(v => v + 1)} />
+              )}
+            </div>
+          ))}
+        </>
+      )}
+      {purchase.is_owner && purchase.notes && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{purchase.notes}</div>}
+      {purchase.is_owner && (
+        <>
+          <button type="button" className="btn btn-secondary btn-sm" style={{ alignSelf: 'flex-start' }}
+            onClick={() => setLinkingUnit(linkingUnit === 'source' ? null : 'source')}>
+            <Link2 size={12} /> {t('sealed.linkToProduct')}
+          </button>
+          {linkingUnit === 'source' && (
+            <LinkSourcePanel purchase={purchase} showToast={showToast} onSaved={() => { setLinkingUnit(null); onChanged?.(); }} />
+          )}
+        </>
+      )}
+    </div>
+  );
+
   return (
     <div className={`glass-panel sealed-purchase-card ${viewMode === 'gallery' ? 'sealed-purchase-card-tile' : ''}`} style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
       <div className="sealed-purchase-card-header">
@@ -417,7 +508,10 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
               <RefreshCw size={14} className={refreshingValue ? 'spin-animation' : ''} />
             </button>
           )}
-          <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setOpen(o => !o)}>
+          <button type="button" className="btn btn-secondary btn-icon-only"
+            title={t('sealed.purchaseDetails')}
+            aria-label={`${t('sealed.purchaseDetails')}: ${purchase.product_name}`}
+            onClick={toggleDetails}>
             {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </button>
           {purchase.is_owner && (
@@ -439,72 +533,45 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
         </div>
       </div>
 
-      {open && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.5rem' }}>
-          {(units || []).filter(unit => !unit.opened_at && (unit.claimed_by_user_id == null || unit.claimed_by_me)).length > 1 && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button type="button" className="btn btn-secondary btn-sm"
-              disabled={openingAll} onClick={openAll}>
-              <Unlock size={12} /> {openingAll ? t('common.loading') : t('sealed.markAllOpen')}
-            </button>
-            </div>
-          )}
-          {(units || []).map((u, i) => (
-            <div key={u.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem' }}>
-                <span style={{ color: 'var(--text-secondary)', width: '4.5rem' }}>{t('sealed.unitLabel', { n: u.unit_number || i + 1 })}</span>
-                <span style={{ color: u.opened_at ? 'var(--type-fire)' : 'var(--type-grass)', flex: 1 }}>
-                  {u.opened_at ? t('sealed.opened') : t('sealed.sealed')}
-                </span>
-                {u.claimed_by_username && (
-                  <span style={{ color: 'var(--text-secondary)' }}>
-                    {t('sealed.claimedBy', { user: u.claimed_by_username })}
-                  </span>
-                )}
-                {u.expected_cards > 0 && (
-                  <span style={{ color: u.linked_cards >= u.expected_cards ? 'var(--type-grass)' : 'var(--text-secondary)' }}>
-                    {t('sealed.cardProgress', { linked: u.linked_cards || 0, expected: u.expected_cards })}
-                  </span>
-                )}
-                {u.can_toggle && (
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => toggleUnit(u)}>
-                    {u.opened_at ? <><Lock size={12} /> {t('sealed.reseal')}</> : <><Unlock size={12} /> {t(!purchase.is_owner && !u.claimed_by_me ? 'sealed.openAndClaim' : 'sealed.markOpened')}</>}
-                  </button>
-                )}
-                {u.opened_at && u.can_view_cards && (
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setLinkingUnit(linkingUnit === u.id ? null : u.id)}>
-                    {t('sealed.linkCards')}
-                  </button>
-                )}
-                {u.can_view_cards && (
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setViewingUnit(viewingUnit === u.id ? null : u.id)}>
-                    {t('sealed.viewLinkedCards')}
-                  </button>
-                )}
+      {open && viewMode === 'list' && renderPurchaseDetails()}
+      {open && viewMode === 'gallery' && createPortal(
+        <Modal
+          onClose={() => setOpen(false)}
+          label={t('sealed.purchaseDetails')}
+          className="glass-panel"
+          overlayStyle={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          style={{
+            maxWidth: '760px', width: '100%', maxHeight: '90vh', overflowY: 'auto',
+            overscrollBehavior: 'contain', padding: '1.25rem', position: 'relative',
+          }}
+        >
+          <button type="button" className="btn btn-secondary btn-icon-only"
+            onClick={() => setOpen(false)} aria-label={t('common.close')}
+            style={{ position: 'absolute', top: '0.75rem', right: '0.75rem', borderRadius: '50%' }}>
+            <X size={16} />
+          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', paddingRight: '2rem', marginBottom: '0.75rem' }}>
+            {purchase.image_url
+              ? <img src={purchase.image_url} alt="" style={{ width: '48px', height: '64px', objectFit: 'contain', flexShrink: 0 }} />
+              : <Package size={32} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />}
+            <div style={{ minWidth: 0 }}>
+              <h2 style={{ color: 'var(--text-strong)', margin: 0 }}>{purchase.product_name}</h2>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                {gameLabel(purchase.game)} · {purchase.sealed_type || t('sealed.otherType')} · {t('sealed.quantity')}: {purchase.quantity}
               </div>
-              {linkingUnit === u.id && (
-                <LinkCardsPanel unit={{ ...u, unit_price: purchase.unit_price }} purchase={purchase} showToast={showToast}
-                  onLinked={() => { loadUnits(); setCardsVersion(v => v + 1); }} />
-              )}
-              {viewingUnit === u.id && (
-                <LinkedCardsPanel unitId={u.id} expectedCards={u.expected_cards} refreshKey={cardsVersion} showToast={showToast}
-                  onChanged={() => setCardsVersion(v => v + 1)} />
+              {(purchase.store || purchase.purchase_date) && (
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                  {[purchase.store, purchase.purchase_date].filter(Boolean).join(' · ')}
+                </div>
               )}
             </div>
-          ))}
-          {purchase.is_owner && purchase.notes && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{purchase.notes}</div>}
-          {purchase.is_owner && (
-            <>
-              <button type="button" className="btn btn-secondary btn-sm" style={{ alignSelf: 'flex-start' }}
-                onClick={() => setLinkingUnit(linkingUnit === 'source' ? null : 'source')}>
-                <Link2 size={12} /> {t('sealed.linkToProduct')}
-              </button>
-              {linkingUnit === 'source' && (
-                <LinkSourcePanel purchase={purchase} showToast={showToast} onSaved={() => { setLinkingUnit(null); onChanged?.(); }} />
-              )}
-            </>
-          )}
-        </div>
+          </div>
+          {renderPurchaseDetails()}
+        </Modal>,
+        document.body
       )}
     </div>
   );
