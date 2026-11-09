@@ -181,12 +181,14 @@ app.use(helmet({
       //   Lorcast            cards.lorcast.io
       //   pokemontcgapi.com  media.rarebit.app
       //   Riftbound          cmsassets.rgpub.io
+      //   TCGCSV / TCGplayer sealed products tcgplayer-cdn.tcgplayer.com
       // data: and blob: are the scanner's captures and previews.
       imgSrc: [
         "'self'", 'data:', 'blob:',
         'https://images.pokemontcg.io', 'https://images.scrydex.com', 'https://assets.tcgdex.net',
         'https://cards.scryfall.io', 'https://svgs.scryfall.io', 'https://c1.scryfall.com', 'https://img.scryfall.com',
-        'https://cards.lorcast.io', 'https://media.rarebit.app', 'https://cmsassets.rgpub.io'
+        'https://cards.lorcast.io', 'https://media.rarebit.app', 'https://cmsassets.rgpub.io',
+        'https://tcgplayer-cdn.tcgplayer.com'
       ],
       // index.html loads Antonio, Outfit and Plus Jakarta Sans from Google Fonts,
       // which is two separate origins: the stylesheet comes from fonts.googleapis
