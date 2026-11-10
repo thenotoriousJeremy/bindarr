@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// One polite copy of TCGCSV's Pokémon data for every Bindarr install.
+// One polite copy of the TCGCSV data Bindarr reads, for every Bindarr install.
 //
 // Why this exists: each self-hosted instance used to sync from TCGCSV itself,
 // under the same User-Agent, so the traffic TCGCSV saw from "Bindarr" grew with
@@ -9,7 +9,11 @@
 // TCGCSV_BASE_URL at the published copy and never contact tcgcsv.com.
 //
 // What it serves, byte for byte as TCGCSV sent it (the client parses the same
-// { totalItems, success, errors, results } envelope, so nothing re-serialises):
+// { totalItems, success, errors, results } envelope, so nothing re-serialises),
+// except in the sealed-only categories (Magic 1, Lorcana 71): there Bindarr reads
+// only sealed product, and Magic alone is ~100k cards, so products and prices are
+// filtered to sealed product with the backend's own rule (utils/tcgcsvSlim.js)
+// and re-serialised in the same envelope:
 //
 //   /last-updated.txt
 //   /tcgplayer/{categoryId}/groups
@@ -29,6 +33,7 @@
 // would do, it only has to be one the workflow can tell apart from failure.
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -39,14 +44,20 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VERSION = JSON.parse(readFileSync(path.join(HERE, '../../backend/package.json'), 'utf8')).version;
 export const USER_AGENT = `BindarrMirror/${VERSION} (+https://github.com/thenotoriousJeremy/bindarr)`;
 
+// The backend's rule for what counts as sealed product, so the mirror and the
+// cache can never disagree about which Magic/Lorcana rows Bindarr needs.
+const { isSealedProduct, SEALED_ONLY_CATEGORIES } = createRequire(import.meta.url)('../../backend/src/utils/tcgcsvSlim.js');
+
 export const EXIT = { SYNCED: 0, ERROR: 1, USAGE: 2, UNCHANGED: 78 };
 
 const MIN_INTERVAL_MS = 100;        // TCGCSV's floor; not configurable below it
 const DEFAULT_INTERVAL_MS = 200;    // double the floor: the run has all night
-// ~606 Pokémon groups today -> ~1,215 requests for a full sync. 2,500 leaves room
-// for new sets; 5,000 is half of TCGCSV's daily allowance and the most anyone may
-// ask for, so a typo in --max-requests cannot turn this into the problem it fixes.
-const DEFAULT_MAX_REQUESTS = 2500;
+// 682 Pokémon groups (3, 85) took 1,367 requests on 2026-11-10; Riftbound (89),
+// Lorcana (71) and Magic (1) add 2 per group. 4,500 leaves room for new sets;
+// 5,000 is half of TCGCSV's daily allowance and the most anyone may ask for, so a
+// typo in --max-requests cannot turn this into the problem it fixes. The run
+// stops after the group lists if the whole sync would not fit.
+const DEFAULT_MAX_REQUESTS = 4500;
 const MAX_REQUESTS_CEILING = 5000;
 const REQUEST_TIMEOUT_MS = 30000;
 
@@ -87,7 +98,7 @@ class PoliteClient {
     // never shortens the gap. Looped because a timer may wake a millisecond early.
     if (this.count > 0) {
       const due = this.lastEnd + this.intervalMs;
-      while (performance.now() < due) await sleep(due - performance.now());
+      while (performance.now() < due) await sleep(Math.max(1, due - performance.now()));
     }
     this.count++;
     try {
@@ -196,15 +207,29 @@ export async function sync(options, log = console) {
   }
 
   for (const { categoryId, groupIds } of groupsByCategory) {
+    const sealedOnly = SEALED_ONLY_CATEGORIES.has(categoryId);
     for (const groupId of groupIds) {
+      let sealedIds = null;   // products before prices, so the prices can follow them
       for (const kind of ['products', 'prices']) {
         const urlPath = `/tcgplayer/${categoryId}/${groupId}/${kind}`;
         const body = await client.get(urlPath);
         const envelope = parseEnvelope(urlPath, body);
-        // Mirrored verbatim anyway: an instance reading the mirror should see what
-        // it would have seen from TCGCSV, not a different answer.
+        // Mirrored anyway: an instance reading the mirror should see what it
+        // would have seen from TCGCSV, not a different answer.
         if (envelope.success === false) log.warn(`${urlPath} reported success: false upstream`);
-        bytes += await writeMirrored(out, urlPath, body);
+        if (!sealedOnly) {
+          bytes += await writeMirrored(out, urlPath, body);
+          continue;
+        }
+        let results;
+        if (kind === 'products') {
+          results = envelope.results.filter(p => p && typeof p === 'object' && isSealedProduct(p));
+          sealedIds = new Set(results.map(p => p.productId));
+        } else {
+          results = envelope.results.filter(r => r && sealedIds.has(r.productId));
+        }
+        const filtered = JSON.stringify({ ...envelope, totalItems: results.length, results });
+        bytes += await writeMirrored(out, urlPath, Buffer.from(filtered));
       }
     }
   }

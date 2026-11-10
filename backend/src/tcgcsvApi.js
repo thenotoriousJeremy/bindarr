@@ -30,7 +30,14 @@ const { normId, normName, fold } = require('./utils/setCatalogueMatch');
 const metrics = require('./utils/metrics');
 const { slimResults, SEALED_ONLY_CATEGORY } = require('./utils/tcgcsvSlim');
 
-const API_BASE_URL = (process.env.TCGCSV_BASE_URL || 'https://tcgcsv.com').replace(/\/+$/, '');
+// The project's daily mirror of TCGCSV (.github/workflows/tcgcsv-mirror.yml), not
+// tcgcsv.com itself. TCGCSV is one person's free service; every install syncing
+// from it separately is what got Bindarr's User-Agent blocked (#102), and its
+// maintainer asked for one shared copy instead. The mirror carries every category
+// this module syncs, in TCGCSV's own path layout. TCGCSV_BASE_URL overrides it,
+// e.g. for an operator's own read-through cache.
+const DEFAULT_TCGCSV_BASE_URL = 'https://raw.githubusercontent.com/thenotoriousJeremy/bindarr/tcgcsv-mirror';
+const API_BASE_URL = (process.env.TCGCSV_BASE_URL || DEFAULT_TCGCSV_BASE_URL).replace(/\/+$/, '');
 const TCGCSV_403_COOLDOWN_HOURS = 24;
 const TCGCSV_MIN_REQUEST_INTERVAL_MS = 110;
 const TCGCSV_MAX_SYNC_REQUESTS = 10000;

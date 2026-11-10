@@ -223,3 +223,33 @@ test('rejects settings that would break TCGCSV rules before any request', async 
     assert.equal(server.requests.length, 0);
   });
 });
+
+test('sealed-only categories keep just sealed product and its prices', async () => {
+  const routes = fixtureRoutes();
+  routes.set('/tcgplayer/1/groups', { body: envelope([{ groupId: 301, name: 'Foundations', abbreviation: 'FDN', categoryId: 1 }]) });
+  routes.set('/tcgplayer/1/301/products', { body: envelope([
+    { productId: 9001, name: 'Lightning Bolt', extendedData: [{ name: 'Number', value: '123' }] },
+    { productId: 9002, name: 'Foundations Play Booster Box', extendedData: [] },
+    { productId: 9003, name: 'Foundations Bundle' },
+  ]) });
+  routes.set('/tcgplayer/1/301/prices', { body: envelope([
+    { productId: 9001, marketPrice: 2.5, subTypeName: 'Normal' },
+    { productId: 9001, marketPrice: 9.5, subTypeName: 'Foil' },
+    { productId: 9002, marketPrice: 140, subTypeName: 'Normal' },
+    { productId: 9003, marketPrice: 45, subTypeName: 'Normal' },
+  ]) });
+  await withFixture(routes, async ({ out, base }) => {
+    const r = await runSync([...base, '--categories', '3,1']);
+    assert.equal(r.code, 0, r.stderr);
+    const read = async (p) => JSON.parse(await readFile(path.join(out, ...p.split('/').filter(Boolean)), 'utf8'));
+    const products = await read('/tcgplayer/1/301/products');
+    assert.deepEqual(products.results.map(p => p.productId), [9002, 9003], 'cards are dropped, sealed product kept');
+    assert.equal(products.totalItems, 2);
+    assert.equal(products.success, true);
+    const prices = await read('/tcgplayer/1/301/prices');
+    assert.deepEqual(prices.results.map(p => p.productId), [9002, 9003], 'only the kept products keep prices');
+    // Pokémon stays byte for byte.
+    const pokemon = await readFile(path.join(out, 'tcgplayer', '3', '101', 'products'));
+    assert.ok(pokemon.equals(Buffer.from(routes.get('/tcgplayer/3/101/products').body)));
+  });
+});

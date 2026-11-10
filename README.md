@@ -432,23 +432,21 @@ Daily is what the free providers publish, so leave it there unless you have a re
 
 ### TCGCSV data sync
 
-Bindarr downloads TCGCSV data from the server and stores it in the local SQLite database; app and catalog operations use that cache instead of fetching data for each request. At startup and during scheduled work, Bindarr checks TCGCSV's `last-updated.txt` no more than once every 24 hours and only downloads a new dataset when the timestamp advances. A new dataset is staged until the full sync succeeds, so the last complete cache remains available if a refresh fails, and price refreshes keep using it. Only the Pokémon categories (3 and 85) are synced, about 1 + 2 + 2 × (number of sets) requests per new dataset, and only the fields Bindarr reads are stored. A set that TCGCSV answers with a 404 or an error is recorded as empty rather than blocking the sync; a dataset that still has not completed after 24 hours is abandoned and `last-updated.txt` is checked again.
+Bindarr downloads TCGCSV data (from the project's mirror, below) and stores it in the local SQLite database; app and catalog operations use that cache instead of fetching data for each request. At startup and during scheduled work, Bindarr checks TCGCSV's `last-updated.txt` no more than once every 24 hours and only downloads a new dataset when the timestamp advances. A new dataset is staged until the full sync succeeds, so the last complete cache remains available if a refresh fails, and price refreshes keep using it. Only the Pokémon categories (3 and 85) are synced, plus Riftbound (89) when a collection or list holds a Riftbound card and Magic (1) and Lorcana (71) sealed product when an admin turns that on; that is about 1 + 2 × (number of sets) requests per category per new dataset, and only the fields Bindarr reads are stored. A set that TCGCSV answers with a 404 or an error is recorded as empty rather than blocking the sync; a dataset that still has not completed after 24 hours is abandoned and `last-updated.txt` is checked again.
 
 Outbound requests are serialized and spaced by at least 100 ms. If TCGCSV returns HTTP 403, Bindarr logs the response and pauses further TCGCSV requests for 24 hours.
 
-To route all Bindarr TCGCSV traffic through a reverse-proxy/read-through cache, set the server-side `TCGCSV_BASE_URL` environment variable to its base URL (for example, `http://tcgcsv-cache:8080`). The cache must serve `last-updated.txt` and the `/tcgplayer/...` endpoints. This setting covers sync, catalog, and price-refresh requests; it defaults to `https://tcgcsv.com`. Configure it in the server's environment or Docker Compose, not in the browser app.
+To route all Bindarr TCGCSV traffic through a reverse-proxy/read-through cache, set the server-side `TCGCSV_BASE_URL` environment variable to its base URL (for example, `http://tcgcsv-cache:8080`). The cache must serve `last-updated.txt` and the `/tcgplayer/...` endpoints. This setting covers sync, catalog, and price-refresh requests; it defaults to the project's mirror (below). Configure it in the server's environment or Docker Compose, not in the browser app.
 
-### TCGCSV mirror (not live yet)
+### TCGCSV mirror
 
-Pokémon TCGplayer prices come from [TCGCSV](https://tcgcsv.com), a free service run by one person. Every install syncing from it separately adds up, so the project is preparing a single shared copy instead: one scheduled job syncs TCGCSV's Pokémon data (categories 3 and 85) once a day, politely, and publishes it with TCGCSV's own path layout to the `tcgcsv-mirror` branch of this repository.
-
-**It is not switched on yet** — it waits on the TCGCSV maintainer's approval. Once it is live, an install can read from it instead of tcgcsv.com:
+TCGplayer prices come from [TCGCSV](https://tcgcsv.com), a free service run by one person. Every install syncing from it separately added up to enough traffic that TCGCSV blocked Bindarr's User-Agent ([#102](https://github.com/thenotoriousJeremy/bindarr/issues/102)), and its maintainer asked for one shared copy instead. So one scheduled job in this repository syncs from TCGCSV once a day, politely, and publishes the result with TCGCSV's own path layout to the `tcgcsv-mirror` branch:
 
 ```sh
-TCGCSV_BASE_URL=https://raw.githubusercontent.com/thenotoriousJeremy/bindarr/tcgcsv-mirror
+https://raw.githubusercontent.com/thenotoriousJeremy/bindarr/tcgcsv-mirror
 ```
 
-Set it in the server's environment or Docker Compose, not in the browser app. Until this section says the mirror is live, leave the variable unset. The sync script and workflow are `scripts/tcgcsv-mirror/sync.mjs` and `.github/workflows/tcgcsv-mirror.yml`.
+Since 1.9 this is the default, and installs never contact tcgcsv.com. It carries every category Bindarr syncs: Pokémon (3, 85) and Riftbound (89) as TCGCSV serves them, and Lorcana (71) and Magic (1) reduced to sealed product and its prices. Older releases default to tcgcsv.com, whose 403s they wait out; set `TCGCSV_BASE_URL` to the URL above on those, or upgrade. Please don't point `TCGCSV_BASE_URL` back at tcgcsv.com. The sync script and workflow are `scripts/tcgcsv-mirror/sync.mjs` and `.github/workflows/tcgcsv-mirror.yml`.
 
 ## API access
 
