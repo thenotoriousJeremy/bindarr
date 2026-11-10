@@ -419,10 +419,10 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, onProposeTrade, 
             </div>
           )}
           {units.map((u, i) => (
-            <div key={u.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            <div key={u.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.4rem 0', borderBottom: i < units.length - 1 ? '1px solid var(--border-subtle)' : undefined }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', flexWrap: 'wrap' }}>
                 <span style={{ color: 'var(--text-secondary)', width: '4.5rem' }}>{t('sealed.unitLabel', { n: u.unit_number || i + 1 })}</span>
-                <span style={{ color: u.opened_at ? 'var(--type-fire)' : 'var(--type-grass)', flex: 1 }}>
+                <span style={{ color: u.opened_at ? 'var(--type-fire)' : 'var(--type-grass)', flex: '1 1 5rem' }}>
                   {u.opened_at ? t('sealed.opened') : t('sealed.sealed')}
                 </span>
                 {u.claimed_by_username && (
@@ -435,6 +435,8 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, onProposeTrade, 
                     {t('sealed.cardProgress', { linked: u.linked_cards || 0, expected: u.expected_cards })}
                   </span>
                 )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.35rem', flexWrap: 'wrap' }}>
                 {u.can_toggle && (
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => toggleUnit(u)}>
                     {u.opened_at ? <><Lock size={12} /> {t('sealed.reseal')}</> : <><Unlock size={12} /> {t(!purchase.is_owner && !u.claimed_by_me ? 'sealed.openAndClaim' : 'sealed.markOpened')}</>}
