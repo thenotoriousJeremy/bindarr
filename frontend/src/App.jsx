@@ -243,6 +243,15 @@ function App() {
     });
     goTab('add-cards');
   });
+  const openSealedTradeComposer = useStableCallback(unit => {
+    if (!unit?.id) return;
+    setTransferLaunch({
+      type: 'sealed',
+      unitId: unit.id,
+      requestId: ++transferActionSequenceRef.current
+    });
+    goTab('add-cards');
+  });
 
   const openTradeHistory = useStableCallback(focus => {
     if (!focus?.type || focus.id == null) return;
@@ -666,7 +675,7 @@ function App() {
       case 'notes':
         return <Notes showToast={showToast} />;
       case 'sealed':
-        return <SealedList showToast={showToast} />;
+        return <SealedList showToast={showToast} onProposeTrade={openSealedTradeComposer} />;
       case 'settings':
         return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} onLeaveDevice={handleLeaveDevice} />;
       case 'admin':

@@ -118,13 +118,18 @@ async function main() {
     method: 'POST', headers: asUser(alice),
     body: JSON.stringify({
       product_name: 'Shared Trainer Box', game: 'pokemon', quantity: 2, unit_price: 12,
-      expected_cards: 6, store: 'Private Shop', purchase_date: '2026-11-09',
+      sealed_type: 'trainer_box', expected_packs: 4, expected_cards: 6,
+      store: 'Private Shop', purchase_date: '2026-11-09',
       notes: 'Shared purchase note', available_to_all: true,
     }),
   });
   assert.strictEqual(res.status, 201, 'a purchase can be made available to all users');
   const sharedPurchase = (await res.json()).purchase;
   const sharedUnits = await db.all(`SELECT id FROM sealed_units WHERE purchase_id = ? ORDER BY id`, [sharedPurchase.id]);
+  const listedUnits = (await fetch(`${base}/api/sealed/units?opened=0`, { headers: asUser(alice) }).then(r => r.json())).units;
+  const listedSharedUnit = listedUnits.find(unit => unit.id === sharedUnits[0].id);
+  assert.strictEqual(listedSharedUnit.sealed_type, 'trainer_box');
+  assert.strictEqual(listedSharedUnit.expected_packs, 4);
 
   let bobPurchases = (await fetch(`${base}/api/sealed/purchases`, { headers: asUser(bob) }).then(r => r.json())).purchases;
   let visibleShared = bobPurchases.find(p => p.id === sharedPurchase.id);

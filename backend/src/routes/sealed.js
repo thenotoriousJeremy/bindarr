@@ -993,7 +993,8 @@ router.get('/sealed/units', async (req, res) => {
               buyer.username AS buyer_username,
               (SELECT COUNT(*) FROM sealed_units earlier_unit
                 WHERE earlier_unit.purchase_id = p.id AND earlier_unit.id <= u.id) AS unit_number,
-              p.id AS purchase_id, p.product_name, p.set_name, p.game, p.image_url,
+              p.id AS purchase_id, p.product_name, p.set_name, p.sealed_type, p.game, p.image_url,
+              p.expected_packs,
               COALESCE(p.source_product_name, source_purchase.product_name) AS source_product_name,
               COALESCE(p.source_product_name, source_purchase.product_name) AS origin_product_name,
               COALESCE(p.source_unit_number, (SELECT COUNT(*) FROM sealed_units earlier_source_unit

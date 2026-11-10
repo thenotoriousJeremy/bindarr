@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal, LayoutGrid, List, MousePointerClick } from 'lucide-react';
+import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal, LayoutGrid, List, MousePointerClick, ArrowLeftRight } from 'lucide-react';
 import { useT } from '../utils/i18n';
 import { gameLabel, gameOptions } from '../utils/games';
 import { formatPrice } from '../utils/formatPrice';
@@ -235,7 +235,7 @@ function LinkedCardsPanel({ unitId, expectedCards, refreshKey, showToast, onChan
   );
 }
 
-function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSelectionChange, showClaimedByOthers, viewMode, selectMode, pressHandlers, longPressFired }) {
+function PurchaseCard({ purchase, onChanged, onEdit, showToast, onProposeTrade, selected, onSelectionChange, showClaimedByOthers, viewMode, selectMode, pressHandlers, longPressFired }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
   const [units, setUnits] = useState(null);
@@ -450,6 +450,11 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
                     {t('sealed.viewLinkedCards')}
                   </button>
                 )}
+                {onProposeTrade && purchase.is_owner && !u.opened_at && (u.claimed_by_user_id == null || u.claimed_by_me) && (
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => onProposeTrade(u)}>
+                    <ArrowLeftRight size={12} /> {t('inspector.proposeTrade')}
+                  </button>
+                )}
               </div>
               {linkingUnit === u.id && (
                 <LinkCardsPanel unit={{ ...u, unit_price: purchase.unit_price }} purchase={purchase} showToast={showToast}
@@ -630,7 +635,7 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
 // The "Sealed" tab: purchases (store, date, price, quantity) with per-unit
 // sealed/opened tracking, and a way to link opened-unit cards back to the
 // purchase they came from.
-export default function SealedList({ showToast }) {
+export default function SealedList({ showToast, onProposeTrade }) {
   const { t } = useT();
   const [purchases, setPurchases] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -961,7 +966,7 @@ export default function SealedList({ showToast }) {
       ) : (
         <div className={viewMode === 'gallery' ? 'sealed-purchase-grid' : 'sealed-purchase-list'}>
           {filteredPurchases.map(p => (
-            <PurchaseCard key={p.id} purchase={p} onChanged={load} onEdit={setEditingPurchase} showToast={showToast}
+            <PurchaseCard key={p.id} purchase={p} onChanged={load} onEdit={setEditingPurchase} showToast={showToast} onProposeTrade={onProposeTrade}
               selected={selectedPurchaseIds.has(p.id)} onSelectionChange={setPurchaseSelected}
               showClaimedByOthers={showClaimedByOthers} viewMode={viewMode} selectMode={selectMode}
               pressHandlers={purchasePressHandlers} longPressFired={purchaseLongPressFired} />

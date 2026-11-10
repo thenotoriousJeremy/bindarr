@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ArrowLeftRight, Check, Gift, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, Check, Gift, Package, RefreshCw, X } from 'lucide-react';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
+import { conditionLabel, printingLabel } from '../utils/cardOptions';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { useT } from '../utils/i18n';
@@ -10,6 +11,7 @@ import { counterSelections } from '../utils/transferSelection';
 import CardImage from './CardImage';
 import { ExternalDealHistory, ExternalReceivedItems } from './ExternalDealComponents';
 import HistoricalTradeModal from './HistoricalTradeModal';
+import Modal from './Modal';
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
@@ -123,6 +125,78 @@ function TransferItem({ item, currentUserId, t, location, showCost = true }) {
   );
 }
 
+function TransferItemDetailsModal({ item, onClose, t }) {
+  const isCard = item.type === 'card';
+  const label = itemLabel(item) || t('transfer.unknownItem');
+  const game = GAMES.find(option => option.value === String(item.game || '').toLowerCase())?.label || item.game;
+  const rows = isCard ? [
+    [t('transfer.detailGame'), game],
+    [t('transfer.detailSet'), item.set_name],
+    [t('transfer.detailNumber'), item.number],
+    [t('transfer.detailRarity'), item.rarity],
+    [t('inspector.specSupertype'), item.type_line || item.supertype],
+    [t('inspector.specPrinting'), printingLabel(t, item.printing, item.game)],
+    [t('inspector.specCondition'), conditionLabel(t, item.condition)],
+    [t('inspector.specLanguage'), item.language]
+  ] : [
+    [t('transfer.detailGame'), game],
+    [t('transfer.detailType'), item.sealed_type],
+    [t('transfer.detailSet'), item.set_name],
+    [t('transfer.detailUnit'), item.unit_number ? t('sealed.unitLabel', { n: item.unit_number }) : null],
+    [t('transfer.detailOrigin'), item.origin_product_name && t('transfer.fromProduct', { product: item.origin_product_name })],
+    [t('sealed.expectedCards'), item.expected_cards],
+    [t('sealed.expectedPacks'), item.expected_packs]
+  ].filter(([, value]) => value != null && value !== '');
+
+  return (
+    <Modal
+      onClose={onClose}
+      label={t('transfer.itemDetails')}
+      className="glass-panel"
+      overlayStyle={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1100,
+        display: 'flex', alignItems: 'center', justifyContent: 'center'
+      }}
+      style={{ maxWidth: '720px', width: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem' }}
+    >
+      <button
+        type="button"
+        className="btn btn-secondary btn-icon-only"
+        onClick={onClose}
+        aria-label={t('common.close')}
+        style={{ position: 'absolute', top: '0.75rem', right: '0.75rem', borderRadius: '50%' }}
+      >
+        <X size={16} />
+      </button>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap', paddingRight: '2rem' }}>
+        <div style={{ width: 'min(180px, 100%)', height: '250px', flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderRadius: 'var(--radius-md)', background: 'var(--surface-2)' }}>
+          {isCard ? (
+            <CardImage card={item} alt={label} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+          ) : item.image_url ? (
+            <img src={item.image_url} alt={label} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+          ) : (
+            <Package size={48} aria-hidden="true" style={{ color: 'var(--text-secondary)' }} />
+          )}
+        </div>
+        <div style={{ minWidth: 0, flex: '1 1 260px' }}>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase' }}>
+            {t(isCard ? 'transfer.cardsOnly' : 'transfer.sealedOnly')}
+          </div>
+          <h2 style={{ color: 'var(--text-strong)', margin: '0.2rem 0 0.8rem', overflowWrap: 'anywhere' }}>{label}</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {rows.filter(([, value]) => value != null && value !== '').map(([name, value]) => (
+              <div key={name} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.35rem' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>{name}</span>
+                <span style={{ color: 'var(--text-strong)', textAlign: 'right', overflowWrap: 'anywhere' }}>{value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export default function TransferManager({
   user,
   showToast,
@@ -138,6 +212,7 @@ export default function TransferManager({
   const [transfers, setTransfers] = useState([]);
   const [historicalTrades, setHistoricalTrades] = useState([]);
   const [historicalModal, setHistoricalModal] = useState(null);
+  const [detailItem, setDetailItem] = useState(null);
   const [myCards, setMyCards] = useState([]);
   const [mySealed, setMySealed] = useState([]);
   const [setsList, setSetsList] = useState([]);
@@ -199,23 +274,31 @@ export default function TransferManager({
   useEffect(() => {
     if (!initialOffer || loading || handledOfferRef.current === initialOffer.requestId) return;
     handledOfferRef.current = initialOffer.requestId;
-    const card = myCards.find(item => String(item.entry_id) === String(initialOffer.entryId));
-    if (!card) {
-      showToast?.(t('transfer.cardUnavailable'));
+    const type = initialOffer.type === 'sealed' ? 'sealed' : 'card';
+    const id = type === 'sealed' ? initialOffer.unitId : initialOffer.entryId;
+    const item = type === 'sealed'
+      ? mySealed.find(unit => String(unit.id) === String(id))
+      : myCards.find(card => String(card.entry_id) === String(id));
+    if (!item) {
+      showToast?.(t(type === 'sealed' ? 'transfer.sealedUnavailable' : 'transfer.cardUnavailable'));
     } else {
       setActivePage('new');
       setRecipientSelection('');
       setTransferType('trade');
       setCountering(null);
       setOffered({
-        [`card:${card.entry_id}`]: { type: 'card', id: card.entry_id, quantity: 1 }
+        [`${type}:${type === 'card' ? item.entry_id : item.id}`]: {
+          type,
+          id: type === 'card' ? item.entry_id : item.id,
+          quantity: 1
+        }
       });
       setRequested({});
       setReceivedItems([]);
       setMessage('');
     }
     onInitialOfferHandled?.(initialOffer.requestId);
-  }, [initialOffer, loading, myCards, onInitialOfferHandled, showToast, t]);
+  }, [initialOffer, loading, myCards, mySealed, onInitialOfferHandled, showToast, t]);
 
   useEffect(() => {
     fetch('/api/sets')
@@ -559,17 +642,27 @@ export default function TransferManager({
                   : [item.sealed_type, item.origin_product_name].filter(Boolean).join(' · ');
                 return (
                   <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', minWidth: 0, padding: '0.35rem', borderRadius: 'var(--radius-sm)', background: 'var(--surface-2)' }}>
-                    <div style={{ width: '2.5rem', height: '3.5rem', flex: '0 0 auto', overflow: 'hidden', borderRadius: 'var(--radius-sm)', background: 'var(--bg-secondary)' }}>
+                    <button
+                      type="button"
+                      aria-label={t('transfer.viewDetails', { item: label })}
+                      onClick={() => setDetailItem(item)}
+                      style={{ width: '2.5rem', height: '3.5rem', flex: '0 0 auto', overflow: 'hidden', border: 0, borderRadius: 'var(--radius-sm)', padding: 0, background: 'var(--bg-secondary)', cursor: 'pointer' }}
+                    >
                       {item.type === 'card'
                         ? <CardImage card={item} alt="" loading="lazy" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         : item.image_url
                           ? <img src={item.image_url} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                           : null}
-                    </div>
+                    </button>
                     <div style={{ minWidth: 0, flex: 1 }}>
-                      <strong title={label} style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-strong)', fontSize: '0.78rem' }}>
+                      <button
+                        type="button"
+                        aria-label={t('transfer.viewDetails', { item: label })}
+                        onClick={() => setDetailItem(item)}
+                        style={{ display: 'block', width: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', border: 0, padding: 0, background: 'transparent', color: 'var(--text-strong)', fontSize: '0.78rem', fontWeight: 700, textAlign: 'left', cursor: 'pointer' }}
+                      >
                         {selection.quantity || 1}× {label}
-                      </strong>
+                      </button>
                       <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: '0.7rem' }}>
                         {details || t('transfer.allItems')}
                       </span>
@@ -678,15 +771,21 @@ export default function TransferManager({
                   aria-label={label}
                   onChange={event => setSelection(setter, selected, item, event.target.checked)}
                 />
-                <div
+                <button
+                  type="button"
+                  aria-label={t('transfer.viewDetails', { item: label })}
+                  onClick={() => setDetailItem(item)}
                   style={{
                     position: 'relative',
                     width: '3.75rem',
                     height: '5.2rem',
                     flex: '0 0 auto',
                     overflow: 'hidden',
+                    border: 0,
+                    padding: 0,
                     borderRadius: 'var(--radius-sm)',
                     background: 'var(--surface-2)',
+                    cursor: 'pointer',
                     ...(item.type === 'card' ? getCardRarityBorder(item.rarity) : {})
                   }}
                 >
@@ -736,9 +835,16 @@ export default function TransferManager({
                       {getPrintingBadgeLabel(item.printing, t)}
                     </span>
                   )}
-                </div>
+                </button>
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-                  <strong title={label} style={{ color: 'var(--text-strong)', fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</strong>
+                  <button
+                    type="button"
+                    aria-label={t('transfer.viewDetails', { item: label })}
+                    onClick={() => setDetailItem(item)}
+                    style={{ color: 'var(--text-strong)', fontSize: '0.95rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', border: 0, padding: 0, background: 'transparent', textAlign: 'left', cursor: 'pointer' }}
+                  >
+                    {label}
+                  </button>
                   <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {item.type === 'card'
                       ? [item.set_name, item.number && `#${item.number}`].filter(Boolean).join(' · ')
@@ -1240,6 +1346,13 @@ export default function TransferManager({
             {},
             'historical.rejected'
           )}
+        />
+      )}
+      {detailItem && (
+        <TransferItemDetailsModal
+          item={detailItem}
+          onClose={() => setDetailItem(null)}
+          t={t}
         />
       )}
     </div>
