@@ -21,6 +21,8 @@ module.exports = {
   crypto: shim('crypto.js'),
   // db.js's connection lock; see the shim for what a WebView can and cannot track.
   async_hooks: shim('async_hooks.js'),
+  // Node's high-resolution clock; WebView exposes the same API on performance.
+  perf_hooks: shim('perfHooks.js'),
   // Native modules with no phone build, and server-only plumbing. Device mode
   // never calls into any of them; see shims/unavailable.js.
   sharp: unavailable,

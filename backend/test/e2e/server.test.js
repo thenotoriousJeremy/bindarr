@@ -40,6 +40,10 @@ async function runTests() {
     const res = await fetch(`${base}/api/health`);
     assert.strictEqual(res.status, 200, 'health check should return 200');
     assert.strictEqual(res.headers.get('x-app-name'), 'Bindarr', 'health header x-app-name must be Bindarr');
+    const csp = res.headers.get('content-security-policy')
+      || res.headers.get('content-security-policy-report-only')
+      || '';
+    assert.ok(csp.includes('https://tcgplayer-cdn.tcgplayer.com'), 'CSP must allow TCGplayer sealed-product images');
     console.log('PASS: F1-TC1');
 
     // F1-TC2: a protected route rejects unauthenticated requests

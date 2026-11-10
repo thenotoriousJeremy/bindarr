@@ -4,6 +4,7 @@ const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept } = requir
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
 const { cacheNormalizedCards } = require('./utils/cardCache');
+const metrics = require('./utils/metrics');
 
 const { version } = require('../package.json');
 const USER_AGENT = `Bindarr/${version} (+https://github.com/thenotoriousJeremy/bindarr)`;
@@ -16,6 +17,7 @@ const client = axios.create({
     'Accept': 'application/json',
   },
 });
+metrics.instrumentAxiosClient(client, 'lorcast');
 
 // Rate limiting: 60ms gap between outgoing Lorcast requests + 429 backoff
 const LORCAST_MIN_GAP_MS = 60;

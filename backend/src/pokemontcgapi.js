@@ -9,6 +9,7 @@ const { cacheNormalizedCards } = require('./utils/cardCache');
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
 const { parseCardRow, parseSqliteUtc, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
+const metrics = require('./utils/metrics');
 
 const BASE = 'https://api.pokemontcgapi.com/v1';
 const PREFIX = 'pokemontcgapi-';
@@ -33,6 +34,7 @@ const client = axios.create({
   headers: { Accept: 'application/json', 'User-Agent': `Bindarr/${require('../package.json').version}` },
   validateStatus: status => status === 200 || status === 304,
 });
+metrics.instrumentAxiosClient(client, 'pokemontcgapi');
 const hasKey = () => !!(process.env.POKEMONTCGAPI_KEY || '').trim();
 const providerId = id => String(id || '').replace(/^pokemontcgapi-/, '');
 const quote = value => `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;

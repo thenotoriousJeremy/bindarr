@@ -16,6 +16,7 @@
 // back to a name search capped at a handful. There is no sweep and no background
 // refresh, and there must not be one.
 const axios = require('axios');
+const metrics = require('./utils/metrics');
 
 const API_BASE_URL = 'https://www.pokemonpricetracker.com/api/v2';
 // Cap on the fallback name search. Each card costs credits, so this trades a few
@@ -27,6 +28,7 @@ const client = axios.create({
   timeout: 15000,
   headers: { 'User-Agent': 'Bindarr/1.0', Accept: 'application/json' },
 });
+metrics.instrumentAxiosClient(client, 'graded-prices');
 
 class GradedPriceError extends Error {
   constructor(status, message) { super(message); this.status = status; }

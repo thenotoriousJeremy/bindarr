@@ -17,6 +17,7 @@ const cardSearchSql = require('./utils/cardSearchSql');
 const { cacheNormalizedCards } = require('./utils/cardCache');
 const languages = require('./utils/languages');
 const { pruneStaleSets } = require('./utils/setCatalogue');
+const metrics = require('./utils/metrics');
 
 const API_BASE_URL = 'https://api.tcgdex.net/v2';
 
@@ -25,6 +26,7 @@ const client = axios.create({
   timeout: 10000,
   headers: { 'User-Agent': 'Bindarr/1.0', Accept: 'application/json' },
 });
+metrics.instrumentAxiosClient(client, 'tcgdex');
 
 // TCGdex publishes no rate limit, but a search hydrates one request per result,
 // so cap the fan-out rather than firing 60 sockets at someone else's free API.

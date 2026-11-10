@@ -4,6 +4,7 @@ const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept } = requir
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
 const { cacheNormalizedCards } = require('./utils/cardCache');
+const metrics = require('./utils/metrics');
 
 const API_BASE_URL = 'https://api.pokemontcg.io/v2';
 const API_KEY = process.env.POKEMON_TCG_API_KEY || ''; // Optional user key
@@ -14,6 +15,7 @@ const tcgClient = axios.create({
   timeout: 6000,
   headers: API_KEY ? { 'X-Api-Key': API_KEY } : {}
 });
+metrics.instrumentAxiosClient(tcgClient, 'pokemontcg');
 
 // api.pokemontcg.io answers 5xx (and occasionally stalls past the timeout) often
 // enough that a single failed GET made searches look broken most of the time —

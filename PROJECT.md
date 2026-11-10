@@ -206,7 +206,23 @@ if `card_cache` gains a writer other than `cacheNormalizedCards`.
 | `/api/notifications` | notifications.js | Per-user notification channels (Discord/ntfy/webhook/Apprise; URL and token write-only, reported as `has_url`/`has_token`), `channels/:id/test`, price-move thresholds (`PUT /prefs`) |
 | `/api/shared` | shared.js | Public, read-only collection view by `share_token` (no auth) |
 | `/api` | backup.js | `GET /backup` (the whole account as one JSON file), `POST /backup/restore` (replace the account's contents from one; ids renumbered, card data only ever added) |
-| `/api/admin` | admin.js | User management, card cache seeding, `catalogs` (list / `build` / `stop` / `progress`), DB backups (admin) |
+| `/api/admin` | admin.js | User management, admin-only collection and runtime metrics, card cache seeding, `catalogs` (list / `build` / `stop` / `progress`), DB backups |
+
+`METRICS_ENABLED=true` enables the admin-only `/api/admin/metrics` panel and
+in-memory request/provider instrumentation. `PROMETHEUS_METRICS_ENABLED=true`
+enables a Prometheus-only listener at `/metrics`, on
+`PROMETHEUS_PORT` (default `9100`), and its instrumentation. The listener serves no
+other routes; protect its port with network rules. Both feature flags default to
+off. Prometheus exports the same collection totals and per-user card/type
+breakdowns as the admin panel, so the endpoint exposes usernames and individual
+collection values to clients that can reach the port. Set
+`PROMETHEUS_METRICS_TOKEN` to require `Authorization: Bearer <token>`
+(`utils/metricsAuth.js`); without it the endpoint is unauthenticated. Runtime
+counters are held in memory and reset on server restart; collection metrics are
+queried from the database on each scrape. Provider totals include API calls and
+catalog card-image downloads; retries count as separate attempts. Prometheus also
+exports `bindarr_upstream_requests_by_operation_total` with `operation="api"` or
+`operation="card_image"` for the breakdown.
 
 ### Device mode (the app without a server)
 

@@ -19,6 +19,7 @@
 //      from the cache rather than by re-fetching every cert the user ever entered.
 const axios = require('axios');
 const db = require('./db');
+const metrics = require('./utils/metrics');
 
 const API_BASE_URL = 'https://api.psacard.com/publicapi';
 
@@ -27,6 +28,7 @@ const client = axios.create({
   timeout: 10000,
   headers: { 'User-Agent': 'Bindarr/1.0', Accept: 'application/json' },
 });
+metrics.instrumentAxiosClient(client, 'psa');
 
 // PSA meters the public API per token and does not publish the ceiling as a
 // header, so the only safe assumption is that it is low. Requests are serialized

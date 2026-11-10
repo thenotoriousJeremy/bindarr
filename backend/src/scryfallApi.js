@@ -7,6 +7,7 @@ const scryfallSyntax = require('./utils/scryfallSyntax');
 const cardSearchSql = require('./utils/cardSearchSql');
 const languages = require('./utils/languages');
 const { cacheNormalizedCards } = require('./utils/cardCache');
+const metrics = require('./utils/metrics');
 
 // Scryfall needs no API key but asks callers to identify themselves and accept
 // JSON. See https://scryfall.com/docs/api. IDs from Scryfall are UUIDs / set-num
@@ -17,6 +18,7 @@ const client = axios.create({
   timeout: 6000,
   headers: { 'User-Agent': 'Bindarr/1.0', 'Accept': 'application/json' }
 });
+metrics.instrumentAxiosClient(client, 'scryfall');
 
 // Search, per-set fetches and the background price sweep all hit Scryfall and
 // can run concurrently, so every request goes through one serialized queue —

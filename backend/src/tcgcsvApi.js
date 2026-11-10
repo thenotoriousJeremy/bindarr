@@ -27,6 +27,7 @@ const axios = require('axios');
 const db = require('./db');
 const { recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
 const { normId, normName, fold } = require('./utils/setCatalogueMatch');
+const metrics = require('./utils/metrics');
 const { slimResults, SEALED_ONLY_CATEGORY } = require('./utils/tcgcsvSlim');
 
 const API_BASE_URL = (process.env.TCGCSV_BASE_URL || 'https://tcgcsv.com').replace(/\/+$/, '');
@@ -152,6 +153,7 @@ const client = axios.create({
   timeout: 30000,
   headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
 });
+metrics.instrumentAxiosClient(client, 'tcgcsv');
 
 let loggedCooldownUntil;
 let lastRequestAt = 0;

@@ -16,6 +16,9 @@ const helmet = require('helmet');
 const compression = require('compression');
 const path = require('path');
 const db = require('./db');
+const metrics = require('./utils/metrics');
+const getCollectionMetrics = require('./utils/collectionMetrics');
+const tcgApi = require('./tcgApi');
 const scryfallApi = require('./scryfallApi');
 const backup = require('./backup');
 const { createScheduler } = require('./scheduler');
@@ -74,6 +77,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const PORT = process.env.PORT || 3001;
+app.use(metrics.middleware);
 
 // The model directory is created here, at startup, as the app's own user —
 // deliberately not by the root entrypoint. A directory root creates inside a
@@ -181,12 +185,14 @@ app.use(helmet({
       //   Lorcast            cards.lorcast.io
       //   pokemontcgapi.com  media.rarebit.app
       //   Riftbound          cmsassets.rgpub.io
+      //   TCGCSV / TCGplayer sealed products tcgplayer-cdn.tcgplayer.com
       // data: and blob: are the scanner's captures and previews.
       imgSrc: [
         "'self'", 'data:', 'blob:',
         'https://images.pokemontcg.io', 'https://images.scrydex.com', 'https://assets.tcgdex.net',
         'https://cards.scryfall.io', 'https://svgs.scryfall.io', 'https://c1.scryfall.com', 'https://img.scryfall.com',
-        'https://cards.lorcast.io', 'https://media.rarebit.app', 'https://cmsassets.rgpub.io'
+        'https://cards.lorcast.io', 'https://media.rarebit.app', 'https://cmsassets.rgpub.io',
+        'https://tcgplayer-cdn.tcgplayer.com'
       ],
       // index.html loads Antonio, Outfit and Plus Jakarta Sans from Google Fonts,
       // which is two separate origins: the stylesheet comes from fonts.googleapis
@@ -558,6 +564,8 @@ app.get('/api/health', async (req, res) => {
 // worse, a stall that looks like a hang.
 app.use(compression());
 
+app.get('/metrics', (_req, res) => res.sendStatus(404));
+
 // --- PUBLIC API ROUTES ---
 // Everything mounted above the gate below is reachable without a session, and
 // each one is deliberate: login/register, a public shared collection, and the
@@ -671,6 +679,47 @@ app.use((err, req, res, next) => {
 });
 
 // Start Express Server
+if (metrics.prometheusEnabled) {
+  const prometheusPort = Number(process.env.PROMETHEUS_PORT || 9100);
+  if (!Number.isInteger(prometheusPort) || prometheusPort < 1 || prometheusPort > 65535) {
+    throw new Error('PROMETHEUS_PORT must be an integer between 1 and 65535');
+  }
+  const otherPorts = [Number(PORT), Number(process.env.HTTPS_PORT)].filter(port => port > 0);
+  if (otherPorts.includes(prometheusPort)) {
+    throw new Error('PROMETHEUS_PORT must differ from PORT and HTTPS_PORT');
+  }
+
+  const { metricsRequestAuthorized } = require('./utils/metricsAuth');
+  const prometheusToken = process.env.PROMETHEUS_METRICS_TOKEN || '';
+  const prometheusApp = express();
+  prometheusApp.disable('x-powered-by');
+  prometheusApp.get('/metrics', async (req, res) => {
+    if (!metricsRequestAuthorized(req.headers.authorization, prometheusToken)) {
+      res.set('WWW-Authenticate', 'Bearer');
+      return res.status(401).type('text/plain').send('Unauthorized\n');
+    }
+    // A scrape during startup would query a schema still being migrated.
+    if (!dbReady) return res.status(503).type('text/plain').send('Database initializing\n');
+    try {
+      const collection = await getCollectionMetrics(db);
+      res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+      res.set('Cache-Control', 'no-store');
+      res.send(metrics.toPrometheus(collection));
+    } catch (error) {
+      console.error('PROMETHEUS METRICS ERROR:', error);
+      res.status(500).type('text/plain').send('Failed to collect metrics\n');
+    }
+  });
+  prometheusApp.use((req, res) => res.sendStatus(404));
+
+  const prometheusServer = prometheusApp.listen(prometheusPort, '0.0.0.0', () => {
+    console.log(`Prometheus metrics listener running on port ${prometheusPort}${prometheusToken ? ' (bearer token required)' : ''}`);
+  });
+  prometheusServer.on('error', error => {
+    console.error(`Prometheus metrics listener failed on port ${prometheusPort}:`, error);
+  });
+}
+
 httpServer = app.listen(PORT, '0.0.0.0', async () => {
   console.log(`=========================================`);
   console.log(`Bindarr Server running on port ${PORT}`);
