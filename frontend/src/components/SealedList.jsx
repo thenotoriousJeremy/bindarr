@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2 } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal, LayoutGrid, List, MousePointerClick } from 'lucide-react';
 import { useT } from '../utils/i18n';
 import { gameLabel, gameOptions } from '../utils/games';
 import { formatPrice } from '../utils/formatPrice';
 import { printingLabel } from '../utils/cardOptions';
+import { useLongPress } from '../utils/useLongPress';
 import SealedPurchaseForm from './SealedPurchaseForm';
 import Modal from './Modal';
 import PackPriceSplitter from './PackPriceSplitter';
@@ -17,6 +19,17 @@ const setsMatch = (a, b) => {
   const na = normSet(a), nb = normSet(b);
   return !!na && !!nb && (na === nb || na.includes(nb) || nb.includes(na));
 };
+
+const filterLabelStyle = { fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' };
+
+function SealedFilterField({ label, children }) {
+  return (
+    <div className="form-group" style={{ marginBottom: 0 }}>
+      <label style={filterLabelStyle}>{label}</label>
+      {children}
+    </div>
+  );
+}
 
 // A single opened unit's "link cards from this pack" panel: pick from the most
 // recently added, still-unlinked collection entries and hand them to
@@ -166,11 +179,12 @@ function LinkSourcePanel({ purchase, showToast, onSaved }) {
 function LinkedCardsPanel({ unitId, expectedCards, refreshKey, showToast, onChanged }) {
   const { t } = useT();
   const [cards, setCards] = useState(null);
+  const [progress, setProgress] = useState(null);
 
   const load = () => {
     fetch(`/api/sealed/units/${unitId}/cards`)
       .then(r => r.json())
-      .then(d => setCards(d.cards || []))
+      .then(d => { setCards(d.cards || []); setProgress(d.progress || null); })
       .catch(() => setCards([]));
   };
 
@@ -189,12 +203,14 @@ function LinkedCardsPanel({ unitId, expectedCards, refreshKey, showToast, onChan
   if (cards == null) return <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{t('common.loading')}</div>;
 
   const linkedCount = cards.reduce((n, c) => n + (c.quantity || 1), 0);
+  const shownLinkedCount = progress?.linked_cards ?? linkedCount;
+  const shownExpectedCards = progress?.expected_cards ?? expectedCards;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-      {expectedCards > 0 && (
-        <div style={{ fontSize: '0.75rem', color: linkedCount >= expectedCards ? 'var(--type-grass)' : 'var(--text-secondary)' }}>
-          {t('sealed.cardProgress', { linked: linkedCount, expected: expectedCards })}
+      {shownExpectedCards > 0 && (
+        <div style={{ fontSize: '0.75rem', color: shownLinkedCount >= shownExpectedCards ? 'var(--type-grass)' : 'var(--text-secondary)' }}>
+          {t('sealed.cardProgress', { linked: shownLinkedCount, expected: shownExpectedCards })}
         </div>
       )}
       {cards.length === 0 ? (
@@ -219,15 +235,18 @@ function LinkedCardsPanel({ unitId, expectedCards, refreshKey, showToast, onChan
   );
 }
 
-function PurchaseCard({ purchase, onChanged, onEdit, showToast }) {
+function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSelectionChange, showClaimedByOthers, viewMode, selectMode, pressHandlers, longPressFired }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
   const [units, setUnits] = useState(null);
+  const [unitsError, setUnitsError] = useState(false);
   const [linkingUnit, setLinkingUnit] = useState(null);
   const [viewingUnit, setViewingUnit] = useState(null);
   const [cardsVersion, setCardsVersion] = useState(0);
   const [recipe, setRecipe] = useState(null);
   const [refreshingValue, setRefreshingValue] = useState(false);
+  const [openingAll, setOpeningAll] = useState(false);
+  const [savingAvailability, setSavingAvailability] = useState(false);
 
   useEffect(() => {
     if (!purchase.template_id) { setRecipe(null); return; }
@@ -238,13 +257,21 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast }) {
   }, [purchase.template_id]);
 
   const loadUnits = () => {
-    fetch(`/api/sealed/purchases/${purchase.id}`)
-      .then(r => r.json())
-      .then(d => setUnits(d.units || []))
-      .catch(() => showToast?.(t('sealed.errLoad')));
+    setUnits(null);
+    setUnitsError(false);
+    fetch(`/api/sealed/purchases/${purchase.id}${showClaimedByOthers ? '?show_claimed_by_others=1' : ''}`)
+      .then(async response => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || t('sealed.errLoad'));
+        setUnits(data.units || []);
+      })
+      .catch(() => {
+        setUnitsError(true);
+        showToast?.(t('sealed.errLoad'));
+      });
   };
 
-  useEffect(() => { if (open && units == null) loadUnits(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open) loadUnits(); }, [open, showClaimedByOthers]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleUnit = async (unit) => {
     const opening = !unit.opened_at;
@@ -260,6 +287,43 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast }) {
       const cardCount = data.applied.filter(c => c.component_type === 'card').reduce((n, c) => n + (c.quantity || 1), 0);
       const productCount = data.applied.filter(c => c.component_type === 'product').reduce((n, c) => n + (c.quantity || 1), 0);
       showToast?.(t('sealed.recipeApplied', { cards: cardCount, packs: productCount }));
+    }
+  };
+
+  const openAll = async () => {
+    setOpeningAll(true);
+    try {
+      const res = await fetch(`/api/sealed/purchases/${purchase.id}/open-all`, { method: 'PUT' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showToast?.(data.error || t('sealed.errSave')); return; }
+      loadUnits();
+      onChanged?.();
+      showToast?.(t('sealed.markedAllOpen', { count: data.opened }));
+    } catch {
+      showToast?.(t('sealed.errSave'));
+    } finally {
+      setOpeningAll(false);
+    }
+  };
+
+  const toggleSharing = async () => {
+    setSavingAvailability(true);
+    try {
+      const res = await fetch(`/api/sealed/purchases/${purchase.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ available_to_all: !purchase.available_to_all }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast?.(data.error || t('sealed.errSave'));
+        return;
+      }
+      onChanged?.();
+    } catch {
+      showToast?.(t('sealed.errSave'));
+    } finally {
+      setSavingAvailability(false);
     }
   };
 
@@ -285,102 +349,123 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast }) {
     }
   };
 
-  const total = (purchase.unit_price || 0) * purchase.quantity;
+  const total = purchase.unit_price == null ? null : Number(purchase.unit_price) * Number(purchase.quantity);
   const unopenedMarketValue = purchase.market_value == null ? null : purchase.market_value * (purchase.sealed_count || 0);
-
-  return (
-    <div className="glass-panel" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-        {purchase.image_url
-          ? <img src={purchase.image_url} alt="" style={{ width: '32px', height: '44px', objectFit: 'contain' }} />
-          : <Package size={28} style={{ color: 'var(--text-secondary)' }} />}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{purchase.product_name}</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-            {gameLabel(purchase.game)} · {purchase.sealed_type || t('sealed.otherType')}
-            {purchase.store ? ` · ${purchase.store}` : ''}{purchase.purchase_date ? ` · ${purchase.purchase_date}` : ''}
-          </div>
-          {(purchase.expected_cards > 0 || purchase.contents_note) && (
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-              {purchase.expected_cards > 0 ? t('sealed.nCards', { n: purchase.expected_cards }) : ''}
-              {purchase.expected_cards > 0 && purchase.contents_note ? ' + ' : ''}
-              {purchase.contents_note ? ` (${purchase.contents_note})` : ''}
-            </div>
-          )}
-          {recipe && recipe.components?.length > 0 && (
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-              {t('sealed.recipeLabel')}: {recipe.components.map(c =>
-                `${c.quantity}x ${c.component_type === 'card' ? (c.card_id || t('sealed.componentCard')) : c.product_name}`
-              ).join(' + ')}
-            </div>
-          )}
-          {purchase.source_unit_id && (
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-              {purchase.source_product_name
-                ? t('sealed.unboxedFromProduct', { product: purchase.source_product_name, unit: purchase.source_unit_number })
-                : t('sealed.unboxedNote')}
-            </div>
-          )}
-        </div>
-        <div style={{ textAlign: 'right', fontSize: '0.8rem' }}>
-          <div style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{t('sealed.totalSpent')}: ${formatPrice(total)}</div>
-          <div style={{ color: 'var(--text-secondary)' }}>
-            {t('sealed.unopenedMarketValue')}: {unopenedMarketValue == null ? '—' : `$${formatPrice(unopenedMarketValue)}`}
-          </div>
-          {purchase.market_value != null && <div style={{ color: 'var(--text-secondary)' }}>{t('sealed.marketValuePerUnit')}: ${formatPrice(purchase.market_value)}</div>}
-          <div style={{ color: 'var(--text-secondary)' }}>
-            {purchase.sealed_count} {t('sealed.sealedLabel')} · {purchase.opened_count} {t('sealed.openedLabel')}
-          </div>
-        </div>
-        {(purchase.sealed_count || 0) > 0 && (
-          <button type="button" className="btn btn-secondary btn-icon-only" title={t('sealed.refreshMarketValue')} aria-label={t('sealed.refreshMarketValue')}
-            onClick={refreshMarketValue} disabled={!purchase.product_id || refreshingValue}>
-            <RefreshCw size={14} className={refreshingValue ? 'spin-animation' : ''} />
-          </button>
-        )}
-        <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setOpen(o => !o)}>
-          {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-        </button>
-        <button type="button" className="btn btn-secondary btn-icon-only" title={t('common.edit')} aria-label={t('common.edit')} onClick={() => onEdit?.(purchase)}>
-          <Pencil size={14} />
-        </button>
-        <button type="button" className="btn btn-secondary btn-icon-only" style={{ color: 'var(--accent-red)' }} onClick={remove}>
-          <Trash2 size={14} />
-        </button>
+  const hasSealedUnits = (purchase.sealed_count || 0) > 0;
+  const canShare = purchase.is_owner && hasSealedUnits;
+  const purchaseSelection = (
+    <input
+      type="checkbox"
+      className="sealed-purchase-card-select"
+      checked={canShare && selected}
+      disabled={!canShare}
+      aria-label={t('sealed.selectPurchase', { product: purchase.product_name })}
+      onChange={event => onSelectionChange?.(purchase.id, event.target.checked)}
+    />
+  );
+  const tilePressHandlers = canShare ? pressHandlers?.(purchase.id) : {};
+  const purchaseImage = purchase.image_url
+    ? <img src={purchase.image_url} alt="" className="sealed-purchase-card-image" />
+    : <Package size={viewMode === 'gallery' ? 56 : 28} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />;
+  const purchaseCounts = (
+    <div className="sealed-purchase-card-counts">
+      <span>{purchase.sealed_count} {t('sealed.sealedLabel')}</span>
+      <span>{purchase.opened_count} {t('sealed.openedLabel')}</span>
+    </div>
+  );
+  const purchaseFinancials = (
+    <div className="sealed-purchase-card-financials">
+      <div style={{ color: 'var(--text-strong)', fontWeight: 600 }}>
+        {t('sealed.totalSpent')}: {total == null ? '—' : `$${formatPrice(total)}`}
       </div>
+      <div style={{ color: 'var(--text-secondary)' }}>
+        {t('sealed.unopenedMarketValue')}: {unopenedMarketValue == null ? '—' : `$${formatPrice(unopenedMarketValue)}`}
+      </div>
+      {purchase.market_value != null && <div style={{ color: 'var(--text-secondary)' }}>{t('sealed.marketValuePerUnit')}: ${formatPrice(purchase.market_value)}</div>}
+    </div>
+  );
 
-      {open && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.5rem' }}>
-          {(units || []).map((u, i) => (
+  const toggleDetails = () => {
+    if (viewMode === 'gallery') setOpen(true);
+    else setOpen(current => !current);
+  };
+
+  const activateTile = () => {
+    if (longPressFired?.current) {
+      longPressFired.current = false;
+      return;
+    }
+    if (selectMode && canShare) {
+      onSelectionChange?.(purchase.id, !selected);
+      return;
+    }
+    toggleDetails();
+  };
+
+  const renderPurchaseDetails = () => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.5rem' }}>
+      {unitsError ? (
+        <div style={{ color: 'var(--text-secondary)' }}>{t('sealed.errLoad')}</div>
+      ) : units === null ? (
+        <div style={{ color: 'var(--text-secondary)' }}>{t('common.loading')}</div>
+      ) : (
+        <>
+          {units.filter(unit => !unit.opened_at && (unit.claimed_by_user_id == null || unit.claimed_by_me)).length > 1 && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button type="button" className="btn btn-secondary btn-sm"
+                disabled={openingAll} onClick={openAll}>
+                <Unlock size={12} /> {openingAll ? t('common.loading') : t('sealed.markAllOpen')}
+              </button>
+            </div>
+          )}
+          {units.map((u, i) => (
             <div key={u.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem' }}>
-                <span style={{ color: 'var(--text-secondary)', width: '4.5rem' }}>{t('sealed.unitLabel', { n: i + 1 })}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text-secondary)', width: '4.5rem' }}>{t('sealed.unitLabel', { n: u.unit_number || i + 1 })}</span>
                 <span style={{ color: u.opened_at ? 'var(--type-fire)' : 'var(--type-grass)', flex: 1 }}>
                   {u.opened_at ? t('sealed.opened') : t('sealed.sealed')}
                 </span>
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => toggleUnit(u)}>
-                  {u.opened_at ? <><Lock size={12} /> {t('sealed.reseal')}</> : <><Unlock size={12} /> {t('sealed.markOpened')}</>}
-                </button>
-                {u.opened_at && (
+                {u.claimed_by_username && (
+                  <span style={{ color: 'var(--text-secondary)' }}>
+                    {t('sealed.claimedBy', { user: u.claimed_by_username })}
+                  </span>
+                )}
+                {u.expected_cards > 0 && (
+                  <span style={{ color: u.linked_cards >= u.expected_cards ? 'var(--type-grass)' : 'var(--text-secondary)' }}>
+                    {t('sealed.cardProgress', { linked: u.linked_cards || 0, expected: u.expected_cards })}
+                  </span>
+                )}
+                {u.can_toggle && (
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => toggleUnit(u)}>
+                    {u.opened_at ? <><Lock size={12} /> {t('sealed.reseal')}</> : <><Unlock size={12} /> {t(!purchase.is_owner && !u.claimed_by_me ? 'sealed.openAndClaim' : 'sealed.markOpened')}</>}
+                  </button>
+                )}
+                {u.opened_at && u.can_view_cards && (
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => setLinkingUnit(linkingUnit === u.id ? null : u.id)}>
                     {t('sealed.linkCards')}
                   </button>
                 )}
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setViewingUnit(viewingUnit === u.id ? null : u.id)}>
-                  {t('sealed.viewLinkedCards')}
-                </button>
+                {u.can_view_cards && (
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setViewingUnit(viewingUnit === u.id ? null : u.id)}>
+                    {t('sealed.viewLinkedCards')}
+                  </button>
+                )}
               </div>
               {linkingUnit === u.id && (
                 <LinkCardsPanel unit={{ ...u, unit_price: purchase.unit_price }} purchase={purchase} showToast={showToast}
                   onLinked={() => { loadUnits(); setCardsVersion(v => v + 1); }} />
               )}
               {viewingUnit === u.id && (
-                <LinkedCardsPanel unitId={u.id} expectedCards={purchase.expected_cards} refreshKey={cardsVersion} showToast={showToast}
+                <LinkedCardsPanel unitId={u.id} expectedCards={u.expected_cards} refreshKey={cardsVersion} showToast={showToast}
                   onChanged={() => setCardsVersion(v => v + 1)} />
               )}
             </div>
           ))}
-          {purchase.notes && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{purchase.notes}</div>}
+        </>
+      )}
+      {purchase.is_owner && purchase.notes && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{purchase.notes}</div>}
+      {purchase.is_owner && (
+        <>
           <button type="button" className="btn btn-secondary btn-sm" style={{ alignSelf: 'flex-start' }}
             onClick={() => setLinkingUnit(linkingUnit === 'source' ? null : 'source')}>
             <Link2 size={12} /> {t('sealed.linkToProduct')}
@@ -388,7 +473,155 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast }) {
           {linkingUnit === 'source' && (
             <LinkSourcePanel purchase={purchase} showToast={showToast} onSaved={() => { setLinkingUnit(null); onChanged?.(); }} />
           )}
+        </>
+      )}
+    </div>
+  );
+
+  return (
+    <div className={`glass-panel sealed-purchase-card ${viewMode === 'gallery' ? 'sealed-purchase-card-tile' : ''}`} style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      <div className="sealed-purchase-card-header">
+        {viewMode === 'gallery' ? (
+          <button type="button" className="sealed-purchase-card-tile-summary"
+            onClick={activateTile} {...tilePressHandlers}
+            aria-label={`${t(selectMode && canShare ? 'collection.select' : 'sealed.purchaseDetails')}: ${purchase.product_name}`}
+            aria-pressed={selectMode && canShare ? selected : undefined}>
+            <div className="sealed-purchase-card-visual">
+              {purchaseImage}
+              {selectMode && canShare && (
+                <div className={`sealed-purchase-card-selection-mark${selected ? ' is-selected' : ''}`} aria-hidden="true">
+                  {selected ? '✓' : ''}
+                </div>
+              )}
+            </div>
+            <div className="sealed-purchase-card-details">
+              <div className="sealed-purchase-card-title" style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{purchase.product_name}</div>
+            </div>
+            <div className="sealed-purchase-card-values">{purchaseCounts}</div>
+          </button>
+        ) : (
+          <div className="sealed-purchase-card-identity">
+            {purchaseSelection}
+            <div className="sealed-purchase-card-visual">{purchaseImage}</div>
+            <div className="sealed-purchase-card-details">
+              <div className="sealed-purchase-card-title" style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{purchase.product_name}</div>
+              <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                {gameLabel(purchase.game)} · {purchase.sealed_type || t('sealed.otherType')}
+                {` · ${t('sealed.quantity')}: ${purchase.quantity}`}
+                {purchase.store ? ` · ${purchase.store}` : ''}{purchase.purchase_date ? ` · ${purchase.purchase_date}` : ''}
+                {purchase.buyer_username ? ` · ${t('sealed.buyer')}: ${purchase.buyer_username}` : ''}
+              </div>
+              {hasSealedUnits && (purchase.available_to_all || purchase.is_claimed) && (
+                <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--accent-blue, var(--text-secondary))' }}>
+                  {purchase.available_to_all ? t('sealed.availableToAll') : t('sealed.claimedFromShared')}
+                </div>
+              )}
+              {(purchase.expected_cards_per_unit > 0 || purchase.contents_note) && (
+                <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                  {purchase.expected_cards_per_unit > 0 ? t('sealed.nCards', { n: purchase.expected_cards_per_unit }) : ''}
+                  {purchase.expected_cards_per_unit > 0 && purchase.contents_note ? ' + ' : ''}
+                  {purchase.contents_note ? ` (${purchase.contents_note})` : ''}
+                </div>
+              )}
+              {recipe && recipe.components?.length > 0 && (
+                <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                  {t('sealed.recipeLabel')}: {recipe.components.map(c =>
+                    `${c.quantity}x ${c.component_type === 'card' ? (c.card_id || t('sealed.componentCard')) : c.product_name}`
+                  ).join(' + ')}
+                </div>
+              )}
+              {purchase.source_unit_id && (
+                <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                  {purchase.source_product_name
+                    ? t('sealed.unboxedFromProduct', { product: purchase.source_product_name, unit: purchase.source_unit_number })
+                    : t('sealed.unboxedNote')}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {viewMode === 'list' && (
+          <div className="sealed-purchase-card-values">
+            {purchaseFinancials}
+            {purchaseCounts}
+          </div>
+        )}
+        <div className="sealed-purchase-card-actions">
+          {purchase.is_owner && hasSealedUnits && (
+            <button type="button" className="btn btn-secondary btn-icon-only" title={t('sealed.refreshMarketValue')} aria-label={t('sealed.refreshMarketValue')}
+              onClick={refreshMarketValue} disabled={!purchase.product_id || refreshingValue}>
+              <RefreshCw size={14} className={refreshingValue ? 'spin-animation' : ''} />
+            </button>
+          )}
+          {viewMode === 'list' && (
+            <button type="button" className="btn btn-secondary btn-icon-only"
+              title={t('sealed.purchaseDetails')}
+              aria-label={`${t('sealed.purchaseDetails')}: ${purchase.product_name}`}
+              onClick={toggleDetails}>
+              {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            </button>
+          )}
+          {canShare && (
+            <button type="button"
+              className={`btn btn-icon-only ${purchase.available_to_all ? 'btn-primary' : 'btn-secondary sealed-share-start'}`}
+              title={t(purchase.available_to_all ? 'sealed.stopSharing' : 'sealed.sharePurchase')}
+              aria-label={t(purchase.available_to_all ? 'sealed.stopSharing' : 'sealed.sharePurchase')}
+              disabled={savingAvailability} onClick={toggleSharing}>
+              {purchase.available_to_all ? <Lock size={14} /> : <Share2 size={14} />}
+            </button>
+          )}
+          {purchase.is_owner && (
+            <>
+              <button type="button" className="btn btn-secondary btn-icon-only" title={t('common.edit')} aria-label={t('common.edit')} onClick={() => onEdit?.(purchase)}>
+                <Pencil size={14} />
+              </button>
+              <button type="button" className="btn btn-secondary btn-icon-only" style={{ color: 'var(--accent-red)' }} onClick={remove}>
+                <Trash2 size={14} />
+              </button>
+            </>
+          )}
         </div>
+      </div>
+
+      {open && viewMode === 'list' && renderPurchaseDetails()}
+      {open && viewMode === 'gallery' && createPortal(
+        <Modal
+          onClose={() => setOpen(false)}
+          label={t('sealed.purchaseDetails')}
+          className="glass-panel"
+          overlayStyle={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          style={{
+            maxWidth: '760px', width: '100%', maxHeight: '90vh', overflowY: 'auto',
+            overscrollBehavior: 'contain', padding: '1.25rem', position: 'relative',
+          }}
+        >
+          <button type="button" className="btn btn-secondary btn-icon-only"
+            onClick={() => setOpen(false)} aria-label={t('common.close')}
+            style={{ position: 'absolute', top: '0.75rem', right: '0.75rem', borderRadius: '50%' }}>
+            <X size={16} />
+          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', paddingRight: '2rem', marginBottom: '0.75rem' }}>
+            {purchase.image_url
+              ? <img src={purchase.image_url} alt="" style={{ width: '48px', height: '64px', objectFit: 'contain', flexShrink: 0 }} />
+              : <Package size={32} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />}
+            <div style={{ minWidth: 0 }}>
+              <h2 style={{ color: 'var(--text-strong)', margin: 0 }}>{purchase.product_name}</h2>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                {gameLabel(purchase.game)} · {purchase.sealed_type || t('sealed.otherType')} · {t('sealed.quantity')}: {purchase.quantity}
+              </div>
+              {(purchase.store || purchase.purchase_date) && (
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                  {[purchase.store, purchase.purchase_date].filter(Boolean).join(' · ')}
+                </div>
+              )}
+            </div>
+          </div>
+          {renderPurchaseDetails()}
+        </Modal>,
+        document.body
       )}
     </div>
   );
@@ -403,15 +636,33 @@ export default function SealedList({ showToast }) {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingPurchase, setEditingPurchase] = useState(null);
+  const [viewMode, setViewMode] = useState('gallery');
+  const [showFilters, setShowFilters] = useState(false);
   const [search, setSearch] = useState('');
   const [gameFilter, setGameFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [expansionFilter, setExpansionFilter] = useState([]);
+  const [showClaimedByOthers, setShowClaimedByOthers] = useState(false);
+  const [selectedPurchaseIds, setSelectedPurchaseIds] = useState(() => new Set());
+  const [selectMode, setSelectMode] = useState(false);
+  const [savingSharing, setSavingSharing] = useState(false);
 
-  const load = () => {
+  const armPurchaseSelection = (id) => {
+    const purchase = purchases.find(item => item.id === id);
+    if (!purchase || !purchase.is_owner || (purchase.sealed_count || 0) <= 0) return;
+    setSelectMode(true);
+    setSelectedPurchaseIds(current => new Set(current).add(id));
+  };
+  const { handlers: purchasePressHandlers, fired: purchaseLongPressFired } = useLongPress(armPurchaseSelection);
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedPurchaseIds(new Set());
+  };
+
+  const load = (includeClaimedByOthers = showClaimedByOthers) => {
     setLoading(true);
-    fetch('/api/sealed/purchases')
+    fetch(`/api/sealed/purchases${includeClaimedByOthers ? '?show_claimed_by_others=1' : ''}`)
       .then(r => r.json())
       .then(d => setPurchases(d.purchases || []))
       .catch(() => showToast?.(t('sealed.errLoad')))
@@ -419,16 +670,27 @@ export default function SealedList({ showToast }) {
   };
 
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setSelectedPurchaseIds(current => {
+      const ownedIds = new Set(purchases.filter(purchase => purchase.is_owner && (purchase.sealed_count || 0) > 0
+        && (showClaimedByOthers || purchase.visible_unit_count > 0)).map(purchase => purchase.id));
+      const next = new Set([...current].filter(id => ownedIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [purchases, showClaimedByOthers]);
 
-  const totalSpent = purchases.reduce((s, p) => s + (p.unit_price || 0) * p.quantity, 0);
-  const unopenedMarketValue = purchases.reduce((sum, p) => sum + (p.market_value || 0) * (p.sealed_count || 0), 0);
-  const hasMarketValue = purchases.some(p => p.market_value != null && p.sealed_count > 0);
-  const totalSealed = purchases.reduce((s, p) => s + (p.sealed_count || 0), 0);
-  const totalOpened = purchases.reduce((s, p) => s + (p.opened_count || 0), 0);
-  const productTypes = [...new Set(purchases.map(p => p.sealed_type).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  const expansions = [...new Set(purchases.flatMap(p => p.expansions || []))].sort((a, b) => a.localeCompare(b));
+  const visiblePurchases = purchases.filter(
+    purchase => showClaimedByOthers || !purchase.is_owner || purchase.visible_unit_count > 0
+  );
+  const totalSpent = purchases.reduce((s, p) => s + (p.is_owner ? (p.unit_price || 0) * p.quantity : 0), 0);
+  const unopenedMarketValue = visiblePurchases.reduce((sum, p) => sum + (p.market_value || 0) * (p.sealed_count || 0), 0);
+  const hasMarketValue = visiblePurchases.some(p => p.market_value != null && p.sealed_count > 0);
+  const totalSealed = visiblePurchases.reduce((s, p) => s + (p.sealed_count || 0), 0);
+  const totalOpened = visiblePurchases.reduce((s, p) => s + (p.opened_count || 0), 0);
+  const productTypes = [...new Set(visiblePurchases.map(p => p.sealed_type).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const expansions = [...new Set(visiblePurchases.flatMap(p => p.expansions || []))].sort((a, b) => a.localeCompare(b));
   const query = search.trim().toLocaleLowerCase();
-  const filteredPurchases = purchases.filter(purchase => {
+  const filteredPurchases = visiblePurchases.filter(purchase => {
     const searchable = [
       purchase.product_name, purchase.set_name, purchase.sealed_type, purchase.store,
       purchase.notes, purchase.contents_note, ...(purchase.expansions || []),
@@ -441,13 +703,66 @@ export default function SealedList({ showToast }) {
     if (expansionFilter.length && !expansionFilter.some(expansion => (purchase.expansions || []).includes(expansion))) return false;
     return true;
   });
-  const hasFilters = !!(search || gameFilter || typeFilter || statusFilter || expansionFilter.length);
+  const filteredOwnedPurchases = filteredPurchases.filter(purchase => purchase.is_owner && (purchase.sealed_count || 0) > 0);
+  const selectedOwnedPurchases = visiblePurchases.filter(
+    purchase => purchase.is_owner && (purchase.sealed_count || 0) > 0 && selectedPurchaseIds.has(purchase.id)
+  );
+  const allFilteredOwnedSelected = filteredOwnedPurchases.length > 0
+    && filteredOwnedPurchases.every(purchase => selectedPurchaseIds.has(purchase.id));
+  const activeFilterCount = (gameFilter ? 1 : 0) + (typeFilter ? 1 : 0) + (statusFilter ? 1 : 0)
+    + (expansionFilter.length ? 1 : 0) + (showClaimedByOthers ? 1 : 0);
+  const hasFilters = !!(search || gameFilter || typeFilter || statusFilter || expansionFilter.length || showClaimedByOthers);
   const clearFilters = () => {
     setSearch('');
     setGameFilter('');
     setTypeFilter('');
     setStatusFilter('');
     setExpansionFilter([]);
+    setShowClaimedByOthers(false);
+    load(false);
+  };
+  const toggleFilteredSelection = () => {
+    const filteredIds = filteredOwnedPurchases.map(purchase => purchase.id);
+    if (viewMode === 'gallery') setSelectMode(true);
+    setSelectedPurchaseIds(current => {
+      const next = new Set(current);
+      if (allFilteredOwnedSelected) filteredIds.forEach(id => next.delete(id));
+      else filteredIds.forEach(id => next.add(id));
+      return next;
+    });
+  };
+  const setPurchaseSelected = (id, selected) => {
+    setSelectedPurchaseIds(current => {
+      const next = new Set(current);
+      if (selected) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+  const updateSelectedSharing = async (availableToAll) => {
+    const ids = selectedOwnedPurchases.map(purchase => purchase.id);
+    if (!ids.length) return;
+
+    setSavingSharing(true);
+    try {
+      const res = await fetch('/api/sealed/purchases/bulk-sharing', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ purchase_ids: ids, available_to_all: availableToAll }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast?.(data.error || t('sealed.errSave'));
+        return;
+      }
+      setSelectedPurchaseIds(new Set());
+      showToast?.(t('sealed.bulkSharingUpdated', { count: data.updated }));
+      load();
+    } catch {
+      showToast?.(t('sealed.errSave'));
+    } finally {
+      setSavingSharing(false);
+    }
   };
 
   return (
@@ -456,9 +771,18 @@ export default function SealedList({ showToast }) {
         <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-strong)' }}>
           <Package size={20} /> {t('nav.sealed')}
         </h2>
-        <button type="button" className="btn btn-primary" onClick={() => setShowForm(true)}>
-          <Plus size={16} /> {t('sealed.addPurchase')}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {viewMode === 'gallery' && (
+            <button type="button" className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+              title={t('collection.selectHint')}>
+              <MousePointerClick size={14} /> {t(selectMode ? 'bulk.done' : 'collection.select')}
+            </button>
+          )}
+          <button type="button" className="btn btn-primary" onClick={() => setShowForm(true)}>
+            <Plus size={16} /> {t('sealed.addPurchase')}
+          </button>
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
@@ -468,39 +792,144 @@ export default function SealedList({ showToast }) {
         <span>{t('sealed.openedLabel')}: <strong style={{ color: 'var(--text-strong)' }}>{totalOpened}</strong></span>
       </div>
 
-      {purchases.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 2fr) repeat(auto-fit, minmax(145px, 1fr))', gap: '0.6rem', alignItems: 'center' }}>
-          <input
-            type="search"
-            className="input-control"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder={t('sealed.searchPlaceholder')}
-            aria-label={t('sealed.searchPlaceholder')}
-          />
-          <select className="select-control" value={gameFilter} onChange={e => setGameFilter(e.target.value)} aria-label={t('sealed.filterGame')}>
-            <option value="">{t('sealed.allGames')}</option>
-            {gameOptions().map(game => <option key={game.value} value={game.value}>{game.label}</option>)}
-          </select>
-          <select className="select-control" value={typeFilter} onChange={e => setTypeFilter(e.target.value)} aria-label={t('sealed.filterType')}>
-            <option value="">{t('sealed.allTypes')}</option>
-            {productTypes.map(type => <option key={type} value={type}>{type}</option>)}
-          </select>
-          <select className="select-control" value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label={t('sealed.filterStatus')}>
-            <option value="">{t('sealed.allStatuses')}</option>
-            <option value="sealed">{t('sealed.hasSealedUnits')}</option>
-            <option value="opened">{t('sealed.hasOpenedUnits')}</option>
-          </select>
-          <MultiSelectDropdown
-            label={t('sealed.filterExpansion')}
-            allLabel={t('sealed.allExpansions')}
-            value={expansionFilter}
-            onChange={setExpansionFilter}
-            options={expansions.map(expansion => ({ value: expansion, label: expansion }))}
-          />
-          {hasFilters && (
-            <button type="button" className="btn btn-secondary" onClick={clearFilters}>
-              <X size={14} /> {t('collection.clearFilters')}
+      <div className="glass-panel" style={{ marginBottom: '1rem', padding: '1rem 1.25rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: '0.75rem', alignItems: 'flex-end' }}>
+          <SealedFilterField label={t('sealed.searchLabel')}>
+            <div style={{ position: 'relative' }}>
+              <input
+                type="text"
+                className="input-control"
+                placeholder={t('sealed.searchPlaceholder')}
+                value={search}
+                onChange={event => setSearch(event.target.value)}
+                style={{ width: '100%', paddingLeft: '2.5rem' }}
+              />
+              <Search size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            </div>
+          </SealedFilterField>
+
+          <button
+            type="button"
+            className={`btn ${showFilters ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setShowFilters(current => !current)}
+            style={{ padding: '0.5rem 0.9rem', height: '40px', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', whiteSpace: 'nowrap' }}
+          >
+            <SlidersHorizontal size={15} />
+            {t('collection.filters')}
+            {activeFilterCount > 0 && (
+              <span style={{ background: 'var(--accent-red)', color: 'var(--text-strong)', fontSize: '0.65rem', fontWeight: 900, borderRadius: '999px', padding: '1px 7px', minWidth: '18px', textAlign: 'center' }}>
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
+
+          <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+            <button
+              type="button"
+              className={`btn btn-icon-only ${viewMode === 'gallery' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setViewMode('gallery')}
+              style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
+              title={t('collection.galleryView')}
+              aria-label={t('collection.galleryView')}
+            >
+              <LayoutGrid size={14} />
+            </button>
+            <button
+              type="button"
+              className={`btn btn-icon-only ${viewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setViewMode('list')}
+              style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
+              title={t('collection.listView')}
+              aria-label={t('collection.listView')}
+            >
+              <List size={14} />
+            </button>
+          </div>
+        </div>
+
+        {showFilters && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-glass)' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.75rem' }}>
+              <SealedFilterField label={t('sealed.filterGame')}>
+                <select className="select-control" value={gameFilter} onChange={event => setGameFilter(event.target.value)}>
+                  <option value="">{t('sealed.allGames')}</option>
+                  {gameOptions().map(game => <option key={game.value} value={game.value}>{game.label}</option>)}
+                </select>
+              </SealedFilterField>
+              <SealedFilterField label={t('sealed.filterType')}>
+                <select className="select-control" value={typeFilter} onChange={event => setTypeFilter(event.target.value)}>
+                  <option value="">{t('sealed.allTypes')}</option>
+                  {productTypes.map(type => <option key={type} value={type}>{type}</option>)}
+                </select>
+              </SealedFilterField>
+              <SealedFilterField label={t('sealed.filterStatus')}>
+                <select className="select-control" value={statusFilter} onChange={event => setStatusFilter(event.target.value)}>
+                  <option value="">{t('sealed.allStatuses')}</option>
+                  <option value="sealed">{t('sealed.hasSealedUnits')}</option>
+                  <option value="opened">{t('sealed.hasOpenedUnits')}</option>
+                </select>
+              </SealedFilterField>
+              <SealedFilterField label={t('sealed.filterExpansion')}>
+                <MultiSelectDropdown
+                  label={t('sealed.filterExpansion')}
+                  allLabel={t('sealed.allExpansions')}
+                  value={expansionFilter}
+                  onChange={setExpansionFilter}
+                  options={expansions.map(expansion => ({ value: expansion, label: expansion }))}
+                />
+              </SealedFilterField>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  id="showClaimedByOthers"
+                  checked={showClaimedByOthers}
+                  onChange={event => {
+                    const checked = event.target.checked;
+                    setShowClaimedByOthers(checked);
+                    load(checked);
+                  }}
+                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                />
+                <label htmlFor="showClaimedByOthers" style={{ cursor: 'pointer', margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  {t('sealed.showClaimedByOthers')}
+                </label>
+              </div>
+
+              {hasFilters && (
+                <button type="button" className="btn btn-secondary" onClick={clearFilters} style={{ fontSize: '0.72rem', padding: '0.3rem 0.7rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <X size={13} /> {t('collection.clearFilters')}
+                </button>
+              )}
+              {filteredOwnedPurchases.length > 0 && (
+                <button type="button" className="btn btn-secondary btn-sm" onClick={toggleFilteredSelection}>
+                  {t(allFilteredOwnedSelected ? 'sealed.deselectFiltered' : 'sealed.selectFiltered', { count: filteredOwnedPurchases.length })}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {selectedOwnedPurchases.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', padding: '0.25rem 0' }}>
+          <span style={{ color: 'var(--text-secondary)', marginRight: 'auto' }}>
+            {t('sealed.selectedPurchases', { count: selectedOwnedPurchases.length })}
+          </span>
+          <button type="button" className="btn btn-secondary btn-sm" disabled={!selectedOwnedPurchases.length || savingSharing}
+            onClick={() => updateSelectedSharing(true)}>
+            {t('sealed.makeSelectedAvailable')}
+          </button>
+          <button type="button" className="btn btn-secondary btn-sm" disabled={!selectedOwnedPurchases.length || savingSharing}
+            onClick={() => updateSelectedSharing(false)}>
+            {t('sealed.makeSelectedPrivate')}
+          </button>
+          {selectedOwnedPurchases.length > 0 && (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={savingSharing}
+              onClick={() => setSelectedPurchaseIds(new Set())}>
+              {t('bulk.clear')}
             </button>
           )}
         </div>
@@ -530,9 +959,12 @@ export default function SealedList({ showToast }) {
           {t('sealed.noFilterMatches')}
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+        <div className={viewMode === 'gallery' ? 'sealed-purchase-grid' : 'sealed-purchase-list'}>
           {filteredPurchases.map(p => (
-            <PurchaseCard key={p.id} purchase={p} onChanged={load} onEdit={setEditingPurchase} showToast={showToast} />
+            <PurchaseCard key={p.id} purchase={p} onChanged={load} onEdit={setEditingPurchase} showToast={showToast}
+              selected={selectedPurchaseIds.has(p.id)} onSelectionChange={setPurchaseSelected}
+              showClaimedByOthers={showClaimedByOthers} viewMode={viewMode} selectMode={selectMode}
+              pressHandlers={purchasePressHandlers} longPressFired={purchaseLongPressFired} />
           ))}
         </div>
       )}

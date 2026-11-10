@@ -8,6 +8,8 @@ const { validateDeckAddition } = require('../../utils/deckRules');
 const { syncDeckAllocation } = require('../../utils/deckAllocation');
 const { splitPrice } = require('../../utils/splitPrice');
 const { allocateSealedUnitCost } = require('../../utils/sealedCostAllocation');
+const { unitCardProgress } = require('../../utils/sealedContents');
+const { getOwnedUnit } = require('../../utils/sealedOwnership');
 const { trashEntries } = require('../../utils/collectionTrash');
 const { conflictingSealedLinks, cardIdForLanguage } = require('./shared');
 
@@ -16,6 +18,33 @@ const BULK_ACTIONS = ['delete', 'move', 'trade', 'untrade', 'list_type', 'condit
 // Allowed field values mirror the collection table CHECK constraints in db.js.
 const BULK_CONDITIONS = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged'];
 const BULK_PRINTINGS = ['Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition', 'Promo'];
+
+async function sealedUnitLinkCapacityError(unitId, userId, entryIds, rows) {
+  const progress = await unitCardProgress(userId, unitId);
+  if (progress?.expected_cards == null) return null;
+  const placeholders = entryIds.map(() => '?').join(',');
+  const alreadySelected = await db.get(
+    `WITH RECURSIVE linked_units(id) AS (
+       SELECT ?
+       UNION
+       SELECT child_unit.id
+         FROM linked_units parent
+         JOIN sealed_purchases child_purchase ON child_purchase.source_unit_id = parent.id
+         JOIN sealed_units child_unit ON child_unit.purchase_id = child_purchase.id
+     )
+     SELECT COALESCE(SUM(quantity), 0) AS count FROM collection
+      WHERE id IN (${placeholders}) AND user_id = ?
+        AND sealed_unit_id IN (SELECT id FROM linked_units)`,
+    [unitId, ...entryIds, userId]
+  );
+  const currentCount = Math.max(0, progress.linked_cards - Number(alreadySelected?.count || 0));
+  const requestedCount = rows.reduce((sum, row) => sum + (Number(row.quantity) || 1), 0);
+  if (currentCount + requestedCount > progress.expected_cards) {
+    return `This pack allows ${progress.expected_cards} linked cards`;
+  }
+  return null;
+}
+
 async function bulkAction(req, res) {
   const { entry_ids = [], action, value } = req.body;
   if (!Array.isArray(entry_ids) || entry_ids.length === 0) {
@@ -136,12 +165,7 @@ async function bulkAction(req, res) {
       const unitId = value ? parseInt(value, 10) : null;
       let unit = null;
       if (unitId) {
-        unit = await db.get(
-          `SELECT u.id, p.unit_price, p.expected_cards FROM sealed_units u
-             JOIN sealed_purchases p ON p.id = u.purchase_id
-            WHERE u.id = ? AND p.user_id = ?`,
-          [unitId, req.user.id]
-        );
+        unit = await getOwnedUnit(req.user.id, unitId);
         if (!unit) return res.status(400).json({ error: 'Invalid sealed unit' });
         const conflicts = await conflictingSealedLinks(ids, req.user.id, unitId);
         if (conflicts.length) {
@@ -155,16 +179,9 @@ async function bulkAction(req, res) {
           WHERE c.id IN (${placeholders}) AND c.user_id = ?`,
         [...ids, req.user.id]
       ) : [];
-      if (unit?.expected_cards != null) {
-        const alreadyLinked = await db.get(
-          `SELECT COALESCE(SUM(quantity), 0) AS count FROM collection
-            WHERE sealed_unit_id = ? AND user_id = ? AND id NOT IN (${placeholders})`,
-          [unitId, req.user.id, ...ids]
-        );
-        const requested = rows.reduce((sum, row) => sum + (Number(row.quantity) || 1), 0);
-        if ((alreadyLinked.count || 0) + requested > unit.expected_cards) {
-          return res.status(400).json({ error: `This pack allows ${unit.expected_cards} linked cards` });
-        }
+      if (unit) {
+        const capacityError = await sealedUnitLinkCapacityError(unitId, req.user.id, ids, rows);
+        if (capacityError) return res.status(400).json({ error: capacityError });
       }
       for (let i = 0; i < rows.length; i++) {
         await db.run(
@@ -192,12 +209,7 @@ async function bulkAction(req, res) {
       const total = Number(value && value.total);
       const method = value && value.method === 'equal' ? 'equal' : 'weighted';
       if (!unitId || !(total >= 0)) return res.status(400).json({ error: 'Invalid sealed unit or total' });
-      const unit = await db.get(
-        `SELECT u.id, p.expected_cards FROM sealed_units u
-           JOIN sealed_purchases p ON p.id = u.purchase_id
-          WHERE u.id = ? AND p.user_id = ?`,
-        [unitId, req.user.id]
-      );
+      const unit = await getOwnedUnit(req.user.id, unitId);
       if (!unit) return res.status(400).json({ error: 'Invalid sealed unit' });
       const conflicts = await conflictingSealedLinks(ids, req.user.id, unitId);
       if (conflicts.length) {
@@ -210,16 +222,9 @@ async function bulkAction(req, res) {
           WHERE c.id IN (${placeholders}) AND c.user_id = ?`,
         [...ids, req.user.id]
       );
-      if (unit.expected_cards != null) {
-        const alreadyLinked = await db.get(
-          `SELECT COALESCE(SUM(quantity), 0) AS count FROM collection
-            WHERE sealed_unit_id = ? AND user_id = ? AND id NOT IN (${placeholders})`,
-          [unitId, req.user.id, ...ids]
-        );
-        const requested = rows.reduce((sum, row) => sum + (Number(row.quantity) || 1), 0);
-        if ((alreadyLinked.count || 0) + requested > unit.expected_cards) {
-          return res.status(400).json({ error: `This pack allows ${unit.expected_cards} linked cards` });
-        }
+      const capacityError = await sealedUnitLinkCapacityError(unitId, req.user.id, ids, rows);
+      if (capacityError) {
+        return res.status(400).json({ error: capacityError });
       }
       for (let i = 0; i < rows.length; i++) {
         await db.run(

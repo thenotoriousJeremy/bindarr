@@ -396,6 +396,123 @@ async function snapshotBeforeMigrating() {
   }
 }
 
+async function migrateSealedTemplatesToShared() {
+  const columns = await all(`PRAGMA table_info(sealed_templates)`);
+  const ownerColumn = columns.find(column => column.name === 'user_id');
+  if (!ownerColumn?.notnull) return;
+
+  const templates = await all(`SELECT * FROM sealed_templates ORDER BY id`);
+  const components = await all(`SELECT * FROM sealed_template_components ORDER BY id`);
+  const templatesByIdentity = new Map();
+  for (const template of templates) {
+    const identity = template.product_id != null
+      ? `${template.game}:id:${template.product_id}`
+      : `${template.game}:name:${String(template.product_name || '').trim().toLowerCase()}`;
+    const group = templatesByIdentity.get(identity) || [];
+    group.push(template);
+    templatesByIdentity.set(identity, group);
+  }
+
+  const groups = [];
+  for (const rows of templatesByIdentity.values()) {
+    const componentCountsByTemplate = new Map();
+    for (const template of rows) {
+      const byIdentity = new Map();
+      for (const component of components.filter(item => item.template_id === template.id)) {
+        const key = component.component_type === 'card'
+          ? `card:${component.card_id || ''}`
+          : `product:${String(component.product_name || '').trim().toLowerCase() || component.product_id}:${component.game || template.game}`;
+        const current = byIdentity.get(key);
+        if (current) {
+          current.quantity += component.quantity;
+          if (current.expected_cards == null || component.expected_cards > current.expected_cards) {
+            current.expected_cards = component.expected_cards;
+          }
+          current.product_id = current.product_id || component.product_id;
+        } else {
+          byIdentity.set(key, { ...component, quantity: component.quantity });
+        }
+      }
+      componentCountsByTemplate.set(template.id, [...byIdentity.values()]);
+    }
+
+    const merged = new Map();
+    for (const template of rows) {
+      for (const component of componentCountsByTemplate.get(template.id) || []) {
+        const key = component.component_type === 'card'
+          ? `card:${component.card_id || ''}`
+          : `product:${String(component.product_name || '').trim().toLowerCase() || component.product_id}:${component.game || template.game}`;
+        const current = merged.get(key);
+        if (current) {
+          current.quantity = Math.max(current.quantity, component.quantity);
+          if (current.expected_cards == null || component.expected_cards > current.expected_cards) {
+            current.expected_cards = component.expected_cards;
+          }
+          current.product_id = current.product_id || component.product_id;
+        } else {
+          merged.set(key, { ...component });
+        }
+      }
+    }
+    const expectedCards = rows.reduce((max, template) =>
+      template.expected_cards == null
+        ? max
+        : Math.max(max ?? 0, Number(template.expected_cards)), null);
+    groups.push({ canonical: rows[0], rows, components: [...merged.values()], expectedCards });
+  }
+
+  await run(`PRAGMA foreign_keys = OFF`);
+  try {
+    await run(`DROP TABLE IF EXISTS sealed_templates_shared`);
+    await run(`
+      CREATE TABLE sealed_templates_shared (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        product_id INTEGER,
+        product_name TEXT NOT NULL,
+        game TEXT NOT NULL DEFAULT 'pokemon',
+        expected_cards INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    for (const group of groups) {
+      const template = group.canonical;
+      await run(
+        `INSERT INTO sealed_templates_shared
+           (id, user_id, product_id, product_name, game, expected_cards, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [template.id, template.user_id, template.product_id, template.product_name, template.game,
+          group.expectedCards, template.created_at]
+      );
+      const ids = group.rows.map(row => row.id);
+      if (ids.length > 1) {
+        const placeholders = ids.map(() => '?').join(',');
+        await run(`UPDATE sealed_purchases SET template_id = ? WHERE template_id IN (${placeholders})`, [template.id, ...ids]);
+        await run(`DELETE FROM sealed_template_components WHERE template_id IN (${placeholders})`, ids);
+        for (const component of group.components) {
+          await run(
+            `INSERT INTO sealed_template_components
+               (template_id, component_type, quantity, card_id, product_name, sealed_type, product_id, game, expected_cards)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [template.id, component.component_type, component.quantity, component.card_id,
+              component.product_name, component.sealed_type, component.product_id,
+              component.game, component.expected_cards]
+          );
+        }
+      }
+    }
+    await run(`DROP TABLE sealed_templates`);
+    await run(`ALTER TABLE sealed_templates_shared RENAME TO sealed_templates`);
+  } finally {
+    await run(`PRAGMA foreign_keys = ON`);
+  }
+
+  const violations = await all(`PRAGMA foreign_key_check`);
+  if (violations.length) {
+    throw new Error(`Sealed recipe migration left ${violations.length} foreign-key violation(s)`);
+  }
+}
+
 async function initDb() {
   await opened;
   await snapshotBeforeMigrating();
@@ -733,6 +850,7 @@ async function initDb() {
       unit_price REAL,
       quantity INTEGER NOT NULL DEFAULT 1,
       notes TEXT,
+      available_to_all INTEGER NOT NULL DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
@@ -746,6 +864,7 @@ async function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       purchase_id INTEGER NOT NULL,
       opened_at DATETIME,
+      claimed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(purchase_id) REFERENCES sealed_purchases(id) ON DELETE CASCADE
     )
@@ -759,16 +878,15 @@ async function initDb() {
   await run(`
     CREATE TABLE IF NOT EXISTS sealed_templates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
+      user_id INTEGER,
       product_id INTEGER,
       product_name TEXT NOT NULL,
       game TEXT NOT NULL DEFAULT 'pokemon',
+      expected_cards INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
     )
   `);
-  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_templates_user ON sealed_templates(user_id)`);
-  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_templates_product ON sealed_templates(user_id, product_id)`);
 
   // One row per guaranteed thing inside a template. A 'card' component is a
   // specific guaranteed pull (an alt-art promo, an oversized card) — not a whole
@@ -1326,9 +1444,8 @@ async function initDb() {
   // What's actually inside a sealed unit (a Build & Battle Box is 4 boosters plus
   // a 40-card preconstructed deck), so opening one can show "how many of the
   // expected cards have I linked so far" instead of leaving that to memory.
-  // TCGCSV/TCGplayer publishes no contents data, so these are typed in by whoever
-  // adds the purchase; all three are optional, per the manual-entry choice made
-  // for this feature.
+  // The expected total belongs to the shared product recipe; the purchase column
+  // remains as a legacy fallback for older records and clients.
   const sealedPurchaseCols = await all(`PRAGMA table_info(sealed_purchases)`);
   if (!sealedPurchaseCols.some(c => c.name === 'expected_packs')) {
     await run(`ALTER TABLE sealed_purchases ADD COLUMN expected_packs INTEGER`);
@@ -1364,18 +1481,47 @@ async function initDb() {
   if (!sealedPurchaseCols.some(c => c.name === 'source_unit_price_saved')) {
     await run(`ALTER TABLE sealed_purchases ADD COLUMN source_unit_price_saved INTEGER NOT NULL DEFAULT 0`);
   }
+  if (!sealedPurchaseCols.some(c => c.name === 'available_to_all')) {
+    await run(`ALTER TABLE sealed_purchases ADD COLUMN available_to_all INTEGER NOT NULL DEFAULT 0`);
+  }
   const sealedTemplateComponentCols = await all(`PRAGMA table_info(sealed_template_components)`);
   if (!sealedTemplateComponentCols.some(c => c.name === 'expected_cards')) {
     await run(`ALTER TABLE sealed_template_components ADD COLUMN expected_cards INTEGER`);
   }
+  const sealedTemplateCols = await all(`PRAGMA table_info(sealed_templates)`);
+  if (!sealedTemplateCols.some(c => c.name === 'expected_cards')) {
+    await run(`ALTER TABLE sealed_templates ADD COLUMN expected_cards INTEGER`);
+    await run(
+      `UPDATE sealed_templates
+          SET expected_cards = (
+            SELECT MAX(p.expected_cards) FROM sealed_purchases p
+             WHERE p.template_id = sealed_templates.id AND p.expected_cards IS NOT NULL
+          )
+        WHERE expected_cards IS NULL
+          AND EXISTS (
+            SELECT 1 FROM sealed_purchases p
+             WHERE p.template_id = sealed_templates.id AND p.expected_cards IS NOT NULL
+          )`
+    );
+  }
+  await migrateSealedTemplatesToShared();
+  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_templates_user ON sealed_templates(user_id)`);
+  await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sealed_templates_global_product
+    ON sealed_templates(game, product_id) WHERE product_id IS NOT NULL`);
+  await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sealed_templates_global_name
+    ON sealed_templates(game, product_name COLLATE NOCASE) WHERE product_id IS NULL`);
 
   // Idempotency guard: a template's components are created once per unit, the
   // first time it's marked opened. Without this, toggling opened -> closed ->
   // opened again would create a second copy of every card and sub-pack.
   const sealedUnitCols = await all(`PRAGMA table_info(sealed_units)`);
+  if (!sealedUnitCols.some(c => c.name === 'claimed_by_user_id')) {
+    await run(`ALTER TABLE sealed_units ADD COLUMN claimed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL`);
+  }
   if (!sealedUnitCols.some(c => c.name === 'components_applied_at')) {
     await run(`ALTER TABLE sealed_units ADD COLUMN components_applied_at DATETIME`);
   }
+  await run(`CREATE INDEX IF NOT EXISTS idx_sealed_units_claimed_by_user ON sealed_units(claimed_by_user_id)`);
 
   // Riftbound (riftcodexApi.js). Four card fields no provider stored before —
   // which way the card is printed (Riftbound battlefields are landscape), its

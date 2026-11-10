@@ -1,15 +1,10 @@
 const db = require('../db');
 const { splitPrice } = require('./splitPrice');
 const { productCardCount, templateCardCount } = require('./sealedContents');
+const { getOwnedUnit } = require('./sealedOwnership');
 
 async function allocateSealedUnitCost(unitId, userId, total, method = 'equal') {
-  const source = await db.get(
-    `SELECT p.expected_cards, p.template_id, p.product_id, p.product_name
-       FROM sealed_units u
-       JOIN sealed_purchases p ON p.id = u.purchase_id
-      WHERE u.id = ? AND p.user_id = ?`,
-    [unitId, userId]
-  );
+  const source = await getOwnedUnit(userId, unitId);
   if (!source) return { linkedRows: [], cardCount: 0, componentCount: 0 };
 
   const linkedRows = await db.all(
@@ -19,7 +14,7 @@ async function allocateSealedUnitCost(unitId, userId, total, method = 'equal') {
     [unitId, userId]
   );
   const childPurchases = await db.all(
-    `SELECT p.id, p.product_id, p.product_name, p.expected_cards, COUNT(u.id) AS unit_count
+    `SELECT p.id, p.product_id, p.product_name, p.expected_cards, p.game, COUNT(u.id) AS unit_count
        FROM sealed_purchases p
        JOIN sealed_units u ON u.purchase_id = p.id
       WHERE p.source_unit_id = ? AND p.user_id = ?
@@ -27,7 +22,7 @@ async function allocateSealedUnitCost(unitId, userId, total, method = 'equal') {
     [unitId, userId]
   );
   for (const purchase of childPurchases) {
-    purchase.cardCount = await productCardCount(userId, purchase.product_id, purchase.product_name, purchase.expected_cards);
+    purchase.cardCount = await productCardCount(userId, purchase.product_id, purchase.product_name, purchase.expected_cards, 0, new Set(), purchase.game);
   }
   const childCardCount = childPurchases.reduce((sum, purchase) =>
     sum + purchase.cardCount * Number(purchase.unit_count), 0);
@@ -35,22 +30,27 @@ async function allocateSealedUnitCost(unitId, userId, total, method = 'equal') {
   const componentCount = cardCount + childCardCount;
   if (componentCount === 0) return { linkedRows, cardCount, componentCount };
 
-  let boxCardCount = Math.max(0, Number(source.expected_cards) || 0);
-  if (boxCardCount === 0) {
-    let templateId = source.template_id;
-    if (!templateId) {
-      const template = source.product_id
-        ? await db.get(
-          `SELECT id FROM sealed_templates WHERE user_id = ? AND product_id = ?`,
-          [userId, source.product_id]
-        )
-        : await db.get(
-          `SELECT id FROM sealed_templates WHERE user_id = ? AND product_id IS NULL AND product_name = ?`,
-          [userId, source.product_name]
-        );
-      templateId = template?.id;
-    }
-    if (templateId) boxCardCount = await templateCardCount(userId, templateId);
+  let templateId = source.template_id;
+  if (!templateId) {
+    const template = source.product_id
+      ? await db.get(
+        `SELECT id FROM sealed_templates WHERE product_id = ? AND game = ?`,
+        [source.product_id, source.game]
+      )
+      : await db.get(
+        `SELECT id FROM sealed_templates WHERE product_id IS NULL AND product_name = ? COLLATE NOCASE AND game = ?`,
+        [source.product_name, source.game]
+      );
+    templateId = template?.id;
+  }
+  const template = templateId
+    ? await db.get(`SELECT expected_cards FROM sealed_templates WHERE id = ?`, [templateId])
+    : null;
+  let boxCardCount = template
+    ? await templateCardCount(userId, templateId)
+    : 0;
+  if (template?.expected_cards == null && boxCardCount === 0) {
+    boxCardCount = Math.max(0, Number(source.expected_cards) || 0);
   }
   // When the box has no known total, preserve the previous behavior by treating
   // its linked contents as the full allocation basis. Never allocate more than
