@@ -14,7 +14,7 @@ import { compileCollectionFilter, syntaxErrorText } from '../utils/scryfallSynta
 import ScryfallSyntaxHelp from './ScryfallSyntaxHelp';
 import { useMultiSelect } from '../utils/useMultiSelect';
 import { undoToast } from '../utils/undo';
-import { stackCollectionRows } from '../utils/stackTiles';
+import { duplicateRowFilter, stackCollectionRows } from '../utils/stackTiles';
 import { defaultGameFilter, gameOptions, isGameEnabled, showGamePicker } from '../utils/games';
 import { useT } from '../utils/i18n';
 import { onActivateKey } from '../utils/a11y';
@@ -284,6 +284,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const [sortBy, setSortBy] = useState('added-newest');
   const [tradeOnly, setTradeOnly] = useState(false);
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [duplicatesOnly, setDuplicatesOnly] = useState(false);
   const [notCheckedOutOnly, setNotCheckedOutOnly] = useState(false);
 
   // Stacking state (default to stacked)
@@ -490,6 +491,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     + (sealedLinkFilter.length > 0 ? 1 : 0)
     + (tradeOnly ? 1 : 0)
     + (favoriteOnly ? 1 : 0)
+    + (duplicatesOnly ? 1 : 0)
     + (notCheckedOutOnly ? 1 : 0);
 
   const clearAllFilters = () => {
@@ -500,7 +502,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     setCmcFilter([]); setLanguageFilter([]);
     setSealedLinkFilter([]);
     setMinPriceFilter(''); setMaxPriceFilter('');
-    setTradeOnly(false); setFavoriteOnly(false);
+    setTradeOnly(false); setFavoriteOnly(false); setDuplicatesOnly(false);
     setNotCheckedOutOnly(false);
   };
 
@@ -515,6 +517,15 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   // A Japanese query is matched through the English name the name dictionaries
   // map it to; they are fetched the first time one is typed.
   const namesReady = useNameDictionaries(hasJapaneseText(searchFilter));
+
+  // "Duplicates only" (#164): counted over the whole collection, grouped the way
+  // the tiles stack (by card, split by condition/printing when those are on).
+  const isDuplicate = useMemo(
+    () => (duplicatesOnly
+      ? duplicateRowFilter(collection, stackCards ? { byCondition: stackByCondition, byPrinting: stackByPrinting } : {})
+      : null),
+    [duplicatesOnly, collection, stackCards, stackByCondition, stackByPrinting]
+  );
 
   // Filter + sort
   const filteredCollection = useMemo(() => {
@@ -548,6 +559,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
           ? sealedLinkFilter.includes('__unlinked')
           : sealedLinkFilter.includes(item.sealed_unit_id));
       const matchesFavorite = favoriteOnly ? item.favorite === 1 : true;
+      const matchesDuplicate = !isDuplicate || isDuplicate(item);
       // Rows written before grading existed have a NULL grader, which means raw —
       // so the comparison defaults rather than treating NULL as its own category.
       const itemGrader = item.grader || 'Raw';
@@ -561,7 +573,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
 
       return matchesSearch && matchesGame && matchesLocation && matchesRarity && matchesCondition &&
              matchesPrinting && matchesSet && matchesType && matchesSupertype &&
-             matchesCmc && matchesLanguage && matchesSealedLink && matchesFavorite &&
+             matchesCmc && matchesLanguage && matchesSealedLink && matchesFavorite && matchesDuplicate &&
              matchesGrader && matchesMinPrice && matchesMaxPrice && matchesNotCheckedOut;
     });
 
@@ -571,7 +583,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       sortCardsByOrder(result, SORT_CRITERIA[sortBy] || SORT_CRITERIA['added-newest'], undefined, setsList);
     }
     return result;
-  }, [collection, searchFilter, syntaxFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter, sealedLinkFilter, favoriteOnly, graderFilter, minPriceFilter, maxPriceFilter, notCheckedOutOnly, sortBy, setsList, namesReady]);
+  }, [collection, searchFilter, syntaxFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, setFilter, typeFilter, supertypeFilter, cmcFilter, languageFilter, sealedLinkFilter, favoriteOnly, isDuplicate, graderFilter, minPriceFilter, maxPriceFilter, notCheckedOutOnly, sortBy, setsList, namesReady]);
 
   // Group duplicate cards if stack option is active. Each tile keeps the ids of
   // the rows it stands for, which is what a quantity edit in the popup works on.
@@ -921,6 +933,13 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                 <input type="checkbox" id="favoriteOnlyOpt" checked={favoriteOnly} onChange={(e) => setFavoriteOnly(e.target.checked)} style={{ width: '14px', height: '14px', cursor: 'pointer' }} />
                 <label htmlFor="favoriteOnlyOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: '#facc15', fontWeight: 600 }}>
                   {t('collection.favoritesOnly')}
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input type="checkbox" id="duplicatesOnlyOpt" checked={duplicatesOnly} onChange={(e) => setDuplicatesOnly(e.target.checked)} style={{ width: '14px', height: '14px', cursor: 'pointer' }} />
+                <label htmlFor="duplicatesOnlyOpt" title={t('collection.duplicatesOnlyHint')} style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  {t('collection.duplicatesOnly')}
                 </label>
               </div>
 

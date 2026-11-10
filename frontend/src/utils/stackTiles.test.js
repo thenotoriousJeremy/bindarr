@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { stackCollectionRows, stackPocketCards } from './stackTiles.js';
+import { duplicateRowFilter, stackCollectionRows, stackPocketCards } from './stackTiles.js';
 
 const row = (entry_id, extra = {}) => ({
   entry_id, card_id: 'mtg-a', quantity: 1, condition: 'Near Mint', printing: 'Normal', language: 'English', ...extra,
@@ -49,4 +49,23 @@ test('the rows themselves are not modified', () => {
   stackCollectionRows(rows);
   stackPocketCards(rows);
   assert.deepEqual(rows, [row(1), row(2)]);
+});
+
+test('duplicates: a card counts when its copies add up to more than one', () => {
+  const rows = [
+    row(1, { card_id: 'single' }),
+    row(2, { card_id: 'pair' }), row(3, { card_id: 'pair', condition: 'Lightly Played' }),
+    row(4, { card_id: 'stacked', quantity: 3 }),
+    row(5, { card_id: 'foils', printing: 'Foil' }), row(6, { card_id: 'foils' }),
+  ];
+  const isDup = duplicateRowFilter(rows);
+  assert.deepEqual(rows.filter(isDup).map(r => r.entry_id), [2, 3, 4, 5, 6]);
+
+  const byCondition = duplicateRowFilter(rows, { byCondition: true });
+  assert.deepEqual(rows.filter(byCondition).map(r => r.entry_id), [4, 5, 6],
+    'split by condition: one NM and one LP copy are not duplicates');
+
+  const byPrinting = duplicateRowFilter(rows, { byPrinting: true });
+  assert.deepEqual(rows.filter(byPrinting).map(r => r.entry_id), [2, 3, 4],
+    'split by printing: a foil and a non-foil are not duplicates');
 });

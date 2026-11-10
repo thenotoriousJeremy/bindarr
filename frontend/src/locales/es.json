@@ -340,6 +340,8 @@
   "collection.fSupertype": "Supertipo",
   "collection.fType": "Tipo / color",
   "collection.favoritesOnly": "Solo favoritas",
+  "collection.duplicatesOnly": "Solo duplicados",
+  "collection.duplicatesOnlyHint": "Solo cartas de las que tienes más de una copia",
   "collection.filters": "Filtros",
   "collection.galleryView": "Vista de galería",
   "collection.listView": "Vista de tabla",

@@ -326,6 +326,8 @@
   "collection.fSupertype": "スーパータイプ",
   "collection.fType": "タイプ・色",
   "collection.favoritesOnly": "お気に入りのみ",
+  "collection.duplicatesOnly": "重複のみ",
+  "collection.duplicatesOnlyHint": "2枚以上持っているカードのみ",
   "collection.filters": "フィルター",
   "collection.galleryView": "ギャラリー表示",
   "collection.listView": "リスト・テーブル表示",

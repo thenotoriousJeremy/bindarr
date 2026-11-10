@@ -327,6 +327,8 @@
   "collection.fSupertype": "超類型",
   "collection.fType": "類型 / 顏色",
   "collection.favoritesOnly": "僅最愛",
+  "collection.duplicatesOnly": "僅重複",
+  "collection.duplicatesOnlyHint": "僅顯示擁有多於一張的卡牌",
   "collection.filters": "篩選",
   "collection.galleryView": "圖庫檢視",
   "collection.listView": "清單表格檢視",

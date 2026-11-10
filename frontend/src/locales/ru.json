@@ -351,6 +351,8 @@
   "collection.fSupertype": "Супертип",
   "collection.fType": "Тип / цвет",
   "collection.favoritesOnly": "Только избранные",
+  "collection.duplicatesOnly": "Только дубликаты",
+  "collection.duplicatesOnlyHint": "Только карты, которых у вас больше одной",
   "collection.filters": "Фильтры",
   "collection.galleryView": "Вид галереей",
   "collection.listView": "Вид таблицей",

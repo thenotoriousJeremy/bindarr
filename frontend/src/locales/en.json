@@ -1429,6 +1429,8 @@
   "collection.splitByPrinting": "Split by Holo/Printing",
   "collection.tradeOnly": "For Trade Only",
   "collection.favoritesOnly": "Favorites Only",
+  "collection.duplicatesOnly": "Duplicates Only",
+  "collection.duplicatesOnlyHint": "Only cards you own more than one copy of",
   "collection.colCard": "Card",
   "collection.colQtyValue": "Qty / Value",
   "collection.errLoad": "Error loading collection.",

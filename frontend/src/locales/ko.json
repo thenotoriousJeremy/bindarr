@@ -326,6 +326,8 @@
   "collection.fSupertype": "상위 타입",
   "collection.fType": "타입 / 색",
   "collection.favoritesOnly": "즐겨찾기만",
+  "collection.duplicatesOnly": "중복만",
+  "collection.duplicatesOnlyHint": "두 장 이상 가진 카드만",
   "collection.filters": "필터",
   "collection.galleryView": "갤러리 보기",
   "collection.listView": "목록 표 보기",

@@ -332,6 +332,8 @@
   "collection.fSupertype": "Übertyp",
   "collection.fType": "Typ / Farbe",
   "collection.favoritesOnly": "Nur Favoriten",
+  "collection.duplicatesOnly": "Nur Duplikate",
+  "collection.duplicatesOnlyHint": "Nur Karten, die du mehr als einmal besitzt",
   "collection.filters": "Filter",
   "collection.galleryView": "Galerieansicht",
   "collection.listView": "Listen-/Tabellenansicht",
