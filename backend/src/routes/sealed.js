@@ -60,6 +60,18 @@ function fail(res, error, fallbackStatus, message) {
   return res.status(fallbackStatus).json({ error: message });
 }
 
+// Recipes are shared by the whole instance: anyone can read and apply one. Only
+// the account that created it, or an admin, may replace or delete it; a recipe
+// whose creator was deleted (user_id NULL) is an admin's to change.
+function assertCanEditTemplate(template, user) {
+  if (user.role === 'admin') return;
+  if (template.user_id != null && Number(template.user_id) === Number(user.id)) return;
+  throw Object.assign(
+    new Error('This recipe was created by another user. Only they or an admin can change it.'),
+    { clientStatus: 403 }
+  );
+}
+
 function assertCanToggleUnit(unit, userId, opened) {
   if (unit.claimed_by_user_id != null && Number(unit.claimed_by_user_id) !== Number(userId)) {
     throw Object.assign(new Error('This sealed unit was claimed by another user'), { status: 409 });
@@ -1128,6 +1140,7 @@ router.post('/sealed/templates', async (req, res) => {
       );
       let templateId = existing?.id;
       if (templateId) {
+        assertCanEditTemplate(existing, req.user);
         if (hasExpectedCards) {
           await db.run(`UPDATE sealed_templates SET expected_cards = ? WHERE id = ?`, [expectedCards, templateId]);
         }
@@ -1198,8 +1211,10 @@ router.get('/sealed/templates/:id', async (req, res) => {
 
 router.delete('/sealed/templates/:id', async (req, res) => {
   try {
-    const result = await db.run(`DELETE FROM sealed_templates WHERE id = ?`, [req.params.id]);
-    if (result.changes === 0) return res.status(404).json({ error: 'Template not found' });
+    const template = await db.get(`SELECT id, user_id FROM sealed_templates WHERE id = ?`, [req.params.id]);
+    if (!template) return res.status(404).json({ error: 'Template not found' });
+    assertCanEditTemplate(template, req.user);
+    await db.run(`DELETE FROM sealed_templates WHERE id = ?`, [template.id]);
     res.json({ success: true });
   } catch (error) {
     fail(res, error, 500, 'Failed to delete template');

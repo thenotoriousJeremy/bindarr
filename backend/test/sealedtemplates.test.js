@@ -50,7 +50,12 @@ async function main() {
     ['tmpl-bob', db.hashPassword('x'), 'admin', `share-b-${process.pid}`]
   )).lastID;
 
-  const base = await startApp(new Map([[alice, { id: alice }], [bob, { id: bob }]]));
+  const admin = (await db.run(
+    `INSERT INTO users (username, password_hash, role, share_token) VALUES (?, ?, ?, ?)`,
+    ['tmpl-admin', db.hashPassword('x'), 'admin', `share-c-${process.pid}`]
+  )).lastID;
+
+  const base = await startApp(new Map([[alice, { id: alice }], [bob, { id: bob }], [admin, { id: admin, role: 'admin' }]]));
   const asUser = (userId) => ({ 'Content-Type': 'application/json', 'x-user-id': String(userId) });
   let res;
 
@@ -88,10 +93,19 @@ async function main() {
     method: 'POST', headers: asUser(bob),
     body: JSON.stringify({ product_name: 'Standalone Booster', game: 'pokemon', expected_cards: 12, components: [] }),
   });
-  assert.strictEqual(res.status, 201);
+  assert.strictEqual(res.status, 403, 'another member must not replace a recipe they did not create');
+  res = await fetch(`${base}/api/sealed/templates/${countTemplate.id}`, { method: 'DELETE', headers: asUser(bob) });
+  assert.strictEqual(res.status, 403, 'another member must not delete a recipe they did not create');
+  res = await fetch(`${base}/api/sealed/templates/${countTemplate.id}`, { headers: asUser(bob) });
+  assert.strictEqual((await res.json()).template.expected_cards, 11, 'a refused edit changes nothing');
+  res = await fetch(`${base}/api/sealed/templates`, {
+    method: 'POST', headers: asUser(admin),
+    body: JSON.stringify({ product_name: 'Standalone Booster', game: 'pokemon', expected_cards: 12, components: [] }),
+  });
+  assert.strictEqual(res.status, 201, 'an admin may update any shared recipe');
   countTemplate = (await res.json()).template;
   assert.strictEqual(countTemplate.expected_cards, 12,
-    'the shared recipe must let any user update the total cards per unit');
+    'the shared recipe total is updated for everyone');
   countOnlyDetails = await fetch(`${base}/api/sealed/purchases/${countOnlyPurchase.id}`, {
     headers: asUser(alice),
   }).then(r => r.json());
@@ -348,7 +362,8 @@ async function main() {
   console.log('PASS: pack expected-card limits prevent linking too many cards');
   console.log('PASS: re-opening a unit is idempotent \u2014 components are applied exactly once');
 
-  // Recipes are shared across users, and any user can update the live recipe.
+  // Recipes are shared across users: anyone can read and apply one, but only its
+  // creator or an admin can change it.
   res = await fetch(`${base}/api/sealed/templates/match?product_name=${encodeURIComponent('Build & Battle Box')}`, { headers: asUser(bob) });
   const bobMatch = await res.json();
   assert.strictEqual(bobMatch.template.id, template.id, 'Bob must match Alice\'s instance-wide recipe');
@@ -356,18 +371,18 @@ async function main() {
   res = await fetch(`${base}/api/sealed/templates`, { headers: asUser(bob) });
   assert.ok((await res.json()).templates.some(row => row.id === template.id), 'Bob must see Alice\'s recipe in the shared list');
 
-  res = await fetch(`${base}/api/sealed/templates`, {
-    method: 'POST', headers: asUser(bob),
-    body: JSON.stringify({
-      product_name: 'Build & Battle Box', game: 'pokemon',
-      components: [
-        { component_type: 'card', quantity: 2, card_id: 'promo-1' },
-        { component_type: 'product', quantity: 4, product_name: 'Booster Pack', sealed_type: 'Booster Pack', game: 'pokemon', expected_cards: 10 },
-        { component_type: 'product', quantity: 1, product_name: 'Precon Deck', sealed_type: 'Starter Deck', game: 'pokemon', expected_cards: 60 },
-      ],
-    }),
+  const editedRecipe = JSON.stringify({
+    product_name: 'Build & Battle Box', game: 'pokemon',
+    components: [
+      { component_type: 'card', quantity: 2, card_id: 'promo-1' },
+      { component_type: 'product', quantity: 4, product_name: 'Booster Pack', sealed_type: 'Booster Pack', game: 'pokemon', expected_cards: 10 },
+      { component_type: 'product', quantity: 1, product_name: 'Precon Deck', sealed_type: 'Starter Deck', game: 'pokemon', expected_cards: 60 },
+    ],
   });
-  assert.strictEqual(res.status, 201, 'Bob must be able to edit a shared recipe');
+  res = await fetch(`${base}/api/sealed/templates`, { method: 'POST', headers: asUser(bob), body: editedRecipe });
+  assert.strictEqual(res.status, 403, 'Bob must not replace Alice\'s recipe');
+  res = await fetch(`${base}/api/sealed/templates`, { method: 'POST', headers: asUser(alice), body: editedRecipe });
+  assert.strictEqual(res.status, 201, 'the recipe\'s creator can edit it');
   const updatedTemplate = (await res.json()).template;
   assert.strictEqual(updatedTemplate.id, template.id, 'editing a recipe must update the shared row, not create another');
   assert.strictEqual(updatedTemplate.components.find(c => c.component_type === 'card').quantity, 2);
@@ -382,7 +397,7 @@ async function main() {
   });
   assert.strictEqual((await res.json()).purchase.template_id, template.id,
     'future purchases by other users must attach to the same shared recipe');
-  console.log('PASS: recipes are shared instance-wide, editable across users and live on existing purchases');
+  console.log('PASS: recipes are shared instance-wide, editable by their creator or an admin, and live on existing purchases');
 
   res = await fetch(`${base}/api/sealed/templates`, {
     method: 'POST', headers: asUser(alice),
