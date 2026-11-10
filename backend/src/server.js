@@ -689,8 +689,17 @@ if (metrics.prometheusEnabled) {
     throw new Error('PROMETHEUS_PORT must differ from PORT and HTTPS_PORT');
   }
 
+  const { metricsRequestAuthorized } = require('./utils/metricsAuth');
+  const prometheusToken = process.env.PROMETHEUS_METRICS_TOKEN || '';
   const prometheusApp = express();
+  prometheusApp.disable('x-powered-by');
   prometheusApp.get('/metrics', async (req, res) => {
+    if (!metricsRequestAuthorized(req.headers.authorization, prometheusToken)) {
+      res.set('WWW-Authenticate', 'Bearer');
+      return res.status(401).type('text/plain').send('Unauthorized\n');
+    }
+    // A scrape during startup would query a schema still being migrated.
+    if (!dbReady) return res.status(503).type('text/plain').send('Database initializing\n');
     try {
       const collection = await getCollectionMetrics(db);
       res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
@@ -704,7 +713,7 @@ if (metrics.prometheusEnabled) {
   prometheusApp.use((req, res) => res.sendStatus(404));
 
   const prometheusServer = prometheusApp.listen(prometheusPort, '0.0.0.0', () => {
-    console.log(`Prometheus metrics listener running on port ${prometheusPort}`);
+    console.log(`Prometheus metrics listener running on port ${prometheusPort}${prometheusToken ? ' (bearer token required)' : ''}`);
   });
   prometheusServer.on('error', error => {
     console.error(`Prometheus metrics listener failed on port ${prometheusPort}:`, error);

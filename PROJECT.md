@@ -210,12 +210,14 @@ if `card_cache` gains a writer other than `cacheNormalizedCards`.
 
 `METRICS_ENABLED=true` enables the admin-only `/api/admin/metrics` panel and
 in-memory request/provider instrumentation. `PROMETHEUS_METRICS_ENABLED=true`
-enables an unauthenticated Prometheus-only listener at `/metrics`, on
+enables a Prometheus-only listener at `/metrics`, on
 `PROMETHEUS_PORT` (default `9100`), and its instrumentation. The listener serves no
 other routes; protect its port with network rules. Both feature flags default to
 off. Prometheus exports the same collection totals and per-user card/type
-breakdowns as the admin panel, so its unauthenticated endpoint exposes usernames
-and individual collection values to clients that can reach the port. Runtime
+breakdowns as the admin panel, so the endpoint exposes usernames and individual
+collection values to clients that can reach the port. Set
+`PROMETHEUS_METRICS_TOKEN` to require `Authorization: Bearer <token>`
+(`utils/metricsAuth.js`); without it the endpoint is unauthenticated. Runtime
 counters are held in memory and reset on server restart; collection metrics are
 queried from the database on each scrape. Provider totals include API calls and
 catalog card-image downloads; retries count as separate attempts. Prometheus also

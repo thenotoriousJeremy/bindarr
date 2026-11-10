@@ -12,11 +12,12 @@ services:
     ports:
       - "3001:3001"                     # HTTP
       - "3443:3443"                     # HTTPS (self-signed cert unless SSL_CERT_PATH is set)
-    environment:
+    environment: {}
       # All optional. Uncomment and set as needed.
-      # - METRICS_ENABLED=false            #Enable Metics view in Admin Panel
-      # - PROMETHEUS_METRICS_ENABLED=false #Enable Prometheus Metrics Endpoint
-      # - PROMETHEUS_PORT=9100             #Set Prometheus Metrics Endpoint Port
+      # - METRICS_ENABLED=false            # Admin -> Metrics panel and in-memory request/provider counters
+      # - PROMETHEUS_METRICS_ENABLED=false # Prometheus /metrics on its own port (not published above; add "9100:9100" to scrape from outside)
+      # - PROMETHEUS_PORT=9100             # Port of that listener
+      # - PROMETHEUS_METRICS_TOKEN=        # Require "Authorization: Bearer <token>" on /metrics
       # - HTTPS_PORT=3443                  # Image default. Set to "" to serve plain HTTP only (no camera scanning off-localhost)
       # - SSL_CERT_PATH=                   # Your own certificate, e.g. /app/database/certs/fullchain.pem. Omit for an auto-generated self-signed one
       # - SSL_KEY_PATH=                    # Its private key
