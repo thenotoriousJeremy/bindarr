@@ -51,6 +51,20 @@ const COLLECTION_FULL_COLUMNS = `
         c.market_value_source,
         c.market_value_at,
         su.id AS sealed_unit_id,
+        c.acquired_via_transfer_item_id,
+        c.acquired_via_historical_trade_item_id,
+        acquired_transfer.id AS acquired_transfer_id,
+        acquired_transfer.transfer_type AS acquired_transfer_type,
+        acquired_transfer.completed_at AS acquired_transfer_completed_at,
+        transfer_partner.username AS acquired_transfer_partner,
+        external_item.id AS acquired_external_transaction_item_id,
+        external_transaction.id AS acquired_external_transaction_id,
+        external_transaction.transaction_type AS acquired_external_transaction_type,
+        external_transaction.contact_name_snapshot AS acquired_external_contact,
+        external_transaction.completed_at AS acquired_external_completed_at,
+        historical_trade.id AS acquired_historical_trade_id,
+        historical_trade.completed_at AS acquired_historical_trade_completed_at,
+        historical_partner.username AS acquired_historical_trade_partner,
         sp.id AS sealed_purchase_id,
         sp.product_id AS sealed_product_id,
         sp.product_name AS sealed_product_name,
@@ -179,6 +193,34 @@ const COLLECTION_SEALED_JOINS = `
                      WHERE owner.id = su.purchase_id AND owner.user_id = c.user_id)
       LEFT JOIN sealed_purchases sp ON sp.id = su.purchase_id AND sp.user_id = c.user_id`;
 
+const COLLECTION_TRADE_JOINS = `
+      LEFT JOIN user_transfer_items acquired_transfer_item
+        ON acquired_transfer_item.id = c.acquired_via_transfer_item_id
+       AND acquired_transfer_item.to_user_id = c.user_id
+      LEFT JOIN user_transfers acquired_transfer
+        ON acquired_transfer.id = acquired_transfer_item.transfer_id
+      LEFT JOIN users transfer_partner
+        ON transfer_partner.id = CASE
+          WHEN acquired_transfer.proposer_id = c.user_id THEN acquired_transfer.recipient_id
+          ELSE acquired_transfer.proposer_id
+        END
+      LEFT JOIN external_transaction_items external_item
+        ON external_item.source_collection_id = c.id AND external_item.direction = 'received'
+      LEFT JOIN external_transactions external_transaction
+        ON external_transaction.id = external_item.transaction_id
+       AND external_transaction.user_id = c.user_id
+      LEFT JOIN historical_trade_items historical_trade_item
+        ON historical_trade_item.id = c.acquired_via_historical_trade_item_id
+       AND historical_trade_item.to_user_id = c.user_id
+      LEFT JOIN historical_trades historical_trade
+        ON historical_trade.id = historical_trade_item.trade_id
+       AND historical_trade.status = 'confirmed'
+      LEFT JOIN users historical_partner
+        ON historical_partner.id = CASE
+          WHEN historical_trade.creator_id = c.user_id THEN historical_trade.recipient_id
+          ELSE historical_trade.creator_id
+        END`;
+
 const COLLECTION_PAGE_MAX = 5000;
 
 function formatCollectionRows(rows, alloc, grid) {
@@ -254,6 +296,7 @@ async function listCollection(req, res) {
       ${grid ? '' : `LEFT JOIN locations l ON c.location_id = l.id
       LEFT JOIN compartments cp ON c.compartment_id = cp.id`}
       ${COLLECTION_SEALED_JOINS}
+      ${grid ? '' : COLLECTION_TRADE_JOINS}
       ${filterSql}
       ORDER BY c.added_at DESC, c.id DESC
       ${paged ? 'LIMIT ? OFFSET ?' : ''}
@@ -293,6 +336,7 @@ async function getEntry(req, res, next) {
       LEFT JOIN locations l ON c.location_id = l.id
       LEFT JOIN compartments cp ON c.compartment_id = cp.id
       ${COLLECTION_SEALED_JOINS}
+      ${COLLECTION_TRADE_JOINS}
       WHERE c.id = ? AND c.user_id = ?
     `, [req.params.id, req.user.id]);
     if (!row) return res.status(404).json({ error: 'Collection entry not found' });

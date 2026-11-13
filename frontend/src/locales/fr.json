@@ -917,7 +917,7 @@
   "login.taglineRegister": "Crée ton compte de dresseur",
   "login.username": "Nom d'utilisateur",
   "login.usernamePlaceholder": "Saisis le nom d'utilisateur",
-  "nav.addCards": "Ajouter des cartes",
+  "nav.addCards": "Ajouter/retirer des cartes",
   "nav.admin": "Administration",
   "nav.collection": "Collection",
   "nav.dashboard": "Tableau de bord",

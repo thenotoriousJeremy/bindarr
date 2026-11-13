@@ -927,7 +927,7 @@
   "login.taglineRegister": "Создайте аккаунт тренера",
   "login.username": "Имя пользователя",
   "login.usernamePlaceholder": "Введите имя пользователя",
-  "nav.addCards": "Добавить карты",
+  "nav.addCards": "Добавить/убрать карты",
   "nav.admin": "Администрирование",
   "nav.collection": "Коллекция",
   "nav.dashboard": "Обзор",

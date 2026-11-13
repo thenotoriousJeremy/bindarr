@@ -170,8 +170,9 @@ async function runTests() {
         body: JSON.stringify({ username: uniqueUsername, password: 'password123' })
       });
       assert.strictEqual(loginRes.status, 200);
-      const { token: userToken } = await loginRes.json();
+      const { token: userToken, user: loginUser } = await loginRes.json();
       assert.ok(userToken);
+      assert.ok(Number.isInteger(loginUser.id), 'login profile should include the user ID');
 
       const userHeaders = {
         'Content-Type': 'application/json',

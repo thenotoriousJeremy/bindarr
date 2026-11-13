@@ -241,7 +241,7 @@ const CollectionRow = memo(function CollectionRow({ item, selected, selectMode, 
   );
 });
 
-function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter, setSelectedCardFilter, onNavigate, setSelectedLocationId, setFocusEntryId }) {
+function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter, setSelectedCardFilter, onNavigate, setSelectedLocationId, setFocusEntryId, onProposeTrade, onViewTrade }) {
   const { t } = useT();
   const [locations, setLocations] = useState([]);
   const [setsList, setSetsList] = useState([]);
@@ -1079,6 +1079,8 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
         onUpdate={onUpdate}
         showToast={showToast}
         onViewStorage={handleViewStorage}
+        onProposeTrade={onProposeTrade}
+        onViewTrade={onViewTrade}
       />
 
       {showTrash && (

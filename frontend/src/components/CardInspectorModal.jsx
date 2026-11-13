@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, MapPin, Trash2, Star, Maximize2, ExternalLink, Search, Layers, RefreshCw, FlipHorizontal2 } from 'lucide-react';
+import { X, MapPin, Trash2, Star, Maximize2, ExternalLink, Search, Layers, RefreshCw, FlipHorizontal2, ArrowLeftRight } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { translatedName, setCode, isEnglish, langCode } from '../utils/languages';
 import { formatPrice, priceText } from '../utils/formatPrice';
@@ -52,7 +52,7 @@ function getSlotNumber(c) {
 // Self-contained: owns its edit form (PUT) and delete (DELETE) so every screen
 // gets the same rich view + edit without duplicating the form. onUpdate() lets
 // the parent refetch after a change. onViewStorage is optional (hidden if absent).
-function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onViewStorage, startInEdit = false }) {
+function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onViewStorage, onProposeTrade, onViewTrade, startInEdit = false }) {
   const { t } = useT();
   const [mode, setMode] = useState('view');
   const [locations, setLocations] = useState([]);
@@ -854,6 +854,72 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               )}
 
               <UsedInDecks cardId={activeCard.card_id || activeCard.id} />
+              {(activeCard.acquired_transfer_id != null || activeCard.acquired_external_transaction_id != null || activeCard.acquired_historical_trade_id != null) && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.75rem' }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
+                    {t('inspector.tradeProvenance')}
+                  </div>
+                  {activeCard.acquired_transfer_id != null && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                        {t('inspector.internalTransfer', {
+                          type: t(activeCard.acquired_transfer_type === 'gift' ? 'transfer.gift' : 'transfer.trade'),
+                          user: activeCard.acquired_transfer_partner || t('transfer.unknownUser')
+                        })}
+                      </span>
+                      {onViewTrade && (
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onViewTrade({ type: 'internal', id: activeCard.acquired_transfer_id })}>
+                          {t('inspector.viewTradeHistory')}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {activeCard.acquired_external_transaction_id != null && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                        {t('inspector.externalTransfer', {
+                          type: t(activeCard.acquired_external_transaction_type === 'gift' ? 'transfer.gift' : 'transfer.trade'),
+                          user: activeCard.acquired_external_contact || t('transfer.unknownUser')
+                        })}
+                      </span>
+                      {onViewTrade && (
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onViewTrade({ type: 'external', id: activeCard.acquired_external_transaction_id })}>
+                          {t('inspector.viewTradeHistory')}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {activeCard.acquired_historical_trade_id != null && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                        {t('inspector.historicalTrade', {
+                          user: activeCard.acquired_historical_trade_partner || t('transfer.unknownUser')
+                        })}
+                      </span>
+                      {onViewTrade && (
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onViewTrade({ type: 'historical', id: activeCard.acquired_historical_trade_id })}>
+                          {t('inspector.viewTradeHistory')}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {onProposeTrade && activeCard.list_type !== 'wishlist' && activeCard.entry_id != null && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    onProposeTrade(activeCard);
+                    onClose();
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}
+                >
+                  <ArrowLeftRight size={14} />
+                  {t('inspector.proposeTrade')}
+                </button>
+              )}
 
               {/* Right card, wrong set: re-file this copy under another printing. */}
               {printings ? (

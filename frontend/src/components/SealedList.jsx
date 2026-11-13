@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal, LayoutGrid, List, MousePointerClick } from 'lucide-react';
+import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal, LayoutGrid, List, MousePointerClick, ArrowLeftRight } from 'lucide-react';
 import { useT } from '../utils/i18n';
 import { gameLabel, gameOptions } from '../utils/games';
 import { formatPrice } from '../utils/formatPrice';
@@ -235,7 +235,7 @@ function LinkedCardsPanel({ unitId, expectedCards, refreshKey, showToast, onChan
   );
 }
 
-function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSelectionChange, showClaimedByOthers, viewMode, selectMode, pressHandlers, longPressFired }) {
+function PurchaseCard({ purchase, onChanged, onEdit, showToast, onProposeTrade, selected, onSelectionChange, showClaimedByOthers, viewMode, selectMode, pressHandlers, longPressFired }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
   const [units, setUnits] = useState(null);
@@ -419,10 +419,10 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
             </div>
           )}
           {units.map((u, i) => (
-            <div key={u.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            <div key={u.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.4rem 0', borderBottom: i < units.length - 1 ? '1px solid var(--border-subtle)' : undefined }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', flexWrap: 'wrap' }}>
                 <span style={{ color: 'var(--text-secondary)', width: '4.5rem' }}>{t('sealed.unitLabel', { n: u.unit_number || i + 1 })}</span>
-                <span style={{ color: u.opened_at ? 'var(--type-fire)' : 'var(--type-grass)', flex: 1 }}>
+                <span style={{ color: u.opened_at ? 'var(--type-fire)' : 'var(--type-grass)', flex: '1 1 5rem' }}>
                   {u.opened_at ? t('sealed.opened') : t('sealed.sealed')}
                 </span>
                 {u.claimed_by_username && (
@@ -435,6 +435,8 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
                     {t('sealed.cardProgress', { linked: u.linked_cards || 0, expected: u.expected_cards })}
                   </span>
                 )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.35rem', flexWrap: 'wrap' }}>
                 {u.can_toggle && (
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => toggleUnit(u)}>
                     {u.opened_at ? <><Lock size={12} /> {t('sealed.reseal')}</> : <><Unlock size={12} /> {t(!purchase.is_owner && !u.claimed_by_me ? 'sealed.openAndClaim' : 'sealed.markOpened')}</>}
@@ -448,6 +450,11 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
                 {u.can_view_cards && (
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => setViewingUnit(viewingUnit === u.id ? null : u.id)}>
                     {t('sealed.viewLinkedCards')}
+                  </button>
+                )}
+                {onProposeTrade && purchase.is_owner && !u.opened_at && (u.claimed_by_user_id == null || u.claimed_by_me) && (
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => onProposeTrade(u)}>
+                    <ArrowLeftRight size={12} /> {t('inspector.proposeTrade')}
                   </button>
                 )}
               </div>
@@ -630,7 +637,7 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
 // The "Sealed" tab: purchases (store, date, price, quantity) with per-unit
 // sealed/opened tracking, and a way to link opened-unit cards back to the
 // purchase they came from.
-export default function SealedList({ showToast }) {
+export default function SealedList({ showToast, onProposeTrade }) {
   const { t } = useT();
   const [purchases, setPurchases] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -961,7 +968,7 @@ export default function SealedList({ showToast }) {
       ) : (
         <div className={viewMode === 'gallery' ? 'sealed-purchase-grid' : 'sealed-purchase-list'}>
           {filteredPurchases.map(p => (
-            <PurchaseCard key={p.id} purchase={p} onChanged={load} onEdit={setEditingPurchase} showToast={showToast}
+            <PurchaseCard key={p.id} purchase={p} onChanged={load} onEdit={setEditingPurchase} showToast={showToast} onProposeTrade={onProposeTrade}
               selected={selectedPurchaseIds.has(p.id)} onSelectionChange={setPurchaseSelected}
               showClaimedByOthers={showClaimedByOthers} viewMode={viewMode} selectMode={selectMode}
               pressHandlers={purchasePressHandlers} longPressFired={purchaseLongPressFired} />
