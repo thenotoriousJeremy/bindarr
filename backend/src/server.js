@@ -338,8 +338,8 @@ const scheduler = createScheduler({
     {
       // Daily: one set-list request per provider (utils/syncJobs.checkSets), so a
       // new release appears within a day rather than a week (#170). Its first day
-      // is counted from the first boot that knows it: the boot fill above has just
-      // fetched the same lists.
+      // is counted from the first boot that has this job, not run at once: the
+      // boot's own set fill (startupTasks) may just have fetched the same lists.
       name: 'sets-check',
       every: () => 24 * HOUR,
       since: () => null,
