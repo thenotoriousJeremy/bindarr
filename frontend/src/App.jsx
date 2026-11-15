@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useSyncExternalStore, Suspense } from 'react';
-import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords, StickyNote, Package, ListChecks, Smartphone, Library } from 'lucide-react';
+import { Sparkles, LogOut, Smartphone } from 'lucide-react';
 import Login from './components/Login';
 import Logo from './components/Logo';
 import Toast from './components/Toast';
+import NavMoreMenu from './components/NavMoreMenu';
 import { showToast as pushToast, dismissToast, getToast, subscribeToast } from './utils/toast';
 import { App as CapacitorApp } from '@capacitor/app';
 import { useRouteSync, goToTab, initialTab } from './utils/router';
@@ -18,7 +19,8 @@ import { readOidcCode } from './utils/webOidc';
 import { clearOfflineData, isOffline, isWriteMethod, noteApiResponse, noteApiUnreachable, offlineWriteResponse, setWriteBlockedText, subscribeOffline } from './utils/offline';
 import { lazyWithReload } from './utils/lazyWithReload';
 import { useNameDictionaries } from './utils/useNameDictionaries';
-import { navBarTabs, litNavTab, collectionTarget, isCollectionView } from './utils/navTabs';
+import { navBarTabs, moreTabs, litNavTab, collectionTarget, isCollectionView } from './utils/navTabs';
+import { NAV_TAB_META } from './utils/navTabMeta';
 import { wishlist } from './utils/wishlist';
 import CollectionViews from './components/CollectionViews';
 
@@ -40,21 +42,8 @@ const Notes = lazyWithReload(() => import('./components/Notes'));
 const SealedList = lazyWithReload(() => import('./components/SealedList'));
 const SetCompletion = lazyWithReload(() => import('./components/SetCompletion'));
 
-// Each nav-bar tab's label and icon. Which of them the bar shows is the user's
-// choice (utils/navTabs.js, Settings).
-const NAV_TAB_META = {
-  dashboard: ['nav.dashboard', LayoutDashboard],
-  'add-cards': ['nav.addCards', Plus],
-  collection: ['nav.collection', Database],
-  sets: ['nav.browse', Library],
-  storage: ['nav.storage', MapPin],
-  deckbuilder: ['nav.deckBuilder', Swords],
-  lists: ['nav.lists', ListChecks],
-  notes: ['nav.notes', StickyNote],
-  sealed: ['nav.sealed', Package],
-  settings: ['nav.settings', SettingsIcon],
-  admin: ['nav.admin', ShieldAlert],
-};
+// The header's Settings, Admin and log-out buttons share one look.
+const HEADER_BUTTON_STYLE = { padding: '0.4rem 0.5rem', borderRadius: 'var(--radius-sm)' };
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -365,8 +354,8 @@ function App() {
 
   // Fit the tab bar by measuring, not by breakpoint. How much room the tabs
   // need depends on Android's system font scale (the WebView honours it), the
-  // language (German and Russian labels run long) and whether the admin tab is
-  // shown — no media query can see any of that. Each pass starts from the
+  // language (German and Russian labels run long) and how many tabs are pinned
+  // — no media query can see any of that. Each pass starts from the
   // least compact state, so widening the window brings labels and the greeting
   // back, then steps down only while something still doesn't fit:
   //   .nav-tight on the header   -> greeting hidden (top bar only, index.css)
@@ -578,8 +567,28 @@ function App() {
   // Settings (see InstanceSettings).
   const deviceMode = isDeviceMode();
   const showAdmin = user.role === 'admin' && !deviceMode;
-  const barTabs = navBarTabs(user.nav_tabs, { showAdmin, activeTab });
+  const barTabs = navBarTabs(user.nav_tabs, { activeTab });
   const litTab = litNavTab(activeTab, barTabs);
+  // What the bar leaves out, under More (utils/navTabs.js).
+  const moreItems = moreTabs(barTabs).map(tab => ({ tab, label: t(NAV_TAB_META[tab][0]), Icon: NAV_TAB_META[tab][1] }));
+  // Settings and Admin are header buttons, not tabs on the bar (#107).
+  const headerTabButton = (tab, iconStyle) => {
+    const [labelKey, Icon] = NAV_TAB_META[tab];
+    const label = t(labelKey);
+    return (
+      <button
+        type="button"
+        onClick={() => goTab(tab)}
+        className="btn btn-secondary btn-icon-only header-tab-btn"
+        title={label}
+        aria-label={label}
+        aria-current={activeTab === tab ? 'page' : undefined}
+        style={HEADER_BUTTON_STYLE}
+      >
+        <Icon size={14} style={iconStyle} aria-hidden="true" />
+      </button>
+    );
+  };
 
   // Every tab learns whether it is the one shown (`active`): a hidden tab holds
   // its statsTrigger refetches until it is shown again (utils/useShownTrigger).
@@ -656,7 +665,8 @@ function App() {
         {/* Navigation Tabs (Nested inside header for unified layout). Each tab
             carries its name as aria-label/title: on narrow screens, or when the
             labels don't fit (navRef check above), the label span is hidden for
-            all but the active tab (index.css). */}
+            all but the active tab (index.css). More, last, holds the tabs the
+            bar leaves out. */}
         <nav ref={navRef} className="nav-tabs" style={{ margin: 0 }}>
           {barTabs.map(tab => {
             const [labelKey, Icon] = NAV_TAB_META[tab];
@@ -670,34 +680,41 @@ function App() {
                 title={label}
                 aria-current={litTab === tab ? 'page' : undefined}
               >
-                <Icon size={18} style={tab === 'admin' ? { color: 'var(--accent-red)' } : undefined} />
+                <Icon size={18} />
                 <span className="nav-tab-label">{label}</span>
               </button>
             );
           })}
+          {moreItems.length > 0 && <NavMoreMenu items={moreItems} onSelect={goTab} />}
         </nav>
 
-        <div className="header-actions" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <div className="header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
           {deviceMode ? (
             // Nobody to greet and nothing to log out of; say where the data is.
-            <div className="header-greeting" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-              <Smartphone size={14} style={{ color: 'var(--accent-yellow)' }} />
-              <span>{t('header.onDevice')}</span>
-            </div>
-          ) : (
             <>
               <div className="header-greeting" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                <Smartphone size={14} style={{ color: 'var(--accent-yellow)' }} />
+                <span>{t('header.onDevice')}</span>
+              </div>
+              {headerTabButton('settings')}
+            </>
+          ) : (
+            <>
+              <div className="header-greeting header-user" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                 <Sparkles size={14} style={{ color: 'var(--accent-yellow)' }} />
                 <span>{t('header.greeting')} <strong style={{ color: 'var(--text-strong)' }}>{user.username}</strong> ({t(`role.${user.role}`)})</span>
               </div>
+              {showAdmin && headerTabButton('admin', { color: 'var(--accent-red)' })}
+              {headerTabButton('settings')}
               <button
+                type="button"
                 onClick={handleLogout}
                 className="btn btn-secondary btn-icon-only"
                 title={t('header.logOut')}
                 aria-label={t('header.logOut')}
-                style={{ padding: '0.4rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
+                style={HEADER_BUTTON_STYLE}
               >
-                <LogOut size={14} />
+                <LogOut size={14} aria-hidden="true" />
               </button>
             </>
           )}

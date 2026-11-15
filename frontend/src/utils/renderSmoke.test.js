@@ -1,29 +1,15 @@
 // Render smoke tests. Everything else in this folder tests plain functions, and
 // nothing rendered a component, which is how 1.9.0 shipped a login screen that
 // threw on every logout (React refuses an object as a child, and the toast is
-// an object). Vite's own SSR loader compiles the JSX and resolves imports the
-// way the app build does; react-dom/server renders the first paint. Effects
-// never run there, so no request is made: each view draws its loading state,
-// which is enough to catch a broken import, a bad prop or a throw in render.
+// an object). renderHarness.js loads the app through Vite's SSR loader and
+// react-dom/server renders the first paint. Effects never run there, so no
+// request is made: each view draws its loading state, which is enough to catch
+// a broken import, a bad prop or a throw in render.
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { fileURLToPath } from 'node:url';
-import { createServer } from 'vite';
+import { installBrowserGlobals, startRenderer } from './renderHarness.js';
 
-// The browser globals the app's modules read while loading or rendering.
-const storage = new Map();
-globalThis.window = globalThis;
-globalThis.localStorage = {
-  getItem: (k) => (storage.has(k) ? storage.get(k) : null),
-  setItem: (k, v) => { storage.set(k, String(v)); },
-  removeItem: (k) => { storage.delete(k); },
-  clear: () => storage.clear(),
-};
-globalThis.addEventListener = () => {};
-globalThis.removeEventListener = () => {};
-globalThis.dispatchEvent = () => true;
-globalThis.location = new URL('https://bindarr.test/');
-globalThis.history = { state: null, length: 1, pushState() {}, replaceState() {}, back() {} };
+installBrowserGlobals();
 // The network under App.jsx's fetch wrapper, which wraps whatever fetch is there
 // when App loads: /api/aborted fails as a cancelled request does, and
 // /api/unreachable as a server that cannot be reached.
@@ -39,27 +25,12 @@ const noop = () => {};
 // A toast pill, as opposed to the always-there region around it.
 const TOAST_PILL = /class="toast( toast-action)?"/;
 
-let vite;
-let React;
-let renderToString;
-const load = (path) => vite.ssrLoadModule(path);
-const render = (Component, props = {}) => renderToString(React.createElement(Component, props));
+let renderer;
+const load = (path) => renderer.load(path);
+const render = (Component, props) => renderer.render(Component, props);
 
-before(async () => {
-  vite = await createServer({
-    root: fileURLToPath(new URL('../..', import.meta.url)),
-    configFile: false,
-    logLevel: 'silent',
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-    optimizeDeps: { noDiscovery: true, include: [] },
-  });
-  // The same React the loaded modules use: Vite leaves node_modules to Node.
-  React = await import('react');
-  ({ renderToString } = await import('react-dom/server'));
-});
-
-after(async () => { await vite?.close(); });
+before(async () => { renderer = await startRenderer(); });
+after(async () => { await renderer?.close(); });
 
 function signOut() {
   localStorage.removeItem('bindarr_token');
@@ -103,6 +74,29 @@ test('the signed-in app renders with a toast up', async () => {
     assert.match(html, /Welcome back/);
     assert.match(html, /class="nav-tabs"/);
     toasts.dismissToast();
+  } finally {
+    signOut();
+  }
+});
+
+test('with nothing pinned, More and the header still reach every tab (#107)', async () => {
+  signIn({ ...USER, nav_tabs: [] });
+  try {
+    const { default: App } = await load('/src/App.jsx');
+    const html = render(App);
+    assert.match(html, /aria-haspopup="menu"[^>]*aria-expanded="false"|aria-expanded="false"[^>]*aria-haspopup="menu"/, 'a closed More button');
+    assert.match(html, /<button[^>]*header-tab-btn[^>]*aria-label="Settings"/);
+    assert.match(html, /<button[^>]*header-tab-btn[^>]*aria-label="Admin"/);
+    assert.doesNotMatch(html, /class="nav-tab[^"]*"[^>]*aria-label="Settings"/, 'Settings is no longer a bar tab');
+  } finally {
+    signOut();
+  }
+  signIn({ ...USER, role: 'user' });
+  try {
+    const { default: App } = await load('/src/App.jsx');
+    const html = render(App);
+    assert.doesNotMatch(html, /aria-haspopup="menu"/, 'the default bar leaves nothing for More');
+    assert.doesNotMatch(html, /aria-label="Admin"/, 'no Admin button for a member');
   } finally {
     signOut();
   }

@@ -1309,6 +1309,64 @@ button, input, select, textarea {
   }
 }
 
+/* More (components/NavMoreMenu.jsx): the tabs the bar leaves out. The menu is
+   drawn in <body> at a fixed position by the button, above the bar on phones. */
+.nav-more-menu {
+  position: fixed;
+  z-index: var(--z-modal);
+  min-width: 12rem;
+  max-width: calc(100vw - 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.35rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-glass-hover);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-glow);
+}
+
+.nav-more-item {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-more-item:hover,
+.nav-more-item:focus-visible {
+  background: var(--surface-2);
+}
+
+.nav-more-item svg {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+/* Settings and Admin in the header: the one open shows it. */
+.header-tab-btn[aria-current="page"] {
+  border-color: var(--accent-red);
+  color: var(--text-primary);
+}
+
+/* A phone's header holds the logo and up to three buttons; the greeting is the
+   first thing to give up its room (the username is in Settings). Device mode's
+   "on this device" note has one button beside it and stays. */
+@media (max-width: 480px) {
+  .header-greeting.header-user {
+    display: none !important;
+  }
+}
+
 /* Dashboard Grid Cards */
 .metrics-grid {
   display: grid;
