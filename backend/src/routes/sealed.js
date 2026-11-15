@@ -10,6 +10,7 @@ const {
   getVisibleUnit,
   getOwnedUnit,
 } = require('../utils/sealedOwnership');
+const { attachSealedProvenance } = require('../utils/transferAssets');
 
 const router = express.Router();
 
@@ -378,6 +379,8 @@ router.get('/sealed/purchases', async (req, res) => {
       [req.user.id, req.user.id, ...unitVisibility.params, req.user.id]
     );
     for (const purchase of purchases) sanitizeSharedPurchase(purchase, req.user.id);
+    // Where a purchase that came by trade, gift or outside deal came from.
+    await attachSealedProvenance(purchases, req.user.id, purchase => purchase.id, purchase => purchase.is_owner);
 
     const purchaseIds = purchases.map(purchase => purchase.id);
     const expansionRows = purchaseIds.length
@@ -1021,6 +1024,9 @@ router.get('/sealed/units', async (req, res) => {
         ORDER BY u.opened_at DESC`,
       [req.user.id, ...params]
     );
+    // Where the unit's purchase came from, when it came by trade, gift or outside deal.
+    await attachSealedProvenance(units, req.user.id, unit => unit.purchase_id,
+      unit => Number(unit.purchase_owner_id) === Number(req.user.id));
     // One memo per request: every unit of a product asks the same recipe questions.
     const memo = recipeMemo();
     for (const unit of units) {

@@ -46,9 +46,11 @@ const API_MOUNTS = [
   { path: '/api', router: () => require('./sealed'), device: 'mount' },
   // Deals with people outside Bindarr: one account's own record, so the phone runs
   // it too. Full paths inside (/transfers/external...), ahead of the transfers
-  // entry, whose 501 on the phone covers every other /api/transfers path.
+  // entries, whose 501 on the phone covers every other /api/transfers path.
   { path: '/api', router: () => require('./externalTransfers'), device: 'mount' },
-  // Trades and gifts between accounts, which need the other account's server.
+  // Trades between accounts recorded after the fact (/transfers/history...), and
+  // trades and gifts between accounts: both need the other account's server.
+  { path: '/api', router: 'historicalTrades', device: 501, devicePaths: ['/api/transfers/history'] },
   { path: '/api', router: 'transfers', device: 501, devicePaths: ['/api/transfers'] },
   { path: '/api', router: () => require('./backup'), device: 'mount' },
   // Uploaded binder artwork is decoded with sharp too.

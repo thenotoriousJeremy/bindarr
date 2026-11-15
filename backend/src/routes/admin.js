@@ -14,6 +14,7 @@ const { revokeSessions, hashPassword } = require('../utils/authHelpers');
 const { BACKUP_DIR, listBackups, createBackup, resolveBackupFile } = require('../backup');
 const binderArtStore = require('../utils/binderArtStore');
 const { sendFileAt } = require('../utils/sendFileAt');
+const { closePendingTradesFor } = require('../utils/transferAssets');
 
 const router = express.Router();
 
@@ -299,10 +300,17 @@ router.delete('/users/:id', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    await db.run(`DELETE FROM sessions WHERE user_id = ?`, [id]);
-    await db.run(`DELETE FROM collection WHERE user_id = ?`, [id]);
-    await db.run(`DELETE FROM locations WHERE user_id = ?`, [id]);
-    await db.run(`DELETE FROM users WHERE id = ?`, [id]);
+    // One transaction. Their trades with other members outlive them (the history
+    // rows SET NULL on the account, and keep the names snapshotted), but nothing may
+    // stay pending against an account that no longer exists: open offers are
+    // cancelled and records awaiting confirmation rejected first.
+    await db.withTransaction(async () => {
+      await closePendingTradesFor(targetUser.id);
+      await db.run(`DELETE FROM sessions WHERE user_id = ?`, [id]);
+      await db.run(`DELETE FROM collection WHERE user_id = ?`, [id]);
+      await db.run(`DELETE FROM locations WHERE user_id = ?`, [id]);
+      await db.run(`DELETE FROM users WHERE id = ?`, [id]);
+    });
     // Their binder artwork rows cascade with the user; the files do not.
     binderArtStore.removeUser(targetUser.id);
 

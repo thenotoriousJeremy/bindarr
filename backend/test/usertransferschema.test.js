@@ -97,6 +97,59 @@ async function main() {
   console.log('PASS: transfer proposals support card and sealed item snapshots');
   console.log('PASS: historical item snapshots survive source collection and unit deletion');
   console.log('PASS: transfer participant and quantity constraints are enforced');
+
+  // Deleting one account keeps the other's history: every user reference is SET
+  // NULL, and the names stay as they were snapshotted.
+  await db.run(
+    `UPDATE user_transfers SET proposer_name = 'transfer-alice', recipient_name = 'transfer-bob' WHERE id = ?`,
+    [transfer.lastID]
+  );
+  const record = await db.run(
+    `INSERT INTO historical_trades (creator_id, recipient_id, creator_name, recipient_name, completed_at)
+     VALUES (?, ?, 'transfer-bob', 'transfer-alice', '2024-01-01')`,
+    [bob, alice]
+  );
+  await db.run(
+    `INSERT INTO historical_trade_items (trade_id, from_user_id, to_user_id, card_id, item_snapshot) VALUES (?, ?, ?, ?, '{}')`,
+    [record.lastID, bob, alice, cardId]
+  );
+  await db.run(`DELETE FROM users WHERE id = ?`, [bob]);
+  assert.deepStrictEqual(
+    await db.get(`SELECT proposer_id, recipient_id, recipient_name FROM user_transfers WHERE id = ?`, [transfer.lastID]),
+    { proposer_id: alice, recipient_id: null, recipient_name: 'transfer-bob' }
+  );
+  assert.deepStrictEqual(
+    await db.all(`SELECT from_user_id, to_user_id FROM user_transfer_items WHERE transfer_id = ? ORDER BY id`, [transfer.lastID]),
+    [{ from_user_id: alice, to_user_id: null }, { from_user_id: null, to_user_id: alice }]
+  );
+  assert.deepStrictEqual(
+    await db.get(`SELECT creator_id, creator_name FROM historical_trades WHERE id = ?`, [record.lastID]),
+    { creator_id: null, creator_name: 'transfer-bob' }
+  );
+  assert.strictEqual((await db.get(`SELECT from_user_id FROM historical_trade_items WHERE trade_id = ?`, [record.lastID])).from_user_id, null);
+  console.log('PASS: a deleted account leaves the other member\'s history in place, names snapshotted');
+
+  // A copy names the outside deal that brought it in, and losing the deal keeps the copy.
+  const contact = await db.run(`INSERT INTO external_contacts (user_id, name) VALUES (?, 'Shop')`, [alice]);
+  const deal = await db.run(
+    `INSERT INTO external_transactions (user_id, contact_id, contact_name_snapshot, transaction_type) VALUES (?, ?, 'Shop', 'gift')`,
+    [alice, contact.lastID]
+  );
+  const line = await db.run(
+    `INSERT INTO external_transaction_items (transaction_id, direction, item_type, item_snapshot) VALUES (?, 'received', 'card', '{}')`,
+    [deal.lastID]
+  );
+  const copy = await db.run(
+    `INSERT INTO collection (card_id, user_id, quantity, acquired_via_external_item_id) VALUES (?, ?, 1, ?)`,
+    [cardId, alice, line.lastID]
+  );
+  await db.run(`DELETE FROM external_transactions WHERE id = ?`, [deal.lastID]);
+  assert.strictEqual((await db.get(`SELECT acquired_via_external_item_id AS v FROM collection WHERE id = ?`, [copy.lastID])).v, null);
+  const indexes = (await db.all(
+    `SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_collection_acquired_%' ORDER BY name`
+  )).map(row => row.name);
+  assert.deepStrictEqual(indexes, ['idx_collection_acquired_external', 'idx_collection_acquired_historical', 'idx_collection_acquired_transfer']);
+  console.log('PASS: provenance columns are indexed and SET NULL with their history');
 }
 
 main()
