@@ -10,10 +10,14 @@ import { installBrowserGlobals, startRenderer } from './renderHarness.js';
 installBrowserGlobals();
 
 const noop = () => {};
-const ME = { id: 1, username: 'ash', role: 'member', nav_tabs: null, trades_enabled: 1 };
-const ON = { members: true, canTrade: true, needsOptIn: false };
-const OFF = { members: true, canTrade: false, needsOptIn: true };
-const DEVICE = { members: false, canTrade: false, needsOptIn: false };
+// The server sends trades_enabled as a boolean.
+const ME = { id: 1, username: 'ash', role: 'member', nav_tabs: null, trades_enabled: true };
+const ON = { members: true, canTrade: true, canDecline: true, needsOptIn: false };
+const OFF = { members: true, canTrade: false, canDecline: true, needsOptIn: true };
+const DEVICE = { members: false, canTrade: false, canDecline: false, needsOptIn: false };
+// Every button's text, in order: what a member can do on what is drawn.
+const buttons = (html) => [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)]
+  .map(m => m[1].replace(/<[^>]+>/g, '').replace(/<!-- -->/g, '').trim());
 
 const list = (items, extra = {}) => ({
   items, cursor: null, pages: 1, loaded: true, loading: false, loadingMore: false, error: null,
@@ -59,11 +63,14 @@ test('the Trades area renders with trading on, off and on a phone', async () => 
   assert.doesNotMatch(on, /Turn on trade offers/);
   assert.match(on, /Record a past trade/);
 
-  const off = render(TransferManager, { user: { ...ME, trades_enabled: 0 }, showToast: noop, onUpdateUser: noop, deviceMode: false });
-  assert.match(off, /Trading with other members is off/);
-  assert.match(off, /<button[^>]*>Turn on trade offers<\/button>/);
-  assert.doesNotMatch(off, /Record a past trade/, 'recording a trade with a member needs trading on');
-  assert.match(off, /id="transfer-tab-offers"/, 'offers stay readable');
+  for (const flag of [false, 0]) {
+    const off = render(TransferManager, { user: { ...ME, trades_enabled: flag }, showToast: noop, onUpdateUser: noop, deviceMode: false });
+    assert.match(off, /Trading with other members is off/);
+    assert.match(off, /<button[^>]*>Turn on trade offers<\/button>/);
+    assert.doesNotMatch(off, /Record a past trade/, 'recording a trade with a member needs trading on');
+    assert.match(off, /id="transfer-tab-offers"/, 'offers stay readable');
+  }
+  assert.doesNotMatch(render(TransferManager, { user: { ...ME, trades_enabled: 1 }, showToast: noop, deviceMode: false }), /Turn on trade offers/, 'an older 0/1 profile reads the same');
 
   const phone = render(TransferManager, { user: ME, showToast: noop, deviceMode: true });
   assert.doesNotMatch(phone, /id="transfer-tab-offers"/, 'no members on a phone');
@@ -72,20 +79,32 @@ test('the Trades area renders with trading on, off and on a phone', async () => 
   assert.match(phone, /Record an external deal/);
 });
 
-test('pending offers: answers while trading is on, a note while it is off', async () => {
+test('pending offers: every answer while trading is on, only saying no while it is off', async () => {
   const { default: PendingOffers } = await load('/src/components/transfers/PendingOffers.jsx');
   const props = { list: list([INCOMING, OUTGOING]), incoming: [INCOMING], outgoing: [OUTGOING], me: 1, busy: false, onRespond: noop, onCounter: noop, locateCard: () => null };
-  const on = render(PendingOffers, { ...props, canRespond: true });
+  const on = render(PendingOffers, { ...props, canTrade: true, canDecline: true });
   assert.match(on, /From misty/);
   assert.match(on, /To brock/);
-  assert.match(on, />Accept<\/button>|Accept<\/button>/);
-  assert.match(on, /Cancel proposal/);
+  assert.deepEqual(buttons(on), ['Accept', 'Counter', 'Reject', 'Cancel proposal']);
   assert.match(on, /\$2\.50/, 'your own cost, formatted');
-  const off = render(PendingOffers, { ...props, canRespond: false });
-  assert.doesNotMatch(off, /Accept<\/button>/);
-  assert.match(off, /Turn on trade offers to answer or cancel this offer/);
-  const failed = render(PendingOffers, { ...props, list: list([], { loaded: false, error: { body: { code: 'trades_disabled', error: 'x' } } }), canRespond: true });
+  assert.doesNotMatch(on, /role="note"/);
+
+  const off = render(PendingOffers, { ...props, canTrade: false, canDecline: true });
+  assert.deepEqual(buttons(off), ['Reject', 'Cancel proposal'], 'decline what was sent, withdraw what you sent');
+  assert.match(off, /Turn on trade offers to accept or counter this offer/);
+
+  const failed = render(PendingOffers, { ...props, list: list([], { loaded: false, error: { body: { code: 'trades_disabled', error: 'x' } } }), canTrade: true, canDecline: true });
   assert.match(failed, /Trading is turned off/);
+});
+
+test('an offer from a deleted member can still be rejected, and a snapshot names its sender', async () => {
+  const { default: TransferCard } = await load('/src/components/transfers/TransferCard.jsx');
+  const orphan = { ...INCOMING, proposer_id: null, proposer_username: null, proposer_name: 'dawn' };
+  const html = render(TransferCard, { transfer: orphan, me: 1, canTrade: true, canDecline: true, onRespond: noop, onCounter: noop });
+  assert.match(html, /From dawn/);
+  assert.deepEqual(buttons(html), ['Reject'], 'nothing to trade with, but it can be cleared away');
+  const graded = { ...OUTGOING, items: [snapshotItem(3, 1, { item_snapshot: { name: 'Charizard', grader: 'PSA', grade: 10, condition: 'Near Mint' } })] };
+  assert.match(render(TransferCard, { transfer: graded, me: 1, onRespond: noop }), /PSA 10/);
 });
 
 test('history pages each list, and a deleted member keeps their name', async () => {
@@ -99,10 +118,11 @@ test('history pages each list, and a deleted member keeps their name', async () 
     id: 7, contact_name: 'Gary', transaction_type: 'trade', created_at: '2026-11-04 09:00:00',
     items: [{ id: 1, direction: 'given', purchase_cost: 1234.5, item_snapshot: { name: 'Snorlax' } }],
   };
+  const handlers = { onRecordPastTrade: noop, onReviewPastTrade: noop, onDeclinePastTrade: noop, onCancelPastTrade: noop };
   const html = render(TransferHistory, {
     me: 1, access: ON, busy: false, target: null,
     transfers: list([closed], { cursor: 'next' }), historical: list([trade], { cursor: 'more' }), external: list([deal], { cursor: 'deeper' }),
-    onRecordPastTrade: noop, onReviewPastTrade: noop, onCancelPastTrade: noop,
+    ...handlers,
   });
   assert.match(html, /Negotiation with gone/);
   assert.match(html, /Past trade with misty/);
@@ -112,10 +132,19 @@ test('history pages each list, and a deleted member keeps their name', async () 
   assert.match(html, /\$1,234\.50/);
   assert.equal((html.match(/>Load more</g) || []).length, 3, 'one per list with a page after it');
 
+  // A record sent to me awaiting my confirmation, and one of mine awaiting theirs.
+  const sentToMe = { ...trade, id: 6, creator_id: 2, creator_username: 'misty', recipient_id: 1, recipient_username: 'ash' };
+  const pastTrades = list([sentToMe, trade]);
+  const trading = buttons(render(TransferHistory, { me: 1, access: ON, busy: false, target: null, transfers: list([]), historical: pastTrades, external: list([]), ...handlers }));
+  assert.deepEqual(trading, ['Record a past trade', 'Review and confirm', 'Cancel proposal']);
+  const offHtml = render(TransferHistory, { me: 1, access: OFF, busy: false, target: null, transfers: list([]), historical: pastTrades, external: list([]), ...handlers });
+  assert.deepEqual(buttons(offHtml), ['Decline record', 'Cancel proposal'], 'confirming needs trading on; declining and cancelling do not');
+  assert.match(offHtml, /Turn on trade offers to confirm this trade/);
+
   const phone = render(TransferHistory, {
     me: 1, access: DEVICE, busy: false, target: null,
     transfers: list([]), historical: list([]), external: list([deal]),
-    onRecordPastTrade: noop, onReviewPastTrade: noop, onCancelPastTrade: noop,
+    ...handlers,
   });
   assert.doesNotMatch(phone, /Transfer history/);
   assert.match(phone, /External deal history/);
@@ -137,6 +166,18 @@ test('the item picker draws its items, filters and deck warning', async () => {
   assert.match(html, /Blue binder/);
   assert.match(html, /Mark for trade/);
   assert.match(html, /Booster Bundle/);
+
+  // A member's marked slab: its grade in place of the condition, and what no
+  // checked-out deck holds as the quantity on offer.
+  const marked = render(ItemPicker, {
+    idPrefix: 'transfer-request', isRequest: true,
+    items: [card(5, { grader: 'PSA', grade: 9, quantity: 1 })],
+    selected: {}, filters: { query: '', game: '', type: 'all', location: '', sort: 'name-asc' },
+    onPick: noop, onQuantity: noop, onFiltersChange: noop, onShowDetails: noop, emptyText: 'Nothing',
+  });
+  assert.match(marked, /PSA 9/);
+  assert.doesNotMatch(marked, /Near Mint/);
+  assert.match(marked, /1 available/);
 });
 
 test('the composer offers only contacts when trading is off', async () => {
@@ -179,23 +220,29 @@ test('the past-trade dialog renders to record and to review', async () => {
   assert.match(review, /2 copies · Near Mint · Unsorted/);
 });
 
-test('a sealed unit that came as a gift says so in its details', async () => {
+test('a sealed unit that came as a gift, from a member or from outside, says so in its details', async () => {
   const { default: ItemDetailsModal } = await load('/src/components/transfers/ItemDetailsModal.jsx');
-  const html = render(ItemDetailsModal, {
-    item: { type: 'sealed', id: 9, product_name: 'Booster Bundle', game: 'pokemon', acquired_transfer_type: 'gift', acquired_transfer_partner: 'Misty' },
-    onClose: noop,
-  });
+  const unit = { type: 'sealed', id: 9, product_name: 'Booster Bundle', game: 'pokemon', acquired_transfer_type: null, acquired_transfer_partner: null, acquired_external_transaction_type: null, acquired_external_contact: null };
+  const html = render(ItemDetailsModal, { item: { ...unit, acquired_transfer_type: 'gift', acquired_transfer_partner: 'Misty' }, onClose: noop });
   assert.match(html, /Received as a gift from Misty/);
+  const outside = render(ItemDetailsModal, { item: { ...unit, acquired_external_transaction_type: 'trade', acquired_external_contact: 'Gary' }, onClose: noop });
+  assert.match(outside, /Received in a trade with Gary, outside Bindarr/);
+  assert.doesNotMatch(render(ItemDetailsModal, { item: unit, onClose: noop }), /Acquired/);
 });
 
 test('Settings carries the trade-offers switch next to sharing', async () => {
   const { default: Settings } = await load('/src/components/Settings.jsx');
   const props = { onUpdateUser: noop, showToast: noop, onLeaveDevice: noop, onDataChanged: noop };
   const tradesSwitch = (html) => (html.match(/<input[^>]*aria-label="Let other members send me trade offers"[^>]*>/) || [''])[0];
-  const on = tradesSwitch(render(Settings, { ...props, user: ME }));
-  assert.match(on, /type="checkbox"/);
-  assert.match(on, /checked=""/);
-  const off = tradesSwitch(render(Settings, { ...props, user: { ...ME, trades_enabled: 0 } }));
-  assert.ok(off, 'there whether on or off');
-  assert.doesNotMatch(off, /checked=""/);
+  // The server's boolean, and the 0/1 an older stored profile may hold.
+  for (const flag of [true, 1]) {
+    const on = tradesSwitch(render(Settings, { ...props, user: { ...ME, trades_enabled: flag } }));
+    assert.match(on, /type="checkbox"/);
+    assert.match(on, /checked=""/);
+  }
+  for (const flag of [false, 0, undefined]) {
+    const off = tradesSwitch(render(Settings, { ...props, user: { ...ME, trades_enabled: flag } }));
+    assert.ok(off, 'there whether on or off');
+    assert.doesNotMatch(off, /checked=""/);
+  }
 });

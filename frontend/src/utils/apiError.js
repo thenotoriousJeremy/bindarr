@@ -41,13 +41,20 @@ const KEYS = {
   restore_too_many_cards: 'apiError.restoreTooManyCards',
   restore_claimed_units: 'apiError.restoreClaimedUnits',
   api_key_shown_once: 'apiError.apiKeyShownOnce',
-  // Trades and gifts between members (routes/transfers.js). The two generic
-  // codes are worded for any route that answers with them.
+  // Trades and gifts between members (routes/transfers.js) and deals recorded
+  // with people outside Bindarr. The generic codes (not_found, invalid,
+  // server_error) are worded for any route that answers with them.
   not_found: 'apiError.notFound',
   invalid: 'apiError.invalid',
+  server_error: 'apiError.serverError',
+  forbidden: 'apiError.forbidden',
+  not_pending: 'apiError.notPending',
+  needs_counter: 'apiError.needsCounter',
+  already_owned: 'apiError.alreadyOwned',
+  name_taken: 'apiError.nameTaken',
   trades_disabled: 'apiError.tradesDisabled',
   api_key_refused: 'apiError.apiKeyRefused',
-  too_many_pending: 'apiError.tooManyPending',
+  too_many_pending: (p) => (p && p.max != null ? 'apiError.tooManyPendingMax' : 'apiError.tooManyPending'),
   asset_changed: 'apiError.assetChanged',
   deck_allocated: (p) => (p && p.decks ? 'apiError.deckAllocatedNamed' : 'apiError.deckAllocated'),
   unit_claimed: 'apiError.unitClaimed',
@@ -66,11 +73,12 @@ function listText(names) {
 
 // What a sentence needs that a body carries beside `params` rather than in it.
 const BODY_PARAMS = {
-  // { decks: ['Mew box', ...] }: the checked-out decks holding the copies,
-  // named in a list, counted for the sentence's plural.
+  // { decks: ['Mew box', ...] } (also in params): the checked-out decks holding
+  // the copies, named in a list, counted for the sentence's plural.
   deck_allocated: (body) => {
-    const names = Array.isArray(body.decks) ? body.decks.filter(name => typeof name === 'string' && name) : [];
-    return names.length ? { decks: listText(names), count: names.length } : {};
+    const given = Array.isArray(body.decks) ? body.decks : body.params?.decks;
+    const names = Array.isArray(given) ? given.filter(name => typeof name === 'string' && name) : [];
+    return names.length ? { decks: listText(names), count: names.length } : { decks: undefined };
   },
 };
 

@@ -2,7 +2,7 @@ import { Package, X } from 'lucide-react';
 import { conditionLabel, printingLabel } from '../../utils/cardOptions';
 import { gameLabel } from '../../utils/games';
 import { useT } from '../../utils/i18n';
-import { itemLabel, receivedFromText } from '../../utils/transferView';
+import { gradeText, itemLabel, provenanceText } from '../../utils/transferView';
 import CardImage from '../CardImage';
 import Modal from '../Modal';
 
@@ -19,7 +19,8 @@ export default function ItemDetailsModal({ item, onClose }) {
     [t('transfer.detailRarity'), item.rarity],
     [t('inspector.specSupertype'), item.type_line || item.supertype],
     [t('inspector.specPrinting'), item.printing && printingLabel(t, item.printing, item.game)],
-    [t('inspector.specCondition'), item.condition && conditionLabel(t, item.condition)],
+    [t('inspector.specGrade'), gradeText(item)],
+    [t('inspector.specCondition'), gradeText(item) || !item.condition ? null : conditionLabel(t, item.condition)],
     [t('inspector.specLanguage'), item.language],
   ] : [
     [t('transfer.detailGame'), game],
@@ -27,7 +28,7 @@ export default function ItemDetailsModal({ item, onClose }) {
     [t('transfer.detailSet'), item.set_name],
     [t('transfer.detailUnit'), item.unit_number ? t('sealed.unitLabel', { n: item.unit_number }) : null],
     [t('transfer.detailOrigin'), item.origin_product_name && t('transfer.fromProduct', { product: item.origin_product_name })],
-    [t('transfer.detailAcquired'), receivedFromText(t, item)],
+    [t('transfer.detailAcquired'), provenanceText(t, item)],
     [t('sealed.expectedCards'), item.expected_cards],
     [t('sealed.expectedPacks'), item.expected_packs],
   ]).filter(([, value]) => value != null && value !== '');

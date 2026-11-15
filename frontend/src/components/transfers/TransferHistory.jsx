@@ -51,11 +51,17 @@ function NegotiationGroup({ group, me, open, onToggle }) {
 }
 
 // A trade recorded after the fact, which the other member confirms or declines.
-function PastTradeRow({ trade, me, canTrade, busy, onReview, onCancel }) {
+// Confirming moves cards, so it needs trading on (`canTrade`); declining a
+// record sent to you and cancelling your own stay allowed with it off
+// (`canDecline`), from the row itself since there is nothing to review.
+function PastTradeRow({ trade, me, canTrade, canDecline, busy, onReview, onDecline, onCancel }) {
   const { t, locale } = useT();
   const isCreator = sameUser(trade.creator_id, me);
   const party = otherParty(trade, me, 'creator', 'recipient');
-  const awaiting = trade.status === 'pending_confirmation' && canTrade && party.id != null;
+  const awaiting = trade.status === 'pending_confirmation';
+  const canReview = awaiting && !isCreator && canTrade && party.id != null;
+  const canDeclineHere = awaiting && !isCreator && !canReview && canDecline;
+  const canCancel = awaiting && isCreator && canDecline;
   return (
     <article id={`historical-trade-${trade.id}`} className="glass-panel" style={{ padding: '0.85rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
@@ -65,13 +71,19 @@ function PastTradeRow({ trade, me, canTrade, busy, onReview, onCancel }) {
             {t(`historical.status.${trade.status}`)} · {calendarDateText(trade.completed_at, locale)}
           </span>
         </div>
-        {awaiting && !isCreator && (
+        {canReview && (
           <button type="button" className="btn btn-primary" disabled={busy} onClick={() => onReview(trade)}>{t('historical.review')}</button>
         )}
-        {awaiting && isCreator && (
+        {canDeclineHere && (
+          <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => onDecline(trade)}>{t('historical.reject')}</button>
+        )}
+        {canCancel && (
           <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => onCancel(trade)}>{t('transfer.cancel')}</button>
         )}
       </div>
+      {awaiting && !isCreator && !canTrade && canDecline && (
+        <p role="note" style={{ margin: '0.45rem 0 0', fontSize: '0.85rem', ...muted }}>{t('historical.confirmNeedsTrading')}</p>
+      )}
       {trade.message && <p style={{ margin: '0.45rem 0', ...muted }}>{trade.message}</p>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.35rem 1rem', marginTop: '0.45rem' }}>
         {(trade.items || []).map((item) => {
@@ -115,6 +127,7 @@ export default function TransferHistory({
   target,
   onRecordPastTrade,
   onReviewPastTrade,
+  onDeclinePastTrade,
   onCancelPastTrade,
 }) {
   const { t } = useT();
@@ -182,8 +195,10 @@ export default function TransferHistory({
               trade={trade}
               me={me}
               canTrade={access.canTrade}
+              canDecline={access.canDecline}
               busy={busy}
               onReview={onReviewPastTrade}
+              onDecline={onDeclinePastTrade}
               onCancel={onCancelPastTrade}
             />
           ))}

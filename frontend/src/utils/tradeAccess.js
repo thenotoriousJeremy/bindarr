@@ -8,11 +8,14 @@
 //
 // On a server, trading with other members is opt-in per member
 // (user.trades_enabled). While it is off the server leaves the member out of
-// everyone's member list, refuses their user-to-user writes (403
-// trades_disabled) and still answers their own lists, so offers and history
-// stay readable.
+// everyone's member list and refuses their trading writes (403
+// trades_disabled), but still answers their own lists, so old offers and
+// history stay readable, and still lets them say no: a member who switched
+// trading off can decline what was sent to them and withdraw what they sent.
 
-export const tradesEnabledFor = (user) => user?.trades_enabled === 1 || user?.trades_enabled === true;
+// The server sends the flag as a boolean (share_* are 0/1); a profile stored by
+// an earlier build may hold either. Read it by truthiness, so both work.
+export const tradesEnabledFor = (user) => !!user?.trades_enabled;
 
 export function tradeAccess({ deviceMode = false, tradesEnabled = false } = {}) {
   const members = !deviceMode;
@@ -20,9 +23,12 @@ export function tradeAccess({ deviceMode = false, tradesEnabled = false } = {}) 
   return {
     // Member trades exist here: offers, their history and recorded past trades load.
     members,
-    // ...and can be made: propose, counter, answer, record a past trade, mark
-    // sealed products for trade.
+    // ...and can be made: propose, accept, counter, record or confirm a past
+    // trade, mark sealed products for trade.
     canTrade,
+    // ...and can be turned down, trading on or off: reject an offer or decline a
+    // recorded trade sent to you, cancel your own offer or record.
+    canDecline: members,
     // A member who has not opted in: say what it is, and offer to turn it on.
     needsOptIn: members && !canTrade,
   };

@@ -69,7 +69,14 @@ export default function TransferManager({
 
   const showError = (err, fallbackKey) => {
     if (isAbortError(err)) return;
-    if (err?.body?.code === 'trades_disabled') data.markTradesOff();
+    const code = err?.body?.code;
+    if (code === 'trades_disabled') data.markTradesOff();
+    // Answered elsewhere meanwhile (the other member, another device): show
+    // where it stands now rather than the stale "pending".
+    if (code === 'not_pending') {
+      data.transfers.refresh();
+      data.historical.refresh();
+    }
     setError(apiErrorText(t, err?.body, fallbackKey));
   };
 
@@ -115,7 +122,9 @@ export default function TransferManager({
           received_items: both || state.giftDirection === 'received' ? state.received : [],
           message: state.message,
         });
-        showToast?.(t('transfer.external.saved'));
+        // Cards given away go to the trash (trash_batch), so a mistake can
+        // still be put right there; the record of the deal stays either way.
+        showToast?.(t(result?.trash_batch ? 'transfer.external.savedTrash' : 'transfer.external.saved'));
         composer.reset();
         if (result?.warnings?.length) composer.patch({ notice: t('transfer.external.deckWarning') });
         setActivePage('history');
@@ -165,6 +174,13 @@ export default function TransferManager({
   const cancelPastTrade = trade => run('historical.errCancel', async () => {
     await data.cancelPastTrade(trade.id);
     showToast?.(t('historical.cancelled'));
+  });
+
+  // Declining a recorded trade sent to you, from its row: what the review
+  // dialog's Decline does, for a member with trading off, who cannot confirm.
+  const declinePastTrade = trade => run('historical.errReject', async () => {
+    await data.rejectPastTrade(trade.id);
+    showToast?.(t('historical.rejected'));
   });
 
   // A card's or sealed unit's "Propose trade". The inventory may be older than
@@ -317,7 +333,8 @@ export default function TransferManager({
               incoming={pending.incoming}
               outgoing={pending.outgoing}
               me={me}
-              canRespond={access.canTrade}
+              canTrade={access.canTrade}
+              canDecline={access.canDecline}
               busy={saving}
               onRespond={respond}
               onCounter={startCounter}
@@ -340,6 +357,7 @@ export default function TransferManager({
             target={historyTarget}
             onRecordPastTrade={() => setPastTradeModal({ mode: 'create' })}
             onReviewPastTrade={trade => setPastTradeModal({ mode: 'review', trade })}
+            onDeclinePastTrade={declinePastTrade}
             onCancelPastTrade={cancelPastTrade}
           />
         )}

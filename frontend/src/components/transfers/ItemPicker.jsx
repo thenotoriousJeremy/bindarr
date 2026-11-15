@@ -5,7 +5,7 @@ import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '.
 import { sortCardsByOrder } from '../../utils/cardSort';
 import { GAMES } from '../../utils/games';
 import { useT } from '../../utils/i18n';
-import { cardLocationLabel, itemCollator, itemKey, itemLabel, matchesItemFilters } from '../../utils/transferView';
+import { cardLocationLabel, gradeText, itemCollator, itemKey, itemLabel, matchesItemFilters } from '../../utils/transferView';
 import CardImage from '../CardImage';
 import TransferField from './TransferField';
 
@@ -260,7 +260,7 @@ export default function ItemPicker({
                     <span style={detailLine}>
                       {[
                         item.printing && `${t('transfer.printing')}: ${printingLabel(t, item.printing, item.game)}`,
-                        item.condition && conditionLabel(t, item.condition),
+                        gradeText(item) || (item.condition && conditionLabel(t, item.condition)),
                         item.language,
                       ].filter(Boolean).join(' · ')}
                     </span>

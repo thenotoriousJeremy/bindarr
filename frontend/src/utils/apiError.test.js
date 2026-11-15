@@ -37,7 +37,8 @@ test('every code maps to a key that exists in en.json', () => {
     'import_failed', 'csv_no_headers', 'manabox_empty', 'manabox_no_match', 'share_not_found', 'share_no_locations',
     'container_not_found', 'deck_name_required', 'deck_not_enough_cards', 'invalid_credentials', 'registration_disabled',
     'username_taken', 'wrong_password', 'offline',
-    'not_found', 'invalid', 'trades_disabled', 'api_key_refused', 'too_many_pending', 'asset_changed', 'deck_allocated', 'unit_claimed'];
+    'not_found', 'invalid', 'server_error', 'forbidden', 'not_pending', 'needs_counter', 'already_owned', 'name_taken',
+    'trades_disabled', 'api_key_refused', 'too_many_pending', 'asset_changed', 'deck_allocated', 'unit_claimed'];
   for (const code of codes) {
     const key = apiErrorKey({ code, params: { name: 'x' } });
     assert.ok(key && key in en, `${code} -> ${key}`);
@@ -49,7 +50,8 @@ test('every code maps to a key that exists in en.json', () => {
 
 test('trade refusals are translated, and the server\'s own words are only a fallback', () => {
   const said = (code, extra) => apiErrorText(tEn, { error: 'English from the server', code, ...extra }, 'transfer.errAction');
-  for (const code of ['not_found', 'invalid', 'trades_disabled', 'api_key_refused', 'too_many_pending', 'asset_changed', 'unit_claimed']) {
+  for (const code of ['not_found', 'invalid', 'server_error', 'forbidden', 'not_pending', 'needs_counter', 'already_owned',
+    'name_taken', 'trades_disabled', 'api_key_refused', 'too_many_pending', 'asset_changed', 'unit_claimed']) {
     assert.notEqual(said(code), 'English from the server', code);
     assert.equal(said(code), en[apiErrorKey({ code })], code);
   }
@@ -67,4 +69,19 @@ test('deck_allocated names the decks holding the copies, from the body', () => {
   const none = apiErrorText(tEn, { error: 'x', code: 'deck_allocated', decks: [] }, 'transfer.errAction');
   assert.equal(none, en['apiError.deckAllocated']);
   assert.doesNotMatch(none, /\{decks\}/);
+  // The server sends the names in params too; either place works, never raw.
+  const inParams = apiErrorText(tEn, { error: 'x', code: 'deck_allocated', params: { decks: ['Mew box'] } }, 'transfer.errAction');
+  assert.equal(inParams, one);
+  const both = apiErrorText(tEn, { error: 'x', code: 'deck_allocated', decks: ['Mew box', 'Dragons'], params: { decks: ['Mew box', 'Dragons'] } }, 'transfer.errAction');
+  assert.match(both, /Mew box and Dragons/);
+  assert.equal(apiErrorText(tEn, { error: 'x', code: 'deck_allocated', params: { decks: [] } }, 'transfer.errAction'), en['apiError.deckAllocated']);
+});
+
+test('too_many_pending names the limit when the server sends it', () => {
+  assert.equal(
+    apiErrorText(tEn, { error: 'x', code: 'too_many_pending', params: { max: 10 } }, 'transfer.errSave'),
+    'There are already 10 offers waiting between you and this member, the most allowed. Answer or cancel one first.'
+  );
+  assert.equal(apiErrorText(tEn, { error: 'x', code: 'too_many_pending' }, 'transfer.errSave'), en['apiError.tooManyPending']);
+  assert.doesNotMatch(apiErrorText(tDe, { error: 'x', code: 'too_many_pending', params: { max: 10 } }, 'transfer.errSave'), /\{max\}/);
 });

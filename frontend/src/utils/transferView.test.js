@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  calendarDateText, composerReady, costText, counterOfferedItems, isOneSidedTrade, itemKey, matchesItemFilters, otherParty,
-  ownOfferItems, parseRecipient, receivedFromText, requestOptions, sameUser, timestampText, transferRole, withLocationNames,
+  calendarDateText, composerReady, costText, counterOfferedItems, gradeText, isOneSidedTrade, itemKey, matchesItemFilters, otherParty,
+  ownOfferItems, parseRecipient, provenanceText, receivedFromText, requestOptions, sameUser, timestampText, transferRole, withLocationNames,
 } from './transferView.js';
 import { translate } from './translate.js';
 
@@ -29,8 +29,20 @@ test('the other party is found from my side, so a deleted member still has a nam
   assert.equal(transferRole(toDeleted, ME), 'outgoing');
   const trade = { creator_id: 3, creator_username: 'ash', recipient_id: ME, recipient_username: 'me' };
   assert.deepEqual(otherParty(trade, ME, 'creator', 'recipient'), { id: 3, name: 'ash' });
+  // The offer's own snapshot of the names, when the live username is gone.
+  const snapshotOnly = { proposer_id: null, proposer_username: null, proposer_name: 'dawn', recipient_id: ME, recipient_name: 'me' };
+  assert.deepEqual(otherParty(snapshotOnly, ME), { id: null, name: 'dawn' });
+  assert.equal(otherParty({ proposer_id: 3, proposer_username: 'brock', proposer_name: 'old-brock', recipient_id: ME }, ME).name, 'brock', 'the live name first');
   assert.equal(transferRole({ proposer_id: 1, recipient_id: 2 }, ME), null);
   assert.equal(transferRole({ proposer_id: 1, recipient_id: 2 }, null), null, 'no id for me yet: no side');
+});
+
+test('a slab shows its grade in place of the condition', () => {
+  assert.equal(gradeText({ grader: 'PSA', grade: 10 }), 'PSA 10');
+  assert.equal(gradeText({ grader: 'BGS', grade: 9.5 }), 'BGS 9.5');
+  assert.equal(gradeText({ grader: 'CGC', grade: null }), 'CGC');
+  assert.equal(gradeText({ grader: 'Raw', grade: null }), null);
+  assert.equal(gradeText({ condition: 'Near Mint' }), null);
 });
 
 test('a trade asking nothing back is one-sided from either side', () => {
@@ -117,4 +129,9 @@ test('a sealed product or card from another member says how it came, from the tr
   assert.equal(receivedFromText(t, { acquired_transfer_type: 'trade', acquired_transfer_partner: null }), `Received in a trade with ${en['transfer.unknownUser']}`);
   assert.equal(receivedFromText(t, { acquired_transfer_type: null, store: 'Transfer from X' }), null, 'store text is not read');
   assert.equal(receivedFromText(t, { acquired_external_transaction_type: 'gift', acquired_external_contact: 'Gary' }, { outside: true }), 'Received as a gift from Gary, outside Bindarr');
+  // A sealed row carries both sets of fields, the unused one null.
+  const sealedRow = (extra) => ({ acquired_transfer_type: null, acquired_transfer_partner: null, acquired_external_transaction_type: null, acquired_external_contact: null, ...extra });
+  assert.equal(provenanceText(t, sealedRow({ acquired_transfer_type: 'gift', acquired_transfer_partner: 'Misty' })), 'Received as a gift from Misty');
+  assert.equal(provenanceText(t, sealedRow({ acquired_external_transaction_type: 'trade', acquired_external_contact: 'Gary' })), 'Received in a trade with Gary, outside Bindarr');
+  assert.equal(provenanceText(t, sealedRow({})), null);
 });

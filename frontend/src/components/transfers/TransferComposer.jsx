@@ -5,7 +5,7 @@ import { useT } from '../../utils/i18n';
 import { fetchJson } from '../../utils/request';
 import { useApi } from '../../utils/useApi';
 import {
-  DEFAULT_PICKER_FILTERS, composerReady, counterOfferedItems, parseRecipient, requestOptions, sameUser,
+  DEFAULT_PICKER_FILTERS, composerReady, counterOfferedItems, otherParty, parseRecipient, requestOptions, sameUser,
 } from '../../utils/transferView';
 import { ExternalReceivedItems } from './ExternalDeals';
 import ItemPicker from './ItemPicker';
@@ -72,6 +72,7 @@ export default function TransferComposer({
   const showsReceived = isExternal && (state.type === 'trade' || state.giftDirection === 'received');
   const originalOffered = countering ? countering.items.filter(item => !sameUser(item.from_user_id, me)) : [];
   const originalRequested = countering ? countering.items.filter(item => sameUser(item.from_user_id, me)) : [];
+  const counterParty = countering ? otherParty(countering, me).name : null;
 
   const addContact = async () => {
     const name = state.newContactName.trim();
@@ -81,7 +82,7 @@ export default function TransferComposer({
   };
 
   const title = countering
-    ? t('transfer.countering', { user: countering.proposer_username || t('transfer.unknownUser') })
+    ? t('transfer.countering', { user: counterParty || t('transfer.unknownUser') })
     : isExternal || !access.canTrade ? t('transfer.external.title') : t('transfer.newProposal');
 
   return (
@@ -137,7 +138,7 @@ export default function TransferComposer({
             {/* A counter's recipient is the member who made the offer, who may
                 have stopped trading since and so be missing from the list. */}
             {countering && !users.some(other => `user:${other.id}` === state.recipient) && (
-              <option value={state.recipient}>{countering.proposer_username || t('transfer.unknownUser')}</option>
+              <option value={state.recipient}>{counterParty || t('transfer.unknownUser')}</option>
             )}
             <optgroup label={t('transfer.externalContacts')}>
               {contacts.map(contact => <option key={contact.id} value={`contact:${contact.id}`}>{contact.name}</option>)}

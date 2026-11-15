@@ -20,10 +20,15 @@ export function transferRole(transfer, me) {
 }
 
 // The other party's id and name, from the viewer's side. Transfers name their
-// parties proposer/recipient, recorded past trades creator/recipient.
+// parties proposer/recipient, recorded past trades creator/recipient. The name
+// is the live username, else the snapshot the server keeps (proposer_name,
+// recipient_name), which is all that is left of a deleted member.
 export function otherParty(record, me, first = 'proposer', second = 'recipient') {
   const them = sameUser(record?.[`${first}_id`], me) ? second : first;
-  return { id: record?.[`${them}_id`] ?? null, name: record?.[`${them}_username`] || null };
+  return {
+    id: record?.[`${them}_id`] ?? null,
+    name: record?.[`${them}_username`] || record?.[`${them}_name`] || null,
+  };
 }
 
 // Proposals still waiting, split by the viewer's side.
@@ -58,6 +63,13 @@ export const itemLabel = (item) => (item.type === 'card'
   : item.product_name);
 export const locationFilterKey = (item) => (item.location_id == null ? 'unsorted' : String(item.location_id));
 export const itemCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+// A slab's grade ('PSA 10'), or null for a raw card. As in the collection grid,
+// it stands in for the condition: both answer how good the copy is.
+export function gradeText(item) {
+  if (!item?.grader || item.grader === 'Raw') return null;
+  return item.grade != null && item.grade !== '' ? `${item.grader} ${item.grade}` : item.grader;
+}
 
 // Where a copy of yours is stored, as the pickers and offers name it.
 export function cardLocationLabel(item, t) {
@@ -128,6 +140,8 @@ export function counterOfferedItems(transfer, me) {
       printing: snapshot.printing,
       condition: snapshot.condition,
       language: snapshot.language,
+      grader: snapshot.grader,
+      grade: snapshot.grade,
       sealed_type: snapshot.sealed_type,
       origin_product_name: snapshot.origin_product_name,
       explicit: true,
@@ -233,3 +247,7 @@ export function receivedFromText(t, row, { outside = false } = {}) {
   const user = (outside ? row.acquired_external_contact : row.acquired_transfer_partner) || t('transfer.unknownUser');
   return t(outside ? keys.outside : keys.member, { user });
 }
+
+// Whichever of the two a sealed purchase or unit carries: GET
+// /api/sealed/purchases and /units send both sets of fields, null when unused.
+export const provenanceText = (t, row) => receivedFromText(t, row) || receivedFromText(t, row, { outside: true });

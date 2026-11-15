@@ -4,7 +4,7 @@ import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil,
 import { useT } from '../utils/i18n';
 import { gameLabel, gameOptions } from '../utils/games';
 import { formatPrice } from '../utils/formatPrice';
-import { receivedFromText } from '../utils/transferView';
+import { provenanceText } from '../utils/transferView';
 import { printingLabel } from '../utils/cardOptions';
 import { useLongPress } from '../utils/useLongPress';
 import { useApi } from '../utils/useApi';
@@ -381,9 +381,10 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, onProposeTrade, 
     }
   };
 
-  // A purchase that came from another member says so from its transfer fields;
-  // the server no longer writes "Transfer from X" into store and notes.
-  const receivedFrom = receivedFromText(t, purchase);
+  // A purchase that came from another member, or in a deal recorded with
+  // someone outside Bindarr, says so from its acquired_* fields; the server no
+  // longer writes "Transfer from X" into store and notes.
+  const receivedFrom = provenanceText(t, purchase);
   const total = purchase.unit_price == null ? null : Number(purchase.unit_price) * Number(purchase.quantity);
   const unopenedMarketValue = purchase.market_value == null ? null : purchase.market_value * (purchase.sealed_count || 0);
   const hasSealedUnits = (purchase.sealed_count || 0) > 0;
@@ -746,9 +747,9 @@ function SealedList({ showToast, active = true, statsTrigger, onProposeTrade }) 
     const searchable = [
       purchase.product_name, purchase.set_name, purchase.sealed_type, purchase.store,
       purchase.notes, purchase.contents_note, ...(purchase.expansions || []),
-      // Who it came from, when it came from another member: findable by name, as
-      // it was when the server wrote it into the store.
-      purchase.acquired_transfer_partner,
+      // Who it came from, a member or someone outside Bindarr: findable by name,
+      // as it was when the server wrote it into the store.
+      purchase.acquired_transfer_partner, purchase.acquired_external_contact,
     ].filter(Boolean).join(' ').toLocaleLowerCase();
     if (query && !searchable.includes(query)) return false;
     if (gameFilter && purchase.game !== gameFilter) return false;

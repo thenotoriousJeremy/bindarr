@@ -5,8 +5,9 @@ import TransferCard from './TransferCard';
 // The Offers page: proposals still waiting, to you (`incoming`) and from you
 // (`outgoing`), split by utils/transferView pendingTransfers. The first page of
 // GET /api/transfers carries every pending one, so this page needs no "Load more".
-// `list` is useTransfers' transfers list, for its loading and error state.
-export default function PendingOffers({ list, incoming, outgoing, me, canRespond, busy, onRespond, onCounter, locateCard }) {
+// `list` is useTransfers' transfers list, for its loading and error state;
+// `canTrade` and `canDecline` come from utils/tradeAccess.
+export default function PendingOffers({ list, incoming, outgoing, me, canTrade, canDecline, busy, onRespond, onCounter, locateCard }) {
   const { t } = useT();
   if (list.error && !list.loaded) {
     return <div role="alert" style={{ color: 'var(--accent-red)' }}>{apiErrorText(t, list.error.body, 'transfer.errLoad')}</div>;
@@ -21,7 +22,8 @@ export default function PendingOffers({ list, incoming, outgoing, me, canRespond
             key={transfer.id}
             transfer={transfer}
             me={me}
-            canRespond={canRespond}
+            canTrade={canTrade}
+            canDecline={canDecline}
             busy={busy}
             onRespond={onRespond}
             onCounter={onCounter}
