@@ -555,6 +555,12 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Every other /api request waits for the migrations initDb is still running: a
+// 503 with Retry-After until then (routes/mounts.js whenReady). Below the health
+// probe, which answers throughout.
+const apiMounts = require('./routes/mounts');
+app.use('/api', apiMounts.whenReady(() => dbReady));
+
 // gzip. Mounted HERE, above the routes, because it has to see a response to
 // compress it: sitting below the /api mounts it only ever reached the static
 // bundle, and every JSON body — a 5000-row collection among them — went out raw.
@@ -566,20 +572,24 @@ app.use(compression());
 
 app.get('/metrics', (_req, res) => res.sendStatus(404));
 
+// --- API ROUTES ---
+// One table, routes/mounts.js, lists every router once, with what the phone app
+// does in its place; embedded/index.js mounts the same table on the device.
+// A router the phone also runs is a function there; a server-only one is named
+// by file, so the phone's bundle never includes it, and is required here.
+const mountApi = (side) => {
+  for (const entry of apiMounts.mountsFor(side)) {
+    app.use(entry.path, typeof entry.router === 'function' ? entry.router() : require(`./routes/${entry.router}`));
+  }
+};
+
 // --- PUBLIC API ROUTES ---
 // Everything mounted above the gate below is reachable without a session, and
-// each one is deliberate: login/register, a public shared collection, and the
-// card art that shared collection renders.
-app.use('/api/auth', authRoutes);
-app.use('/api/shared', sharedRoutes);
-// Admin carries its own authenticateToken + requireAdmin, so it sits above the
-// gate rather than being authenticated twice.
-app.use('/api/admin', adminRoutes);
-// Ahead of the bare '/api' mounts so nothing shadows it. Its reads are
-// deliberately unauthenticated — a public shared collection renders card art too.
-app.use('/api/card-art', cardArtRoutes);
-// ECB reference rates: public data, and a shared collection converts with them.
-app.use('/api/fx', fxRoutes);
+// each one is deliberate: login/register, a public shared collection, the card
+// art that shared collection renders, and exchange rates. Admin carries its own
+// authenticateToken + requireAdmin, so it sits above the gate too rather than
+// being authenticated twice.
+mountApi({ public: true });
 
 // --- AUTHENTICATION GATE ---
 // ONE gate for every remaining /api route, rather than a router.use in each file.
@@ -601,23 +611,7 @@ app.use(BIG_BODY_PATHS, express.json({ limit: '15mb' }));
 app.use(BACKUP_BODY_PATH, express.json({ limit: '200mb' }));
 
 // --- AUTHENTICATED API ROUTES ---
-app.use('/api/collection/trash', trashRoutes);
-app.use('/api', collectionRoutes);
-app.use('/api', storageRoutes);
-app.use('/api', statsRoutes);
-app.use('/api', importExportRoutes);
-app.use('/api', notesRoutes);
-app.use('/api', sealedRoutes);
-app.use('/api', backupRoutes);
-app.use('/api', binderArtRoutes);
-app.use('/api/sets', setsRoutes);
-app.use('/api/decks', decksRoutes);
-// Full paths inside (/lists, /decks/:id/missing-list, /cards/:id/decks), like collectionRoutes.
-app.use('/api', listsRoutes);
-app.use('/api/settings', settingsRoutes);
-app.use('/api/set-completion', require('./routes/setCompletion'));
-app.use('/api/precons', require('./routes/precons'));
-app.use('/api/notifications', notificationRoutes);
+mountApi({ public: false });
 
 // The service worker and the web app manifest: revalidated rather than cached
 // for a year, and the worker gets a policy that lets it cache card art. See

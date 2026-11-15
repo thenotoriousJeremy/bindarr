@@ -6,14 +6,11 @@
 // to handle() below, and nothing listens on a port.
 //
 // This file is to that mode what server.js is to a server — the composition
-// root — and it mounts the same routers in the same order, minus the ones that
-// exist for other people or other machines. Those answer 501, so the UI can
-// tell "not on this device" from "broken":
-//   /api/shared    public share links; nothing on the internet can reach a
-//                  phone to follow one.
-//   /api/admin     accounts, server backups and scan catalogs; there is one
-//                  user, and the scan models run server-side.
-//   /api/card-art  custom art is decoded with sharp, which has no phone build.
+// root. Both mount one table, routes/mounts.js: every router the phone runs too,
+// in the server's order, and a 501 "not on this device" for the ones that exist
+// for other people or other machines (share links, accounts and server backups,
+// uploaded art, notifications, the health probe), so the UI can tell "not here"
+// from "broken".
 //
 // Bundled for the app by frontend/scripts/build-device-backend.mjs, with the
 // Node modules a phone lacks swapped per ./aliases.js.
@@ -38,20 +35,13 @@ const scryfallApi = require('../scryfallApi');
 const { authenticateToken } = require('../middleware/auth');
 const { hashSessionToken } = require('../utils/authHelpers');
 const { syncSets, sweepPrices } = require('../utils/syncJobs');
+const { mountOnDevice } = require('../routes/mounts');
 const { dispatch } = require('./dispatch');
 const cvScan = require('../cvScan');
 
 const app = express.Router();
 
-app.use('/api/auth', require('../routes/auth'));
-// ECB reference rates for the display currency, public as on the server.
-app.use('/api/fx', require('../routes/fx'));
-for (const prefix of ['/api/shared', '/api/admin', '/api/card-art']) {
-  app.use(prefix, (req, res) => res.status(501).json({
-    error: 'Not available when Bindarr runs on this device.',
-    deviceMode: true,
-  }));
-}
+mountOnDevice(app, { public: true });
 app.use('/api', authenticateToken);
 // Scanning on a phone: the app downloads the models and the published catalogs
 // (frontend/src/device/scanAssets.js), runs milo itself and sends the route an
@@ -70,20 +60,7 @@ app.post('/api/scan-match', (req, res, next) => {
       : 'Download the scan data for this game first: Add Cards → Scan.',
   });
 });
-app.use('/api', require('../routes/collection'));
-app.use('/api', require('../routes/storage'));
-app.use('/api', require('../routes/stats'));
-app.use('/api', require('../routes/importExport'));
-app.use('/api', require('../routes/notes'));
-app.use('/api', require('../routes/sealed'));
-app.use('/api', require('../routes/backup'));
-app.use('/api/sets', require('../routes/sets'));
-app.use('/api/decks', require('../routes/decks'));
-app.use('/api/settings', require('../routes/settings'));
-app.use('/api/set-completion', require('../routes/setCompletion'));
-app.use('/api/precons', require('../routes/precons'));
-// Full paths inside (/lists, /decks/:id/missing-list, /cards/:id/decks), as on a server.
-app.use('/api', require('../routes/lists'));
+mountOnDevice(app, { public: false });
 
 // The phone's one account. Named `admin` because that is the owner account's name
 // on a server too, and db.js looks the owner up by it: initDb adopts orphaned rows
