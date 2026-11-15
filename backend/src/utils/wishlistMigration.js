@@ -40,6 +40,7 @@ async function migrateLegacyWishlists() {
   // both columns arrive with the wishlist feature, filled with 'collection'.
   if (!columns.has('list_type') || !columns.has('user_id')) return { users: 0, cards: 0, rows: 0 };
   const notes = columns.has('notes') ? 'c.notes' : 'NULL';
+  const addedAt = columns.has('added_at') ? 'c.added_at' : 'NULL';
 
   const movable = `
     FROM collection c JOIN card_cache cc ON cc.id = c.card_id
@@ -51,7 +52,7 @@ async function migrateLegacyWishlists() {
     // Read inside the transaction: nothing can change a row between reading it
     // and deleting it.
     const rows = await db.all(`
-      SELECT u.id AS user_id, c.id, c.card_id, c.quantity, ${notes} AS notes, c.added_at
+      SELECT u.id AS user_id, c.id, c.card_id, c.quantity, ${notes} AS notes, ${addedAt} AS added_at
         FROM users u JOIN collection c ON c.user_id = u.id JOIN card_cache cc ON cc.id = c.card_id
        WHERE c.list_type = 'wishlist'
        ORDER BY u.id, c.id`);

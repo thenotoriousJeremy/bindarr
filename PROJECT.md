@@ -224,7 +224,7 @@ if `card_cache` gains a writer other than `cacheNormalizedCards`;
 | `/api/sets` | sets.js | Set catalog for dividers and scan scoping; non-English Pokémon set lists come from TCGdex, whose ids differ per language; `tcgplayer-unpublished` (sets TCGplayer lists before the Pokémon provider does) |
 | `/api/settings` | settings.js | App-wide settings (read any; write requires admin) |
 | `/api/notifications` | notifications.js | Per-user notification channels (Discord/ntfy/webhook/Apprise; URL and token write-only, reported as `has_url`/`has_token`), `channels/:id/test`, price-move thresholds (`PUT /prefs`) |
-| `/api/shared` | shared.js | Public, read-only collection view by `share_token` (no auth) |
+| `/api/shared` | shared.js | Public, read-only collection view by `share_token` (no auth); `?list=trade` the copies for trade, `?list=wishlist` the owner's default Wishlist in the same row shape |
 | `/api` | backup.js | `GET /backup` (the whole account as one JSON file), `POST /backup/restore` (replace the account's contents from one; ids renumbered, card data only ever added) |
 | `/api/admin` | admin.js | User management, admin-only collection and runtime metrics, card cache seeding, `catalogs` (list / `build` / `stop` / `progress`), DB backups |
 
@@ -797,8 +797,8 @@ their failure paths (`price_sweep_failed`, `backup_failed`,
 scheduler's `price-sweeps` job emits `price_sweep_done` with the
 `utils/priceSweeps` summary once a run finishes (a sweep that threw is reported
 from that summary). That runs the price-move check: for each user with a price channel, every owned (and, if
-enabled, wishlisted — `collection.list_type = 'wishlist'` or `card_lists` when
-present) card's latest `price_history` point is compared with the price the user
+enabled, wanted — on any of their `card_lists` of kind `wishlist`, which every
+price sweep prices too) card's latest `price_history` point is compared with the price the user
 was last told about (`notification_price_state`). Over either per-user bar
 (`notification_prefs.price_pct` / `price_abs`, `min_price` floor) it joins one
 digest message; a card is reported at most once per 20 h.
@@ -821,6 +821,7 @@ always refused.
 - Custom-order binders are never renumbered: a new card takes the first empty pocket. Stacking containers count pockets, not rows, and give each stack one position. A write that cannot place everything says so instead of overfilling a page: `unplaced` on an add, `unplaced_copies` on a quantity change, `rule_rejected` on a bulk move (a refused card stays where it was).
 - **Slot encoding**: a card's `position` is `slot * 1000` (slot 1 → 1000, slot 2 → 2000). `Math.floor(position / 1000)` recovers the human slot number. The gaps leave room for manual reordering.
 - Sort schemes are either `custom` (manual order, honored via stored `position`) or structured (name / set-number / price / type-color / language), optionally foil-aware (`foil_sorting`). Structured schemes also drive the visual set/category **dividers** in the binder view.
+- The Storage view holds only what it shows: `GET /api/collection?location_id=none&fields=storage` (Unsorted) and `?location_id=<open container>&fields=storage`, slim rows; opening another container swaps its copies in, and one-card actions re-read just the compartments and entries they touched (`utils/storageQueries.js`). The card popup reads the full row by id.
 
 ---
 
@@ -831,7 +832,8 @@ always refused.
 | `users` | `id`, `username`, `password_hash` (PBKDF2, iterations embedded), `role`, `share_token`, `share_enabled`, `tcg_api_key`, `psa_api_token`, `graded_price_api_key`, `api_key` (SHA-256 of the read-only external credential, which is shown once) |
 | `sessions` | `user_id`, `token` (`sha256:` + hash of the bearer token), `expires_at` — Bearer-token auth |
 | `card_cache` | Normalized card metadata keyed by provider `id`: `name` (searchable) and `printed_name` (as printed), `language`, `set_id`/`set_name`, `number`, `image_url`, `types`/`subtypes`/`supertype`, `rarity`, `cmc`, `color_identity`, `price_*` with `price_source`/`price_currency`, `tcgplayer_product_id`, `tcgplayer_url`/`cardmarket_url`, `game`, `last_updated`. Written only through `utils/cardCache.cacheNormalizedCards`, which upserts — `INSERT OR REPLACE` re-created the row and reset every column outside the provider's own list — and keeps a fuller row's data, product ids and TCGCSV prices on a re-cache (see Card data sources) |
-| `collection` | One row per owned stack: `id` (entry_id), `user_id`, `card_id`→card_cache, `quantity`, `condition`, `printing`, `language`, `purchase_price`, `location_id`, `compartment_id`, `position`, `list_type` (`collection`, or `wishlist` for a wanted card; only `collection` counts as owned, `utils/collectionMetrics.OWNED_SQL`), `is_trade`, `game`, `added_at`; per-copy grading (`grader`, `grade`, `cert_number`) and per-copy value (`market_value`, `market_value_source`, `market_value_at`) |
+| `collection` | One row per owned stack: `id` (entry_id), `user_id`, `card_id`→card_cache, `quantity`, `condition`, `printing`, `language`, `purchase_price`, `location_id`, `compartment_id`, `position`, `list_type` (always `collection`: a wanted card is an item on the user's default Wishlist, see `card_lists`; the `wishlist` rows older releases wrote are moved there at boot by `utils/wishlistMigration.js`, and readers still count only `collection` as owned, `utils/collectionMetrics.OWNED_SQL`), `is_trade`, `game`, `added_at`; per-copy grading (`grader`, `grade`, `cert_number`) and per-copy value (`market_value`, `market_value_source`, `market_value_at`) |
+| `card_lists` / `card_list_items` | Wishlists, buylists, "missing" lists (`kind`, optional `game`, `deck_id`); one item per wanted card (`quantity_wanted`, `any_printing`, `condition_min`, `language`, `notes`), owned/missing worked out against `collection` on read (`utils/listOwnership.js`). `is_default` marks each user's default Wishlist: the hearts, Collection › Wishlist and the public wishlist link all read it, and every request that still says `list_type: 'wishlist'` (older apps, files and trash) lands on it (`utils/defaultWishlist.js`) |
 | `locations` | Physical containers: `user_id`, `name`, `type`, `sort_order`, `foil_sorting`, `rule_type`, `rule_config`, `game` |
 | `compartments` | Pages/rows within a location: `location_id`, `idx`, `label`, `capacity`, `rule_config` |
 | `compartment_assignments` | Maps sort categories to specific compartments (category→page filing) |
