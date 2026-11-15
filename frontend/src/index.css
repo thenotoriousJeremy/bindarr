@@ -79,6 +79,11 @@
   --overlay-backdrop: rgba(0, 0, 0, 0.7);
 
   --overlay-backdrop-camera: rgba(0, 0, 0, 0.85);
+
+  /* Settings' on/off switches (.switch-slider): the track while off, and the
+     knob. On, the track is --type-grass. */
+  --switch-track-off: #334155;
+  --switch-knob: #fff;
 }
 
 /* ------------------------------------------------------------------ THEMES */
@@ -3724,6 +3729,51 @@ button, input, select, textarea {
   textarea {
     font-size: max(16px, 1em) !important;
   }
+}
+
+/* Settings' on/off switches (Settings.jsx SettingsSwitch): a hidden checkbox,
+   the track after it and the knob inside the track. The same in every theme. */
+.switch-control {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 46px;
+  height: 24px;
+}
+
+.switch-control input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch-slider {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  background-color: var(--switch-track-off);
+  border-radius: 24px;
+  transition: 0.3s;
+}
+
+.switch-slider.active {
+  background-color: var(--type-grass);
+}
+
+.switch-knob {
+  position: absolute;
+  left: 4px;
+  bottom: 3px;
+  width: 18px;
+  height: 18px;
+  background-color: var(--switch-knob);
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  transition: 0.3s;
+}
+
+.switch-slider.active .switch-knob {
+  left: 24px;
 }
 
 /* Settings switches hide their checkbox (opacity 0), so the ring goes on the

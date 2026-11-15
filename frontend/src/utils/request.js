@@ -27,6 +27,18 @@ export async function fetchJson(url, { signal, fetchImpl = fetch, ...init } = {}
   return { data: body, res };
 }
 
+// A write with a JSON body: fetchJson with the body serialised and its
+// Content-Type set. Without a body (a bare PUT or DELETE) it sends neither.
+export function sendJson(url, method, body, { headers, ...options } = {}) {
+  if (body === undefined) return fetchJson(url, { ...options, method, headers });
+  return fetchJson(url, {
+    ...options,
+    method,
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
 // Only the newest request counts. begin() aborts the one before it and hands
 // back a signal for fetch plus isLatest(), which a caller checks after every
 // await before it touches state: an aborted fetch rejects, but a response that

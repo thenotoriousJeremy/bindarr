@@ -246,7 +246,7 @@ const CollectionRow = memo(function CollectionRow({ item, selected, selectMode, 
   );
 });
 
-function CollectionList({ active = true, statsTrigger, onUpdate, showToast, selectedCardFilter, setSelectedCardFilter, onNavigate, setSelectedLocationId, setFocusEntryId }) {
+function CollectionList({ active = true, statsTrigger, onUpdate, showToast, selectedCardFilter, setSelectedCardFilter, onNavigate, setSelectedLocationId, setFocusEntryId, onProposeTrade, onViewTrade }) {
   const { t } = useT();
   // statsTrigger as this tab should see it: held while another tab is showing,
   // so an add or scan elsewhere does not refetch 20,000 rows nobody is looking
@@ -1075,6 +1075,8 @@ function CollectionList({ active = true, statsTrigger, onUpdate, showToast, sele
         onUpdate={onUpdate}
         showToast={showToast}
         onViewStorage={handleViewStorage}
+        onProposeTrade={onProposeTrade}
+        onViewTrade={onViewTrade}
       />
 
       {showTrash && (

@@ -1,9 +1,10 @@
 import { memo, useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal, LayoutGrid, List, MousePointerClick } from 'lucide-react';
+import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal, LayoutGrid, List, MousePointerClick, ArrowLeftRight } from 'lucide-react';
 import { useT } from '../utils/i18n';
 import { gameLabel, gameOptions } from '../utils/games';
 import { formatPrice } from '../utils/formatPrice';
+import { provenanceText } from '../utils/transferView';
 import { printingLabel } from '../utils/cardOptions';
 import { useLongPress } from '../utils/useLongPress';
 import { useApi } from '../utils/useApi';
@@ -255,7 +256,7 @@ function LinkedCardsPanel({ unitId, expectedCards, refreshKey, showToast, onChan
   );
 }
 
-function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSelectionChange, showClaimedByOthers, viewMode, selectMode, pressHandlers, longPressFired }) {
+function PurchaseCard({ purchase, onChanged, onEdit, showToast, onProposeTrade, selected, onSelectionChange, showClaimedByOthers, viewMode, selectMode, pressHandlers, longPressFired }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
   const [units, setUnits] = useState(null);
@@ -380,6 +381,10 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
     }
   };
 
+  // A purchase that came from another member, or in a deal recorded with
+  // someone outside Bindarr, says so from its acquired_* fields; the server no
+  // longer writes "Transfer from X" into store and notes.
+  const receivedFrom = provenanceText(t, purchase);
   const total = purchase.unit_price == null ? null : Number(purchase.unit_price) * Number(purchase.quantity);
   const unopenedMarketValue = purchase.market_value == null ? null : purchase.market_value * (purchase.sealed_count || 0);
   const hasSealedUnits = (purchase.sealed_count || 0) > 0;
@@ -450,10 +455,10 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
             </div>
           )}
           {units.map((u, i) => (
-            <div key={u.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            <div key={u.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.4rem 0', borderBottom: i < units.length - 1 ? '1px solid var(--border-subtle)' : undefined }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', flexWrap: 'wrap' }}>
                 <span style={{ color: 'var(--text-secondary)', width: '4.5rem' }}>{t('sealed.unitLabel', { n: u.unit_number || i + 1 })}</span>
-                <span style={{ color: u.opened_at ? 'var(--type-fire)' : 'var(--type-grass)', flex: 1 }}>
+                <span style={{ color: u.opened_at ? 'var(--type-fire)' : 'var(--type-grass)', flex: '1 1 5rem' }}>
                   {u.opened_at ? t('sealed.opened') : t('sealed.sealed')}
                 </span>
                 {u.claimed_by_username && (
@@ -466,6 +471,8 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
                     {t('sealed.cardProgress', { linked: u.linked_cards || 0, expected: u.expected_cards })}
                   </span>
                 )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.35rem', flexWrap: 'wrap' }}>
                 {u.can_toggle && (
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => toggleUnit(u)}>
                     {u.opened_at ? <><Lock size={12} /> {t('sealed.reseal')}</> : <><Unlock size={12} /> {t(!purchase.is_owner && !u.claimed_by_me ? 'sealed.openAndClaim' : 'sealed.markOpened')}</>}
@@ -479,6 +486,11 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
                 {u.can_view_cards && (
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => setViewingUnit(viewingUnit === u.id ? null : u.id)}>
                     {t('sealed.viewLinkedCards')}
+                  </button>
+                )}
+                {onProposeTrade && purchase.is_owner && !u.opened_at && (u.claimed_by_user_id == null || u.claimed_by_me) && (
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => onProposeTrade(u)}>
+                    <ArrowLeftRight size={12} /> {t('inspector.proposeTrade')}
                   </button>
                 )}
               </div>
@@ -568,6 +580,11 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
                     : t('sealed.unboxedNote')}
                 </div>
               )}
+              {receivedFrom && (
+                <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                  {receivedFrom}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -640,9 +657,9 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
                 {gameLabel(purchase.game)} · {purchase.sealed_type || t('sealed.otherType')} · {t('sealed.quantity')}: {purchase.quantity}
               </div>
-              {(purchase.store || purchase.purchase_date) && (
+              {(purchase.store || purchase.purchase_date || receivedFrom) && (
                 <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                  {[purchase.store, purchase.purchase_date].filter(Boolean).join(' · ')}
+                  {[receivedFrom, purchase.store, purchase.purchase_date].filter(Boolean).join(' · ')}
                 </div>
               )}
             </div>
@@ -658,7 +675,7 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
 // The "Sealed" tab: purchases (store, date, price, quantity) with per-unit
 // sealed/opened tracking, and a way to link opened-unit cards back to the
 // purchase they came from.
-function SealedList({ showToast, active = true, statsTrigger }) {
+function SealedList({ showToast, active = true, statsTrigger, onProposeTrade }) {
   const { t } = useT();
   const [showForm, setShowForm] = useState(false);
   const [editingPurchase, setEditingPurchase] = useState(null);
@@ -730,6 +747,9 @@ function SealedList({ showToast, active = true, statsTrigger }) {
     const searchable = [
       purchase.product_name, purchase.set_name, purchase.sealed_type, purchase.store,
       purchase.notes, purchase.contents_note, ...(purchase.expansions || []),
+      // Who it came from, a member or someone outside Bindarr: findable by name,
+      // as it was when the server wrote it into the store.
+      purchase.acquired_transfer_partner, purchase.acquired_external_contact,
     ].filter(Boolean).join(' ').toLocaleLowerCase();
     if (query && !searchable.includes(query)) return false;
     if (gameFilter && purchase.game !== gameFilter) return false;
@@ -974,7 +994,7 @@ function SealedList({ showToast, active = true, statsTrigger }) {
       ) : (
         <div className={viewMode === 'gallery' ? 'sealed-purchase-grid' : 'sealed-purchase-list'}>
           {filteredPurchases.map(p => (
-            <PurchaseCard key={p.id} purchase={p} onChanged={load} onEdit={setEditingPurchase} showToast={showToast}
+            <PurchaseCard key={p.id} purchase={p} onChanged={load} onEdit={setEditingPurchase} showToast={showToast} onProposeTrade={onProposeTrade}
               selected={selectedPurchaseIds.has(p.id)} onSelectionChange={setPurchaseSelected}
               showClaimedByOthers={showClaimedByOthers} viewMode={viewMode} selectMode={selectMode}
               pressHandlers={purchasePressHandlers} longPressFired={purchaseLongPressFired} />

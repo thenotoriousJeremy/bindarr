@@ -539,7 +539,7 @@ For an off-box copy, stop the container first so the WAL is checkpointed:
 docker run --rm -v bindarr-data:/data -v "$PWD":/backup alpine cp /data/bindarr.db /backup/
 ```
 
-Restore by dropping the file back into the volume with the container stopped. Individual users can also export their own account from the app: **Export full backup** (Settings → Collection Backup) holds everything they own — storage and where each copy sits, decks, notes, and the card data behind them — and **Import Backup** restores it, here or on another Bindarr, replacing what the account has. On a member's account, the card details are looked up again from the card databases rather than taken from the file, so restoring there needs internet access; an admin's restore uses the file's copy. CSV and JSON exports remain for spreadsheets and other apps.
+Restore by dropping the file back into the volume with the container stopped. Individual users can also export their own account from the app: **Export full backup** (Settings → Collection Backup & Data) holds everything they own — storage and where each copy sits, decks, notes, sealed product, deals recorded with people outside Bindarr, and the card data behind them — and **Import Backup** restores it, here or on another Bindarr, replacing what the account has. Trades and gifts with other members are not in it: that history belongs to both accounts and stays on the server. On a member's account, the card details are looked up again from the card databases rather than taken from the file, so restoring there needs internet access; an admin's restore uses the file's copy. CSV and JSON exports remain for spreadsheets and other apps.
 
 **Lost the admin password?** Reset it from the command line. Your collection stays as it is:
 
