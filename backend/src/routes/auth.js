@@ -460,7 +460,7 @@ router.post('/bootstrap', authLimiter, async (req, res) => {
     res.status(201).json({
       message: 'Setup complete',
       token,
-      user: sessionUser({ username: OWNER_USERNAME, role: 'admin', share_token: shareToken, share_enabled: 0, share_locations: 0 })
+      user: sessionUser({ id: result.lastID, username: OWNER_USERNAME, role: 'admin', share_token: shareToken, share_enabled: 0, share_locations: 0 })
     });
   } catch (error) {
     console.error(error);
@@ -514,7 +514,7 @@ router.post('/register', authLimiter, async (req, res) => {
     res.status(201).json({
       message: 'Registration successful',
       token,
-      user: sessionUser({ username: cleanUsername, role: 'member', share_token: shareToken, share_enabled: 0, share_locations: 0 })
+      user: sessionUser({ id: result.lastID, username: cleanUsername, role: 'member', share_token: shareToken, share_enabled: 0, share_locations: 0 })
     });
   } catch (error) {
     console.error(error);
