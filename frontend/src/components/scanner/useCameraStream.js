@@ -127,6 +127,8 @@ export function useCameraStream({ showToast, t, onBeforeOpen }) {
         paused.current = lens;
         return;
       }
+      // Opened by hand meanwhile (Retry, or closing the add drawer): keep that one.
+      if (streamRef.current) { stopTracks(next); return; }
       if (!next) {
         setCameraActive(false);
         setCameraErrorKey('scan.errCameraPermissions');
