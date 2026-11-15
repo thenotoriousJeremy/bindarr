@@ -455,9 +455,12 @@ async function main() {
   await db.run(`UPDATE notification_channels SET events_admin = 1 WHERE id = ?`, [discordId]);
   await db.run(`UPDATE notification_channels SET events_admin = 0 WHERE id = ?`, [aliceHook]);
   let calls = 0;
+  // Reset-After is 30 s, far longer than this test takes, so the pause it causes
+  // is still visible at the check below however slow the machine is. At 0.3 s
+  // the check had a 150 ms margin, and a busy CI runner's SQLite I/O ate it.
   responder = () => (++calls === 1
     ? { status: 429, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ retry_after: 0.2, global: false }) }
-    : { status: 204, headers: { 'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset-After': '0.3' } });
+    : { status: 204, headers: { 'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset-After': '30' } });
   await notify.notifyAdmins({ type: 'catalog_build_failed', game: 'pokemon', lang: 'German', error: 'boom' });
   await notify.flush();
   row = (await logFor(alice))[0];
@@ -468,7 +471,8 @@ async function main() {
   await notify.flush();
   row = (await logFor(alice))[0];
   assert.strictEqual(row.status, 'sent');
-  assert.ok(notify._blockedUntil.get(discordId) > Date.now(), 'Remaining: 0 pauses the channel pre-emptively');
+  assert.ok(notify._blockedUntil.get(discordId) - Date.now() > 20000,
+    'Remaining: 0 pauses the channel pre-emptively, for Reset-After');
 
   // A message for a deleted channel is dropped, not retried forever.
   await db.run(`INSERT INTO notification_log (user_id, channel_id, event_type, payload, next_attempt_at) VALUES (?, NULL, 'x', '{}', 0)`, [alice]);
