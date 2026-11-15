@@ -190,9 +190,7 @@ export default function ContainerSettingsModal({
         )}
 
         <div style={{ background: 'var(--surface-1)', borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.55rem', fontSize: '0.72rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          {/* Label only — the count sits in the value beside it, so this is
-              not loc.cardsCurrentlyStored, whose sentence carries a {count}
-              this row has nowhere to put. */}
+          {/* Label only: the count sits in the value beside it. */}
           <span style={{ color: 'var(--text-muted)' }}>{t(selectedLoc.allow_stacking ? 'loc.slotsUsedLabel' : 'loc.cardsStoredLabel')}</span>
           <strong style={{ fontSize: '0.9rem', color: 'var(--text-strong)' }}>{selectedLoc.total_cards || 0} / {selectedLoc.total_capacity || 0}</strong>
         </div>
