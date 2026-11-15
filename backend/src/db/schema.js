@@ -696,6 +696,11 @@ module.exports = {
     ON historical_trade_items(trade_id, id)`,
   idx_historical_trade_items_collection: `CREATE INDEX IF NOT EXISTS idx_historical_trade_items_collection
     ON historical_trade_items(creator_collection_id, recipient_collection_id)`,
+  // The pair index above starts with the creator's copy, so it cannot find the
+  // recipient's: without this, deleting a copy (trash, restore) scanned the table
+  // once per copy to SET NULL recipient_collection_id.
+  idx_historical_trade_items_recipient_collection: `CREATE INDEX IF NOT EXISTS idx_historical_trade_items_recipient_collection
+    ON historical_trade_items(recipient_collection_id) WHERE recipient_collection_id IS NOT NULL`,
 
   external_contacts: `
     CREATE TABLE IF NOT EXISTS external_contacts (

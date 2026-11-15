@@ -715,6 +715,7 @@ async function initDb() {
     'idx_user_transfer_items_sealed_unit',
     'historical_trades', 'idx_historical_trades_creator', 'idx_historical_trades_recipient',
     'historical_trade_items', 'idx_historical_trade_items_trade', 'idx_historical_trade_items_collection',
+    'idx_historical_trade_items_recipient_collection',
     'external_contacts', 'idx_external_contacts_user_name', 'idx_external_contacts_user',
     'external_transactions', 'idx_external_transactions_user_created',
     'external_transaction_items', 'idx_external_transaction_items_transaction',
