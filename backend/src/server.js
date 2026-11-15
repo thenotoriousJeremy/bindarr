@@ -44,26 +44,8 @@ async function warnIfProviderSunsetting() {
   } catch { /* a boot-time notice must never be the thing that stops the boot */ }
 }
 
-const authRoutes = require('./routes/auth');
-const sharedRoutes = require('./routes/shared');
-const adminRoutes = require('./routes/admin');
-const collectionRoutes = require('./routes/collection');
-const storageRoutes = require('./routes/storage');
-const statsRoutes = require('./routes/stats');
-const importExportRoutes = require('./routes/importExport');
-const setsRoutes = require('./routes/sets');
-const decksRoutes = require('./routes/decks');
-const listsRoutes = require('./routes/lists');
-const settingsRoutes = require('./routes/settings');
-const notesRoutes = require('./routes/notes');
-const cardArtRoutes = require('./routes/cardArt');
-const sealedRoutes = require('./routes/sealed');
-const backupRoutes = require('./routes/backup');
-const trashRoutes = require('./routes/trash');
-const binderArtRoutes = require('./routes/binderArt');
-const notificationRoutes = require('./routes/notifications');
+// The routers themselves are listed once, in routes/mounts.js (mounted below).
 const notify = require('./notify');
-const fxRoutes = require('./routes/fx');
 const { authenticateToken } = require('./middleware/auth');
 const { startHttps, selfSignedTls } = require('./utils/tls');
 const { PWA_FILES, setPwaHeaders } = require('./utils/serviceWorkerHeaders');
