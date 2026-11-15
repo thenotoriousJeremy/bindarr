@@ -436,10 +436,12 @@ async function getPrintingInLang(id, lang) {
 const setsCache = new Map(); // lang -> { at, sets }
 const SETS_TTL_MS = 1000 * 60 * 60 * 12;
 
-async function listSets(lang) {
+// `fresh` skips the memory cache: the set refresh asks because a set may have been
+// released since, which twelve hours of cache would hide.
+async function listSets(lang, { fresh = false } = {}) {
   const code = languages.toCode(lang);
   const hit = setsCache.get(code);
-  if (hit && Date.now() - hit.at < SETS_TTL_MS) return hit.sets;
+  if (!fresh && hit && Date.now() - hit.at < SETS_TTL_MS) return hit.sets;
   const { data } = await client.get(`/${code}/sets`);
   // A set brief carries id, name and cardCount only. Release date, series and
   // logos live on the per-set endpoint, and 177 extra requests to decorate an
@@ -534,6 +536,13 @@ async function listSeries(lang) {
 // series and logos only exist on the per-set endpoint, and chronological binder
 // sorting needs the dates — so those are filled in afterwards, four at a time,
 // and a failure there leaves a usable row rather than no row.
+//
+// The list is an upsert that leaves those detail columns alone, and details are
+// fetched only for sets that do not have them yet: a new release, or one an
+// earlier refresh failed to date. It used to INSERT OR REPLACE every row with an
+// empty date and then refetch all ~220, dropping failures — so one TCGdex hiccup
+// left sets undated for a week, and chronological binders sorted them first.
+// A refresh is now one request plus one per set that is missing its details.
 async function fetchAndCacheSets(force = false) {
   try {
     const existing = await db.get(`SELECT COUNT(*) n FROM sets WHERE game = 'pokemon'`);
@@ -544,21 +553,29 @@ async function fetchAndCacheSets(force = false) {
       return;
     }
     console.log('Fetching sets from TCGdex...');
-    const sets = await listSets('en');
+    const sets = await listSets('en', { fresh: force });
     if (!sets.length) throw new Error('TCGdex returned no sets');
     for (const s of sets) {
       await db.run(
-        `INSERT OR REPLACE INTO sets (id, name, series, printed_total, total, release_date, ptcgo_code, symbol_url, logo_url, game)
-         VALUES (?, ?, '', ?, ?, '', '', '', '', 'pokemon')`,
+        `INSERT INTO sets (id, name, series, printed_total, total, release_date, ptcgo_code, symbol_url, logo_url, game)
+         VALUES (?, ?, '', ?, ?, '', '', '', '', 'pokemon')
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, printed_total = excluded.printed_total,
+           total = excluded.total, game = excluded.game`,
         [s.id, s.name, s.printed_total || 0, s.total || 0]
       );
     }
-    console.log(`Cached ${sets.length} Pokemon sets from TCGdex. Filling in dates and series...`);
+    console.log(`Cached ${sets.length} Pokemon sets from TCGdex.`);
     await pruneStaleSets(sets.map(s => s.id), 'TCGdex');
 
+    const undated = new Set((await db.all(
+      `SELECT id FROM sets WHERE game = 'pokemon' AND (release_date IS NULL OR release_date = '')`
+    )).map(r => r.id));
+    const toDate = sets.filter(s => undated.has(s.id));
+    if (!toDate.length) return;
+    console.log(`TCGdex sets: filling in dates and series for ${toDate.length} set(s)...`);
     const series = await listSeries('en').catch(() => new Map());
     let dated = 0;
-    await mapLimited(sets, async (s) => {
+    await mapLimited(toDate, async (s) => {
       const { data } = await client.get(`/en/sets/${encodeURIComponent(s.id)}`);
       await db.run(
         `UPDATE sets SET release_date = ?, series = ?, symbol_url = ?, logo_url = ? WHERE id = ? AND game = 'pokemon'`,
@@ -574,7 +591,7 @@ async function fetchAndCacheSets(force = false) {
       dated++;
       return true;
     });
-    console.log(`TCGdex sets: ${dated} of ${sets.length} have release dates and series.`);
+    console.log(`TCGdex sets: dated ${dated} of ${toDate.length} that had no release date.`);
   } catch (error) {
     console.error('Error fetching TCGdex sets:', error.message);
   }
