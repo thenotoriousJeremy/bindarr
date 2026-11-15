@@ -773,8 +773,13 @@ async function initDb() {
     // did this come from". SET NULL: deleting the history keeps the card.
     acquired_via_transfer_item_id: 'INTEGER REFERENCES user_transfer_items(id) ON DELETE SET NULL',
     acquired_via_historical_trade_item_id: 'INTEGER REFERENCES historical_trade_items(id) ON DELETE SET NULL',
+    // And from someone outside Bindarr (routes/externalTransfers.js).
+    acquired_via_external_item_id: 'INTEGER REFERENCES external_transaction_items(id) ON DELETE SET NULL',
   });
-  await create('idx_collection_cert');
+  await create(
+    'idx_collection_cert',
+    'idx_collection_acquired_transfer', 'idx_collection_acquired_historical', 'idx_collection_acquired_external'
+  );
 
   await addColumns('locations', {
     user_id: 'INTEGER REFERENCES users(id) ON DELETE CASCADE',
@@ -813,6 +818,9 @@ async function initDb() {
   // NULL means the default set, so a tab added later reaches everyone who never
   // chose.
   await addColumns('users', { nav_tabs: 'TEXT' });
+  // Trading with other members is opt-in (routes/transfers.js): a member who has
+  // not turned it on is not listed to others and cannot be sent an offer.
+  await addColumns('users', { trades_enabled: 'INTEGER NOT NULL DEFAULT 0' });
 
   // API keys are stored as their SHA-256 (utils/authHelpers.hashApiKey, the same
   // digest a session token gets), so a copy of this file or an admin backup holds

@@ -597,11 +597,17 @@ module.exports = {
   // A transfer is a proposal between two users. Item rows snapshot the asset at
   // proposal time and keep nullable source links so completed history survives
   // when the original collection row or sealed unit is later removed.
+  //
+  // Deleting one of the two accounts must not take the other one's history with
+  // it, so every user reference is SET NULL, and the names the history shows are
+  // snapshotted at creation (proposer_name, recipient_name).
   user_transfers: `
     CREATE TABLE IF NOT EXISTS user_transfers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      proposer_id INTEGER NOT NULL,
-      recipient_id INTEGER NOT NULL,
+      proposer_id INTEGER,
+      recipient_id INTEGER,
+      proposer_name TEXT NOT NULL DEFAULT '',
+      recipient_name TEXT NOT NULL DEFAULT '',
       transfer_type TEXT NOT NULL CHECK(transfer_type IN ('gift', 'trade')),
       status TEXT NOT NULL DEFAULT 'pending'
         CHECK(status IN ('pending', 'accepted', 'rejected', 'cancelled', 'countered')),
@@ -611,8 +617,8 @@ module.exports = {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       completed_at DATETIME,
       CHECK(proposer_id != recipient_id),
-      FOREIGN KEY(proposer_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY(recipient_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(proposer_id) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY(recipient_id) REFERENCES users(id) ON DELETE SET NULL,
       FOREIGN KEY(response_to_transfer_id) REFERENCES user_transfers(id) ON DELETE SET NULL
     )
   `,
@@ -623,8 +629,8 @@ module.exports = {
     CREATE TABLE IF NOT EXISTS user_transfer_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       transfer_id INTEGER NOT NULL,
-      from_user_id INTEGER NOT NULL,
-      to_user_id INTEGER NOT NULL,
+      from_user_id INTEGER,
+      to_user_id INTEGER,
       item_type TEXT NOT NULL CHECK(item_type IN ('card', 'sealed')),
       source_collection_id INTEGER,
       source_sealed_unit_id INTEGER,
@@ -634,8 +640,8 @@ module.exports = {
       item_snapshot TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(transfer_id) REFERENCES user_transfers(id) ON DELETE CASCADE,
-      FOREIGN KEY(from_user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY(to_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(from_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY(to_user_id) REFERENCES users(id) ON DELETE SET NULL,
       FOREIGN KEY(source_collection_id) REFERENCES collection(id) ON DELETE SET NULL,
       FOREIGN KEY(source_sealed_unit_id) REFERENCES sealed_units(id) ON DELETE SET NULL
     )
@@ -647,8 +653,10 @@ module.exports = {
   historical_trades: `
     CREATE TABLE IF NOT EXISTS historical_trades (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      creator_id INTEGER NOT NULL,
-      recipient_id INTEGER NOT NULL,
+      creator_id INTEGER,
+      recipient_id INTEGER,
+      creator_name TEXT NOT NULL DEFAULT '',
+      recipient_name TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'pending_confirmation'
         CHECK(status IN ('pending_confirmation', 'confirmed', 'rejected')),
       completed_at TEXT NOT NULL,
@@ -656,8 +664,8 @@ module.exports = {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       confirmed_at DATETIME,
       CHECK(creator_id != recipient_id),
-      FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY(recipient_id) REFERENCES users(id) ON DELETE CASCADE
+      FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY(recipient_id) REFERENCES users(id) ON DELETE SET NULL
     )
   `,
   idx_historical_trades_creator: `CREATE INDEX IF NOT EXISTS idx_historical_trades_creator
@@ -669,8 +677,8 @@ module.exports = {
     CREATE TABLE IF NOT EXISTS historical_trade_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       trade_id INTEGER NOT NULL,
-      from_user_id INTEGER NOT NULL,
-      to_user_id INTEGER NOT NULL,
+      from_user_id INTEGER,
+      to_user_id INTEGER,
       card_id TEXT NOT NULL,
       quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
       item_snapshot TEXT NOT NULL,
@@ -678,8 +686,8 @@ module.exports = {
       recipient_collection_id INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(trade_id) REFERENCES historical_trades(id) ON DELETE CASCADE,
-      FOREIGN KEY(from_user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY(to_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(from_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY(to_user_id) REFERENCES users(id) ON DELETE SET NULL,
       FOREIGN KEY(creator_collection_id) REFERENCES collection(id) ON DELETE SET NULL,
       FOREIGN KEY(recipient_collection_id) REFERENCES collection(id) ON DELETE SET NULL
     )
@@ -741,6 +749,16 @@ module.exports = {
     ON external_transaction_items(transaction_id)`,
   idx_external_transaction_items_collection: `CREATE INDEX IF NOT EXISTS idx_external_transaction_items_collection
     ON external_transaction_items(source_collection_id, direction)`,
+
+  // Which transfer, recorded trade or outside deal brought a copy in. Partial: most
+  // copies came from none, and a SET NULL cascade from a deleted history row looks
+  // its rows up here instead of scanning the collection.
+  idx_collection_acquired_transfer: `CREATE INDEX IF NOT EXISTS idx_collection_acquired_transfer
+    ON collection(acquired_via_transfer_item_id) WHERE acquired_via_transfer_item_id IS NOT NULL`,
+  idx_collection_acquired_historical: `CREATE INDEX IF NOT EXISTS idx_collection_acquired_historical
+    ON collection(acquired_via_historical_trade_item_id) WHERE acquired_via_historical_trade_item_id IS NOT NULL`,
+  idx_collection_acquired_external: `CREATE INDEX IF NOT EXISTS idx_collection_acquired_external
+    ON collection(acquired_via_external_item_id) WHERE acquired_via_external_item_id IS NOT NULL`,
 
   // A cert number identifies one physical slab, so entering it twice is a mistake
   // rather than a second copy — unlike raw cards, where two identical rows are
