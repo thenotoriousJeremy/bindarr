@@ -853,7 +853,7 @@ async function updateCollectionPrices(force = false, scope = 'owned') {
     const match = buildGroupMatcher(groups);
 
     console.log(`Starting TCGCSV price update for ${sets.length} Pokémon sets (${scope})...`);
-    let priced = 0, unmatched = [];
+    let priced = 0, unmatched = [], answered = 0, lastError = null;
     const groupDataCache = new Map();
     // Sequential: this is one request per set against somebody else's free mirror,
     // and the sweep has all day to finish.
@@ -861,13 +861,19 @@ async function updateCollectionPrices(force = false, scope = 'owned') {
       try {
         const r = await priceSet(s, match, groupDataCache);
         if (!r.matched) unmatched.push(`${s.set_id} (${s.language})`);
+        else answered++;
         priced += r.priced;
       } catch (e) {
         // Reads come from the cache, never the network, so there is no 403 to
         // stop for here: one set failing must not abandon the rest.
+        lastError = e;
         console.warn(`TCGCSV: ${s.set_id} (${s.language}) failed: ${e.message}`);
       }
     }
+    // Every set it could place failed: the cache cannot answer, which is not a
+    // sweep done. The error goes to the handler below — a cache miss waits for the
+    // next sync, any other failure is reported — and the sweep stays due.
+    if (lastError && !answered) throw lastError;
     await markPricesSwept('tcgcsv');
     console.log(`TCGCSV price update complete: ${priced} cards priced.`);
     // Named, not just counted. An unmatched set is a silent price gap otherwise,

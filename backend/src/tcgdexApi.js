@@ -591,10 +591,26 @@ async function updateCollectionPrices(force = false) {
     const owned = rows.filter(r => idLanguage(r.id));
     if (owned.length === 0) return;
     console.log(`Starting TCGdex price update for ${owned.length} unique cards...`);
-    const fresh = await mapLimited(owned, async (row) => {
+    let lastError = null;
+    const fetchOne = async (row) => {
       const code = idLanguage(row.id);
-      return normalizeCard(await fetchFullCard(code, providerId(row.id)), code);
-    });
+      try {
+        return normalizeCard(await fetchFullCard(code, providerId(row.id)), code);
+      } catch (e) {
+        lastError = e;
+        throw e;
+      }
+    };
+    // A first batch with not one answer is TCGdex being down, not a few cards
+    // missing: report it (the catch below) and leave the sweep due, rather than
+    // walking every card into a timeout and then marking a sweep that priced
+    // nothing as done — which skipped a whole interval with no word to anyone.
+    const probe = owned.slice(0, HYDRATE_CONCURRENCY * 2);
+    const fresh = await mapLimited(probe, fetchOne);
+    if (!fresh.length) {
+      throw new Error(`every TCGdex price request failed (${probe.length} cards tried): ${lastError && lastError.message}`);
+    }
+    fresh.push(...await mapLimited(owned.slice(probe.length), fetchOne));
     if (fresh.length) await cacheCards(fresh);
     // The sweep already visits every non-English card owned, which makes it the one
     // place rows added before English names were learned can catch up. One extra

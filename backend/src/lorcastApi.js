@@ -21,6 +21,8 @@ metrics.instrumentAxiosClient(client, 'lorcast');
 
 // Rate limiting: 60ms gap between outgoing Lorcast requests + 429 backoff
 const LORCAST_MIN_GAP_MS = 60;
+// A price sweep whose first this-many requests all fail gives up and reports it.
+const SWEEP_ABORT_AFTER = 5;
 let lorcastQueue = Promise.resolve();
 let lastLorcastAt = 0;
 let cooldownUntil = 0;
@@ -368,7 +370,13 @@ async function updateCollectionPrices(force = false) {
     }
     console.log(`Starting Lorcana price update for ${cards.length} unique cards...`);
     let priced = 0;
+    let failed = 0;
+    let lastError = null;
     for (const item of cards) {
+      // Not one answer from the first handful: Lorcast is down, not a few cards
+      // missing. Marking the sweep done would skip a whole interval with nothing
+      // said; the catch below reports it and the next tick tries again.
+      if (!priced && failed >= SWEEP_ABORT_AFTER) break;
       try {
         const rawId = String(item.card_id).replace(/^lorcana-/, '');
         const resp = await lorcastGetRetried(`/cards/${encodeURIComponent(rawId)}`);
@@ -385,8 +393,13 @@ async function updateCollectionPrices(force = false) {
           priced++;
         }
       } catch (itemErr) {
+        failed++;
+        lastError = itemErr;
         console.warn(`Lorcana price refresh failed for ${item.card_id}: ${itemErr.message}`);
       }
+    }
+    if (!priced && failed) {
+      throw new Error(`every Lorcast price request failed (${failed} of ${cards.length} cards tried): ${lastError.message}`);
     }
     await markPricesSwept('lorcana');
     console.log(`Lorcana price update complete: ${priced} cards refreshed.`);
