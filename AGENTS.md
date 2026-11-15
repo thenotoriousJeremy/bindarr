@@ -55,7 +55,7 @@ Use `npm ci` in each package scope for reproducible CI/container installs. Backe
 - **Modules:** backend is CommonJS (`require`, `module.exports`); frontend is ESM/JSX (`import`, `export`). Keep the boundary intact.
 - **Names:** camelCase for values/functions, PascalCase for React components, snake_case for SQLite/API fields. Use lower-case game values: `pokemon`, `mtg`, `lorcana`.
 - **Backend routes:** create `express.Router()`, validate early, use parameterized SQL (`?` with values), wrap async work in `try/catch`, log operational context, and return client-safe `{ error: '...' }` responses. Use `db.run/get/all`; do not use raw callback sqlite calls.
-- **Device mode:** the phone app bundles the route modules (`frontend/scripts/build-device-backend.mjs`), so route code must not depend on Node APIs outside `backend/src/embedded/aliases.js` on a path device mode reaches (no `Buffer`, streams or filesystem writes there), and a new bare `require` needs either an alias or a frontend dependency. A route mounted in `server.js` should be mounted in `embedded/index.js` too, or answer 501 there. `backend/test/embedded.test.js` loads the routes the way the bundle does.
+- **Device mode:** the phone app bundles the route modules (`frontend/scripts/build-device-backend.mjs`), so route code must not depend on Node APIs outside `backend/src/embedded/aliases.js` on a path device mode reaches (no `Buffer`, streams or filesystem writes there), and a new bare `require` needs either an alias or a frontend dependency. Every `/api` router is listed once in `backend/src/routes/mounts.js`, with `device: 'mount'` (the phone runs it too) or `device: 501` (server-only); `server.js` and `embedded/index.js` both mount from that table, and `backend/test/apimounts.test.js` fails on a router mounted anywhere else. `backend/test/embedded.test.js` loads the routes the way the bundle does.
 - **Auth:** preserve central auth/mount placement. Authenticated mutations must be user-scoped with `req.user.id`; do not rely on client-provided user IDs.
 - **Providers:** normalize and cache through the existing provider modules. For Pokémon search/set work use `pokemonProvider.apiFor(lang)`; for an existing card ID use `cardApi`. Do not add feature-local language/ID-prefix branching.
 - **Async/error handling:** non-critical startup warmups/background jobs may intentionally use fallbacks; mutations, auth, and ownership checks must fail explicitly. Do not turn deliberate non-blocking work into request-path blocking.
@@ -68,6 +68,7 @@ Use `npm ci` in each package scope for reproducible CI/container installs. Backe
 
 - `package.json` — root command orchestration.
 - `backend/src/server.js` — backend entry, route composition, lifecycle scheduling, static SPA serving.
+- `backend/src/routes/mounts.js` — the one table of `/api` routers, for the server and for device mode.
 - `backend/src/db.js` — schema/migrations, SQLite access, transactions.
 - `backend/src/routes/collection.js` — search, scan matching, collection and price operations.
 - `backend/src/routes/storage.js` — physical storage/location rules.

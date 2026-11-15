@@ -130,6 +130,19 @@ Open `http://localhost:3001`. The first visit asks you to set a password for the
 logs. (If you set `DEFAULT_ADMIN_PASSWORD` instead, that same `admin` account is
 created at startup and the first visit is a normal login screen.)
 
+The setup screen also asks for a **setup code**, so that nobody who finds a new
+server before you do can claim it. The server prints the code to its log while no
+account exists:
+
+```bash
+docker logs bindarr 2>&1 | grep SETUP
+```
+
+A restart makes a new code; set `SETUP_CODE` to choose your own. Only a browser
+connecting straight to the server on the same machine skips it, so with Docker
+(whose port mapping connects through its network) and behind a reverse proxy
+you always need it.
+
 You can change the password later in Settings. Everything (database, backups, scan models and catalogs, TLS cert) lives in the `bindarr-data` volume.
 
 Update with `docker compose pull && docker compose up -d`. Your volume is untouched.
@@ -169,6 +182,7 @@ All optional.
 | `SSL_CERT_PATH` / `SSL_KEY_PATH` | — | Your own certificate instead of the generated self-signed one. |
 | `DB_PATH` | `/app/database/bindarr.db` | SQLite file location. Outside Docker the default is `backend/database/bindarr.db`, and a relative path is read from `backend/` (`app/backend/` for the prebuilt server), the folder the server runs in. |
 | `DEFAULT_ADMIN_PASSWORD` | — | Create the `admin` account with this password at startup instead of letting the first browser visit create the owner account. Only applied while the `users` table is empty — changing it later does nothing to an existing account. |
+| `SETUP_CODE` | random | The one-time code that creating the owner account asks for while no account exists (the first SSO login takes it too). Unset, the server makes a new one at each start and prints it to the log as a `SETUP:` line. A browser connecting straight to the server on the same machine doesn't need it. |
 | `POKEMON_TCG_API_KEY` | — | **Only for installs still on the pokemontcg.io provider.** Raises its rate limit from 1,000 to 20,000 requests/day. pokemontcg.io is deprecated: [new registrations are closed](https://dev.pokemontcg.io/) and existing keys stop working on **1 March 2027**. New installs default to TCGdex, which needs no key — leave this unset. |
 | `POKEMONTCGAPI_KEY` | unset | Server-side key for the optional [pokemontcgapi.com provider](#pokemon-data-providers). Setting a key alone does not enable it. |
 | `PUBLIC_BASE_URL` | — | External URL behind a proxy, e.g. `https://cards.example.com`. Used for share links and auto-allowed as a CORS origin, so proxied logins work with just this. Also editable in the Admin panel. |
@@ -233,7 +247,7 @@ If you'd rather not run Docker, every release ships a self-contained server. Dow
 | Linux | `Bindarr-Server-linux-x64.tar.gz` | `tar xzf`, then `chmod +x bindarr-server && ./bindarr-server` |
 | macOS (Apple Silicon) | `Bindarr-Server-macos-arm64.tar.gz` | `tar xzf`, then `chmod +x bindarr-server && ./bindarr-server` |
 
-The first visit in a browser asks you to create the owner account. The database is created in `app/backend/database/` (`bindarr.db`, with backups, uploaded art and the TLS certificate beside it) and scan models and catalogs go in `app/backend/data/models/`, so keep both folders when you replace the binary with a newer release. To set variables from the table above, create `app/backend/.env` before the first run — HTTPS is off by default here, so add `HTTPS_PORT=3443` if you want to scan from a phone. A relative `DB_PATH` there is read from `app/backend`, where the server runs.
+The first visit in a browser asks you to create the owner account, with the setup code the server prints when it starts (a browser on the same machine doesn't need it). The database is created in `app/backend/database/` (`bindarr.db`, with backups, uploaded art and the TLS certificate beside it) and scan models and catalogs go in `app/backend/data/models/`, so keep both folders when you replace the binary with a newer release. To set variables from the table above, create `app/backend/.env` before the first run — HTTPS is off by default here, so add `HTTPS_PORT=3443` if you want to scan from a phone. A relative `DB_PATH` there is read from `app/backend`, where the server runs.
 
 ### Mobile apps
 
