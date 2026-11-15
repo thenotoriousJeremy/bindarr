@@ -580,11 +580,7 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
   const last = step === STEPS.length - 1;
 
   return (
-    <Modal onClose={onClose} label={t('setup.dialogLabel')} closeOnBackdrop={false} overlayStyle={{
-      position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: '1rem', background: 'rgba(0,0,0,0.72)',
-      backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
-    }} style={{
+    <Modal onClose={onClose} label={t('setup.dialogLabel')} closeOnBackdrop={false} style={{
         width: '100%', maxWidth: 580, maxHeight: '90vh', display: 'flex', flexDirection: 'column',
         padding: '1.25rem', background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)',
         borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-glow)',

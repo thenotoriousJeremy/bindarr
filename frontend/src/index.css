@@ -77,6 +77,8 @@
      stacks over it by document order, so one value serves every dialog. */
   --z-modal: 1050;
   --overlay-backdrop: rgba(0, 0, 0, 0.7);
+
+  --overlay-backdrop-camera: rgba(0, 0, 0, 0.85);
 }
 
 /* ------------------------------------------------------------------ THEMES */
@@ -897,6 +899,14 @@ button, input, select, textarea {
     max(1rem, max(env(safe-area-inset-right, 0px), var(--sar, 0px)))
     max(1rem, max(env(safe-area-inset-bottom, 0px), var(--sab, 0px)))
     max(1rem, max(env(safe-area-inset-left, 0px), var(--sal, 0px)));
+}
+
+/* A dialog over the live camera (the scanner's): darker and blurred, so the moving
+   feed does not compete with it. */
+.modal-overlay--camera {
+  background: var(--overlay-backdrop-camera);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
 }
 
 /* Glassmorphic Panel Component */

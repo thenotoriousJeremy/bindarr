@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { defaultGame, isGameEnabled } from '../../utils/games';
 import { langName, isLanguageSupported } from '../../utils/languages';
-import { useStableCallback } from './useStableCallback';
+import { useStableCallback } from '../../utils/useStableCallback';
 import { MIN_FILL, STEADY_FRAMES_NEEDED, SCAN_PROFILES } from './scanConstants';
 
 // The scanner's settings: what is being fed in (game, language, sets), how it is

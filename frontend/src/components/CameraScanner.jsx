@@ -14,7 +14,7 @@ import { useScanPipeline } from './scanner/useScanPipeline';
 import { useScanSettings } from './scanner/useScanSettings';
 import { useGuideGesture } from './scanner/useGuideGesture';
 import { useAddFlow } from './scanner/useAddFlow';
-import { useStableCallback, useStableHandlers } from './scanner/useStableCallback';
+import { useStableCallback, useStableHandlers } from '../utils/useStableCallback';
 import { buildFramedCanvas as frameCanvas, localDewarp as dewarpQuad } from './scanner/scanFrame';
 import { scanDecision, sameCard, rankByScore } from './scanner/scanDecision';
 import AutoAddModal from './scanner/AutoAddModal';

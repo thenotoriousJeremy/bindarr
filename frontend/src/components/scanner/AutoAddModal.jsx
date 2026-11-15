@@ -22,18 +22,7 @@ function AutoAddModal({
       onClose={cancelAutoAdd}
       label={getCardDisplayName(autoAddTargetCard.name, addLanguage(autoAddTargetCard), autoAddTargetCard.printed_name)}
       closeOnBackdrop={false}
-      overlayClassName="modal-backdrop"
-      overlayStyle={{
-        position: 'fixed',
-        top: 0, left: 0, right: 0, bottom: 0,
-        backgroundColor: 'rgba(0,0,0,0.85)',
-        backdropFilter: 'blur(5px)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1100,
-        padding: '1rem'
-      }}
+      overlayClassName="modal-overlay modal-overlay--camera"
       className="glass-panel animate-fade-in scan-confirm-modal" style={{ maxWidth: '420px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: '1.25rem', alignItems: 'center', textAlign: 'center', border: '1px solid var(--accent-red)' }}>
         <div>
           <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 800 }}>{t(autoAddEditing ? 'scan.adjustAndAdd' : 'scan.exactMatch')}</span>
