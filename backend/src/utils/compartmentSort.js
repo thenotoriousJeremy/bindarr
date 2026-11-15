@@ -37,16 +37,6 @@ function safeJsonParse(val, fallback = []) {
   }
 }
 
-function prepareCardMetadata(card) {
-  if (!card) return card;
-  return {
-    ...card,
-    parsed_types: Array.isArray(card.types) ? card.types : safeJsonParse(card.types, []),
-    parsed_subtypes: Array.isArray(card.subtypes) ? card.subtypes : safeJsonParse(card.subtypes, []),
-    parsed_color_identity: Array.isArray(card.color_identity) ? card.color_identity : safeJsonParse(card.color_identity, [])
-  };
-}
-
 function evaluateCompoundRules(rules, cardMetadata) {
   for (const rule of (rules || [])) {
     let matches = false;
@@ -168,6 +158,19 @@ const STACK_KEY_SQL = `card_id || '|' || COALESCE(printing, 'Normal') || '|' || 
 function stackKey(row) {
   const id = row.card_id !== undefined ? row.card_id : row.id;
   return `${id}|${row.printing || 'Normal'}|${row.language || 'English'}`;
+}
+
+// How full a compartment is, as SQL over its collection rows: the copies in it,
+// or on a stacking container the pockets they use (one per stack). Every
+// capacity check reads this one expression — it used to be written five ways,
+// some counting rows and some copies — so none can disagree about when a page is
+// full. `stacking` is a boolean, or a SQL expression when the query spans
+// containers.
+function occupancySql(stacking) {
+  const stacks = `COUNT(DISTINCT ${STACK_KEY_SQL})`;
+  const copies = 'COALESCE(SUM(quantity), 0)';
+  if (typeof stacking === 'string') return `CASE WHEN ${stacking} THEN ${stacks} ELSE ${copies} END`;
+  return stacking ? stacks : copies;
 }
 
 // Fixed slots (locations.fixed_slots): a binder can pin a set's cards to the
@@ -297,6 +300,23 @@ function fixedPagePositions(cards, { ranges, startSlot, capacity, allowStacking 
   return positions;
 }
 
+// Positions for a sorted page: one pocket per card, or on a stacking container one
+// per stack, so the copies that share a pocket keep sharing it. Giving every row
+// its own pocket there split each stack across the page the next time anything
+// was filed.
+function sortedPagePositions(sorted, { allowStacking }) {
+  const positions = new Map();
+  const stackPocket = new Map();
+  let next = 0;
+  for (const card of sorted) {
+    if (!allowStacking) { positions.set(card.id, ++next * 1000); continue; }
+    const key = stackKey(card);
+    if (!stackPocket.has(key)) stackPocket.set(key, ++next * 1000);
+    positions.set(card.id, stackPocket.get(key));
+  }
+  return positions;
+}
+
 async function loadCompartments(database, locationId, userId) {
   const dbClient = database || db;
   // The location's stacking flag rides along rather than being passed in by every
@@ -322,7 +342,7 @@ async function loadCompartments(database, locationId, userId) {
 
   const stacking = compartments.some(c => c.allow_stacking);
   const countRows = await dbClient.all(
-    `SELECT compartment_id, ${stacking ? `COUNT(DISTINCT ${STACK_KEY_SQL})` : 'SUM(quantity)'} as cnt
+    `SELECT compartment_id, ${occupancySql(stacking)} as cnt
      FROM collection WHERE user_id = ? AND compartment_id IN (${placeholders}) GROUP BY compartment_id`,
     [userId, ...ids]
   );
@@ -351,255 +371,381 @@ const SORT_SCHEME_LABELS = {
   'language': 'language'
 };
 
-async function recommendSlot(database, location, cardMetadata, overrideCompartments = null, mockCards = []) {
-  const dbClient = database || db;
-  // A locked container accepts no auto-filed cards at all.
-  if (location.locked) return null;
-  // Drop locked compartments so filing never targets them; their existing cards
-  // stay put and manual moves still work.
-  const allCompartments = overrideCompartments || await loadCompartments(dbClient, location.id, location.user_id);
-  let compartments = allCompartments.filter(c => !c.locked);
-  if (compartments.length === 0) return null;
+// --- Filing -----------------------------------------------------------------
+//
+// Where a copy goes is decided against a Container: one storage location's
+// compartments and the copies already in them, held in memory. recommendSlot
+// loads one per call. A FilingPlan keeps them across a batch — filing a selection,
+// adding several copies, re-sorting a whole container — so each copy is filed
+// against the ones placed before it, from memory. Re-sorting used to reload and
+// re-sort every card in the container for every card it filed, inside one
+// transaction on the only connection: 33 seconds for 1,000 cards, with every
+// other request (the Docker healthcheck included) waiting behind it.
 
-  if (!locationAcceptsCard(location, cardMetadata)) {
-    return null;
+// The copies a container holds, as filing reads them, in the order these rows have
+// always come back in (the query runs on idx_collection_loc_pos): ties in a sort
+// keep this order, so it is spelled out rather than left to the planner.
+const LOCATION_CARDS_SQL = `
+  SELECT c.id as entry_id, c.card_id, c.compartment_id, c.position, c.quantity, c.condition, c.printing, c.language, c.purchase_price, c.added_at, c.is_trade, c.favorite, c.list_type,
+         cc.name, cc.printed_name, cc.supertype, cc.game, cc.types, cc.subtypes, cc.rarity, cc.set_id, cc.set_name, cc.number, cc.image_url, cc.orientation,
+         cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
+  FROM collection c
+  JOIN card_cache cc ON c.card_id = cc.id
+  WHERE c.user_id = ? AND c.location_id = ?
+  ORDER BY c.position ASC, c.id ASC`;
+
+// Types as a list and the price the copy is worth in its printing: how a stored
+// copy has always been compared against the one being filed.
+function readyStoredCard(card) {
+  if (typeof card.types === 'string') {
+    try { card.types = JSON.parse(card.types || '[]'); } catch { card.types = []; }
+  } else if (!Array.isArray(card.types)) {
+    card.types = [];
+  }
+  card.price_trend = resolveCardPrice(card);
+  return card;
+}
+
+const sqliteNow = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
+
+// The copy being filed, as the sort compares it: the defaults a stored row always
+// has, and for a copy not in the collection yet the newest added_at and entry_id,
+// so a newest-first container puts it first.
+function filingView(card) {
+  return {
+    ...card,
+    favorite: card.favorite ? 1 : 0,
+    printing: card.printing || 'Normal',
+    language: card.language || 'English',
+    name: card.name || '',
+    supertype: card.supertype || '',
+    game: card.game || null,
+    types: card.types || [],
+    subtypes: card.subtypes || [],
+    rarity: card.rarity || '',
+    set_name: card.set_name || '',
+    number: card.number || '0',
+    cmc: card.cmc !== undefined ? card.cmc : null,
+    color_identity: card.color_identity || null,
+    entry_id: card.entry_id || Number.MAX_SAFE_INTEGER,
+    added_at: card.added_at || sqliteNow(),
+  };
+}
+
+// First index in `list` (sorted by cmp) whose card sorts after `card`: where a
+// stable sort puts a card that arrives after every copy it ties with.
+function upperBound(list, card, cmp) {
+  if (list.length === 0 || cmp(list[list.length - 1], card) <= 0) return list.length;
+  let lo = 0;
+  let hi = list.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (cmp(list[mid], card) <= 0) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+// "No room here: try the user's other containers." Returned by Container.decide.
+const OVERFLOW = Symbol('every compartment is full');
+
+class Container {
+  // `compartments` as loadCompartments returns them (idx order, count = slots
+  // used). `cards` are the location's own copies (LOCATION_CARDS_SQL rows), plus any
+  // a caller has already placed in memory. With `resort`, none of them are in a
+  // compartment: the container is being refilled from empty, in sorted order.
+  constructor(location, compartments, cards, { resort = false } = {}) {
+    this.location = location;
+    this.comps = compartments.map(c => ({
+      ...c,
+      assignedFilters: c.assignedFilters || [],
+      units: c.count || 0,
+      list: [],
+      rows: 0,
+      pockets: new Map(),
+      keys: new Map(),
+    }));
+    this.byId = new Map(this.comps.map(c => [c.id, c]));
+    this.stacking = this.comps.some(c => c.allow_stacking) || !!location.allow_stacking;
+    this.cmp = comparatorFor(location.sort_order, location.foil_sorting);
+    this.resort = resort;
+    this.ranges = fixedSlotRanges(location.fixed_slots);
+    this.starts = this.ranges ? compartmentStartSlots(this.comps) : null;
+    // stack key -> the copy a duplicate stacks onto: the first, in row order, that
+    // has a pocket in an unlocked compartment.
+    this.twins = new Map();
+    this.seq = 0;
+    // Every copy in a compartment here, in row order, and those with an entry id by
+    // it, so a copy that moves can leave its old slot.
+    this.members = [];
+    this.byEntry = new Map();
+
+    const byComp = new Map();
+    for (const card of cards) {
+      readyStoredCard(card);
+      card._seq = this.seq++;
+      const comp = card.compartment_id ? this.byId.get(card.compartment_id) : null;
+      if (!comp) continue;
+      this.track(comp, card);
+      this.members.push(card);
+      if (card.entry_id != null) this.byEntry.set(card.entry_id, card);
+      if (!byComp.has(comp.id)) byComp.set(comp.id, []);
+      byComp.get(comp.id).push(card);
+    }
+    for (const [compId, list] of byComp) {
+      const comp = this.byId.get(compId);
+      const sorted = list.slice().sort(this.cmp);
+      if (!this.stacking) { comp.list = sorted; continue; }
+      // One entry per stack: filing counts the pockets a page uses, not its rows.
+      const seen = new Set();
+      comp.list = sorted.filter(card => {
+        const key = stackKey(card);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
   }
 
-  const allLocationCards = await dbClient.all(`
-    SELECT c.id as entry_id, c.card_id, c.compartment_id, c.position, c.quantity, c.condition, c.printing, c.language, c.purchase_price, c.added_at, c.is_trade, c.favorite, c.list_type,
-           cc.name, cc.printed_name, cc.supertype, cc.game, cc.types, cc.subtypes, cc.rarity, cc.set_id, cc.set_name, cc.number, cc.image_url, cc.orientation,
-           cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
-    FROM collection c
-    JOIN card_cache cc ON c.card_id = cc.id
-    WHERE c.user_id = ? AND c.location_id = ?
-  `, [location.user_id, location.id]);
-
-  allLocationCards.push(...mockCards);
-
-  allLocationCards.forEach(c => {
-    if (typeof c.types === 'string') {
-      try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; }
-    } else if (!Array.isArray(c.types)) {
-      c.types = [];
-    }
-    c.price_trend = resolveCardPrice(c);
-  });
-
-  const cardsByCompId = new Map();
-  allLocationCards.forEach(c => {
-    if (!c.compartment_id) return;
-    if (!cardsByCompId.has(c.compartment_id)) cardsByCompId.set(c.compartment_id, []);
-    cardsByCompId.get(c.compartment_id).push(c);
-  });
-
-  // Stacking container: a duplicate rides in the pocket its twin already holds,
-  // so it claims no new slot and a full container still accepts it. Checked
-  // before the "everything is full" bail-out below for exactly that reason.
-  if (location.allow_stacking) {
-    const key = stackKey(cardMetadata);
-    const twin = allLocationCards.find(c =>
-      c.position > 0 && compartments.some(comp => comp.id === c.compartment_id) && stackKey(c) === key
-    );
-    if (twin) {
-      const twinComp = compartments.find(comp => comp.id === twin.compartment_id);
-      const seq = Math.max(1, Math.round(twin.position / 1000));
-      return {
-        location_id: location.id,
-        compartment_id: twin.compartment_id,
-        position: twin.position,
-        label: `${compartmentLabel(twinComp, location.type)}, Pos ${seq} (in ${location.name})`,
-        reason: `Stacked with the copy already in ${compartmentLabel(twinComp, location.type)}`,
-        // Batch callers tick a compartment's occupancy down per placement; a
-        // stacked copy takes no slot, so it must not count against capacity.
-        stacked: true
-      };
-    }
+  // Occupancy bookkeeping for one copy in `comp`.
+  track(comp, card) {
+    comp.rows++;
+    const pocket = Math.floor((card.position || 0) / 1000);
+    comp.pockets.set(pocket, (comp.pockets.get(pocket) || 0) + 1);
+    if (!this.stacking) return false;
+    const key = stackKey(card);
+    const had = comp.keys.get(key) || 0;
+    comp.keys.set(key, had + 1);
+    if (card.position > 0 && !comp.locked && !this.twins.has(key)) this.twins.set(key, card);
+    return had > 0;
   }
 
-  const countOf = (c) => overrideCompartments
-    ? (overrideCompartments.find(oc => oc.id === c.id)?.count || 0)
-    : (c.count !== undefined ? c.count : (cardsByCompId.get(c.id) || []).reduce((sum, card) => sum + (card.quantity || 1), 0));
+  free(comp) {
+    return comp.units < comp.capacity;
+  }
 
-  // Fixed-slot binder: a pinned card goes to its own pocket when that pocket is
-  // free, on an unlocked page whose rules accept it. Everything else — unpinned
-  // cards, and pinned ones whose pocket is taken — is filed by the normal scheme
-  // on the pages after the last reserved slot, or overflows to another container
-  // (via the "full" path below) when the reserved ranges leave no such pages.
-  const ranges = fixedSlotRanges(location.fixed_slots);
-  if (ranges) {
-    const starts = compartmentStartSlots(allCompartments);
-    const slot = fixedSlotFor(cardMetadata, ranges);
-    const page = slot && allCompartments.find(c => slot >= starts.get(c.id) && slot < starts.get(c.id) + c.capacity);
-    if (page && !page.locked && compartmentAcceptsCard(page, cardMetadata)) {
-      const local = slot - starts.get(page.id) + 1;
-      const occupied = allLocationCards.some(c => c.compartment_id === page.id && Math.floor((c.position || 0) / 1000) === local);
-      if (!occupied) {
+  // Where `card` goes in this container: a recommendation, OVERFLOW when every
+  // compartment it could use is full, or null when it cannot be filed here.
+  decide(card) {
+    const location = this.location;
+    // A locked container accepts no auto-filed cards at all.
+    if (location.locked) return null;
+    // Drop locked compartments so filing never targets them; their existing cards
+    // stay put and manual moves still work.
+    let compartments = this.comps.filter(c => !c.locked);
+    if (compartments.length === 0) return null;
+
+    if (!locationAcceptsCard(location, card)) return null;
+
+    // Stacking container: a duplicate rides in the pocket its twin already holds,
+    // so it claims no new slot and a full container still accepts it. Checked
+    // before the "everything is full" bail-out below for exactly that reason.
+    if (this.stacking) {
+      const twin = this.twins.get(stackKey(card));
+      if (twin) {
+        const twinComp = this.byId.get(twin.compartment_id);
+        const seq = Math.max(1, Math.round(twin.position / 1000));
         return {
           location_id: location.id,
-          compartment_id: page.id,
-          position: local * 1000,
-          label: `${compartmentLabel(page, location.type)}, Pos ${local} (in ${location.name})`,
-          reason: `Fixed slot ${slot} for ${cardMetadata.set_name || cardMetadata.set_id} #${cardMetadata.number}`
+          compartment_id: twin.compartment_id,
+          position: twin.position,
+          label: `${compartmentLabel(twinComp, location.type)}, Pos ${seq} (in ${location.name})`,
+          reason: `Stacked with the copy already in ${compartmentLabel(twinComp, location.type)}`,
+          // Batch callers tick a compartment's occupancy down per placement; a
+          // stacked copy takes no slot, so it must not count against capacity.
+          stacked: true
         };
       }
     }
-    const last = lastReservedSlot(ranges);
-    compartments = compartments.filter(c => starts.get(c.id) > last);
-  }
 
-  const allCompartmentsFull = compartments.every(c => countOf(c) >= c.capacity);
-
-  if (allCompartmentsFull) {
-    const otherLocations = await dbClient.all(
-      `SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, game, allow_stacking, fixed_slots, user_id FROM locations WHERE user_id = ? AND id != ? AND locked = 0 ORDER BY id ASC`,
-      [location.user_id, location.id]
-    );
-    for (const otherLoc of otherLocations) {
-      const otherComps = await loadCompartments(dbClient, otherLoc.id, location.user_id);
-      const hasSpace = otherComps.some(c => c.free > 0);
-      if (hasSpace) {
-        const rec = await recommendSlot(dbClient, otherLoc, cardMetadata, otherComps);
-        if (rec) {
+    // Fixed-slot binder: a pinned card goes to its own pocket when that pocket is
+    // free, on an unlocked page whose rules accept it. Everything else — unpinned
+    // cards, and pinned ones whose pocket is taken — is filed by the normal scheme
+    // on the pages after the last reserved slot, or overflows to another container
+    // (via the "full" path below) when the reserved ranges leave no such pages.
+    const ranges = this.ranges;
+    if (ranges) {
+      const starts = this.starts;
+      const slot = fixedSlotFor(card, ranges);
+      const page = slot && this.comps.find(c => slot >= starts.get(c.id) && slot < starts.get(c.id) + c.capacity);
+      if (page && !page.locked && compartmentAcceptsCard(page, card)) {
+        const local = slot - starts.get(page.id) + 1;
+        if (!page.pockets.get(local)) {
           return {
-            ...rec,
-            location_id: otherLoc.id,
-            reason: `"${location.name}" is full — overflowed to "${otherLoc.name}". ${rec.reason || ''}`.trim()
+            location_id: location.id,
+            compartment_id: page.id,
+            position: local * 1000,
+            label: `${compartmentLabel(page, location.type)}, Pos ${local} (in ${location.name})`,
+            reason: `Fixed slot ${slot} for ${card.set_name || card.set_id} #${card.number}`
           };
         }
       }
+      const last = lastReservedSlot(ranges);
+      compartments = compartments.filter(c => starts.get(c.id) > last);
     }
+
+    if (compartments.every(c => !this.free(c))) return OVERFLOW;
+
+    card.price_trend = resolveCardPrice(card);
+    const cardCat = getSortCategory(card, location.sort_order);
+    const legacyCat = legacySortCategory(card, location.sort_order);
+    const view = filingView(card);
+
+    // The compartments this card may go in: its rules accept it, and a compartment
+    // assigned to categories is one of this card's. Those assigned to it come
+    // first; the open ones only when they are full.
+    const eligible = compartments.filter(c => compartmentAcceptsCard(c, card) &&
+      (c.assignedFilters.length === 0 || assignedTo(c, cardCat, legacyCat)));
+    let pool = eligible.filter(c => c.assignedFilters.length > 0);
+    if (!pool.some(c => this.free(c))) pool = eligible;
+    if (!pool.some(c => this.free(c))) return null;
+    pool = [...pool].sort((a, b) => a.idx - b.idx);
+
+    if (location.sort_order === 'custom') {
+      const best = pool.find(c => this.free(c));
+      return {
+        location_id: location.id,
+        compartment_id: best.id,
+        position: this.customPosition(best),
+        label: `${compartmentLabel(best, location.type)} (in ${location.name})`,
+        reason: 'Manual order — next open slot'
+      };
+    }
+
+    // Where the card falls in the pool's sorted order, then the compartment whose
+    // share of that order holds it — spilling to the next one with room. On a
+    // re-sort every card is filed in order, so it lands after everything already
+    // placed.
+    const at = (comp) => (this.resort ? comp.list.length : upperBound(comp.list, view, this.cmp));
+    let targetIndex = 0;
+    for (const c of pool) targetIndex += at(c);
+
+    let cursor = 0;
+    for (let i = 0; i < pool.length; i++) {
+      const compartment = pool[i];
+      if (targetIndex < cursor + compartment.capacity) {
+        let target = compartment;
+        if (!this.free(target)) {
+          target = pool.slice(i + 1).find(c => this.free(c));
+          if (!target) return null;
+        }
+        const seq = at(target);
+        // Neighbours in the TARGET compartment's own order (handles spill), so the
+        // "file it after X" hint names the physical card the new one sits behind.
+        const afterCard = seq > 0 ? target.list[seq - 1] : this.neighbour(pool, at, -1);
+        const beforeCard = seq < target.list.length ? target.list[seq] : this.neighbour(pool, at, 1);
+
+        let reason = `Sorted by ${schemeLabel(location.sort_order, card)}`;
+        if (afterCard) reason += `, right after ${afterCard.name}`;
+        else if (beforeCard) reason += `, right before ${beforeCard.name}`;
+        else reason += ` — first card here`;
+        if (assignedTo(target, cardCat, legacyCat)) {
+          const matched = target.assignedFilters.includes(cardCat) ? cardCat : legacyCat;
+          reason += ` (${compartmentLabel(target, location.type)} is assigned "${matched}")`;
+        }
+        return {
+          location_id: location.id,
+          compartment_id: target.id,
+          position: (seq + 1) * 1000,
+          label: `${compartmentLabel(target, location.type)}, Pos ${seq + 1} (in ${location.name})`,
+          reason,
+          after: afterCard ? { name: afterCard.name, image_url: afterCard.image_url || null } : null,
+          before: beforeCard ? { name: beforeCard.name, image_url: beforeCard.image_url || null } : null
+        };
+      }
+      cursor += compartment.capacity;
+    }
+
     return null;
   }
 
-  cardMetadata.price_trend = resolveCardPrice(cardMetadata);
-  const cardCat = getSortCategory(cardMetadata, location.sort_order);
-  const legacyCat = legacySortCategory(cardMetadata, location.sort_order);
-
-  const dynamicCatsByCompId = new Map();
-  compartments.forEach(c => {
-    const compCards = cardsByCompId.get(c.id) || [];
-    const cardCats = compCards.map(card => getSortCategory(card, location.sort_order)).filter(Boolean);
-    dynamicCatsByCompId.set(c.id, Array.from(new Set(cardCats)));
-  });
-
-  const validComps = compartments.filter(c => {
-    if (!compartmentAcceptsCard(c, cardMetadata)) return false;
-
-    if (c.assignedFilters && c.assignedFilters.length > 0) {
-      return assignedTo(c, cardCat, legacyCat);
+  // The card just before (dir -1) or after (dir 1) the new one across the whole
+  // pool, in sorted order with ties in row order.
+  neighbour(pool, at, dir) {
+    let best = null;
+    for (const comp of pool) {
+      const i = at(comp) + (dir < 0 ? -1 : 0);
+      const card = comp.list[i];
+      if (!card) continue;
+      if (!best) { best = card; continue; }
+      const c = this.cmp(card, best) || (card._seq - best._seq);
+      if (dir < 0 ? c > 0 : c < 0) best = card;
     }
-    
-    if (location.type !== 'binder') {
-      return true;
-    }
-
-    const dCats = dynamicCatsByCompId.get(c.id) || [];
-    if (dCats.length > 0) {
-      return cardCat && dCats.includes(cardCat);
-    }
-    
-    return true;
-  });
-
-  const assignedComps = validComps.filter(c => {
-    if (c.assignedFilters && c.assignedFilters.length > 0) return true;
-    if (location.type !== 'binder') return false;
-    const dCats = dynamicCatsByCompId.get(c.id) || [];
-    return dCats.length > 0;
-  });
-  
-  const unassignedComps = validComps.filter(c => {
-    if (c.assignedFilters && c.assignedFilters.length > 0) return false;
-    if (location.type !== 'binder') return true;
-    const dCats = dynamicCatsByCompId.get(c.id) || [];
-    return dCats.length === 0;
-  });
-
-  let pool = [...assignedComps];
-  
-  const poolHasFreeSpace = pool.some(c => countOf(c) < c.capacity);
-
-  if (pool.length === 0 || !poolHasFreeSpace) {
-    pool = [...pool, ...unassignedComps];
+    return best;
   }
 
-  const hasFreeSpace = (c) => countOf(c) < c.capacity;
-
-  if (pool.length === 0 || !pool.some(hasFreeSpace)) {
-    pool = compartments.filter(c =>
-      compartmentAcceptsCard(c, cardMetadata) &&
-      (!(c.assignedFilters && c.assignedFilters.length > 0) ||
-      assignedTo(c, cardCat, legacyCat))
-    );
-  }
-
-  if (pool.length === 0 || !pool.some(hasFreeSpace)) {
-    return null;
-  }
-
-  pool.sort((a, b) => a.idx - b.idx);
-
-  if (location.sort_order === 'custom') {
-    const usableCandidates = pool.filter(c => countOf(c) < c.capacity);
-    const best = usableCandidates.find(c => {
-      const cats = dynamicCatsByCompId.get(c.id) || [];
-      return cardCat && cats.includes(cardCat);
-    }) || usableCandidates.find(c => {
-      const cats = dynamicCatsByCompId.get(c.id) || [];
-      return cats.length === 0;
-    }) || usableCandidates[0];
-
-    if (!best) return null;
-    const bestCards = cardsByCompId.get(best.id) || [];
-    let reason = 'Manual order — next open slot';
-    if (cardCat && (best.assignedFilters || []).includes(cardCat)) {
-      reason = `${compartmentLabel(best, location.type)} is assigned to "${cardCat}"`;
-    } else if (cardCat && (dynamicCatsByCompId.get(best.id) || []).includes(cardCat)) {
-      reason = `${compartmentLabel(best, location.type)} already holds "${cardCat}" cards`;
+  // Custom order: a box row is an order, so the copy goes at its end; a binder page
+  // is a grid of pockets the owner arranged, so it takes the first empty one
+  // rather than a number past the cards already there, which could be a pocket in
+  // use (a page holding pockets 2, 3 and 4 gave a fourth card pocket 4).
+  customPosition(comp) {
+    if (isBinderType(this.location.type)) {
+      for (let pocket = 1; pocket <= comp.capacity; pocket++) {
+        if (!comp.pockets.get(pocket)) return pocket * 1000;
+      }
     }
-    return {
-      location_id: location.id,
-      compartment_id: best.id,
-      position: (bestCards.length + 1) * 1000,
-      label: `${compartmentLabel(best, location.type)} (in ${location.name})`,
-      reason
-    };
+    return (comp.rows + 1) * 1000;
   }
 
-  const poolIds = pool.map(c => c.id);
-  const existingCardsInPool = allLocationCards.filter(c => poolIds.includes(c.compartment_id));
+  // Record a placement this container's decide() returned, so the next copy is
+  // filed against it.
+  commit(card, rec) {
+    const comp = this.byId.get(rec.compartment_id);
+    if (!comp) return;
+    const placed = readyStoredCard({ ...filingView(card), compartment_id: rec.compartment_id, position: rec.position, _seq: this.seq++ });
+    this.members.push(placed);
+    if (card.entry_id != null) this.byEntry.set(card.entry_id, placed);
+    const stackedHere = this.track(comp, placed);
+    if (this.stacking && stackedHere) return;
+    comp.units += 1;
+    if (this.resort) comp.list.push(placed);
+    else comp.list.splice(upperBound(comp.list, placed, this.cmp), 0, placed);
+  }
 
-  // The copy being filed. Not in the collection yet (or being re-filed), it is the
-  // newest by added_at and entry_id unless it says otherwise, so a newest-first
-  // container files it first.
-  const newCard = {
-    entry_id: cardMetadata.entry_id || Number.MAX_SAFE_INTEGER,
-    added_at: cardMetadata.added_at || new Date().toISOString().replace('T', ' ').slice(0, 19),
-    favorite: cardMetadata.favorite ? 1 : 0,
-    printing: cardMetadata.printing || 'Normal',
-    language: cardMetadata.language || 'English',
-    name: cardMetadata.name || '',
-    supertype: cardMetadata.supertype || '',
-    game: cardMetadata.game || null,
-    types: cardMetadata.types || [],
-    // An MTG card's type sort reads its type line, which lives here.
-    subtypes: cardMetadata.subtypes || [],
-    rarity: cardMetadata.rarity || '',
-    set_name: cardMetadata.set_name || '',
-    number: cardMetadata.number || '0',
-    price_trend: resolveCardPrice(cardMetadata),
-    cmc: cardMetadata.cmc !== undefined ? cardMetadata.cmc : null,
-    color_identity: cardMetadata.color_identity || null
-  };
+  // A copy leaving its slot here (it is being filed somewhere else, or somewhere
+  // else in this container): the next copy is filed as if it had already gone.
+  remove(entryId) {
+    const card = this.byEntry.get(entryId);
+    if (!card) return;
+    this.byEntry.delete(entryId);
+    this.members.splice(this.members.indexOf(card), 1);
+    const comp = this.byId.get(card.compartment_id);
+    comp.rows--;
+    const pocket = Math.floor((card.position || 0) / 1000);
+    if ((comp.pockets.get(pocket) || 0) > 1) comp.pockets.set(pocket, comp.pockets.get(pocket) - 1);
+    else comp.pockets.delete(pocket);
+    const at = comp.list.indexOf(card);
+    if (at >= 0) comp.list.splice(at, 1);
+    if (!this.stacking) {
+      comp.units -= 1;
+      return;
+    }
+    const key = stackKey(card);
+    const sameStack = this.members.filter(c => c.compartment_id === comp.id && stackKey(c) === key);
+    if (sameStack.length === 0) {
+      comp.keys.delete(key);
+      comp.units -= 1;
+    } else {
+      comp.keys.set(key, sameStack.length);
+      // It stood for its stack in the order: the stack's next copy does now.
+      if (at >= 0) {
+        const next = sameStack.slice().sort((a, b) => this.cmp(a, b) || a._seq - b._seq)[0];
+        comp.list.splice(upperBound(comp.list, next, this.cmp), 0, next);
+      }
+    }
+    if (this.twins.get(key) === card) {
+      this.twins.delete(key);
+      const twin = this.members.find(c => stackKey(c) === key && c.position > 0 && !this.byId.get(c.compartment_id).locked);
+      if (twin) this.twins.set(key, twin);
+    }
+  }
+}
 
-  const sorted = sortCards([...existingCardsInPool, newCard], location.sort_order, location.foil_sorting);
-  const targetIndex = sorted.indexOf(newCard);
-  if (targetIndex === -1) return null;
-
-  // 'type-name' files a Magic card by card type, not energy type.
-  let scheme = location.sort_order === 'type-name' && isMtgCard(cardMetadata)
+// 'type-name' files a Magic card by card type, not energy type.
+function schemeLabel(sortOrder, card) {
+  let scheme = sortOrder === 'type-name' && isMtgCard(card)
     ? 'card type'
-    : (SORT_SCHEME_LABELS[location.sort_order] || location.sort_order);
+    : (SORT_SCHEME_LABELS[sortOrder] || sortOrder);
   if (typeof scheme === 'string' && scheme.startsWith('[')) {
     try {
       const parsed = JSON.parse(scheme);
@@ -619,59 +765,170 @@ async function recommendSlot(database, location, cardMetadata, overrideCompartme
       }
     } catch (e) {}
   }
-  const prevCard = targetIndex > 0 ? sorted[targetIndex - 1] : null;
-  const nextCard = targetIndex < sorted.length - 1 ? sorted[targetIndex + 1] : null;
+  return scheme;
+}
 
+const OTHER_LOCATION_COLUMNS = 'id, name, type, sort_order, foil_sorting, rule_type, rule_config, game, allow_stacking, fixed_slots, user_id';
 
-
-  const localSeq = (comp) => {
-    const cc = cardsByCompId.get(comp.id) || [];
-    const ls = sortCards([...cc, newCard], location.sort_order, location.foil_sorting);
-    const idx = ls.indexOf(newCard);
-    return idx === -1 ? cc.length : idx;
-  };
-
-  let cursor = 0;
-  for (let i = 0; i < pool.length; i++) {
-    const compartment = pool[i];
-    if (targetIndex < cursor + compartment.capacity) {
-      let target = compartment;
-      let seq = localSeq(target);
-      if (countOf(target) >= target.capacity) {
-        const spill = pool.slice(i + 1).find(c => countOf(c) < c.capacity);
-        if (!spill) return null;
-        target = spill;
-        seq = localSeq(spill);
-      }
-      // Neighbours in the TARGET compartment's own order (handles spill), so the
-      // "file it after X" hint names the physical card the new one sits behind.
-      const targetLocal = sortCards([...(cardsByCompId.get(target.id) || []), newCard], location.sort_order, location.foil_sorting);
-      const li = targetLocal.indexOf(newCard);
-      const afterCard = li > 0 ? targetLocal[li - 1] : (prevCard || null);
-      const beforeCard = (li !== -1 && li < targetLocal.length - 1) ? targetLocal[li + 1] : (nextCard || null);
-
-      let reason = `Sorted by ${scheme}`;
-      if (afterCard) reason += `, right after ${afterCard.name}`;
-      else if (beforeCard) reason += `, right before ${beforeCard.name}`;
-      else reason += ` — first card here`;
-      if (assignedTo(target, cardCat, legacyCat)) {
-        const matched = (target.assignedFilters || []).includes(cardCat) ? cardCat : legacyCat;
-        reason += ` (${compartmentLabel(target, location.type)} is assigned "${matched}")`;
-      }
-      return {
-        location_id: location.id,
-        compartment_id: target.id,
-        position: (seq + 1) * 1000,
-        label: `${compartmentLabel(target, location.type)}, Pos ${seq + 1} (in ${location.name})`,
-        reason,
-        after: afterCard ? { name: afterCard.name, image_url: afterCard.image_url || null } : null,
-        before: beforeCard ? { name: beforeCard.name, image_url: beforeCard.image_url || null } : null
-      };
-    }
-    cursor += compartment.capacity;
+// Several placements in a row, each against the ones before it, across every
+// container a copy can overflow into. Nothing is written: callers write what
+// recommend() returned, then rebalance touched() with each container's own scheme.
+class FilingPlan {
+  constructor(dbClient) {
+    this.db = dbClient;
+    this.containers = new Map();
+    this.others = new Map();
+    this.touchedComps = new Set();
   }
 
-  return null;
+  // The plan for filing into `location`. Options are recommendSlot's old batch
+  // inputs: compartments whose counts the caller has kept, and copies it has
+  // placed without writing them.
+  static async open(database, location, { compartments = null, extraCards = [], resort = false } = {}) {
+    const plan = new FilingPlan(database || db);
+    plan.primary = await plan.load(location, { compartments, extraCards, resort });
+    return plan;
+  }
+
+  async load(location, { compartments = null, extraCards = [], resort = false } = {}) {
+    let comps = compartments || await loadCompartments(this.db, location.id, location.user_id);
+    let cards;
+    if (resort) {
+      // Refilled from empty. Its own copies leave their slots; anything filed in its
+      // compartments under another location_id stays, and still takes room.
+      cards = [];
+      const ids = comps.map(c => c.id);
+      const stacking = comps.some(c => c.allow_stacking);
+      const rows = ids.length ? await this.db.all(
+        `SELECT compartment_id, ${occupancySql(stacking)} AS cnt
+           FROM collection WHERE user_id = ? AND compartment_id IN (${ids.map(() => '?').join(',')}) AND location_id IS NOT ?
+          GROUP BY compartment_id`,
+        [location.user_id, ...ids, location.id]
+      ) : [];
+      const drift = new Map(rows.map(r => [r.compartment_id, r.cnt]));
+      comps = comps.map(c => ({ ...c, count: drift.get(c.id) || 0 }));
+    } else {
+      cards = await this.db.all(LOCATION_CARDS_SQL, [location.user_id, location.id]);
+      cards.push(...extraCards.map(c => ({ ...c })));
+    }
+    const container = new Container(location, comps, cards, { resort });
+    this.containers.set(location.id, container);
+    return container;
+  }
+
+  async container(location) {
+    return this.containers.get(location.id) || this.load(location);
+  }
+
+  async otherLocations(location) {
+    const key = `${location.user_id}:${location.id}`;
+    if (!this.others.has(key)) {
+      this.others.set(key, await this.db.all(
+        `SELECT ${OTHER_LOCATION_COLUMNS} FROM locations WHERE user_id = ? AND id != ? AND locked = 0 ORDER BY id ASC`,
+        [location.user_id, location.id]
+      ));
+    }
+    return this.others.get(key);
+  }
+
+  // Where `card` goes: a recommendation (location_id, compartment_id, position,
+  // label, reason, and the neighbours to file it next to), or null when nowhere has
+  // room. When its own container is full, the user's other unlocked containers are
+  // tried in id order — each visited once, so two full containers can no longer
+  // send a card back and forth until the stack overflows.
+  async recommend(card) {
+    return this.recommendIn(this.primary, card, new Set([this.primary.location.id]));
+  }
+
+  async recommendIn(container, card, visited) {
+    const rec = container.decide(card);
+    if (rec !== OVERFLOW) return rec;
+    for (const otherLoc of await this.otherLocations(container.location)) {
+      if (visited.has(otherLoc.id)) continue;
+      const other = await this.container(otherLoc);
+      if (!other.comps.some(c => c.capacity - c.units > 0)) continue;
+      const otherRec = await this.recommendIn(other, card, new Set([...visited, otherLoc.id]));
+      if (otherRec) {
+        return {
+          ...otherRec,
+          reason: `"${container.location.name}" is full — overflowed to "${otherLoc.name}". ${otherRec.reason || ''}`.trim()
+        };
+      }
+    }
+    return null;
+  }
+
+  // Keep a placement recommend() returned, so later copies are filed around it. A
+  // copy already in the collection leaves the slot it had, as it will once written.
+  commit(card, rec) {
+    if (!rec) return;
+    if (card.entry_id != null) for (const loaded of this.containers.values()) loaded.remove(card.entry_id);
+    const container = this.containers.get(rec.location_id);
+    if (container) container.commit(card, rec);
+    this.touchedComps.add(rec.compartment_id);
+  }
+
+  // Compartments a placement went into, to rebalance once the batch is written.
+  touched() {
+    return [...this.touchedComps];
+  }
+}
+
+async function recommendSlot(database, location, cardMetadata, overrideCompartments = null, mockCards = []) {
+  const plan = await FilingPlan.open(database || db, location, { compartments: overrideCompartments, extraCards: mockCards });
+  return plan.recommend(cardMetadata);
+}
+
+// Re-sorting a container: every copy in it filed again from empty, in the order
+// its scheme gives them, in one pass. Nothing is written. Returns `placed`, one
+// { entry, recommended } per copy in that order (recommended null where there was
+// no room, plus rejected: true where the container's rules refuse the card), and
+// the plan, whose touched() names the compartments filled.
+async function planResort(database, location) {
+  const dbClient = database || db;
+  const cards = await dbClient.all(`
+    SELECT c.id as entry_id, c.card_id, c.printing, c.language, c.quantity, c.favorite, c.is_trade, c.list_type, c.added_at,
+           cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.image_url, cc.orientation, cc.game,
+           cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
+    FROM collection c
+    JOIN card_cache cc ON c.card_id = cc.id
+    WHERE c.location_id = ? AND c.user_id = ?
+    ORDER BY c.position ASC, c.id ASC
+  `, [location.id, location.user_id]);
+  cards.forEach(c => { try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; } });
+
+  const plan = await FilingPlan.open(dbClient, location, { resort: true });
+  const placed = [];
+  for (const entry of sortCards(cards, location.sort_order, location.foil_sorting)) {
+    const recommended = await plan.recommend(entry);
+    if (recommended) {
+      plan.commit(entry, recommended);
+      placed.push({ entry, recommended });
+    } else {
+      placed.push({ entry, recommended: null, ...(!location.locked && !locationAcceptsCard(location, entry) ? { rejected: true } : {}) });
+    }
+  }
+  return { placed, plan };
+}
+
+// Write placements in chunks: { id, location_id, compartment_id, position } per
+// copy, all the user's. One statement per hundred copies rather than per copy.
+async function writePlacements(database, placements, userId) {
+  const dbClient = database || db;
+  const CHUNK = 100;
+  for (let i = 0; i < placements.length; i += CHUNK) {
+    const chunk = placements.slice(i, i + CHUNK);
+    const caseOf = () => `CASE id ${chunk.map(() => 'WHEN ? THEN ?').join(' ')} END`;
+    const params = [];
+    for (const field of ['location_id', 'compartment_id', 'position']) {
+      for (const p of chunk) params.push(p.id, p[field]);
+    }
+    await dbClient.run(
+      `UPDATE collection SET location_id = ${caseOf()}, compartment_id = ${caseOf()}, position = ${caseOf()}
+        WHERE user_id = ? AND id IN (${chunk.map(() => '?').join(',')})`,
+      [...params, userId, ...chunk.map(p => p.id)]
+    );
+  }
 }
 
 // The new order is computed from one read and written back in chunks, so it is
@@ -679,6 +936,22 @@ async function recommendSlot(database, location, cardMetadata, overrideCompartme
 // positions, and a chunk failing part way would leave two cards on one slot.
 function rebalanceCompartmentByScheme(database, compartmentId, sortOrder, foilSorting) {
   return db.withTransaction(() => rebalanceCompartment(database, compartmentId, sortOrder, foilSorting));
+}
+
+// Rebalance each compartment with its own container's scheme. A batch can file
+// into several containers (a card overflows into the next one), and every one of
+// them is renumbered by the order it keeps, not the order of the container the
+// batch started in.
+async function rebalanceCompartments(database, compartmentIds) {
+  const dbClient = database || db;
+  for (const compartmentId of new Set(compartmentIds)) {
+    if (!compartmentId) continue;
+    const loc = await dbClient.get(
+      `SELECT l.sort_order, l.foil_sorting FROM compartments cp JOIN locations l ON l.id = cp.location_id WHERE cp.id = ?`,
+      [compartmentId]
+    );
+    if (loc) await rebalanceCompartmentByScheme(dbClient, compartmentId, loc.sort_order, loc.foil_sorting);
+  }
 }
 
 async function rebalanceCompartment(database, compartmentId, sortOrder, foilSorting) {
@@ -698,7 +971,7 @@ async function rebalanceCompartment(database, compartmentId, sortOrder, foilSort
   // 1..n would slide #23 into slot 1. Pages past the reserved range sort as usual.
   let positions = null;
   const loc = await dbClient.get(
-    `SELECT l.id, l.fixed_slots, l.allow_stacking FROM compartments cp JOIN locations l ON l.id = cp.location_id WHERE cp.id = ?`,
+    `SELECT l.id, l.type, l.fixed_slots, l.allow_stacking FROM compartments cp JOIN locations l ON l.id = cp.location_id WHERE cp.id = ?`,
     [compartmentId]
   );
   const ranges = loc && fixedSlotRanges(loc.fixed_slots);
@@ -711,7 +984,11 @@ async function rebalanceCompartment(database, compartmentId, sortOrder, foilSort
     }
   }
   if (!positions) {
-    positions = new Map(sortCards(cards, sortOrder, foilSorting).map((card, idx) => [card.id, (idx + 1) * 1000]));
+    // A Custom binder page is a grid the owner arranged pocket by pocket: gaps are
+    // part of it. Renumbering it 1..n turned pockets 1, 5 and 9 into 1, 2 and 3
+    // after any add. A Custom box row is an order, and is still renumbered.
+    if (sortOrder === 'custom' && loc && isBinderType(loc.type)) return;
+    positions = sortedPagePositions(sortCards(cards, sortOrder, foilSorting), { allowStacking: !!(loc && loc.allow_stacking) });
   }
 
   const entries = [...positions];
@@ -798,17 +1075,21 @@ module.exports = {
   isBinderType,
   loadCompartments,
   recommendSlot,
+  FilingPlan,
+  planResort,
+  writePlacements,
   rebalanceCompartmentByScheme,
+  rebalanceCompartments,
   locationAcceptsCard,
   compartmentAcceptsCard,
   loadSetsCache,
   getSortCategory,
   cardTypeCategory,
   mtgTypeCategory,
-  prepareCardMetadata,
   safeJsonParse,
   stackKey,
   STACK_KEY_SQL,
+  occupancySql,
   normalizeFixedSlots,
   fixedSlotRanges,
   fixedSlotFor,
