@@ -324,6 +324,18 @@ async function testTrashOnDevice() {
   assert.strictEqual((await call('GET', '/api/collection/trash')).json.batches.length, 0);
 }
 
+// A request as the phone's WebView makes it: with no Node Buffer anywhere on its
+// path (riftboundnobuffer.test.js hides it the same way).
+async function onPhone(method, url, options) {
+  const saved = global.Buffer;
+  global.Buffer = undefined;
+  try {
+    return await call(method, url, options);
+  } finally {
+    global.Buffer = saved;
+  }
+}
+
 // Trades and gifts between accounts need the other account's server, so the phone
 // answers 501 for them; deals recorded with people outside Bindarr are the
 // account's own record and work on the phone, backup included (routes/mounts.js).
@@ -339,7 +351,7 @@ async function testTransfersOnDevice() {
     assert.strictEqual(res.status, 501, `${method} ${url} needs a server`);
     assert.strictEqual(res.json.deviceMode, true);
   }
-  const none = await call('GET', '/api/transfers/external');
+  const none = await onPhone('GET', '/api/transfers/external');
   assert.strictEqual(none.status, 200, JSON.stringify(none.json));
   assert.deepStrictEqual(none.json.transactions, []);
 
@@ -351,9 +363,9 @@ async function testTransfersOnDevice() {
   );
   const given = await call('POST', '/api/collection', { body: { card_id: 'mtg-deal-given', game: 'mtg' } });
   assert.strictEqual(given.status, 200, JSON.stringify(given.json));
-  const contact = await call('POST', '/api/transfers/external/contacts', { body: { name: 'Sam' } });
+  const contact = await onPhone('POST', '/api/transfers/external/contacts', { body: { name: 'Sam' } });
   assert.strictEqual(contact.status, 201, JSON.stringify(contact.json));
-  const deal = await call('POST', '/api/transfers/external', {
+  const deal = await onPhone('POST', '/api/transfers/external', {
     body: {
       contact_id: contact.json.contact.id,
       transaction_type: 'trade',
@@ -362,7 +374,7 @@ async function testTransfersOnDevice() {
     },
   });
   assert.strictEqual(deal.status, 201, JSON.stringify(deal.json));
-  const recorded = await call('GET', '/api/transfers/external');
+  const recorded = await onPhone('GET', '/api/transfers/external');
   assert.deepStrictEqual(recorded.json.transactions.map(t => [t.contact_name, t.transaction_type, t.items.map(i => i.direction).sort()]),
     [['Sam', 'trade', ['given', 'received']]]);
   assert.strictEqual(await db.get(`SELECT 1 FROM collection WHERE id = ?`, [given.json.id]), undefined, 'the copy given away left the collection');
@@ -376,14 +388,14 @@ async function testTransfersOnDevice() {
   // the restored copy. The same file as made on a server, where that copy came in
   // a trade between accounts: the phone has no record of the trade, and the copy
   // comes back without the link instead of failing the restore on it.
-  const backup = await call('GET', '/api/backup');
+  const backup = await onPhone('GET', '/api/backup');
   assert.strictEqual(backup.status, 200);
   assert.deepStrictEqual(backup.json.data.external_contacts.map(c => c.name), ['Sam']);
   assert.strictEqual(backup.json.data.external_transaction_items.length, 2);
   const file = JSON.parse(JSON.stringify(backup.json));
   Object.assign(file.data.collection.find(c => c.card_id === 'mtg-deal-received'),
     { acquired_via_transfer_item_id: 4242, acquired_via_historical_trade_item_id: 4343 });
-  const restored = await call('POST', '/api/backup/restore', { body: { backup: file } });
+  const restored = await onPhone('POST', '/api/backup/restore', { body: { backup: file } });
   assert.strictEqual(restored.status, 200, JSON.stringify(restored.json));
   assert.strictEqual(restored.json.external_deals, 1);
   const copy = await db.get(`SELECT * FROM collection WHERE card_id = 'mtg-deal-received'`);
@@ -397,7 +409,7 @@ async function testTransfersOnDevice() {
   assert.strictEqual(copy.acquired_via_external_item_id, back.id, 'the copy names the restored deal item');
   assert.strictEqual(back.source_collection_id, copy.id, 'and the item names the restored copy');
   assert.deepStrictEqual([back.contact_name_snapshot, back.name], ['Sam', 'Sam']);
-  const after = await call('GET', '/api/transfers/external');
+  const after = await onPhone('GET', '/api/transfers/external');
   assert.deepStrictEqual(after.json.transactions.map(t => [t.contact_name, t.items.length]), [['Sam', 2]]);
 }
 
