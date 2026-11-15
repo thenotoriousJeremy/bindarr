@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, memo } from 'react';
 import { X } from 'lucide-react';
+import { useShownTrigger } from '../utils/useShownTrigger';
 import { shuffleArray } from '../utils/shuffle';
 import { translateJapaneseName, loadNameDictionaries, hasJapaneseText } from '../utils/langHelper';
 import { displayName } from '../utils/languages';
@@ -25,7 +26,7 @@ import DeckImportDialog from './deck/DeckImportDialog';
 // The deck builder: owns the deck list, the open deck and every handler that
 // changes them, and picks the view the URL asks for. The views and dialogs it
 // draws live in ./deck.
-function DeckBuilder({ showToast }) {
+function DeckBuilder({ showToast, statsTrigger, active = true }) {
   const { t } = useT();
   const [decks, setDecks] = useState([]);
   const [activeDeck, setActiveDeck] = useState(null);
@@ -96,6 +97,19 @@ function DeckBuilder({ showToast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Cards added, moved or removed in another tab change what each deck owns and
+  // where its copies are, so refresh the list and the open deck once this tab is
+  // shown after such a change (statsTrigger, held while hidden).
+  const shownTrigger = useShownTrigger(statsTrigger, active);
+  const lastTrigger = useRef(shownTrigger);
+  useEffect(() => {
+    if (lastTrigger.current === shownTrigger) return;
+    lastTrigger.current = shownTrigger;
+    fetchDecks({ quiet: true });
+    if (viewMode === 'detail' && activeDeck) loadDeckDetails(activeDeck.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch on the trigger only
+  }, [shownTrigger]);
+
   // Waits for the deck list, which carries the checkout status loadDeckDetails
   // merges in. A deck that will not load (deleted, someone else's) closes again.
   useEffect(() => {
@@ -115,9 +129,10 @@ function DeckBuilder({ showToast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deckParam, decksLoaded]);
 
-  const fetchDecks = async () => {
+  // quiet: a refresh behind a list already on screen, without the spinner.
+  const fetchDecks = async ({ quiet = false } = {}) => {
     try {
-      setLoading(true);
+      if (!quiet) setLoading(true);
       const response = await fetch('/api/decks');
       if (response.ok) {
         const data = await response.json();
@@ -662,7 +677,6 @@ function DeckBuilder({ showToast }) {
       {/* E. High-Res Card Art Preview Popover */}
       {previewCard && (
         <Modal onClose={() => setPreviewCard(null)} label={displayName(previewCard)}
-          overlayStyle={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
           className="glass-panel" style={{ maxWidth: '340px', padding: '1rem', position: 'relative', textAlign: 'center', animation: 'draw-card-anim 0.25s ease-out forwards' }}>
             <button className="btn btn-secondary btn-icon-only" onClick={() => setPreviewCard(null)} aria-label={t('common.close')} style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', borderRadius: '50%', zIndex: 10 }}>
               <X size={16} />
@@ -692,4 +706,4 @@ function DeckBuilder({ showToast }) {
   );
 }
 
-export default DeckBuilder;
+export default memo(DeckBuilder);

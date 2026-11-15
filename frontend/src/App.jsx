@@ -78,10 +78,11 @@ class ErrorBoundary extends React.Component {
     if (this.state.hasError) {
       // Class component, so no hook: App hands t down as a prop.
       const t = this.props.t;
+      // Theme tokens: the old pink-on-dark error text was unreadable in the light theme.
       return (
-        <div style={{ padding: '2rem', color: 'var(--text-strong)', background: 'rgba(255,0,0,0.1)', border: '1px solid red', borderRadius: '8px', margin: '2rem' }}>
+        <div style={{ padding: '2rem', color: 'var(--text-strong)', background: 'var(--surface-1)', border: '1px solid var(--accent-red)', borderRadius: '8px', margin: '2rem' }}>
           <h2 style={{ fontSize: '1.2rem', marginBottom: '1rem', color: 'var(--accent-red)' }}>{t('error.crashed')}</h2>
-          <pre style={{ whiteSpace: 'pre-wrap', color: '#ff8888', background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '4px', fontSize: '0.85rem' }}>{this.state.error && this.state.error.toString()}</pre>
+          <pre style={{ whiteSpace: 'pre-wrap', color: 'var(--text-strong)', background: 'var(--surface-2)', padding: '1rem', borderRadius: '4px', fontSize: '0.85rem' }}>{this.state.error && this.state.error.toString()}</pre>
           <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.75rem', marginTop: '1rem', color: 'var(--text-secondary)' }}>{this.state.error && this.state.error.stack}</pre>
           <button className="btn btn-primary" style={{ marginTop: '1.5rem' }} onClick={() => window.location.reload()}>{t('error.reload')}</button>
         </div>
@@ -504,14 +505,15 @@ function App() {
 
   // Device mode → back to the login screen to pick a server. The collection stays
   // in the on-device database, so choosing "This device" again finds it intact.
-  const handleLeaveDevice = () => {
+  // Stable, like every handler a (memoized) tab receives.
+  const handleLeaveDevice = useStableCallback(() => {
     setDeviceMode(false);
     setToken(null);
     setUser(null);
     localStorage.removeItem('bindarr_token');
     localStorage.removeItem('bindarr_user');
     resetTabs();
-  };
+  });
 
   const handleLogout = () => {
     // Revoke token on server asynchronously
@@ -527,14 +529,21 @@ function App() {
     showToast(t('toast.loggedOut'));
   };
 
-  const handleUpdateUser = (updatedUser) => {
+  const handleUpdateUser = useStableCallback((updatedUser) => {
     setUser(updatedUser);
     saveStoredUser(updatedUser);
-  };
+  });
 
   const triggerRefresh = useCallback(() => {
     setStatsTrigger(prev => prev + 1);
   }, []);
+
+  // An import, restore or precon import (Settings) wrote cards behind every open
+  // tab's back: drop the cached answers and have each tab refetch when shown.
+  const handleDataChanged = useCallback(() => {
+    clearApiCache();
+    triggerRefresh();
+  }, [triggerRefresh]);
 
   // Render shared collection view if URL matches /share/:token. ?container=<id>
   // narrows it to one binder or box, drawn as that container rather than a list.
@@ -568,16 +577,20 @@ function App() {
   const barTabs = navBarTabs(user.nav_tabs, { showAdmin, activeTab });
   const litTab = litNavTab(activeTab, barTabs);
 
+  // Every tab learns whether it is the one shown (`active`): a hidden tab holds
+  // its statsTrigger refetches until it is shown again (utils/useShownTrigger).
   const renderTab = (tab) => {
+    const active = tab === activeTab;
     switch (tab === 'admin' && !showAdmin ? 'dashboard' : tab) {
       case 'dashboard':
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
       case 'add-cards':
-        return <AddCards active={activeTab === 'add-cards'} onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab} />;
+        return <AddCards active={active} onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab} />;
       case 'collection':
         return (
-          <CollectionList 
-            statsTrigger={statsTrigger} 
+          <CollectionList
+            active={active}
+            statsTrigger={statsTrigger}
             onUpdate={triggerRefresh} 
             showToast={showToast} 
             token={token} 
@@ -591,6 +604,7 @@ function App() {
       case 'storage':
         return (
           <LocationManager
+            active={active}
             statsTrigger={statsTrigger}
             onUpdate={triggerRefresh}
             showToast={showToast}
@@ -601,21 +615,21 @@ function App() {
           />
         );
       case 'sets':
-        return <SetCompletion focusSet={focusSet} statsTrigger={statsTrigger} showToast={showToast} />;
+        return <SetCompletion active={active} focusSet={focusSet} statsTrigger={statsTrigger} showToast={showToast} />;
       case 'deckbuilder':
-        return <DeckBuilder showToast={showToast} />;
+        return <DeckBuilder active={active} statsTrigger={statsTrigger} showToast={showToast} />;
       case 'lists':
-        return <Lists active={activeTab === 'lists'} statsTrigger={statsTrigger} showToast={showToast} />;
+        return <Lists active={active} statsTrigger={statsTrigger} showToast={showToast} />;
       case 'notes':
-        return <Notes showToast={showToast} />;
+        return <Notes active={active} showToast={showToast} />;
       case 'sealed':
-        return <SealedList showToast={showToast} />;
+        return <SealedList active={active} statsTrigger={statsTrigger} showToast={showToast} />;
       case 'settings':
-        return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} onLeaveDevice={handleLeaveDevice} />;
+        return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} onLeaveDevice={handleLeaveDevice} onDataChanged={handleDataChanged} />;
       case 'admin':
         return <AdminPanel user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
       default:
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
     }
   };
 

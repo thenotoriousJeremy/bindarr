@@ -10,7 +10,8 @@ import { useT } from '../utils/i18n';
 // than silently left out.
 const MODES = ['collection', 'deck', 'both'];
 
-export default function PreconImportModal({ onClose, showToast }) {
+// onImported runs after cards or a deck were written, so the open tabs refetch.
+export default function PreconImportModal({ onClose, showToast, onImported }) {
   const { t } = useT();
 
   const [q, setQ] = useState('');
@@ -99,6 +100,7 @@ export default function PreconImportModal({ onClose, showToast }) {
       }
       setResult(body);
       showToast(t('precon.imported', { name: deck ? deck.name : selected }));
+      if (onImported) onImported();
     } catch (err) {
       setError(err.message || t('precon.errImport'));
     } finally {
