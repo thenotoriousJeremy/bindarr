@@ -33,14 +33,14 @@
     "axios": "^1.21.0",
     "bindarr-native-detector": "file:native-detector",
     "canvas-confetti": "^1.9.3",
-    "lucide-react": "^0.577.0",
+    "lucide-react": "^1.70.0",
     "onnxruntime-web": "^1.31.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "recharts": "^3.10.1"
   },
   "devDependencies": {
-    "@capacitor/assets": "^3.0.5",
+    "@capacitor/assets": "^4.0.0",
     "@capacitor/cli": "^8.4.2",
     "@eslint/js": "^10.0.1",
     "@types/react": "^19.3.0",
