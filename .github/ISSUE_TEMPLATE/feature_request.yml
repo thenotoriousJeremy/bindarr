@@ -1,0 +1,31 @@
+name: Feature request
+description: An idea for something Bindarr should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to do
+      description: The task or the problem, in your own words. What do you do today instead?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How it could work
+      description: Optional. Other apps that do it well are useful references.
+    validations:
+      required: false
+  - type: dropdown
+    id: games
+    attributes:
+      label: Which games it is about
+      multiple: true
+      options:
+        - All of them
+        - Pokémon
+        - "Magic: The Gathering"
+        - Disney Lorcana
+        - Riftbound
+    validations:
+      required: false
