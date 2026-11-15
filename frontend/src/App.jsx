@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useSyncExternalStore, Suspense } from 'react';
 import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords, StickyNote, Package, ListChecks, Smartphone, Library } from 'lucide-react';
 import Login from './components/Login';
 import Logo from './components/Logo';
+import Toast from './components/Toast';
+import { showToast as pushToast, dismissToast, getToast, subscribeToast } from './utils/toast';
 import { App as CapacitorApp } from '@capacitor/app';
 import { useRouteSync, goToTab, initialTab } from './utils/router';
 import { useT } from './utils/i18n';
@@ -171,7 +173,8 @@ function App() {
   const [selectedLocationId, setSelectedLocationId] = useState(null);
   const [focusEntryId, setFocusEntryId] = useState(null);
   const [selectedCardFilter, setSelectedCardFilter] = useState('');
-  const [toast, setToast] = useState(null);
+  // utils/toast.js holds it, so the login screen and the app draw the same one.
+  const toast = useSyncExternalStore(subscribeToast, getToast, getToast);
   const [statsTrigger, setStatsTrigger] = useState(0);
   // The set the Sets tab should open, from the dashboard's set-progress list. A
   // new object per click, so reopening the same set still reaches the tab.
@@ -247,9 +250,7 @@ function App() {
   // showToast(message) for a note; showToast(message, { onAction, actionLabel })
   // adds a button (Undo by default) and keeps the toast up long enough to use it.
   // Stable identity: the tabs are memoized and receive it as a prop.
-  const showToast = useCallback((message, options) => {
-    setToast({ message, ...(options || {}), id: Date.now() + Math.random() });
-  }, []);
+  const showToast = useCallback((message, options) => pushToast(message, options), []);
 
   // Web SSO return. The callback sends the browser back with ?oidc_code=..., a
   // one-time code that redeems only together with the HttpOnly cookie set when
@@ -351,7 +352,7 @@ function App() {
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => {
-        setToast(null);
+        dismissToast(toast.id);
       }, toast.onAction ? 6000 : 2500);
       return () => clearTimeout(timer);
     }
@@ -430,10 +431,10 @@ function App() {
   useEffect(() => subscribeOffline(setOffline), []);
   useEffect(() => {
     setWriteBlockedText(t('offline.writeBlocked'));
-    const onBlocked = () => setToast(t('offline.writeBlocked'));
+    const onBlocked = () => showToast(t('offline.writeBlocked'));
     window.addEventListener('bindarr_offline_write', onBlocked);
     return () => window.removeEventListener('bindarr_offline_write', onBlocked);
-  }, [t]);
+  }, [t, showToast]);
 
   // Handle automatic logout on 401
   useEffect(() => {
@@ -549,12 +550,12 @@ function App() {
 
   // Render login screen if unauthenticated. The toast too: "your session expired"
   // and a failed SSO hand-off are said exactly when this screen is showing, and
-  // without it here they were never seen.
+  // without it here they were never seen. The same <Toast> as the app below.
   if (!token || !user) {
     return (
       <>
         <Login onLoginSuccess={handleLoginSuccess} />
-        {toast && <div className="toast">{toast}</div>}
+        <Toast toast={toast} onDismiss={dismissToast} />
       </>
     );
   }
@@ -711,21 +712,7 @@ function App() {
         ))}
       </main>
 
-      {/* Toast Notification */}
-      {toast && (
-        <div key={toast.id} className={toast.onAction ? 'toast toast-action' : 'toast'} role="status">
-          <span>{toast.message}</span>
-          {toast.onAction && (
-            <button
-              type="button"
-              className="toast-action-btn"
-              onClick={() => { const run = toast.onAction; setToast(null); run(); }}
-            >
-              {toast.actionLabel || t('toast.undo')}
-            </button>
-          )}
-        </div>
-      )}
+      <Toast toast={toast} onDismiss={dismissToast} />
     </div>
   );
 }

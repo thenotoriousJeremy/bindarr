@@ -2143,6 +2143,19 @@ button, input, select, textarea {
   text-align: center;
 }
 
+/* The toast's live region (components/Toast.jsx). Always mounted and takes no
+   room; the toast inside is fixed to the viewport on its own. Fixed means a
+   stacking context of its own, so it carries the toast's z-index, which keeps
+   the toast above open dialogs. */
+.toast-region {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  z-index: 2000;
+}
+
 .toast {
   position: fixed;
   bottom: 80px;
