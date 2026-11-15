@@ -256,6 +256,25 @@ function generatePkce() {
   return { codeVerifier, codeChallenge };
 }
 
+// The login's PKCE verifier, derived from a random seed with the state secret.
+//
+// The state token is signed, not encrypted: anyone holding the callback URL can
+// read it. With the verifier sealed in it, that URL carried the authorization
+// code AND the verifier PKCE exists to keep apart from it, so whoever intercepted
+// the redirect held both. The state carries only the seed (ps); the verifier is
+// recomputed here at the callback, and takes the server's secret to compute.
+// 32 bytes of HMAC, base64url: 43 characters, the RFC's minimum length.
+function pkceVerifierFor(seed) {
+  return crypto.createHmac('sha256', STATE_SECRET).update(`pkce:${seed}`).digest('base64url');
+}
+
+function generateSeededPkce() {
+  const seed = crypto.randomBytes(16).toString('base64url');
+  const codeVerifier = pkceVerifierFor(seed);
+  const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+  return { seed, codeVerifier, codeChallenge };
+}
+
 /**
  * Create a signed, tamper-proof state token for CSRF protection and PKCE storage.
  */
@@ -331,7 +350,7 @@ async function buildAuthorizationUrl(req, { nativeChallenge, webBindingHash, set
     throw new Error('OIDC_CLIENT_ID is not configured');
   }
 
-  const { codeVerifier, codeChallenge } = generatePkce();
+  const { seed: pkceSeed, codeChallenge } = generateSeededPkce();
   const nonce = crypto.randomBytes(16).toString('hex');
   const redirectUri = resolveRedirectUri(req);
 
@@ -340,7 +359,7 @@ async function buildAuthorizationUrl(req, { nativeChallenge, webBindingHash, set
   }
 
   const stateToken = createStateToken({
-    cv: codeVerifier,
+    ps: pkceSeed,
     n: nonce,
     ru: redirectUri,
     ...(nativeChallenge ? { nat: 1, nc: nativeChallenge } : {}),
@@ -407,7 +426,9 @@ async function exchangeCode({ code, stateToken, req }) {
     grant_type: 'authorization_code',
     code,
     redirect_uri: redirectUri,
-    code_verifier: stateData.cv
+    // Recomputed from the seed (pkceVerifierFor). `cv` is a state minted before
+    // the verifier left it, alive for at most STATE_TTL_MS across an upgrade.
+    code_verifier: stateData.ps ? pkceVerifierFor(stateData.ps) : stateData.cv
   });
 
   const headers = {
@@ -469,6 +490,16 @@ async function exchangeCode({ code, stateToken, req }) {
       }
     } catch (err) {
       console.warn('OIDC userinfo fetch failed, falling back to ID token claims:', describeFetchError(err).log);
+    }
+    // OIDC Core 5.3.2: the UserInfo response's sub MUST equal the ID token's, or
+    // its claims MUST NOT be used. Merged unchecked, a userinfo answer could swap
+    // in another subject -- the claim accounts are matched on.
+    if (!userInfoClaims || typeof userInfoClaims !== 'object'
+      || String(userInfoClaims.sub || '') !== String(idTokenClaims.sub || '')) {
+      if (userInfoClaims && Object.keys(userInfoClaims).length) {
+        console.warn('OIDC userinfo answered for a different subject than the ID token; using the ID token claims only.');
+      }
+      userInfoClaims = {};
     }
   }
 
