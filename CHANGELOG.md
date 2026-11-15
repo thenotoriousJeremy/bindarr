@@ -6,6 +6,9 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+### Added
+- **Trades and gifts between members.** Under Add/Remove Cards → **Trades & Gifts**, offer cards or sealed units to another member as a gift or a trade, see what they marked for trade, and accept, decline, counter or cancel offers. The other side never sees what you paid, and a copy changed or put in a checked-out deck after the offer can no longer be accepted until the offer is renewed. Trading is opt-in: Settings → **Let other members send me trade offers**; a member who has not turned it on is not listed. Trades made before Bindarr can be recorded and confirmed by the other member, and deals with people outside Bindarr can be recorded too, which moves the cards in or out of your collection (cards given away go to the trash for 30 days). Received cards show where they came from. Trades with other members need a server; outside deals also work on a phone without one. Thanks [@shadow431](https://github.com/shadow431) ([#107](https://github.com/thenotoriousJeremy/bindarr/issues/107), [#169](https://github.com/thenotoriousJeremy/bindarr/pull/169)).
+
 ### Security
 - **A new server can only be claimed with its setup code.** While no account exists, the server prints a one-time code to its log (`docker logs bindarr 2>&1 | grep SETUP`), and creating the owner account asks for it, in the browser and on a first SSO sign-in. A browser connecting straight to the server on the same machine doesn't need it; through Docker's port mapping or a reverse proxy it is always asked for. `SETUP_CODE` sets your own.
 - **API keys are stored hashed and shown once.** Existing keys are converted at the first start and keep working. Settings shows that a key is set, with Replace and Revoke; a lost key is replaced rather than read back.
