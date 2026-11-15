@@ -16,7 +16,7 @@ export default function PriceAreaChart({ data, currency }) {
             <stop offset="95%" stopColor="var(--accent-yellow)" stopOpacity={0} />
           </linearGradient>
         </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-glass)" vertical={false} />
         <XAxis dataKey="ts" type="number" scale="time" domain={['dataMin', 'dataMax']} hide />
         <YAxis
           domain={['auto', 'auto']}
