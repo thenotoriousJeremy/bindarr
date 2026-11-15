@@ -298,7 +298,7 @@ router.get('/oidc/callback', authLimiter, async (req, res) => {
         `, [OWNER_USERNAME, lockedHash, 'admin', shareToken, 0, sub]);
 
         await db.adoptOrphanRows(result.lastID);
-        await db.seedStarterLocations(result.lastID);
+        await db.seedStarterLocations(result.lastID, { newAccount: true });
         user = await db.get(`SELECT * FROM users WHERE id = ?`, [result.lastID]);
       } else if (oidc.isAutoProvisionEnabled() || REGISTRATION_ENABLED) {
         // Auto-provision new member
@@ -318,7 +318,7 @@ router.get('/oidc/callback', authLimiter, async (req, res) => {
           VALUES (?, ?, ?, ?, ?, ?)
         `, [finalUsername, lockedHash, role, shareToken, 0, sub]);
 
-        await db.seedStarterLocations(result.lastID);
+        await db.seedStarterLocations(result.lastID, { newAccount: true });
         user = await db.get(`SELECT * FROM users WHERE id = ?`, [result.lastID]);
       } else {
         return frontendRedirect({ oidc_error: 'no_account' });
@@ -450,7 +450,7 @@ router.post('/bootstrap', authLimiter, async (req, res) => {
 
     // Both skipped by initDb, which found no account to hand them to.
     await db.adoptOrphanRows(result.lastID);
-    await db.seedStarterLocations(result.lastID);
+    await db.seedStarterLocations(result.lastID, { newAccount: true });
 
     const token = await generateSession(result.lastID);
     res.status(201).json({
@@ -502,6 +502,8 @@ router.post('/register', authLimiter, async (req, res) => {
       INSERT INTO users (username, password_hash, role, share_token, share_enabled)
       VALUES (?, ?, ?, ?, ?)
     `, [cleanUsername, passwordHash, 'member', shareToken, 0]);
+    // A binder and a box to put the first card in, as every new account gets.
+    await db.seedStarterLocations(result.lastID, { newAccount: true });
 
     const token = await generateSession(result.lastID);
 

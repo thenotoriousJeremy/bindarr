@@ -231,10 +231,12 @@ router.post('/users', async (req, res) => {
     const passwordHash = await hashPassword(password);
     const shareToken = crypto.randomBytes(16).toString('hex');
 
-    await db.run(`
+    const created = await db.run(`
       INSERT INTO users (username, password_hash, role, share_token, share_enabled)
       VALUES (?, ?, ?, ?, ?)
     `, [cleanUsername, passwordHash, role, shareToken, 0]);
+    // A binder and a box to put the first card in, as every new account gets.
+    await db.seedStarterLocations(created.lastID, { newAccount: true });
 
     res.status(201).json({ message: `User "${cleanUsername}" created successfully.` });
   } catch (error) {

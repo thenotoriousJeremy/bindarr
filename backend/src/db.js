@@ -2039,10 +2039,19 @@ async function adoptOrphanRows(userId) {
 }
 
 // A binder and a bulk box, so a new account has somewhere to put its first card.
-// Runs from initDb when DEFAULT_ADMIN_PASSWORD seeds the account, and from the
-// bootstrap route when the owner creates it through the UI instead.
-async function seedStarterLocations(userId) {
-  const locCount = await get(`SELECT COUNT(*) as count FROM locations`);
+//
+// `newAccount` is every route that creates an account (the owner's bootstrap,
+// registration, an admin's Add User, SSO sign-up): it counts that account's own
+// locations, so each new account gets the pair. Counting the whole install's, as
+// this used to for everyone, gave them to the first account and to no one after.
+//
+// Without it, the install-wide count stays: initDb calls this at every boot for
+// the existing owner, and an owner who deleted their starter locations must not
+// get them back on each restart.
+async function seedStarterLocations(userId, { newAccount = false } = {}) {
+  const locCount = newAccount
+    ? await get(`SELECT COUNT(*) as count FROM locations WHERE user_id = ?`, [userId])
+    : await get(`SELECT COUNT(*) as count FROM locations`);
   if (locCount.count > 0) return;
 
   console.log('Populating default locations...');
