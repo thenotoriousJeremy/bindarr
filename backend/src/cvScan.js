@@ -331,18 +331,22 @@ async function detectAndDewarp(session, imageBuffer) {
   const { data: rgb, info } = await sharp(imageBuffer)
     .resize({ width: 1200, withoutEnlargement: true })
     .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  // The corner model's input and the no-card fallback are resampled from those
+  // same pixels. Each used to decode the whole photo again — two or three
+  // decodes of a phone camera's JPEG per scan, for one image.
+  const decoded = () => sharp(rgb, { raw: { width: info.width, height: info.height, channels: 3 } });
 
-  const { data: small } = await sharp(imageBuffer)
+  const { data: small } = await decoded()
     .resize(CORN_SIZE, CORN_SIZE, { fit: 'fill' })
-    .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    .raw().toBuffer({ resolveWithObject: true });
 
   const out = await session.run({ image: toTensor(small, CORN_SIZE) });
   const corners = out.corners.data;
   const sharpness = out.sharpness ? out.sharpness.data[0] : 1;
 
   if (!(sharpness > SHARPNESS_GATE)) {
-    const { data } = await sharp(imageBuffer).resize(EMBED_SIZE, EMBED_SIZE, { fit: 'fill' })
-      .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const { data } = await decoded().resize(EMBED_SIZE, EMBED_SIZE, { fit: 'fill' })
+      .raw().toBuffer({ resolveWithObject: true });
     return { rgb: data, detected: false, sharpness };
   }
 
@@ -358,8 +362,8 @@ async function detectAndDewarp(session, imageBuffer) {
   ];
   const M = perspectiveTransform(src, dst);
   if (!M) {
-    const { data } = await sharp(imageBuffer).resize(EMBED_SIZE, EMBED_SIZE, { fit: 'fill' })
-      .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const { data } = await decoded().resize(EMBED_SIZE, EMBED_SIZE, { fit: 'fill' })
+      .raw().toBuffer({ resolveWithObject: true });
     return { rgb: data, detected: false, sharpness };
   }
   return {
@@ -665,5 +669,7 @@ function reloadModels() {
   models = null;
 }
 
-module.exports = { match, load, loadAll, isBuilt, builtLangs, reload, reloadModels, scoreCards, setSource, STRONG_SIM, STRONG_MARGIN, GAP_FLOOR };
+module.exports = { match, load, loadAll, isBuilt, builtLangs, reload, reloadModels, scoreCards, setSource, STRONG_SIM, STRONG_MARGIN, GAP_FLOOR,
+  // For tests, which drive it with a stand-in corner model.
+  detectAndDewarp };
 
