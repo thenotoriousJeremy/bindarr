@@ -1,21 +1,24 @@
-const axios = require('axios');
 const db = require('./db');
 const { parseCardRow, recordStoredPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
 const { cacheNormalizedCards } = require('./utils/cardCache');
-const metrics = require('./utils/metrics');
+const { createProviderClient } = require('./utils/providerClient');
 
 const API_BASE_URL = 'https://api.pokemontcg.io/v2';
 const API_KEY = process.env.POKEMON_TCG_API_KEY || ''; // Optional user key
 
-// Axios instance with rate limit handling headers if key is available
-const tcgClient = axios.create({
+// Axios instance with rate limit handling headers if key is available. Through
+// utils/providerClient for the User-Agent it never sent and its metrics; not
+// serialized, as it never was (the sweep spaces its own requests).
+const tcgClient = createProviderClient({
+  name: 'pokemontcg',
+  label: 'pokemontcg.io',
   baseURL: API_BASE_URL,
   timeout: 6000,
-  headers: API_KEY ? { 'X-Api-Key': API_KEY } : {}
-});
-metrics.instrumentAxiosClient(tcgClient, 'pokemontcg');
+  headers: API_KEY ? { 'X-Api-Key': API_KEY } : {},
+  serial: false,
+}).client;
 
 // api.pokemontcg.io answers 5xx (and occasionally stalls past the timeout) often
 // enough that a single failed GET made searches look broken most of the time —

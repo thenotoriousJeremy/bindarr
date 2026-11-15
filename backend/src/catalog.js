@@ -464,10 +464,10 @@ async function defaultEmbedder() {
   };
 
   // Scryfall's image CDN rejects a request with no User-Agent — 400, not 403, which
-  // reads like a bad URL. Version comes from package.json rather than a literal: the
-  // one in tcgcsvApi said 1.6.1 through two releases.
+  // reads like a bad URL. The shared one (utils/providerClient), whose version comes
+  // from package.json rather than a literal.
   const HEADERS = {
-    'User-Agent': `Bindarr/${require('../package.json').version} (+https://github.com/thenotoriousJeremy/bindarr)`,
+    'User-Agent': require('./utils/providerClient').USER_AGENT,
     Accept: 'image/*',
   };
   return {

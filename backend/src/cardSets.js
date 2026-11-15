@@ -6,9 +6,8 @@
 // catalog) — and filling card_cache, which had only ever run as a SIDE EFFECT of
 // indexing, is what survives as a job in its own right. Its ORB imports (opencv,
 // sharp, fs) and tuning constants went with it; nothing here reads pixels.
-const axios = require('axios');
 const languages = require('./utils/languages');
-const metrics = require('./utils/metrics');
+const { createProviderClient } = require('./utils/providerClient');
 // The one place that decides pokemontcg.io vs TCGdex. Every branch below asks it
 // rather than re-deriving the answer from the language — see the note in that
 // module for what re-deriving it cost.
@@ -16,11 +15,10 @@ const pokemonProvider = require('./utils/pokemonProvider');
 // scryfallApi/tcgApi are lazy-required inside the build/preview paths only — they
 // pull in the DB module, which verify-only worker threads must not load.
 
-const httpOptions = { timeout: 30000, headers: { 'User-Agent': 'Bindarr/1.0', 'Accept': 'application/json' } };
-const tcgdexHttp = axios.create(httpOptions);
-metrics.instrumentAxiosClient(tcgdexHttp, 'tcgdex');
-const pokemonTcgHttp = axios.create(httpOptions);
-metrics.instrumentAxiosClient(pokemonTcgHttp, 'pokemontcg');
+// The catalog build's own clients, with the long timeout whole-set pages need;
+// the shared User-Agent and metrics come with them (utils/providerClient).
+const tcgdexHttp = createProviderClient({ name: 'tcgdex', label: 'TCGdex', timeout: 30000, serial: false }).client;
+const pokemonTcgHttp = createProviderClient({ name: 'pokemontcg', label: 'pokemontcg.io', timeout: 30000, serial: false }).client;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // "This set has no data in this language" — an expected gap, not a failure.

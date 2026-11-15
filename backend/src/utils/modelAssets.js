@@ -123,7 +123,8 @@ async function fetchAsset(a, onProgress, { fetchImpl = fetch } = {}) {
   if (isCurrent(a)) return 'present';
   fs.mkdirSync(MODEL_DIR, { recursive: true });
   const res = await fetchImpl(assetUrl(a), {
-    headers: { 'User-Agent': 'Mozilla/5.0' },
+    // Bindarr's own name (utils/providerClient), not a browser's.
+    headers: { 'User-Agent': require('./providerClient').USER_AGENT },
     redirect: 'follow', signal: AbortSignal.timeout(900000),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${a.name}`);

@@ -9,7 +9,6 @@
 // Shape of this module deliberately mirrors tcgApi.js: searchCards returns
 // { cards, total } of card_cache-shaped rows, so routes/collection.js can pick a
 // provider and treat the answer identically.
-const axios = require('axios');
 const db = require('./db');
 const { parseCardRow, recordStoredPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
 const { parseSetList } = require('./utils/setQuery');
@@ -18,16 +17,20 @@ const { cacheNormalizedCards } = require('./utils/cardCache');
 const languages = require('./utils/languages');
 const { pruneStaleSets } = require('./utils/setCatalogue');
 const { sameNumber } = require('./utils/setCatalogueMatch');
-const metrics = require('./utils/metrics');
+const { createProviderClient } = require('./utils/providerClient');
 
 const API_BASE_URL = 'https://api.tcgdex.net/v2';
 
-const client = axios.create({
+// Not serialized: TCGdex publishes no rate limit, and fan-out is capped below
+// (HYDRATE_CONCURRENCY). A 429 still pauses every request (utils/providerClient).
+const tcgdex = createProviderClient({
+  name: 'tcgdex',
+  label: 'TCGdex',
   baseURL: API_BASE_URL,
   timeout: 10000,
-  headers: { 'User-Agent': 'Bindarr/1.0', Accept: 'application/json' },
+  serial: false,
 });
-metrics.instrumentAxiosClient(client, 'tcgdex');
+const { client } = tcgdex;
 
 // TCGdex publishes no rate limit, but a search hydrates one request per result,
 // so cap the fan-out rather than firing 60 sockets at someone else's free API.
@@ -196,7 +199,7 @@ async function mapLimited(items, fn, { strict = false } = {}) {
 // A search returns "briefs" — id, localId, name, image and nothing else. Set,
 // rarity, types and prices only exist on the full card, so each result has to be
 // fetched. Rows land in card_cache, so the next search for them is local.
-const fetchFullCard = (lang, id) => client.get(`/${lang}/cards/${encodeURIComponent(id)}`).then(r => r.data);
+const fetchFullCard = (lang, id) => tcgdex.get(`/${lang}/cards/${encodeURIComponent(id)}`).then(r => r.data);
 
 // TCGdex filters briefs with `field=value` (exact) or `field=like:value`
 // (substring, case-insensitive). There is no `set` field on a brief, so a
@@ -214,7 +217,7 @@ async function searchBriefs(lang, name, setList, page, limit) {
   if (setList.length) {
     const perSet = await mapLimited(setList, async (set) => {
       try {
-        const { data } = await client.get(`/${lang}/sets/${encodeURIComponent(set)}`);
+        const { data } = await tcgdex.get(`/${lang}/sets/${encodeURIComponent(set)}`);
         return data.cards || [];
       } catch (e) {
         if (e.response && e.response.status === 404) return [];
@@ -224,7 +227,7 @@ async function searchBriefs(lang, name, setList, page, limit) {
     return { briefs: perSet.flat(), paged: false };
   }
   if (!name) return { briefs: [], paged: true };
-  const { data } = await client.get(`/${lang}/cards`, {
+  const { data } = await tcgdex.get(`/${lang}/cards`, {
     params: { name: `like:${name}`, 'pagination:page': page, 'pagination:itemsPerPage': limit },
   });
   return { briefs: data || [], paged: true };
@@ -436,7 +439,7 @@ async function listSets(lang, { fresh = false } = {}) {
   const code = languages.toCode(lang);
   const hit = setsCache.get(code);
   if (!fresh && hit && Date.now() - hit.at < SETS_TTL_MS) return hit.sets;
-  const { data } = await client.get(`/${code}/sets`);
+  const { data } = await tcgdex.get(`/${code}/sets`);
   // A set brief carries id, name and cardCount only. Release date, series and
   // logos live on the per-set endpoint, and 177 extra requests to decorate an
   // autocomplete is not a trade worth making — the list already arrives oldest
@@ -463,7 +466,7 @@ async function listSets(lang, { fresh = false } = {}) {
 // signature as pokemontcgapi.getSetCards, so a caller holding either client can ask.
 async function getSetCards(setId, lang = 'en') {
   const code = languages.toCode(lang);
-  const { data } = await client.get(`/${code}/sets/${encodeURIComponent(setId)}`);
+  const { data } = await tcgdex.get(`/${code}/sets/${encodeURIComponent(setId)}`);
   const set = { id: (data && data.id) || setId, name: (data && data.name) || setId };
   return ((data && data.cards) || []).map(brief => normalizeCard({ ...brief, set }, code));
 }
@@ -500,9 +503,9 @@ async function listSeries(lang) {
   const hit = seriesCache.get(code);
   if (hit && Date.now() - hit.at < SETS_TTL_MS) return hit.bySet;
 
-  const { data } = await client.get(`/${code}/series`);
+  const { data } = await tcgdex.get(`/${code}/series`);
   const details = await mapLimited(data || [], async (s) => {
-    const r = await client.get(`/${code}/series/${encodeURIComponent(s.id)}`);
+    const r = await tcgdex.get(`/${code}/series/${encodeURIComponent(s.id)}`);
     return { id: s.id, name: s.name || s.id, sets: r.data.sets || [] };
   });
 
@@ -570,7 +573,7 @@ async function fetchAndCacheSets(force = false) {
     const series = await listSeries('en').catch(() => new Map());
     let dated = 0;
     await mapLimited(toDate, async (s) => {
-      const { data } = await client.get(`/en/sets/${encodeURIComponent(s.id)}`);
+      const { data } = await tcgdex.get(`/en/sets/${encodeURIComponent(s.id)}`);
       await db.run(
         `UPDATE sets SET release_date = ?, series = ?, symbol_url = ?, logo_url = ? WHERE id = ? AND game = 'pokemon'`,
         // Slashes, not TCGdex's hyphens: compartmentSort orders by this column as a

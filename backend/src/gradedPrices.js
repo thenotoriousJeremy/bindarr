@@ -15,20 +15,22 @@
 // TCGplayer product id when we know it — one card, exact, 2 credits — and fall
 // back to a name search capped at a handful. There is no sweep and no background
 // refresh, and there must not be one.
-const axios = require('axios');
-const metrics = require('./utils/metrics');
+const { createProviderClient } = require('./utils/providerClient');
 
 const API_BASE_URL = 'https://www.pokemonpricetracker.com/api/v2';
 // Cap on the fallback name search. Each card costs credits, so this trades a few
 // missed matches for not emptying the day's allowance on one ambiguous name.
 const SEARCH_LIMIT = 5;
 
-const client = axios.create({
+// One lookup per button press, so nothing to pace; the client is for the shared
+// User-Agent and metrics (utils/providerClient).
+const { client } = createProviderClient({
+  name: 'graded-prices',
+  label: 'PokemonPriceTracker',
   baseURL: API_BASE_URL,
   timeout: 15000,
-  headers: { 'User-Agent': 'Bindarr/1.0', Accept: 'application/json' },
+  serial: false,
 });
-metrics.instrumentAxiosClient(client, 'graded-prices');
 
 class GradedPriceError extends Error {
   constructor(status, message) { super(message); this.status = status; }
