@@ -67,7 +67,6 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
   const [locationId, setLocationId] = useState('');
   const [isTrade, setIsTrade] = useState(0);
   const [favorite, setFavorite] = useState(0);
-  const [listType, setListType] = useState('collection');
   const [notes, setNotes] = useState('');
   const [grader, setGrader] = useState('Raw');
   const [grade, setGrade] = useState('');
@@ -136,7 +135,6 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     setLocationId(from.location_id || '');
     setIsTrade(from.is_trade ? 1 : 0);
     setFavorite(from.favorite ? 1 : 0);
-    setListType(from.list_type || 'collection');
     setNotes(from.notes || '');
     setGrader(from.grader || 'Raw');
     setGrade(from.grade == null ? '' : String(from.grade));
@@ -206,7 +204,6 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
           language,
           purchase_price: parseFloat(purchasePrice) || 0,
           location_id: locationId ? parseInt(locationId, 10) : null,
-          list_type: listType,
           is_trade: isTrade ? 1 : 0,
           favorite: favorite ? 1 : 0,
           notes,
@@ -235,7 +232,6 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         card.language = language;
         card.purchase_price = parseFloat(purchasePrice) || 0;
         card.location_id = locationId ? parseInt(locationId, 10) : null;
-        card.list_type = listType;
         card.is_trade = isTrade ? 1 : 0;
         card.favorite = favorite ? 1 : 0;
         card.notes = notes;
@@ -298,18 +294,15 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     if (!targetEntryId) return;
     const nextFavorite = field === 'favorite' ? (value ? 1 : 0) : (favorite ? 1 : 0);
     const nextIsTrade = field === 'is_trade' ? (value ? 1 : 0) : (isTrade ? 1 : 0);
-    const nextListType = field === 'list_type' ? value : listType;
 
     // Optimistic UI & prop object updates
     if (field === 'is_trade') { setIsTrade(nextIsTrade); card.is_trade = nextIsTrade; }
     if (field === 'favorite') { setFavorite(nextFavorite); card.favorite = nextFavorite; }
-    if (field === 'list_type') { setListType(nextListType); card.list_type = nextListType; }
 
     // Only the toggled flags. Quantity and placement are deliberately absent:
     // a favourite/trade toggle must never change how many copies you own or
     // where they live, and sending quantity here reconciles the whole stack.
     const payload = {
-      list_type: nextListType,
       is_trade: nextIsTrade,
       favorite: nextFavorite
     };
@@ -327,14 +320,12 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         // revert on fail
         if (field === 'is_trade') { setIsTrade(isTrade); card.is_trade = isTrade; }
         if (field === 'favorite') { setFavorite(favorite); card.favorite = favorite; }
-        if (field === 'list_type') { setListType(listType); card.list_type = listType; }
         showToast && showToast(t('inspector.errUpdate'));
       }
     } catch (err) {
       console.error(err);
       if (field === 'is_trade') { setIsTrade(isTrade); card.is_trade = isTrade; }
       if (field === 'favorite') { setFavorite(favorite); card.favorite = favorite; }
-      if (field === 'list_type') { setListType(listType); card.list_type = listType; }
       showToast && showToast(t('inspector.errUpdateGeneric'));
     }
   };
@@ -541,11 +532,6 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         <div className="ci-info-col" style={{ flex: '1 1 320px', display: 'flex', flexDirection: 'column', gap: '1.25rem', justifyContent: 'space-between' }}>
           <div>
             <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-              {activeCard.list_type === 'wishlist' && (
-                <span style={{ fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.2rem 0.5rem', borderRadius: '4px', backgroundColor: 'rgba(6, 182, 212, 0.15)', color: '#06b6d4', border: '1px solid rgba(6, 182, 212, 0.3)' }}>
-                  {t('inspector.wishlistItem')}
-                </span>
-              )}
               {activeCard.is_trade === 1 && (
                 <span style={{ fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.2rem 0.5rem', borderRadius: '4px', backgroundColor: 'rgba(74, 222, 128, 0.15)', color: 'var(--type-grass)', border: '1px solid rgba(74, 222, 128, 0.3)' }}>
                   {t('inspector.forTrade')}
@@ -620,21 +606,12 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
 
           {mode === 'edit' ? (
             <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {listType === 'wishlist' ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(74,222,128,0.1)', padding: '0.6rem 0.9rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(74,222,128,0.2)' }}>
-                  <input type="checkbox" checked={listType === 'collection'} onChange={(e) => setListType(e.target.checked ? 'collection' : 'wishlist')} id="markOwned" style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
-                  <label htmlFor="markOwned" style={{ cursor: 'pointer', margin: 0, fontWeight: 700, color: 'var(--type-grass)', fontSize: '0.85rem' }}>
-                    {t('inspector.markObtained')}
-                  </label>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--surface-1)', padding: '0.6rem 0.9rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                  <input type="checkbox" checked={isTrade === 1} onChange={(e) => setIsTrade(e.target.checked ? 1 : 0)} id="isTrade" style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
-                  <label htmlFor="isTrade" style={{ cursor: 'pointer', margin: 0, fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.85rem' }}>
-                    {t('inspector.listedInTrade')}
-                  </label>
-                </div>
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--surface-1)', padding: '0.6rem 0.9rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                <input type="checkbox" checked={isTrade === 1} onChange={(e) => setIsTrade(e.target.checked ? 1 : 0)} id="isTrade" style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
+                <label htmlFor="isTrade" style={{ cursor: 'pointer', margin: 0, fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.85rem' }}>
+                  {t('inspector.listedInTrade')}
+                </label>
+              </div>
 
               <CardEntryFields
                 game={activeCard.game || activeCard.supertype}
@@ -929,36 +906,34 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               )}
 
               {/* Storage Container details (clickable to view in storage) */}
-              {activeCard.list_type !== 'wishlist' && (
-                <div
-                  role={onViewStorage ? 'button' : undefined}
-                  tabIndex={onViewStorage ? 0 : undefined}
-                  onClick={() => onViewStorage && activeCard.list_type !== 'wishlist' && onViewStorage(activeCard)}
-                  onKeyDown={onViewStorage ? onActivateKey(() => onViewStorage(activeCard)) : undefined}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: '0.5rem',
-                    background: 'rgba(255, 71, 71, 0.03)', padding: '0.65rem 0.75rem',
-                    borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)',
-                    fontSize: '0.75rem', cursor: onViewStorage ? 'pointer' : 'default',
-                    transition: 'background 0.2s'
-                  }}
-                  title={onViewStorage ? t('inspector.viewInStorage') : undefined}
-                >
-                  <MapPin size={14} style={{ color: 'var(--accent-red)', flexShrink: 0 }} />
-                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                    <span style={{ color: 'var(--text-muted)' }}>{t('inspector.locationLabel')} </span>
-                    <strong style={{ color: 'var(--text-strong)' }}>
-                      {activeCard.location_name ? `${activeCard.location_name}${activeCard.location_type ? ` (${activeCard.location_type})` : ''}` : t('bulk.unassignedPile')}
-                    </strong>
-                    {activeCard.location_name && activeCard.compartment_display_label && (
-                      <span style={{ color: 'var(--text-secondary)' }}>
-                        {` • ${activeCard.compartment_display_label}`}
-                        {getSlotNumber(activeCard) !== null ? ` • ${t('wizard.slot', { slot: getSlotNumber(activeCard) })}` : ''}
-                      </span>
-                    )}
-                  </div>
+              <div
+                role={onViewStorage ? 'button' : undefined}
+                tabIndex={onViewStorage ? 0 : undefined}
+                onClick={() => onViewStorage && onViewStorage(activeCard)}
+                onKeyDown={onViewStorage ? onActivateKey(() => onViewStorage(activeCard)) : undefined}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '0.5rem',
+                  background: 'rgba(255, 71, 71, 0.03)', padding: '0.65rem 0.75rem',
+                  borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)',
+                  fontSize: '0.75rem', cursor: onViewStorage ? 'pointer' : 'default',
+                  transition: 'background 0.2s'
+                }}
+                title={onViewStorage ? t('inspector.viewInStorage') : undefined}
+              >
+                <MapPin size={14} style={{ color: 'var(--accent-red)', flexShrink: 0 }} />
+                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                  <span style={{ color: 'var(--text-muted)' }}>{t('inspector.locationLabel')} </span>
+                  <strong style={{ color: 'var(--text-strong)' }}>
+                    {activeCard.location_name ? `${activeCard.location_name}${activeCard.location_type ? ` (${activeCard.location_type})` : ''}` : t('bulk.unassignedPile')}
+                  </strong>
+                  {activeCard.location_name && activeCard.compartment_display_label && (
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      {` • ${activeCard.compartment_display_label}`}
+                      {getSlotNumber(activeCard) !== null ? ` • ${t('wizard.slot', { slot: getSlotNumber(activeCard) })}` : ''}
+                    </span>
+                  )}
                 </div>
-              )}
+              </div>
 
               {activeCard.notes && (
                 <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.6rem 0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
@@ -989,17 +964,6 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                   showToast={showToast}
                   style={{ fontSize: '0.8rem', padding: '0.45rem 0.5rem', maxWidth: '140px' }}
                 />
-
-                {activeCard.list_type === 'wishlist' && (
-                  <button 
-                    className="btn btn-secondary" 
-                    style={{ backgroundColor: 'rgba(74,222,128,0.2)', color: 'var(--type-grass)', border: '1px solid rgba(74,222,128,0.3)', padding: '0 0.75rem', fontSize: '0.8rem' }} 
-                    onClick={() => handleQuickToggle('list_type', 'collection')}
-                    title={t('bulk.moveToCollection')}
-                  >
-                    {t('inspector.obtained')}
-                  </button>
-                )}
 
                 <button
                   type="button"

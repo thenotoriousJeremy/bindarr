@@ -370,6 +370,7 @@ async function initDb() {
   // hearts tapped at once cannot make two.
   await addColumns('card_lists', { is_default: 'INTEGER NOT NULL DEFAULT 0' });
   await create('idx_card_lists_default');
+  await require('../utils/wishlistMigration').migrateLegacyWishlists();
   await create(
     'notification_channels', 'idx_notification_channels_user', 'notification_prefs', 'notification_price_state',
     'notification_log', 'idx_notification_log_queue', 'idx_notification_log_dedupe',

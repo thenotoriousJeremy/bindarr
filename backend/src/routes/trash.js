@@ -19,7 +19,7 @@ router.post('/:batch/restore', async (req, res) => {
   try {
     const result = await restoreBatch(req.params.batch, req.user.id);
     if (!result.found) return res.status(404).json({ error: 'Trash batch not found' });
-    res.json({ restored: result.restored, skipped: result.skipped, unsorted: result.unsorted });
+    res.json({ restored: result.restored, skipped: result.skipped, unsorted: result.unsorted, wishlisted: result.wishlisted });
   } catch (error) {
     console.error('Restore from trash failed:', error);
     res.status(500).json({ error: 'Failed to restore cards' });

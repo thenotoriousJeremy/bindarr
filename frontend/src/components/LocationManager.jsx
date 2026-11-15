@@ -11,7 +11,8 @@ import ContainerOverview from './ContainerOverview';
 import CreateContainerModal from './CreateContainerModal';
 import { lazyWithReload } from '../utils/lazyWithReload';
 import { useShownTrigger } from '../utils/useShownTrigger';
-import { createLatestLoader, createCardStore, readCardPatch, applyCardPatch, evictedText, applyAllText, importContainerText } from '../utils/storageQueries';
+import { createLatestLoader, createCardStore, readCardPatch, readShownCards, applyCardPatch, shownOnly, evictedText, applyAllText, importContainerText } from '../utils/storageQueries';
+import { LatestRequest, fetchJson, isAbortError } from '../utils/request';
 import { useBinderArt } from '../utils/useBinderArt';
 import { isDeviceMode } from '../apiBase';
 import { artPocketsByPage } from '../utils/binderArtGeometry';
@@ -138,6 +139,25 @@ function LocationManager({ active = true, statsTrigger, onUpdate, showToast, sel
     onChanged: () => { storage.exitSelectMode(); refreshAll(); notifyChanged(); },
   });
 
+  // Storage holds slim rows; the popup edits every field (notes, cert, purchase
+  // price), so it opens on the full row, fetched by id. A stacked pocket keeps
+  // its own quantity and member ids, which are the stack's, not the one row's.
+  const inspectorReq = useRef(null);
+  if (!inspectorReq.current) inspectorReq.current = new LatestRequest();
+  useEffect(() => () => inspectorReq.current.cancel(), []);
+  const openInspector = async (card) => {
+    const req = inspectorReq.current.begin();
+    try {
+      const { data: full } = await fetchJson(`/api/collection/${encodeURIComponent(card.entry_id)}`, { signal: req.signal });
+      if (!req.isLatest()) return;
+      setInspectorCard({ ...card, ...full, quantity: card.quantity, ...(card.member_ids ? { member_ids: card.member_ids } : {}) });
+    } catch (err) {
+      if (isAbortError(err) || !req.isLatest()) return;
+      console.error(err);
+      showToast(t('collection.errOpenCard'));
+    }
+  };
+
   const activateUnsortedCard = (card) => {
     if (unsortedLongPressFired.current) return;
     if (moveMode) {
@@ -148,7 +168,7 @@ function LocationManager({ active = true, statsTrigger, onUpdate, showToast, sel
       toggleUnsortedSelect(card.entry_id);
       return;
     }
-    setInspectorCard(card);
+    openInspector(card);
   };
 
   const [activePageIndex, setActivePageIndex] = useState(0);
@@ -318,14 +338,24 @@ function LocationManager({ active = true, statsTrigger, onUpdate, showToast, sel
     } catch (err) { console.error(err); }
   };
 
-  // The whole collection, unpaged: the Unsorted queue and the filter-value
-  // suggestions need every unplaced card, and /api/collection has no filter for
-  // those (nor for one container) yet.
+  // The container open now, for reads that land after it changed.
+  const activeLocationIdRef = useRef(activeLocationId);
+  activeLocationIdRef.current = activeLocationId;
+
+  // What Storage shows, and only that (DATA-18): every copy in no container,
+  // for the Unsorted queue and its filing, and the open container's copies, in
+  // slim rows. It used to read the whole collection with every column: 45 MB at
+  // 20,000 copies. Another container's copies come in when it is opened (the
+  // activeLocationId effect below), as a patch.
+  const cardsReadRef = useRef(false);   // a whole read has landed
   const fetchAllCards = async () => {
     const stamp = cardStore.beginRead();
     try {
-      const result = await loaders.cards.load('/api/collection');
-      if ('data' in result) setAllCards(cardStore.landRead(result.data, stamp));
+      const result = await loaders.cards.run(() => readShownCards(activeLocationIdRef.current));
+      if ('data' in result) {
+        cardsReadRef.current = true;
+        setAllCards(shownOnly(cardStore.landRead(result.data, stamp), activeLocationIdRef.current));
+      }
     } catch (err) {
       cardStore.failRead(stamp);
       console.error(err);
@@ -334,8 +364,6 @@ function LocationManager({ active = true, statsTrigger, onUpdate, showToast, sel
 
   // Latest wins, and only for the container still open: pages read for one
   // container must never land under another one opened meanwhile.
-  const activeLocationIdRef = useRef(activeLocationId);
-  activeLocationIdRef.current = activeLocationId;
   const fetchCompartments = async (locId) => {
     if (!locId) { loaders.compartments.cancel(); setCompartments([]); return; }
     try {
@@ -351,13 +379,14 @@ function LocationManager({ active = true, statsTrigger, onUpdate, showToast, sel
 
   // After a one-card action: read back only the compartments and entries it
   // touched and patch them into allCards, in the order the actions happened.
-  // A failed read falls back to reading everything.
+  // Opening another container is a patch too ({ container }). A failed read
+  // falls back to reading everything.
   const patchChainRef = useRef(Promise.resolve());
   const refreshCards = (touched) => {
     const ticket = cardStore.issue();
     const read = readCardPatch(touched);
     const step = patchChainRef.current.then(() => read).then((patch) => {
-      if (cardStore.accept(ticket, patch)) setAllCards(prev => applyCardPatch(prev, patch));
+      if (cardStore.accept(ticket, patch)) setAllCards(prev => shownOnly(applyCardPatch(prev, patch), activeLocationIdRef.current));
     });
     patchChainRef.current = step.catch(() => {});
     return step.catch((err) => { console.error(err); return fetchAllCards(); });
@@ -383,6 +412,8 @@ function LocationManager({ active = true, statsTrigger, onUpdate, showToast, sel
 
   useEffect(() => {
     fetchCompartments(activeLocationId);
+    // Its copies, in place of the last container's.
+    refreshCards({ container: activeLocationId ?? null });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- a new container; refreshAll covers each statsTrigger
   }, [activeLocationId]);
 
@@ -427,13 +458,34 @@ function LocationManager({ active = true, statsTrigger, onUpdate, showToast, sel
     }
   }, [locations, activeLocationId]);
 
+  // A card to locate that Storage does not hold (it is in a container not open):
+  // asked where it is, once per request, and its container opened, whose read
+  // then brings it in for the snapping and scrolling below.
+  const focusLookupRef = useRef(null);
+  const focusScrollRef = useRef(null);
   useEffect(() => {
     // App clears the request when you leave this tab (the tab stays mounted), so
     // forget it here too: locating the same card again must navigate again.
-    if (!focusEntryId) { focusNavRef.current = null; return; }
-    if (allCards.length === 0) return;
+    if (!focusEntryId) { focusNavRef.current = null; focusLookupRef.current = null; focusScrollRef.current = null; return; }
     const targetCard = allCards.find(c => (c.entry_id || c.id) === focusEntryId);
-    if (!targetCard) return;
+    if (!targetCard) {
+      if (!cardsReadRef.current || focusLookupRef.current === focusEntryId || focusNavRef.current === focusEntryId) return;
+      const wanted = focusEntryId;
+      focusLookupRef.current = wanted;
+      fetchJson(`/api/collection/${encodeURIComponent(wanted)}`)
+        .then(({ data }) => {
+          if (focusLookupRef.current !== wanted || focusNavRef.current === wanted || !data) return;
+          focusNavRef.current = wanted;
+          if (data.location_id) {
+            setActiveLocationId(data.location_id);
+          } else {
+            setActiveLocationId(null);
+            setMobilePane('unsorted');
+          }
+        })
+        .catch(err => console.error(err));
+      return;
+    }
 
     // Navigate to the card's location ONCE per focus request. Reruns (compartments
     // reload when you open another container) must NOT re-apply this, or an
@@ -460,7 +512,10 @@ function LocationManager({ active = true, statsTrigger, onUpdate, showToast, sel
       }
     }
 
-    if (firstForThisFocus) {
+    // Scrolled to once per request, when the card is first here (which, for one
+    // asked about above, is a run after the navigation).
+    if (focusScrollRef.current !== focusEntryId) {
+      focusScrollRef.current = focusEntryId;
       let attempts = 0;
       const tryScroll = () => {
         const el = document.getElementById(`card-${focusEntryId}`) || document.querySelector(`.focus-flash`);
@@ -499,7 +554,8 @@ function LocationManager({ active = true, statsTrigger, onUpdate, showToast, sel
   const unsortedCardsRef = useRef(unsortedCards);
   unsortedCardsRef.current = unsortedCards;
 
-  // Distinct values per filterable field from the cards actually owned, so the
+  // Distinct values per filterable field from the cards Storage holds (the open
+  // container's and Unsorted's, the ones a rule is being written for), so the
   // FilterBuilder value box suggests real options (e.g. subtypes like "Basic")
   // instead of only a hardcoded list.
   const filterFieldOptions = useMemo(() => {
@@ -1450,7 +1506,7 @@ function LocationManager({ active = true, statsTrigger, onUpdate, showToast, sel
                 setsList={setsList}
                 cardScale={containerCardScale}
                 selectedIds={storage.selectMode ? storage.selectedIds : null}
-                onCardClick={(card) => (storage.selectMode ? storage.toggleSelect(card.entry_id) : setInspectorCard(card))}
+                onCardClick={(card) => (storage.selectMode ? storage.toggleSelect(card.entry_id) : openInspector(card))}
                 onOpenCompartment={openCompartmentInLayout}
               />
             )}
@@ -1475,7 +1531,7 @@ function LocationManager({ active = true, statsTrigger, onUpdate, showToast, sel
                   handleRemoveCompartment={handleRemoveCompartment}
                   handleToggleCompartmentLock={handleToggleCompartmentLock}
                   openCompartmentRules={openCompartmentRules}
-                  setInspectorCard={setInspectorCard}
+                  setInspectorCard={openInspector}
                   handleDeleteCard={handleDeleteCard}
                   handleMoveCard={handleMoveCard}
                   currentRecSpot={currentRecSpot}
@@ -1509,7 +1565,7 @@ function LocationManager({ active = true, statsTrigger, onUpdate, showToast, sel
                   handleRemoveCompartment={handleRemoveCompartment}
                   handleToggleCompartmentLock={handleToggleCompartmentLock}
                   openCompartmentRules={openCompartmentRules}
-                  setInspectorCard={setInspectorCard}
+                  setInspectorCard={openInspector}
                   handleDeleteCard={handleDeleteCard}
                   handleMoveCard={handleMoveCard}
                   currentRecSpot={currentRecSpot}

@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useCallback, useRef } from 'react';
-import { Search, RefreshCw, ShoppingCart, Heart } from 'lucide-react';
+import { Search, RefreshCw, ShoppingCart } from 'lucide-react';
 import CardImage from './CardImage';
 import CardImageZoom from './CardImageZoom';
 import AddToListSelect from './AddToListSelect';
@@ -468,14 +468,8 @@ function SetCompletion({ active = true, focusSet, statsTrigger, showToast }) {
                       {selectMode ? (
                         <div aria-hidden="true" className={`select-check${isSelected ? ' on' : ''}`}>{isSelected ? '✓' : ''}</div>
                       ) : (
+                        // The one heart: on the Wishlist or not, and one tap to switch.
                         <WishlistHeart card={{ ...card, name: displayName(card) }} showToast={showToast} corner="bottom" />
-                      )}
-                      {/* On the collection's own wishlist (Collection > Cards > Wishlist). */}
-                      {!have && card.wishlisted && (
-                        <span title={t('sets.wishlisted')} aria-label={t('sets.wishlisted')}
-                          style={{ position: 'absolute', top: '6px', left: '6px', zIndex: 10, display: 'flex', padding: '3px', borderRadius: '50%', background: 'rgba(0,0,0,0.6)', color: 'var(--accent-red)' }}>
-                          <Heart size={12} fill="currentColor" />
-                        </span>
                       )}
                     </div>
                     <div className="tcg-card-info">

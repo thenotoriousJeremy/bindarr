@@ -16,16 +16,13 @@ const COUNTED = {
   add_to_deck: 'bulk.result.addedToDeck',
 };
 
-const LIST_TYPES = { collection: 'bulk.result.movedToCollection', wishlist: 'bulk.result.movedToWishlist' };
-
 // The translation key for a bulk answer, or null when the server's own words
-// are needed.
+// are needed. (list_type, which only older apps still send, is one of those.)
 export function bulkResultKey(action, value, data) {
   if (!data || typeof data.affected !== 'number') return null;
   // Part of the selection was left out, for a reason only the server states.
   // rule_rejected: cards a container's rules refused, left where they were.
   if (data.rejected > 0 || data.skipped > 0 || data.rule_rejected > 0 || data.container_full) return null;
-  if (action === 'list_type') return LIST_TYPES[value] || null;
   // A move to no container is a move to Unsorted.
   if (action === 'move') return value ? 'bulk.result.moved' : 'bulk.result.unfiled';
   // Linking to a unit allocates its price, which only the message carries;

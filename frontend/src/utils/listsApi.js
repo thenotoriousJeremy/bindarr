@@ -4,6 +4,9 @@
 // Cards per request; the server takes at most this many (routes/lists.js BULK_MAX).
 const BULK_MAX = 500;
 
+// The kinds a list can be (utils/listOwnership.js LIST_KINDS on the server).
+export const LIST_KINDS = ['wishlist', 'buylist', 'missing', 'custom'];
+
 // Add cards to a list, as many as fit in one request each: the server merges a
 // card already on the list into its quantity. Resolves to { added, failed, error }
 // — `error` is the first refusal, which names the problem (wrong game, unknown card).

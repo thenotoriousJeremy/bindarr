@@ -11,35 +11,62 @@ import { LatestRequest, fetchJson } from './request.js';
 // The replaced request is left to finish rather than aborted: App.jsx's fetch
 // wrapper takes any failed /api request, an abort included, for the server
 // being unreachable, which would flash the offline banner and refuse writes.
+//
+// run(read) is the same for a read of several requests: `read` resolves the data.
 export function createLatestLoader({ fetchImpl } = {}) {
   const latest = new LatestRequest();
+  const run = async (read) => {
+    const req = latest.begin();
+    try {
+      const data = await read();
+      return req.isLatest() ? { data } : { stale: true };
+    } catch (err) {
+      if (!req.isLatest()) return { stale: true };
+      throw err;
+    }
+  };
   return {
-    async load(url) {
-      const req = latest.begin();
-      try {
-        const { data } = await fetchJson(url, fetchImpl ? { fetchImpl } : {});
-        return req.isLatest() ? { data } : { stale: true };
-      } catch (err) {
-        if (!req.isLatest()) return { stale: true };
-        throw err;
-      }
-    },
+    load: (url) => run(async () => (await fetchJson(url, fetchImpl ? { fetchImpl } : {})).data),
+    run,
     cancel() { latest.cancel(); },
   };
 }
+
+// Storage holds the copies it shows, not the collection: those in no container
+// (the Unsorted queue) and, when one is open, that container's. Slim rows
+// (GET /collection fields=storage); the card popup reads the full row when it
+// opens. These are the reads of one whole load.
+export const STORAGE_FIELDS = 'fields=storage';
+export const unsortedCardsUrl = () => `/api/collection?location_id=none&${STORAGE_FIELDS}`;
+export const containerCardsUrl = (locationId) =>
+  `/api/collection?location_id=${encodeURIComponent(locationId)}&${STORAGE_FIELDS}`;
+export const shownCardsUrls = (locationId) =>
+  [unsortedCardsUrl(), ...(locationId != null ? [containerCardsUrl(locationId)] : [])];
+
+// Only the rows Storage shows: unfiled ones and the open container's. A patch
+// can bring back a row filed elsewhere (a compartment the card just left); it is
+// dropped rather than kept as a stale copy of a container nobody has open.
+export const shownOnly = (cards, locationId) =>
+  cards.filter(card => card.location_id == null || (locationId != null && String(card.location_id) === String(locationId)));
 
 // Fold a fresh read of a few compartments and entries into the cached
 // collection. Every cached row filed in one of `compartments`, and every cached
 // row of an entry in `entries`, gives way to `rows`: what the server holds now
 // for those compartments and entries. An entry that is gone (deleted) simply
 // has no row there.
-export function applyCardPatch(cards, { compartments = [], entries = [], rows = [] }) {
+//
+// `container` (an id, or null for none) is another container opened: every
+// cached row filed in any container gives way, and `rows` are the new one's.
+// Unfiled rows stay.
+export function applyCardPatch(cards, { compartments = [], entries = [], rows = [], container }) {
+  const swap = container !== undefined;
   const comps = new Set(compartments.filter(id => id != null).map(String));
   const fresh = new Map();
   for (const row of rows) fresh.set(String(row.entry_id), row);
   const replaced = new Set([...entries.map(String), ...fresh.keys()]);
   const kept = cards.filter(card => !replaced.has(String(card.entry_id))
-    && !(card.compartment_id != null && comps.has(String(card.compartment_id))));
+    && !(card.compartment_id != null && comps.has(String(card.compartment_id)))
+    && !(swap && card.location_id != null));
   return [...kept, ...fresh.values()];
 }
 
@@ -89,18 +116,32 @@ export function createCardStore() {
 }
 
 // The reads behind a patch: each compartment's current cards
-// (GET /api/collection?compartment_id=) and each entry's current row
-// (GET /api/collection/:id, none once it is deleted).
-export async function readCardPatch({ compartments = [], entries = [] }, { fetchImpl } = {}) {
+// (GET /api/collection?compartment_id=), each entry's current row
+// (GET /api/collection/:id, none once it is deleted), and, for a container
+// opened (`container`), its cards (none when it is null: no container open).
+export async function readCardPatch({ compartments = [], entries = [], container }, { fetchImpl } = {}) {
   const opts = fetchImpl ? { fetchImpl } : {};
   const comps = [...new Set(compartments.filter(id => id != null))];
   const ids = [...new Set(entries.filter(id => id != null))];
   const parts = await Promise.all([
-    ...comps.map(id => fetchJson(`/api/collection?compartment_id=${encodeURIComponent(id)}`, opts).then(r => r.data)),
+    ...(container != null ? [fetchJson(containerCardsUrl(container), opts).then(r => r.data)] : []),
+    ...comps.map(id => fetchJson(`/api/collection?compartment_id=${encodeURIComponent(id)}&${STORAGE_FIELDS}`, opts).then(r => r.data)),
     ...ids.map(id => fetchJson(`/api/collection/${encodeURIComponent(id)}`, opts)
       .then(r => [r.data], err => (err && err.status === 404 ? [] : Promise.reject(err)))),
   ]);
-  return { compartments: comps, entries: ids, rows: parts.flat().filter(Boolean) };
+  return {
+    compartments: comps,
+    entries: ids,
+    rows: parts.flat().filter(Boolean),
+    ...(container !== undefined ? { container } : {}),
+  };
+}
+
+// One whole load of what Storage shows (shownCardsUrls), its parts read together.
+export async function readShownCards(locationId, { fetchImpl } = {}) {
+  const opts = fetchImpl ? { fetchImpl } : {};
+  const parts = await Promise.all(shownCardsUrls(locationId).map(url => fetchJson(url, opts).then(r => r.data)));
+  return parts.flat().filter(Boolean);
 }
 
 // The toast after saving a container's settings or a page's or row's rules:

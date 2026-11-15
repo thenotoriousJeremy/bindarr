@@ -1,5 +1,5 @@
 const db = require('./db');
-const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
+const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept, WISHLIST_CARDS_SQL } = require('./utils/priceHelpers');
 const { parseSetList } = require('./utils/setQuery');
 const { rulesTextFields } = require('./utils/mtgRulesText');
 const scryfallSyntax = require('./utils/scryfallSyntax');
@@ -702,9 +702,9 @@ async function fetchAndCacheSets(force = false) {
   }
 }
 
-// Refresh prices for every owned/decked MTG card from Scryfall and record price
-// history. The Pokémon updater (tcgApi) skips these, so this is their only
-// periodic refresh path.
+// Refresh prices for every owned, decked or wishlisted MTG card from Scryfall and
+// record price history. The Pokémon updater (tcgApi) skips these, so this is their
+// only periodic refresh path.
 // `force` bypasses the once-a-day gate (used by the scheduled daily run, which
 // is already on the right cadence by construction).
 async function updateCollectionPrices(force = false) {
@@ -715,6 +715,9 @@ async function updateCollectionPrices(force = false) {
       UNION
       SELECT DISTINCT d.card_id, cc.set_id, cc.number, cc.name FROM deck_cards d
       JOIN card_cache cc ON d.card_id = cc.id WHERE cc.game = 'mtg'
+      UNION
+      SELECT DISTINCT w.card_id, cc.set_id, cc.number, cc.name FROM (${WISHLIST_CARDS_SQL}) w
+      JOIN card_cache cc ON w.card_id = cc.id WHERE cc.game = 'mtg'
     `);
     if (cards.length === 0) return;
     if (!force && !(await shouldSweepPrices('mtg'))) {

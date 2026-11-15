@@ -229,11 +229,19 @@ async function markPricesSwept(game) {
   }
 }
 
+// The cards on a wishlist, as a SELECT of card_id for a price sweep's UNION. A
+// sweep prices the cards held and the cards in decks, and these: price alerts
+// watch wanted cards too (notify.js), and since wanted cards left the collection
+// for the Lists feature's wishlists (WEB-03) nothing else would keep their prices
+// and price history moving.
+const WISHLIST_CARDS_SQL = `SELECT wi.card_id FROM card_list_items wi JOIN card_lists wl ON wl.id = wi.list_id WHERE wl.kind = 'wishlist'`;
+
 module.exports = {
   parseSqliteUtc,
   shouldSweepPrices,
   markPricesSwept,
   SWEEP_COLUMN,
+  WISHLIST_CARDS_SQL,
   priceRefreshDays,
   DEFAULT_PRICE_REFRESH_DAYS,
   PRICE_SWEEP_INTERVAL_MS,

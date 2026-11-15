@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db');
 const cardApi = require('../utils/cardApi');
 const games = require('../utils/games');
+const { defaultList, ensureDefaultList } = require('../utils/defaultWishlist');
 const { deckAvailability } = require('../utils/deckAllocation');
 const { parseCardRow } = require('../utils/priceHelpers');
 const {
@@ -175,25 +176,11 @@ router.post('/lists', async (req, res) => {
 // --- The default Wishlist ---
 //
 // The list the heart on a card adds to, so wanting a card needs no setup: it is
-// made on the first add, named Wishlist, takes any game, and is otherwise an
-// ordinary list (rename it, add to it from the Lists view, delete it -- the next
-// heart makes a new one). At most one per user (idx_card_lists_default). Declared
-// before /lists/:id so 'default' is never read as an id.
+// made on the first add (utils/defaultWishlist.js, which the old collection
+// wishlist's migration and every request still naming that wishlist use too).
+// Declared before /lists/:id so 'default' is never read as an id.
 
-const DEFAULT_WISHLIST_NAME = 'Wishlist';
 const BULK_MAX = 500;
-
-const defaultList = (userId) =>
-  db.get(`SELECT * FROM card_lists WHERE user_id = ? AND is_default = 1`, [userId]);
-
-async function ensureDefaultList(userId) {
-  // OR IGNORE: a second request racing this one finds the row the first made.
-  await db.run(
-    `INSERT OR IGNORE INTO card_lists (user_id, name, kind, game, is_default) VALUES (?, ?, 'wishlist', NULL, 1)`,
-    [userId, DEFAULT_WISHLIST_NAME]
-  );
-  return defaultList(userId);
-}
 
 const defaultCardIds = async (listId) => (listId == null ? [] :
   (await db.all(`SELECT card_id FROM card_list_items WHERE list_id = ? ORDER BY id`, [listId])).map(r => r.card_id));

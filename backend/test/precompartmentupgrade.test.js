@@ -218,10 +218,21 @@ async function main() {
     'only the row that was already orphaned in the legacy database lacks its card_cache row');
   assert.strictEqual((await db.get(`PRAGMA foreign_keys`)).foreign_keys, 1, 'foreign keys must be back on');
 
-  // A second boot changes nothing.
+  // The second boot moves the copied wishlist row (row 3) onto the owner's
+  // Wishlist list (utils/wishlistMigration.js runs before the copy above, so it
+  // finds the row one boot later), and changes nothing else.
   const before = await snapshot();
   await db.initDb();
-  assert.deepStrictEqual(await snapshot(), before, 'a second initDb must not change anything');
+  assert.deepStrictEqual(await snapshot(), { ...before, collection: before.collection.filter(r => r.id !== 3) },
+    'a second initDb only moves the wishlist row');
+  assert.deepStrictEqual(await db.all(
+    `SELECT l.user_id, l.is_default, i.card_id FROM card_list_items i JOIN card_lists l ON l.id = i.list_id`
+  ), [{ user_id: 1, is_default: 1, card_id: 'base1-7' }], 'onto its owner\'s default Wishlist');
+
+  // A third boot changes nothing.
+  const settled = await snapshot();
+  await db.initDb();
+  assert.deepStrictEqual(await snapshot(), settled, 'a third initDb must not change anything');
 
   console.log('precompartmentupgrade: all assertions passed');
 }

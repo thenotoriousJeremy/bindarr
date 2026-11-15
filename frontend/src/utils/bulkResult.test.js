@@ -19,8 +19,15 @@ test('counted actions are phrased here, with plural forms', () => {
   assert.equal(bulkResultText(tEn, 'printing', 'Holofoil', { affected: 1 }), 'Set the printing of 1 card');
   assert.equal(bulkResultText(tEn, 'language', 'German', { affected: 2 }), 'Set the language of 2 cards');
   assert.equal(bulkResultText(tEn, 'add_to_deck', '7', { message: 'Added 5 card(s) to deck', affected: 5, rejected: 0 }), 'Added 5 cards to the deck');
-  assert.equal(bulkResultText(tEn, 'list_type', 'wishlist', { affected: 1 }), 'Moved 1 card to the wishlist');
-  assert.equal(bulkResultText(tEn, 'list_type', 'collection', { affected: 1200 }), 'Moved 1,200 cards to the collection');
+});
+
+test('list_type is no longer phrased here: the Wishlist is a list now, not a move', () => {
+  // Only an older app sends it; the server answers what it did (cards on the
+  // Wishlist, copies in the trash) in its own words.
+  const moved = { message: 'Put 1 card(s) on your wishlist; 1 copy moved to the trash', affected: 1, wishlisted: 1, trash_batch: 'b' };
+  assert.equal(bulkResultKey('list_type', 'wishlist', moved), null);
+  assert.equal(bulkResultText(tEn, 'list_type', 'wishlist', moved), moved.message);
+  assert.equal(en['bulk.result.movedToWishlist.one'], undefined, 'the old phrasing is gone from en.json');
 });
 
 test('a move names Unsorted when it unfiles, and unlinking a sealed unit is a count', () => {
