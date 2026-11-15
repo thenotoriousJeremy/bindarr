@@ -88,7 +88,49 @@ async function main() {
     response = await request('/api/transfers/external/contacts', ownerId, 'POST', { name: 'local league friend' });
     await expectStatus(response, 409, 'contact names should be unique per owner, ignoring case', 'name_taken');
     assert.deepStrictEqual((await (await request('/api/transfers/external/contacts', otherId)).json()).contacts, []);
+    const second = (await expectStatus(
+      await request('/api/transfers/external/contacts', ownerId, 'POST', { name: 'Second Contact' }), 201, 'a second contact'
+    )).contact;
+    await expectStatus(await request(`/api/transfers/external/contacts/${second.id}`, ownerId, 'PUT', { name: 'LOCAL LEAGUE FRIEND' }),
+      409, 'renaming onto a name taken in another case', 'name_taken');
+    await expectStatus(await request(`/api/transfers/external/contacts/${second.id}`, ownerId, 'PUT', { name: 'SECOND contact' }),
+      200, 'a contact takes its own name in another case');
+    await expectStatus(await request('/api/transfers/external/contacts/999999', ownerId, 'PUT', { name: 'Local League Friend' }),
+      404, 'renaming no contact', 'not_found');
     console.log('PASS: external contacts are reusable and scoped to their owner');
+
+    // The phone's SQLite plugin rejects a failed statement with a bare message and
+    // no `code` (Android: "Run: " + SQLite's message). A write the unique index
+    // refuses all the same (one that raced the name check) is still a 409 there,
+    // and any other such error is not mistaken for one.
+    const realRun = db.run;
+    const phoneError = (message) => async (sql, params) => {
+      if (/^\s*(INSERT INTO|UPDATE) external_contacts/.test(sql)) throw new Error(`Run: ${message}`);
+      return realRun(sql, params);
+    };
+    try {
+      db.run = phoneError('UNIQUE constraint failed: external_contacts.user_id, external_contacts.name (code 2067 SQLITE_CONSTRAINT_UNIQUE)');
+      await expectStatus(await request('/api/transfers/external/contacts', ownerId, 'POST', { name: 'Raced Name' }),
+        409, 'a constraint failure with no code', 'name_taken');
+      await expectStatus(await request(`/api/transfers/external/contacts/${second.id}`, ownerId, 'PUT', { name: 'Raced Rename' }),
+        409, 'a rename refused with no code', 'name_taken');
+      db.run = phoneError('disk I/O error (code 10 SQLITE_IOERR)');
+      const logged = [];
+      const realError = console.error;
+      console.error = (...args) => logged.push(args.map(String).join(' '));
+      try {
+        await expectStatus(await request('/api/transfers/external/contacts', ownerId, 'POST', { name: 'Unlucky Name' }),
+          500, 'another failure with no code', 'server_error');
+      } finally {
+        console.error = realError;
+      }
+      assert.ok(logged.some(line => line.includes('disk I/O error')), 'and the server logs it');
+    } finally {
+      db.run = realRun;
+    }
+    assert.ok(!(await db.get(`SELECT 1 FROM external_contacts WHERE name IN ('Raced Name', 'Unlucky Name')`)), 'nothing was written');
+    await expectStatus(await request(`/api/transfers/external/contacts/${second.id}`, ownerId, 'DELETE'), 200, 'tidying up');
+    console.log('PASS: a taken contact name is a 409 even when the driver reports no error code');
 
     await db.run(
       `INSERT INTO card_cache (id, name, printed_name, set_name, number, image_url, game)

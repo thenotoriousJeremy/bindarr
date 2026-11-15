@@ -32,11 +32,28 @@ function optionalText(value, label, maxLength) {
   return value.trim() || null;
 }
 
-function isDuplicateContactError(error) {
-  return error && error.code === 'SQLITE_CONSTRAINT'
-    && String(error.message).includes('external_contacts.user_id, external_contacts.name');
-}
 const nameTaken = () => new T.TransferError(409, 'name_taken', 'A contact with that name already exists');
+
+// A member's contact names are unique, ignoring case (the unique index is on
+// user_id, name COLLATE NOCASE). Looked up before the write, so a taken name is a
+// 409 whatever SQLite is underneath. `exceptId`: the contact being renamed.
+async function assertContactNameFree(userId, name, exceptId = null) {
+  const taken = await db.get(
+    `SELECT id FROM external_contacts
+      WHERE user_id = ? AND name = ? COLLATE NOCASE${exceptId == null ? '' : ' AND id != ?'}`,
+    exceptId == null ? [userId, name] : [userId, name, exceptId]
+  );
+  if (taken) throw nameTaken();
+}
+
+// The index refusing a write all the same. Read from the message, not the code:
+// node-sqlite3 sets code SQLITE_CONSTRAINT, but the phone's SQLite plugin rejects
+// with a bare message (Android: "Run: " + the SQLite message) and no code at all,
+// which made a taken name a 500 there.
+function isDuplicateContactError(error) {
+  const message = String((error && error.message) || '');
+  return /UNIQUE constraint failed/i.test(message) && /external_contacts\b/.test(message);
+}
 
 // Every game the registry knows (utils/games): absent means the legacy game, an
 // unknown one is refused rather than guessed.
@@ -334,11 +351,16 @@ router.get('/transfers/external/contacts', async (req, res) => {
   }
 });
 
+// The name check and the write in one transaction, so nothing else on this
+// connection can take the name in between; the constraint is the backstop.
 router.post('/transfers/external/contacts', async (req, res) => {
   try {
     const name = optionalText(req.body?.name, 'name', 100);
     if (!name) throw T.invalid('name is required');
-    const result = await db.run(`INSERT INTO external_contacts (user_id, name) VALUES (?, ?)`, [req.user.id, name]);
+    const result = await withTransaction(async () => {
+      await assertContactNameFree(req.user.id, name);
+      return db.run(`INSERT INTO external_contacts (user_id, name) VALUES (?, ?)`, [req.user.id, name]);
+    });
     res.status(201).json({ contact: { id: result.lastID, name } });
   } catch (error) {
     T.respondError(res, isDuplicateContactError(error) ? nameTaken() : error, 'Failed to create the contact');
@@ -350,8 +372,13 @@ router.put('/transfers/external/contacts/:id', async (req, res) => {
     const id = T.positiveInt(req.params.id, 'contact id');
     const name = optionalText(req.body?.name, 'name', 100);
     if (!name) throw T.invalid('name is required');
-    const result = await db.run(`UPDATE external_contacts SET name = ? WHERE id = ? AND user_id = ?`, [name, id, req.user.id]);
-    if (!result.changes) throw T.notFound('Contact not found');
+    await withTransaction(async () => {
+      const contact = await db.get(`SELECT id FROM external_contacts WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+      if (!contact) throw T.notFound('Contact not found');
+      // Its own name in another case is a rename, not a clash.
+      await assertContactNameFree(req.user.id, name, id);
+      await db.run(`UPDATE external_contacts SET name = ? WHERE id = ? AND user_id = ?`, [name, id, req.user.id]);
+    });
     res.json({ contact: { id, name } });
   } catch (error) {
     T.respondError(res, isDuplicateContactError(error) ? nameTaken() : error, 'Failed to update the contact');
