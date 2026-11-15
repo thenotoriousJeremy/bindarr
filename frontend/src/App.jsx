@@ -23,6 +23,7 @@ import { navBarTabs, moreTabs, litNavTab, collectionTarget, isCollectionView } f
 import { NAV_TAB_META } from './utils/navTabMeta';
 import { wishlist } from './utils/wishlist';
 import CollectionViews from './components/CollectionViews';
+import { oidcErrorKey } from './utils/oidcErrors';
 
 // View components are code-split so heavy deps (recharts in the chart views)
 // load on demand instead of in the initial bundle. A view whose chunk an upgrade
@@ -300,7 +301,8 @@ function App() {
       if (!verifier) return;
 
       if (ret.error) {
-        showToast(ret.error);
+        // A code (routes/auth.js oidcReturn), never text a link could plant.
+        showToast(t(oidcErrorKey(ret.error)));
         return;
       }
       fetch('/api/auth/oidc/exchange', {

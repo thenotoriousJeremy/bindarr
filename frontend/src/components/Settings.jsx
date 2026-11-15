@@ -6,6 +6,7 @@ import RiotNotice from './RiotNotice';
 import { CURRENCIES, getCurrency, setCurrency } from '../utils/formatPrice';
 import { LOCALES, localeName, useT } from '../utils/i18n';
 import { apiErrorText } from '../utils/apiError';
+import { backupForUpload } from '../utils/backupUpload';
 import { REPO_URL } from '../utils/repo';
 import { saveFile } from '../utils/saveFile';
 import NotificationSettings from './NotificationSettings';
@@ -241,14 +242,14 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice, onDataChanged 
       const response = await fetch('/api/backup/restore', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ backup }),
+        body: JSON.stringify({ backup: backupForUpload(backup, user?.role) }),
       });
       const result = await response.json().catch(() => ({}));
       if (response.ok) {
         showToast(t('settings.restoreOk', { cards: result.cards, locations: result.locations, decks: result.decks }));
         dataChanged();
       } else {
-        showToast(t('settings.restoreFailed', { error: result.error || t('settings.unknownError') }));
+        showToast(t('settings.restoreFailed', { error: apiErrorText(t, result, 'settings.unknownError') }));
       }
     } catch (err) {
       console.error(err);

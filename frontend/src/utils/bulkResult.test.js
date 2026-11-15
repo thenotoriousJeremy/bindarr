@@ -41,6 +41,10 @@ test("what only the server can say is left in the server's words", () => {
   assert.equal(bulkResultText(tEn, 'link_sealed_unit', { unit_id: 9, total: 5 }, { message: 'Linked…', affected: 2 }), 'Linked…');
   assert.equal(bulkResultText(tEn, 'some_future_action', null, { message: 'Did a thing', affected: 1 }), 'Did a thing');
   assert.equal(bulkResultText(tEn, 'move', '12', { message: 'Moved 1, skipped 1', affected: 1, skipped: 1 }), 'Moved 1, skipped 1');
+  // A container's rules refused some cards (they stay where they were): the
+  // count of what moved alone would hide that.
+  const refused = { message: 'Moved 2 card(s); 1 left where it was: the container does not take that card', affected: 2, rule_rejected: 1 };
+  assert.equal(bulkResultText(tEn, 'move', '12', refused), refused.message);
 });
 
 test('an answer with no count or message still says something', () => {

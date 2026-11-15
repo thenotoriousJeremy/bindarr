@@ -23,7 +23,8 @@ const LIST_TYPES = { collection: 'bulk.result.movedToCollection', wishlist: 'bul
 export function bulkResultKey(action, value, data) {
   if (!data || typeof data.affected !== 'number') return null;
   // Part of the selection was left out, for a reason only the server states.
-  if (data.rejected > 0 || data.skipped > 0 || data.container_full) return null;
+  // rule_rejected: cards a container's rules refused, left where they were.
+  if (data.rejected > 0 || data.skipped > 0 || data.rule_rejected > 0 || data.container_full) return null;
   if (action === 'list_type') return LIST_TYPES[value] || null;
   // A move to no container is a move to Unsorted.
   if (action === 'move') return value ? 'bulk.result.moved' : 'bulk.result.unfiled';

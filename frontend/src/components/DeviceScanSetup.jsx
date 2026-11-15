@@ -69,6 +69,12 @@ function DeviceScanSetup({ gate = false, children = null, showToast }) {
       </div>
       <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.5 }}>{t('deviceScan.intro')}</p>
 
+      {/* A WebView without wasm SIMD cannot run the models (device/wasmSupport.js), so
+          nothing is offered for download; scanning still works through a server. */}
+      {state.supported === false && (
+        <div role="status" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>{t('deviceScan.unsupported')}</div>
+      )}
+
       {state.catalogs.map(c => {
         const ready = c.present && state.modelsReady;
         const size = c.bytes + missingModels;
@@ -90,7 +96,7 @@ function DeviceScanSetup({ gate = false, children = null, showToast }) {
                   </button>
                 )}
               </div>
-            ) : (
+            ) : state.supported === false ? null : (
               <button type="button" className="btn btn-primary btn-sm" onClick={() => download(c.game)} disabled={!!busyName}
                 style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.8rem' }}>
                 <Download size={14} /> {t('deviceScan.download', { size: mb(size) })}
@@ -110,7 +116,7 @@ function DeviceScanSetup({ gate = false, children = null, showToast }) {
           )}
         </div>
       )}
-      {state.error && !busyName && (
+      {state.error && !busyName && state.supported !== false && (
         <div style={{ fontSize: '0.8rem', color: '#f87171' }}>{t('deviceScan.errDownload', { error: state.error })}</div>
       )}
       {pokemonReady && productMap && (productMap.progress || !productMap.rows) && (

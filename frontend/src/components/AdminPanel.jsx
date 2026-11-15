@@ -533,7 +533,7 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
                       </td>
                       <td style={{ fontWeight: 600 }}>{t('admin.userCards', { count: user.total_cards })}</td>
                       <td style={{ fontWeight: 700, color: 'var(--accent-yellow)' }}>
-                        {currencySymbol()}{(user.total_value || 0).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {currencySymbol(user.value_currency)}{(user.total_value || 0).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                       <td>
                         <div style={{ display: 'flex', gap: '0.35rem' }}>

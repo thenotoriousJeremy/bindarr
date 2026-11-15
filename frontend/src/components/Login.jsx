@@ -5,29 +5,13 @@ import { useT } from '../utils/i18n';
 import { apiErrorText } from '../utils/apiError';
 import { getOrCreateVerifier, challengeFor } from '../utils/nativeOidc';
 import Logo from './Logo';
+import { oidcErrorKey } from '../utils/oidcErrors';
 
 // Must match OWNER_USERNAME in backend/src/routes/auth.js — the bootstrap route
 // ignores whatever username is posted and always creates `admin`.
 const OWNER_USERNAME = 'admin';
 
-// The server answers a failed SSO sign-in with one of these codes in ?oidc_error=
-// (routes/auth.js oidcReturn), never with text: a link can put anything in a URL,
-// and the login screen would have shown it as the server's own words. Anything
-// else gets the generic message.
-const OIDC_ERRORS = {
-  access_denied: 'login.oidcAccessDenied',
-  idp_error: 'login.oidcIdpError',
-  missing_code: 'login.oidcRestart',
-  state_invalid: 'login.oidcRestart',
-  nonce_mismatch: 'login.oidcRestart',
-  id_token_expired: 'login.oidcRestart',
-  browser_mismatch: 'login.oidcBrowserMismatch',
-  username_taken: 'login.oidcUsernameTaken',
-  identity_conflict: 'login.oidcIdentityConflict',
-  no_account: 'login.oidcNoAccount',
-  setup_code_required: 'login.oidcSetupCodeRequired',
-  setup_code_invalid: 'login.setupCodeInvalid',
-};
+// SSO error codes in ?oidc_error= map to messages in utils/oidcErrors.js.
 
 // The setup code the server asks for (backend routes/auth.js "Claiming a fresh
 // install"), refused with one of these codes.
@@ -75,7 +59,7 @@ function Login({ onLoginSuccess }) {
       if (oidcErr) {
         // Clean URL parameter without reloading
         window.history.replaceState({}, document.title, window.location.pathname);
-        return { key: OIDC_ERRORS[oidcErr] || 'login.errOidcFailed' };
+        return { key: oidcErrorKey(oidcErr) };
       }
     } catch { /* ignore */ }
     return '';

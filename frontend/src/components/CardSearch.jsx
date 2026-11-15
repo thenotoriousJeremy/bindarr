@@ -535,7 +535,13 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       });
 
       if (response.ok) {
-        showToast(t('search.addedToCollection', { name: displayName(selectedCard) }));
+        const added = await response.json().catch(() => ({}));
+        const place = added.placement?.label || null;
+        const qty = parseInt(quantity, 10) > 1 ? `${parseInt(quantity, 10)}× ` : '';
+        // Each copy is filed on its own; one with no room stays in Unsorted (`unplaced`).
+        if (place && added.unplaced > 0) showToast(t('scan.addedSomeUnplaced', { qty, name: displayName(selectedCard), place, count: added.unplaced }));
+        else if (!place && added.container_full) showToast(t('scan.addedFullPlain', { name: displayName(selectedCard) }));
+        else showToast(t('search.addedToCollection', { name: displayName(selectedCard) }));
         
         // Trigger confetti for rare/valuable cards!
         const rarity = (selectedCard.rarity || '').toLowerCase();

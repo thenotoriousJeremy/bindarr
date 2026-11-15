@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import confetti from 'canvas-confetti';
+// Loaded on the first ultra-rare, so the scanner's chunk does not carry it.
+const confetti = (options) => import('canvas-confetti').then(m => m.default(options)).catch(() => {});
 import { getCardDisplayName } from '../../utils/langHelper';
 import { resolveCardPrice } from '../../utils/resolveCardPrice';
 import { langName, langCode } from '../../utils/languages';
@@ -117,7 +118,10 @@ export function useAddFlow({
         const qtyLabel = qty > 1 ? `${qty}× ` : '';
         const placementLabel = data.placement?.label || null;
         const cardDisplayName = getCardDisplayName(card.name, autoLanguage, card.printed_name);
-        if (placementLabel) {
+        // Each copy is filed on its own; one with no room stays in Unsorted (`unplaced`).
+        if (placementLabel && data.unplaced > 0) {
+          showToast(t('scan.addedSomeUnplaced', { qty: qtyLabel, name: cardDisplayName, place: placementLabel, count: data.unplaced }));
+        } else if (placementLabel) {
           showToast(t('scan.addedTo', { qty: qtyLabel, name: cardDisplayName, place: placementLabel }));
         } else if (data.container_full) {
           showToast(t('scan.addedFull', { qty: qtyLabel, name: cardDisplayName }));
