@@ -49,6 +49,10 @@ const SCRYFALL_MIN_GAP_MS = 100 * GAP_SCALE; // floor for "all other methods" (1
 // window Scryfall asked for has passed. Default 60s: that is what its 429 body
 // asks for when no Retry-After header is sent.
 const SCRYFALL_DEFAULT_COOLDOWN_MS = 60000;
+// The longest pause a Retry-After can impose. Scryfall asks for seconds to a
+// minute; a header claiming an hour (or a date a clock skew pushed into next week)
+// would otherwise hold every background job for that long.
+const SCRYFALL_MAX_COOLDOWN_MS = 5 * 60 * 1000;
 let scryfallQueue = Promise.resolve();
 let lastScryfallAt = 0;
 let cooldownUntil = 0;
@@ -86,10 +90,20 @@ function waitFor(url) {
   };
 }
 
+// Retry-After as seconds or as an HTTP-date; null when absent or unreadable.
+function retryAfterMs(value) {
+  if (value == null || value === '') return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : null;
+}
+
 function noteRateLimit(error) {
   if (!error.response || error.response.status !== 429) return false;
-  const ra = parseInt(error.response.headers?.['retry-after'], 10);
-  const waitMs = Number.isFinite(ra) ? ra * 1000 : SCRYFALL_DEFAULT_COOLDOWN_MS;
+  if (error.code === 'SCRYFALL_COOLDOWN') return true;   // our own refusal, not Scryfall's
+  const asked = retryAfterMs(error.response.headers?.['retry-after']);
+  const waitMs = Math.min(asked ?? SCRYFALL_DEFAULT_COOLDOWN_MS, SCRYFALL_MAX_COOLDOWN_MS);
   const until = Date.now() + waitMs;
   if (until > cooldownUntil) {
     cooldownUntil = until;
@@ -98,10 +112,25 @@ function noteRateLimit(error) {
   return true;
 }
 
-function scryGet(url, config) {
+// An interactive request (a search, a card the user is looking at) refuses during
+// a 429 cooldown instead of waiting it out: a minute, or whatever Retry-After said,
+// is not something to hold a person's search for. It refuses with a 429 of its
+// own, which every caller already turns into RATE_LIMIT_EXCEEDED — or serves from
+// the cache. Background work (price sweeps, catalog builds, set refreshes) still
+// queues behind the cooldown, which is what it is for.
+function cooldownError() {
+  return Object.assign(new Error(`Scryfall rate limit: requests paused for ${Math.ceil((cooldownUntil - Date.now()) / 1000)}s`), {
+    code: 'SCRYFALL_COOLDOWN', response: { status: 429, headers: {}, data: {} },
+  });
+}
+const coolingDown = () => cooldownUntil > Date.now();
+
+function scryGet(url, config, { interactive = false } = {}) {
+  if (interactive && coolingDown()) return Promise.reject(cooldownError());
   const run = scryfallQueue.then(async () => {
     // Re-check after waiting: a 429 may have armed the cooldown while queued.
     for (let w = waitFor(url); w.ms > 0; w = waitFor(url)) {
+      if (interactive && coolingDown()) throw cooldownError();
       await new Promise(r => setTimeout(r, w.ms));
     }
     const { key } = endpointGap(url);
@@ -160,14 +189,16 @@ async function scryPostRetried(url, body, config, retries = 4) {
 // Queue + 429 retry, returning the raw axios response (callers that need
 // has_more/next_page/total_cards can't use fetchFromScryfall, which strips to
 // .data.data). The wait itself is handled by the shared cooldown above, so a
-// retry here just re-queues behind it.
-async function scryGetRetried(url, config, retries = 4) {
+// retry here just re-queues behind it. `interactive` retries only a 429 whose
+// pause is already over (Retry-After: 0), and otherwise fails fast (scryGet).
+async function scryGetRetried(url, config, retries = 4, { interactive = false } = {}) {
   let lastError;
   for (let i = 0; i < retries; i++) {
     try {
-      return await scryGet(url, config);
+      return await scryGet(url, config, { interactive });
     } catch (error) {
       lastError = error;
+      if (interactive && coolingDown()) throw error;
       if (error.response && error.response.status === 429 && i < retries - 1) continue;
       throw error;
     }
@@ -473,7 +504,8 @@ async function fetchWindow(q, lang, offset, limit, order) {
   while (out.length < limit) {
     let url = `/cards/search?q=${encodeURIComponent(scoped.q)}&page=${page}${scoped.params}`;
     if (order) url += `&order=${order}`;
-    const resp = await scryGetRetried(url);
+    // A search someone is waiting on: refused during a 429 pause, not held.
+    const resp = await scryGetRetried(url, undefined, 4, { interactive: true });
     if (resp.data && resp.data.total_cards != null) total = resp.data.total_cards;
     out.push(...(((resp.data && resp.data.data) || []).slice(skip)));
     skip = 0;
@@ -890,7 +922,7 @@ async function getPrintingInLang(setCode, number, lang) {
   );
   if (cached) return parseCardRow(cached);
   try {
-    const resp = await scryGet(`/cards/${encodeURIComponent(String(setCode).toLowerCase())}/${encodeURIComponent(number)}/${code}`);
+    const resp = await scryGet(`/cards/${encodeURIComponent(String(setCode).toLowerCase())}/${encodeURIComponent(number)}/${code}`, undefined, { interactive: true });
     if (!resp.data) return null;
     const norm = normalizeCard(resp.data, name);
     // Only keep it if Scryfall really answered in that language. A 404 is the
@@ -911,7 +943,7 @@ async function getCardById(cardId) {
   const cached = await db.get(`SELECT * FROM card_cache WHERE id = ?`, [cardId]);
   if (cached) return parseCardRow(cached);
   try {
-    const resp = await scryGet(`/cards/${rawId}`);
+    const resp = await scryGet(`/cards/${rawId}`, undefined, { interactive: true });
     if (resp.data) {
       const norm = normalizeCard(resp.data);
       await cacheCards([norm]);
@@ -924,4 +956,6 @@ async function getCardById(cardId) {
 // `client` and `fetchWindow` are exported for tests (stub the axios adapter),
 // mirroring how tcgApi exposes tcgClient.
 module.exports = { searchCards, normalizeCard, cacheCards, getCardsBySet, fetchAndCacheSets, updateCollectionPrices, getCardById, getPrintingInLang, scryGetRetried, bulkFetchByIdentifier, client, fetchWindow,
-  setPriceSource, getPriceSource, loadPriceSource, repriceForSourceChange, MTG_PRICE_SOURCES };
+  setPriceSource, getPriceSource, loadPriceSource, repriceForSourceChange, MTG_PRICE_SOURCES,
+  // For tests: how long the 429 pause has left, in ms (0 when none).
+  cooldownRemainingMs: () => Math.max(0, cooldownUntil - Date.now()), SCRYFALL_MAX_COOLDOWN_MS };
