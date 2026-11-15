@@ -1,79 +1,30 @@
-const axios = require('axios');
 const db = require('./db');
 const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
 const { cacheNormalizedCards } = require('./utils/cardCache');
-const metrics = require('./utils/metrics');
+const { createProviderClient } = require('./utils/providerClient');
 
-const { version } = require('../package.json');
-const USER_AGENT = `Bindarr/${version} (+https://github.com/thenotoriousJeremy/bindarr)`;
-
-const client = axios.create({
-  baseURL: 'https://api.lorcast.com/v0',
-  timeout: 10000,
-  headers: {
-    'User-Agent': USER_AGENT,
-    'Accept': 'application/json',
-  },
-});
-metrics.instrumentAxiosClient(client, 'lorcast');
-
-// Rate limiting: 60ms gap between outgoing Lorcast requests + 429 backoff
+// Rate limiting: 60ms gap between outgoing Lorcast requests, and a pause for
+// every request after a 429 (Retry-After, else 30s). The queue, the pause and
+// the retries are utils/providerClient's.
 const LORCAST_MIN_GAP_MS = 60;
 // A price sweep whose first this-many requests all fail gives up and reports it.
 const SWEEP_ABORT_AFTER = 5;
-let lorcastQueue = Promise.resolve();
-let lastLorcastAt = 0;
-let cooldownUntil = 0;
 
-function waitFor() {
-  const now = Date.now();
-  return Math.max(cooldownUntil - now, LORCAST_MIN_GAP_MS - (now - lastLorcastAt), 0);
-}
+const lorcast = createProviderClient({
+  name: 'lorcast',
+  label: 'Lorcast',
+  baseURL: 'https://api.lorcast.com/v0',
+  timeout: 10000,
+  minGapMs: LORCAST_MIN_GAP_MS,
+  defaultCooldownMs: 30000,
+  attempts: 3,
+});
+const { client } = lorcast;
 
-function noteRateLimit(error) {
-  if (!error.response || error.response.status !== 429) return false;
-  const ra = parseInt(error.response.headers?.['retry-after'], 10);
-  const waitMs = Number.isFinite(ra) ? ra * 1000 : 30000;
-  const until = Date.now() + waitMs;
-  if (until > cooldownUntil) {
-    cooldownUntil = until;
-    console.warn(`Lorcast rate-limited us — pausing all Lorcast traffic for ${Math.round(waitMs / 1000)}s.`);
-  }
-  return true;
-}
-
-function lorcastGet(url, config) {
-  const run = lorcastQueue.then(async () => {
-    for (let w = waitFor(); w > 0; w = waitFor()) {
-      await new Promise(r => setTimeout(r, w));
-    }
-    lastLorcastAt = Date.now();
-    try {
-      return await client.get(url, config);
-    } catch (error) {
-      noteRateLimit(error);
-      throw error;
-    }
-  });
-  lorcastQueue = run.then(() => {}, () => {});
-  return run;
-}
-
-async function lorcastGetRetried(url, config, retries = 3) {
-  let lastError;
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await lorcastGet(url, config);
-    } catch (error) {
-      lastError = error;
-      if (error.response && error.response.status === 429 && i < retries - 1) continue;
-      throw error;
-    }
-  }
-  throw lastError;
-}
+// Up to three tries of a request that hit Lorcast's rate limit.
+const lorcastGetRetried = (url, config, retries = 3) => lorcast.getRetried(url, config, { tries: retries });
 
 function formatRarity(r) {
   if (!r) return 'Common';
