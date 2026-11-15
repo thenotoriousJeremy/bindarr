@@ -29,16 +29,39 @@ export const locationCollator = new Intl.Collator(undefined, { numeric: true, se
 // Deck Creation Constants. The format lists come from the rules table
 // (shared/deckRules.mjs), so a format added there is offered here too.
 export const DECK_CATEGORIES = ['Competitive', 'Casual', 'Tournament', 'Theorycraft', 'Proxy', 'Trade'];
+// A swatch's name is shown as t(`deck.accentName.${key}`).
 export const DECK_ACCENT_COLORS = [
-  { name: 'Gold', hex: '#eab308' },
-  { name: 'Red', hex: '#ef4444' },
-  { name: 'Blue', hex: '#3b82f6' },
-  { name: 'Green', hex: '#10b981' },
-  { name: 'Purple', hex: '#a855f7' },
-  { name: 'Slate', hex: '#64748b' },
-  { name: 'Pink', hex: '#ec4899' },
-  { name: 'Orange', hex: '#f97316' },
+  { key: 'gold', hex: '#eab308' },
+  { key: 'red', hex: '#ef4444' },
+  { key: 'blue', hex: '#3b82f6' },
+  { key: 'green', hex: '#10b981' },
+  { key: 'purple', hex: '#a855f7' },
+  { key: 'slate', hex: '#64748b' },
+  { key: 'pink', hex: '#ec4899' },
+  { key: 'orange', hex: '#f97316' },
 ];
+
+// A deck's category is stored as the English name above and shown translated. A
+// category not in the list (an older build's, or set through the API) keeps its
+// stored text rather than being mislabelled.
+export const deckCategoryLabel = (t, category) => (DECK_CATEGORIES.includes(category)
+  ? t(`deck.categoryName.${category.toLowerCase()}`)
+  : category);
+
+// The heading a group of deck cards is listed under. Groups are the English card
+// types the grouping matches on (cardGroup, groupOrder, plus the command zone);
+// only the heading is translated. 'Other' is keyed 'misc': a key ending in a
+// plural category is read as a counted phrase.
+const GROUP_KEYS = {
+  Commander: 'commander',
+  'Pokémon': 'pokemon', Trainer: 'trainer', Energy: 'energy',
+  Creature: 'creature', Planeswalker: 'planeswalker', Instant: 'instant', Sorcery: 'sorcery',
+  Enchantment: 'enchantment', Artifact: 'artifact', Battle: 'battle', Land: 'land',
+  Character: 'character', Action: 'action', Item: 'item', Location: 'location',
+  Legend: 'legend', Champion: 'champion', Unit: 'unit', Spell: 'spell', Gear: 'gear', Rune: 'rune', Battlefield: 'battlefield',
+  Other: 'misc',
+};
+export const deckGroupLabel = (t, group) => (GROUP_KEYS[group] ? t(`deck.group.${GROUP_KEYS[group]}`) : group);
 
 // MTG card-type buckets, read off the parsed type line stored in subtypes.
 const MTG_MAIN_TYPES = ['Creature', 'Planeswalker', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Battle', 'Land'];

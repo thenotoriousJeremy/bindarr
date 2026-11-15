@@ -1,7 +1,8 @@
-// The nav-bar tabs a user may show or hide (users.nav_tabs). Dashboard,
-// Collection and Settings are always shown, so they are not here. The SPA's
-// utils/navTabs.js holds the same list with the defaults and the ordering; this
-// side only checks what is stored.
+// The nav-bar tabs a user may pin or unpin (users.nav_tabs). Dashboard and
+// Collection are always on the bar and Settings and Admin are header buttons,
+// so they are not here; an unpinned tab stays reachable under the bar's More
+// menu. The SPA's utils/navTabs.js holds the same list with the defaults and the
+// ordering; this side only checks what is stored.
 const OPTIONAL_NAV_TABS = ['add-cards', 'sets', 'storage', 'deckbuilder', 'lists', 'notes', 'sealed'];
 
 // What to store for a PUT body's nav_tabs. null (or '') resets to the default

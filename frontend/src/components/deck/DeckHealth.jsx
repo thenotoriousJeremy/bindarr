@@ -10,6 +10,7 @@ export default function DeckHealth({ activeDeck, deckGame, deckRules, totalDeckC
   // Everything the deck currently breaks under the rules its format holds it to
   // (the same table the server enforces).
   const ruleWarnings = activeDeck ? deckWarnings({ game: deckGame, format: activeDeck.format, cards: activeDeck.cards }) : [];
+  const basicCount = (activeDeck?.cards || []).filter(c => isBasicEnergyOrLand(c, deckGame)).reduce((s, c) => s + c.quantity, 0);
 
   return (
     <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -27,16 +28,18 @@ export default function DeckHealth({ activeDeck, deckGame, deckRules, totalDeckC
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', fontSize: '0.8rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
           <span>{t('deck.targetDeckSize')}</span>
-          <strong style={{ color: totalDeckCardsCount === targetDeckCardsCount ? 'var(--type-grass)' : 'var(--text-strong)' }}>{totalDeckCardsCount}/{targetDeckCardsCount} {t('deck.cardCapacity')}</strong>
+          <strong style={{ color: totalDeckCardsCount === targetDeckCardsCount ? 'var(--type-grass)' : 'var(--text-strong)' }}>{t('deck.cardsOfTarget', { total: totalDeckCardsCount, count: targetDeckCardsCount })}</strong>
         </div>
+        {/* The counted phrases carry their number ("12 titles"), so it is not
+            written in front of them as well. */}
         <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
           <span>{t('deck.uniqueCards')}</span>
-          <strong style={{ color: 'var(--text-strong)' }}>{activeDeck.cards.length} {deckGame === 'mtg' ? t('deck.titlesCount', { count: activeDeck.cards.length }) : t('deck.speciesCount', { count: activeDeck.cards.length })}</strong>
+          <strong style={{ color: 'var(--text-strong)' }}>{deckGame === 'mtg' ? t('deck.titlesCount', { count: activeDeck.cards.length }) : t('deck.speciesCount', { count: activeDeck.cards.length })}</strong>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
           <span>{t(deckGame === 'mtg' ? 'deck.basicLands' : 'deck.basicEnergy')}</span>
           <strong style={{ color: 'var(--accent-yellow)' }}>
-            {activeDeck.cards.filter(c => isBasicEnergyOrLand(c, deckGame)).reduce((s, c) => s + c.quantity, 0)} {deckGame === 'mtg' ? t('deck.basicLandsCount', { count: activeDeck.cards.filter(c => isBasicEnergyOrLand(c, deckGame)).reduce((s, c) => s + c.quantity, 0) }) : t('deck.basicEnergyCount', { count: activeDeck.cards.filter(c => isBasicEnergyOrLand(c, deckGame)).reduce((s, c) => s + c.quantity, 0) })}
+            {t(deckGame === 'mtg' ? 'deck.basicLandsCount' : 'deck.basicEnergyCount', { count: basicCount })}
           </strong>
         </div>
       </div>

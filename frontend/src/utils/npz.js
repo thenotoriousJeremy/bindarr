@@ -101,8 +101,12 @@ export function parseNpy(b) {
   if (descr === '|O') throw new Error('pickled object array (needs allow_pickle)');
   const T = DTYPES[descr];
   if (!T) throw new Error(`unsupported dtype ${descr}`);
-  // Copied: a member's payload need not sit on an element-size boundary, and a
-  // typed-array view over a misaligned offset throws.
+  // A view over the bytes already in memory when they sit on an element-size
+  // boundary, which an inflated member always does (npy pads its header to 64)
+  // and a stored one does when its offset in the zip happens to. Copying there
+  // doubled the peak for the Magic catalog's 56 MB for nothing. A misaligned
+  // payload is still copied: a typed-array view over it throws.
+  if (body.byteOffset % T.BYTES_PER_ELEMENT === 0) return { shape, data: new T(body.buffer, body.byteOffset, n), descr };
   const bytes = body.slice(0, n * T.BYTES_PER_ELEMENT);
   return { shape, data: new T(bytes.buffer, 0, n), descr };
 }

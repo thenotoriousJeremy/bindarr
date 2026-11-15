@@ -44,26 +44,8 @@ async function warnIfProviderSunsetting() {
   } catch { /* a boot-time notice must never be the thing that stops the boot */ }
 }
 
-const authRoutes = require('./routes/auth');
-const sharedRoutes = require('./routes/shared');
-const adminRoutes = require('./routes/admin');
-const collectionRoutes = require('./routes/collection');
-const storageRoutes = require('./routes/storage');
-const statsRoutes = require('./routes/stats');
-const importExportRoutes = require('./routes/importExport');
-const setsRoutes = require('./routes/sets');
-const decksRoutes = require('./routes/decks');
-const listsRoutes = require('./routes/lists');
-const settingsRoutes = require('./routes/settings');
-const notesRoutes = require('./routes/notes');
-const cardArtRoutes = require('./routes/cardArt');
-const sealedRoutes = require('./routes/sealed');
-const backupRoutes = require('./routes/backup');
-const trashRoutes = require('./routes/trash');
-const binderArtRoutes = require('./routes/binderArt');
-const notificationRoutes = require('./routes/notifications');
+// The routers themselves are listed once, in routes/mounts.js (mounted below).
 const notify = require('./notify');
-const fxRoutes = require('./routes/fx');
 const { authenticateToken } = require('./middleware/auth');
 const { startHttps, selfSignedTls } = require('./utils/tls');
 const { PWA_FILES, setPwaHeaders } = require('./utils/serviceWorkerHeaders');
@@ -94,7 +76,7 @@ app.use(metrics.middleware);
 // anyone reads these logs.
 function checkScanModels() {
   const fs = require('fs');
-  const dir = process.env.CV_MODEL_DIR || path.join(__dirname, '..', 'data', 'models');
+  const dir = require('./utils/modelAssets').MODEL_DIR;
   try {
     fs.mkdirSync(dir, { recursive: true });
     const probe = path.join(dir, `.write-probe-${process.pid}`);
@@ -129,10 +111,12 @@ checkScanModels();
 // and the rate limiters use the real client IP from X-Forwarded-For instead of
 // the proxy's. Leave it UNSET when the app is directly exposed: trusting that
 // header otherwise lets any client spoof its IP and defeat the rate limiter.
-// Accepts a hop count ("1"), "true", or an express trust-proxy string ("loopback").
+// Accepts a hop count ("1") or an express trust-proxy string ("loopback"); "true"
+// means one hop, never "trust every hop" (middleware/auth.js trustProxySetting).
 if (process.env.TRUST_PROXY) {
-  const tp = process.env.TRUST_PROXY;
-  app.set('trust proxy', tp === 'true' ? true : (Number.isNaN(Number(tp)) ? tp : Number(tp)));
+  const tp = require('./middleware/auth').trustProxySetting(process.env.TRUST_PROXY);
+  if (tp.warning) console.warn(`STARTUP: ${tp.warning}`);
+  if (tp.value !== undefined) app.set('trust proxy', tp.value);
 }
 
 // Content Security Policy, enforced. Identification is server-side (the client
@@ -194,13 +178,12 @@ app.use(helmet({
         'https://cards.lorcast.io', 'https://media.rarebit.app', 'https://cmsassets.rgpub.io',
         'https://tcgplayer-cdn.tcgplayer.com'
       ],
-      // index.html loads Antonio, Outfit and Plus Jakarta Sans from Google Fonts,
-      // which is two separate origins: the stylesheet comes from fonts.googleapis
-      // .com and the .woff2 files it then references come from fonts.gstatic.com.
+      // The webfonts are self-hosted (frontend/src/fonts.css, files in
+      // public/fonts), so neither styles nor fonts come from another origin.
       // 'unsafe-inline' because React renders a few <style> blocks (the scanner and
       // the deck builder); style cannot run script, so it is the cheap one to allow.
-      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-      fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      fontSrc: ["'self'", 'data:'],
       objectSrc: ["'none'"],
       upgradeInsecureRequests: null
     }
@@ -266,9 +249,17 @@ const BIG_BODY_PATHS = ['/api/import', '/api/scan-match', '/api/search'];
 // A full backup restore (routes/backup.js) can be far larger still; it gets its own
 // limit below the gate, like the paths above.
 const BACKUP_BODY_PATH = '/api/backup';
-const isBigBodyPath = (p) => [...BIG_BODY_PATHS, BACKUP_BODY_PATH].some(b => p === b || p.startsWith(`${b}/`));
+// Card art uploads (an admin's, base64 in JSON, up to 8 MB of image) are parsed by
+// routes/cardArt.js itself, behind its own admin gate: that router sits above the
+// /api gate, where a parser here would read the body before anyone signed in.
+const CARD_ART_BODY_PATH = '/api/card-art';
+const isBigBodyPath = (p) => [...BIG_BODY_PATHS, BACKUP_BODY_PATH, CARD_ART_BODY_PATH].some(b => p === b || p.startsWith(`${b}/`));
 const smallJson = express.json({ limit: '1mb' });
 app.use((req, res, next) => (isBigBodyPath(req.path) ? next() : smallJson(req, res, next)));
+// The restore's parsers and limiter, mounted below the gate.
+const adminBackupJson = express.json({ limit: '200mb' });
+const memberBackupJson = express.json({ limit: '100mb' });
+const { importLimiter } = require('./middleware/auth');
 // Express 5's parsers leave req.body undefined when a request has no JSON body;
 // Express 4 left {}. Routes destructure req.body, so keep the 4 default: a missing
 // body then fails validation with a 400 instead of a TypeError's 500. The big-body
@@ -291,13 +282,14 @@ app.use((req, res, next) => {
 // entirely while a build is running, since catalog.start refuses a second one
 // anyway.
 //
-// Each update is SCOPED to the sets released since that catalog was built
-// (catalog.setsBehind), so the cost is the new sets' card lists and images and
-// nothing else. It used to rebuild the whole game: ~950 Scryfall requests and a
-// rewrite of every cached Magic card, every week, because the count it went by
-// could never reach zero (digital-only and unreachable sets), and a catalog
-// scoped to a few sets grew into a whole-game build. Every behind catalog is
-// updated in turn, not just the first one found.
+// Each update is SCOPED to the sets that catalog is missing (catalog.setsBehind;
+// a scoped catalog's own sets only), so the cost is the new sets' card lists and
+// images and nothing else. It used to rebuild the whole game: ~950 Scryfall
+// requests and a rewrite of every cached Magic card, every week, because the count
+// it went by could never reach zero (digital-only and unreachable sets), and a
+// catalog scoped to a few sets grew into a whole-game build. Every behind catalog
+// is updated in turn, the one built longest ago first (catalog.autoUpdates), so no
+// game waits behind another.
 //
 // Runs detached: the weekly job does not wait out hours of builds.
 //
@@ -319,9 +311,9 @@ async function autoUpdateCatalogs() {
   (async () => {
     for (const c of behind) {
       if (catalog.state() || shuttingDown) return;
-      console.log(`catalog: ${c.game}/${c.lang} is ${c.pending.length} set(s) behind — building just those (CATALOG_AUTO_UPDATE=0 to disable)`);
+      console.log(`catalog: ${c.game}/${c.lang} is missing ${c.sets.length} set(s) — building just those (CATALOG_AUTO_UPDATE=0 to disable)`);
       try {
-        catalog.start(c.game, c.lang, { sets: c.pending });
+        catalog.start(c.game, c.lang, { sets: c.sets });
       } catch (err) {
         console.error(`Catalog auto-update for ${c.game}/${c.lang} could not start: ${err.message}`);
         return;
@@ -334,7 +326,7 @@ async function autoUpdateCatalogs() {
 }
 
 // Every game's set list (utils/syncJobs, shared with device mode's embedded/).
-const { syncSets } = require('./utils/syncJobs');
+const { syncSets, checkSets } = require('./utils/syncJobs');
 
 const HOUR = 60 * 60 * 1000;
 
@@ -358,10 +350,24 @@ const scheduler = createScheduler({
       },
     },
     {
+      // Daily: one set-list request per provider (utils/syncJobs.checkSets), so a
+      // new release appears within a day rather than a week (#170). Its first day
+      // is counted from the first boot that has this job, not run at once: the
+      // boot's own set fill (startupTasks) may just have fetched the same lists.
+      name: 'sets-check',
+      every: () => 24 * HOUR,
+      since: () => null,
+      run: async () => {
+        await checkSets();
+        await require('./utils/compartmentSort').loadSetsCache(db);
+      },
+    },
+    {
       // Bindarr's downloaded scan catalogs (catalogReleases.js): one small manifest
       // request per installed catalog, then only a delta the install lacks. Daily
       // because a check that finds nothing costs one request, and an install that
-      // was off on build day then catches up a day later, not a week later.
+      // was off on build day then catches up a day later, not a week later. With
+      // nothing installed it makes no request at all.
       name: 'scan-catalog-releases',
       every: () => (process.env.CATALOG_AUTO_UPDATE === '0' ? 0 : 24 * HOUR),
       run: async () => {
@@ -591,6 +597,12 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Every other /api request waits for the migrations initDb is still running: a
+// 503 with Retry-After until then (routes/mounts.js whenReady). Below the health
+// probe, which answers throughout.
+const apiMounts = require('./routes/mounts');
+app.use('/api', apiMounts.whenReady(() => dbReady));
+
 // gzip. Mounted HERE, above the routes, because it has to see a response to
 // compress it: sitting below the /api mounts it only ever reached the static
 // bundle, and every JSON body — a 5000-row collection among them — went out raw.
@@ -602,20 +614,24 @@ app.use(compression());
 
 app.get('/metrics', (_req, res) => res.sendStatus(404));
 
+// --- API ROUTES ---
+// One table, routes/mounts.js, lists every router once, with what the phone app
+// does in its place; embedded/index.js mounts the same table on the device.
+// A router the phone also runs is a function there; a server-only one is named
+// by file, so the phone's bundle never includes it, and is required here.
+const mountApi = (side) => {
+  for (const entry of apiMounts.mountsFor(side)) {
+    app.use(entry.path, typeof entry.router === 'function' ? entry.router() : require(`./routes/${entry.router}`));
+  }
+};
+
 // --- PUBLIC API ROUTES ---
 // Everything mounted above the gate below is reachable without a session, and
-// each one is deliberate: login/register, a public shared collection, and the
-// card art that shared collection renders.
-app.use('/api/auth', authRoutes);
-app.use('/api/shared', sharedRoutes);
-// Admin carries its own authenticateToken + requireAdmin, so it sits above the
-// gate rather than being authenticated twice.
-app.use('/api/admin', adminRoutes);
-// Ahead of the bare '/api' mounts so nothing shadows it. Its reads are
-// deliberately unauthenticated — a public shared collection renders card art too.
-app.use('/api/card-art', cardArtRoutes);
-// ECB reference rates: public data, and a shared collection converts with them.
-app.use('/api/fx', fxRoutes);
+// each one is deliberate: login/register, a public shared collection, the card
+// art that shared collection renders, and exchange rates. Admin carries its own
+// authenticateToken + requireAdmin, so it sits above the gate too rather than
+// being authenticated twice.
+mountApi({ public: true });
 
 // --- AUTHENTICATION GATE ---
 // ONE gate for every remaining /api route, rather than a router.use in each file.
@@ -634,26 +650,18 @@ app.use('/api/fx', fxRoutes);
 // SELECT — four times per request.
 app.use('/api', authenticateToken);
 app.use(BIG_BODY_PATHS, express.json({ limit: '15mb' }));
-app.use(BACKUP_BODY_PATH, express.json({ limit: '200mb' }));
+// A restore is counted against the import budget BEFORE its body is read, so the
+// limiter, not the parser, is what turns away the twenty-first upload of the hour.
+// An admin's restore can bring card data for everyone (routes/backup.js); a
+// member's restores only their own rows and gets a smaller ceiling. Both are
+// middleware on the backup path, not a router: routes/backup.js answers it, from
+// routes/mounts.js like every other /api router.
+app.use(BACKUP_BODY_PATH,
+  (req, res, next) => (req.method === 'POST' && req.path === '/restore' ? importLimiter(req, res, next) : next()),
+  (req, res, next) => (req.user && req.user.role === 'admin' ? adminBackupJson : memberBackupJson)(req, res, next));
 
 // --- AUTHENTICATED API ROUTES ---
-app.use('/api/collection/trash', trashRoutes);
-app.use('/api', collectionRoutes);
-app.use('/api', storageRoutes);
-app.use('/api', statsRoutes);
-app.use('/api', importExportRoutes);
-app.use('/api', notesRoutes);
-app.use('/api', sealedRoutes);
-app.use('/api', backupRoutes);
-app.use('/api', binderArtRoutes);
-app.use('/api/sets', setsRoutes);
-app.use('/api/decks', decksRoutes);
-// Full paths inside (/lists, /decks/:id/missing-list, /cards/:id/decks), like collectionRoutes.
-app.use('/api', listsRoutes);
-app.use('/api/settings', settingsRoutes);
-app.use('/api/set-completion', require('./routes/setCompletion'));
-app.use('/api/precons', require('./routes/precons'));
-app.use('/api/notifications', notificationRoutes);
+mountApi({ public: false });
 
 // The service worker and the web app manifest: revalidated rather than cached
 // for a year, and the worker gets a policy that lets it cache card art. See
@@ -707,8 +715,14 @@ app.use((err, req, res, next) => {
   // body-parser's other refusals (broken JSON, a body that is a bare string,
   // number or null, an unsupported charset) are the client's mistake and carry a
   // 4xx. Answering them 500 blamed the server and logged a stack per request.
+  // body-parser marks each of its errors with a `type`; another exposed 4xx (a
+  // file send's 404, say) is answered with its own status, not called a body
+  // problem.
   if (err && err.expose && err.status >= 400 && err.status < 500) {
-    return res.status(err.status).json({ error: err.type === 'entity.parse.failed' ? 'Request body is not valid JSON' : 'Bad request body' });
+    if (typeof err.type === 'string') {
+      return res.status(err.status).json({ error: err.type === 'entity.parse.failed' ? 'Request body is not valid JSON' : 'Bad request body' });
+    }
+    return res.status(err.status).json({ error: err.status === 404 ? 'Not found' : 'Bad request' });
   }
   console.error(err);
   res.status(500).json({ error: 'Internal server error' });
@@ -750,11 +764,22 @@ if (metrics.prometheusEnabled) {
 
   const prometheusServer = prometheusApp.listen(prometheusPort, '0.0.0.0', () => {
     console.log(`Prometheus metrics listener running on port ${prometheusPort}${prometheusToken ? ' (bearer token required)' : ''}`);
+    // Documented, and still easy to miss: with no token, every address that can
+    // reach this port reads the usernames and each account's collection value.
+    if (!prometheusToken) {
+      console.warn(`STARTUP: PROMETHEUS_METRICS_TOKEN is not set, so /metrics on port ${prometheusPort} (all interfaces) `
+        + 'answers anyone who can reach it, usernames and collection values included. Set a token, or keep the port off untrusted networks.');
+    }
   });
   prometheusServer.on('error', error => {
     console.error(`Prometheus metrics listener failed on port ${prometheusPort}:`, error);
   });
 }
+
+// A fresh install's owner account is claimed with a one-time setup code
+// (routes/auth.js). It goes to the log once the database can say no account
+// exists; a failed start is handled above and says nothing here.
+dbInit.then(() => require('./routes/auth').announceSetupCode(), () => {});
 
 httpServer = app.listen(PORT, '0.0.0.0', async () => {
   console.log(`=========================================`);

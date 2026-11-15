@@ -2,7 +2,7 @@ const express = require('express');
 const db = require('../db');
 const { withTransaction } = require('../db');
 const tcgcsv = require('../tcgcsvApi');
-const { productCardCount, unitCardProgress } = require('../utils/sealedContents');
+const { productCardCount, unitCardProgress, recipeMemo } = require('../utils/sealedContents');
 const { allocateSealedUnitCost } = require('../utils/sealedCostAllocation');
 const {
   VISIBLE_UNIT_WHERE,
@@ -13,7 +13,9 @@ const {
 
 const router = express.Router();
 
-const GAMES = ['pokemon', 'mtg', 'lorcana'];
+// Every game in the registry. This was a hard-coded three, so Riftbound sealed
+// product could be neither recorded nor given a recipe.
+const GAMES = require('../utils/games').VALUES;
 // Units, extra units and recipe components are written one row each inside a
 // write transaction on the shared connection, so the count is bounded: nobody
 // buys more than a thousand of one product in one go, and an unbounded value
@@ -86,16 +88,37 @@ function assertCanToggleUnit(unit, userId, opened) {
   }
 }
 
-// A product's contents the user already matches by product identity: by
-// product_id when the purchase is catalog-linked, else an exact product_name
-// match. Returns the template plus its components, or null.
-async function matchTemplate(userId, productId, productName, game) {
+// The recipe for a product, by product identity: by product_id when the purchase
+// is catalog-linked, else an exact product_name match. Returns the template plus
+// its components, or null.
+//
+// Recipes are shared, one per product, so reading one is anyone's. Applying one
+// without being asked is not: with `trustedBy`, only a recipe that user created,
+// or an admin did, is returned. Opening a unit passes the purchase's buyer, so
+// another member's recipe can no longer decide which cards land in their
+// collection; they still see it, and get it by saving the purchase with it.
+async function matchTemplate(userId, productId, productName, game, { trustedBy = null } = {}) {
+  const trust = trustedBy == null ? '' : ` AND (user_id = ? OR user_id IN (SELECT id FROM users WHERE role = 'admin'))`;
+  const trustParams = trustedBy == null ? [] : [trustedBy];
   const template = productId
-    ? await db.get(`SELECT * FROM sealed_templates WHERE product_id = ? AND game = ?`, [productId, game || 'pokemon'])
-    : await db.get(`SELECT * FROM sealed_templates WHERE product_id IS NULL AND product_name = ? COLLATE NOCASE AND game = ?`, [productName, game || 'pokemon']);
+    ? await db.get(`SELECT * FROM sealed_templates WHERE product_id = ? AND game = ?${trust}`, [productId, game || 'pokemon', ...trustParams])
+    : await db.get(`SELECT * FROM sealed_templates WHERE product_id IS NULL AND product_name = ? COLLATE NOCASE AND game = ?${trust}`, [productName, game || 'pokemon', ...trustParams]);
   if (!template) return null;
   const components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
   return { ...template, components };
+}
+
+// The recipe opening a unit of `purchase` applies: the one the purchase was saved
+// with, else one its buyer may be given without asking (matchTemplate trustedBy).
+async function recipeForOpening(purchase) {
+  if (!purchase) return { template: null, attach: false };
+  if (purchase.template_id) {
+    const template = await db.get(`SELECT * FROM sealed_templates WHERE id = ?`, [purchase.template_id]);
+    if (template) template.components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
+    return { template, attach: false };
+  }
+  const template = await matchTemplate(purchase.user_id, purchase.product_id, purchase.product_name, purchase.game, { trustedBy: purchase.user_id });
+  return { template, attach: !!template };
 }
 
 async function assertNoRecipeCycle(productId, productName, game, existingTemplateId, candidateComponents) {
@@ -268,16 +291,9 @@ async function setUnitOpenState(unit, opened, ownerUserId, resolvedCards = new M
   if (!opened) return null;
 
   const purchase = await db.get(`SELECT * FROM sealed_purchases WHERE id = ?`, [unit.purchase_id]);
-  let template = purchase?.template_id
-    ? await db.get(`SELECT * FROM sealed_templates WHERE id = ?`, [purchase.template_id])
-    : null;
-  if (template) {
-    template.components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
-  } else if (purchase) {
-    template = await matchTemplate(purchase.user_id, purchase.product_id, purchase.product_name, purchase.game);
-    if (template) {
-      await db.run(`UPDATE sealed_purchases SET template_id = ? WHERE id = ?`, [template.id, purchase.id]);
-    }
+  const { template, attach } = await recipeForOpening(purchase);
+  if (attach) {
+    await db.run(`UPDATE sealed_purchases SET template_id = ? WHERE id = ?`, [template.id, purchase.id]);
   }
   if (!template) return null;
 
@@ -445,8 +461,10 @@ router.get('/sealed/purchases/:id', async (req, res) => {
     purchase.visible_unit_count = units.length;
     purchase.claimed_by_me = units.some(unit => unit.claimed_by_me);
     sanitizeSharedPurchase(purchase, req.user.id);
+    // One memo per request: every unit of a product asks the same recipe questions.
+    const memo = recipeMemo();
     for (const unit of units) {
-      const progress = await unitCardProgress(req.user.id, unit.id);
+      const progress = await unitCardProgress(req.user.id, unit.id, memo);
       unit.expected_cards = progress?.expected_cards ?? null;
       unit.linked_cards = progress?.linked_cards ?? 0;
       unit.can_toggle = unit.claimed_by_user_id == null
@@ -619,10 +637,10 @@ router.put('/sealed/purchases/bulk-sharing', async (req, res) => {
     });
     res.json({ updated: ids.length, available_to_all: Boolean(availableToAll) });
   } catch (error) {
-    res.status(error.status || 500).json({
-      error: error.status ? error.message : 'Failed to update sharing status',
-      message: error.message,
-    });
+    // A deliberate refusal says why; anything else is logged, not sent (the raw
+    // SQLite message used to ride along in `message`).
+    if (error.status) return res.status(error.status).json({ error: error.message, message: error.message });
+    fail(res, error, 500, 'Failed to update sharing status');
   }
 });
 
@@ -633,36 +651,39 @@ router.put('/sealed/purchases/bulk-sharing', async (req, res) => {
 router.put('/sealed/purchases/:id', async (req, res) => {
   const { store, purchase_date, unit_price, notes, quantity, expected_packs, expected_cards, contents_note, market_value, available_to_all } = req.body || {};
   try {
-    const purchase = await db.get(
-      `SELECT * FROM sealed_purchases WHERE id = ? AND user_id = ?`,
-      [req.params.id, req.user.id]
-    );
-    if (!purchase) return res.status(404).json({ error: 'Purchase not found' });
+    if (available_to_all !== undefined && ![true, false, 0, 1].includes(available_to_all)) {
+      return res.status(400).json({ error: 'available_to_all must be a boolean' });
+    }
+    // The purchase is read inside the transaction that edits it: read before it,
+    // two edits at once could each add or remove units against a quantity the
+    // other had already changed.
+    const found = await withTransaction(async () => {
+      const purchase = await db.get(
+        `SELECT * FROM sealed_purchases WHERE id = ? AND user_id = ?`,
+        [req.params.id, req.user.id]
+      );
+      if (!purchase) return null;
 
-    const sets = [];
-    const params = [];
-    if (store !== undefined) { sets.push('store = ?'); params.push(store); }
-    if (purchase_date !== undefined) { sets.push('purchase_date = ?'); params.push(purchase_date); }
-    if (expected_packs !== undefined) { sets.push('expected_packs = ?'); params.push(parseAmount(expected_packs, 'expected_packs', { integer: true })); }
-    if (expected_cards !== undefined) { sets.push('expected_cards = ?'); params.push(parseAmount(expected_cards, 'expected_cards', { integer: true })); }
-    if (contents_note !== undefined) { sets.push('contents_note = ?'); params.push(contents_note); }
-    if (unit_price !== undefined) { sets.push('unit_price = ?'); params.push(parseAmount(unit_price, 'unit_price')); }
-    if (notes !== undefined) { sets.push('notes = ?'); params.push(notes); }
-    if (available_to_all !== undefined) {
-      if (![true, false, 0, 1].includes(available_to_all)) {
-        return res.status(400).json({ error: 'available_to_all must be a boolean' });
+      const sets = [];
+      const params = [];
+      if (store !== undefined) { sets.push('store = ?'); params.push(store); }
+      if (purchase_date !== undefined) { sets.push('purchase_date = ?'); params.push(purchase_date); }
+      if (expected_packs !== undefined) { sets.push('expected_packs = ?'); params.push(parseAmount(expected_packs, 'expected_packs', { integer: true })); }
+      if (expected_cards !== undefined) { sets.push('expected_cards = ?'); params.push(parseAmount(expected_cards, 'expected_cards', { integer: true })); }
+      if (contents_note !== undefined) { sets.push('contents_note = ?'); params.push(contents_note); }
+      if (unit_price !== undefined) { sets.push('unit_price = ?'); params.push(parseAmount(unit_price, 'unit_price')); }
+      if (notes !== undefined) { sets.push('notes = ?'); params.push(notes); }
+      if (available_to_all !== undefined) {
+        sets.push('available_to_all = ?');
+        params.push(available_to_all ? 1 : 0);
       }
-      sets.push('available_to_all = ?');
-      params.push(available_to_all ? 1 : 0);
-    }
-    const newQty = quantity !== undefined ? parseQuantity(quantity, 'quantity', purchase.quantity) : null;
-    if (market_value !== undefined) {
-      const value = parseAmount(market_value, 'market_value');
-      sets.push('market_value = ?', 'market_value_source = ?', 'market_value_at = CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END');
-      params.push(value, value == null ? null : 'manual', value);
-    }
+      const newQty = quantity !== undefined ? parseQuantity(quantity, 'quantity', purchase.quantity) : null;
+      if (market_value !== undefined) {
+        const value = parseAmount(market_value, 'market_value');
+        sets.push('market_value = ?', 'market_value_source = ?', 'market_value_at = CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END');
+        params.push(value, value == null ? null : 'manual', value);
+      }
 
-    await withTransaction(async () => {
       if (newQty != null) {
         const delta = newQty - purchase.quantity;
         if (delta > 0) {
@@ -693,10 +714,10 @@ router.put('/sealed/purchases/:id', async (req, res) => {
         params.push(purchase.id, req.user.id);
         await db.run(`UPDATE sealed_purchases SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, params);
       }
+      return db.get(`SELECT * FROM sealed_purchases WHERE id = ?`, [purchase.id]);
     });
-
-    const updated = await db.get(`SELECT * FROM sealed_purchases WHERE id = ?`, [purchase.id]);
-    res.json({ purchase: updated });
+    if (!found) return res.status(404).json({ error: 'Purchase not found' });
+    res.json({ purchase: found });
   } catch (error) {
     fail(res, error, 500, 'Failed to update sealed purchase');
   }
@@ -788,23 +809,23 @@ router.put('/sealed/purchases/:id/source-unit', async (req, res) => {
 // those units keep the card, just losing the link (ON DELETE SET NULL).
 router.delete('/sealed/purchases/:id', async (req, res) => {
   try {
-    const purchase = await db.get(
-      `SELECT id FROM sealed_purchases WHERE id = ? AND user_id = ?`,
-      [req.params.id, req.user.id]
-    );
-    if (!purchase) return res.status(404).json({ error: 'Purchase not found' });
-    const claimedByOthers = await db.get(
-      `SELECT 1 FROM sealed_units WHERE purchase_id = ? AND claimed_by_user_id IS NOT NULL AND claimed_by_user_id != ? LIMIT 1`,
-      [purchase.id, req.user.id]
-    );
-    if (claimedByOthers) {
-      return res.status(409).json({ error: 'This purchase has units claimed by other users and cannot be deleted' });
-    }
-    const result = await db.run(
-      `DELETE FROM sealed_purchases WHERE id = ? AND user_id = ?`,
-      [req.params.id, req.user.id]
-    );
-    if (result.changes === 0) return res.status(404).json({ error: 'Purchase not found' });
+    // The claim check and the delete in one transaction: checked first and deleted
+    // after, another member could claim a unit in between and lose it to the delete.
+    await withTransaction(async () => {
+      const purchase = await db.get(
+        `SELECT id FROM sealed_purchases WHERE id = ? AND user_id = ?`,
+        [req.params.id, req.user.id]
+      );
+      if (!purchase) throw Object.assign(new Error('Purchase not found'), { clientStatus: 404 });
+      const claimedByOthers = await db.get(
+        `SELECT 1 FROM sealed_units WHERE purchase_id = ? AND claimed_by_user_id IS NOT NULL AND claimed_by_user_id != ? LIMIT 1`,
+        [purchase.id, req.user.id]
+      );
+      if (claimedByOthers) {
+        throw Object.assign(new Error('This purchase has units claimed by other users and cannot be deleted'), { clientStatus: 409 });
+      }
+      await db.run(`DELETE FROM sealed_purchases WHERE id = ? AND user_id = ?`, [purchase.id, req.user.id]);
+    });
     res.json({ success: true });
   } catch (error) {
     fail(res, error, 500, 'Failed to delete sealed purchase');
@@ -833,15 +854,7 @@ router.put('/sealed/units/:id/open', async (req, res) => {
     const resolvedCards = new Map();
     const includeCards = !unit.components_applied_at;
     if (opened) {
-      template = purchase?.template_id
-        ? await db.get(`SELECT * FROM sealed_templates WHERE id = ?`, [purchase.template_id])
-        : null;
-      if (template) {
-        template.components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
-      } else if (purchase) {
-        template = await matchTemplate(purchase.user_id, purchase.product_id, purchase.product_name, purchase.game);
-        attachTemplate = !!template;
-      }
+      ({ template, attach: attachTemplate } = await recipeForOpening(purchase));
       if (template && includeCards) {
         const { resolveCardForAdd } = require('./collection');
         const user = { id: req.user.id, tcg_api_key: req.user.tcg_api_key };
@@ -905,11 +918,8 @@ router.put('/sealed/purchases/:id/open-all', async (req, res) => {
     );
     const resolvedCards = new Map();
     if (candidateUnits.some(unit => !unit.components_applied_at)) {
-      let template = purchase.template_id
-        ? await db.get(`SELECT * FROM sealed_templates WHERE id = ?`, [purchase.template_id])
-        : await matchTemplate(purchase.user_id, purchase.product_id, purchase.product_name, purchase.game);
+      const { template } = await recipeForOpening(purchase);
       if (template) {
-        template.components = await db.all(`SELECT * FROM sealed_template_components WHERE template_id = ?`, [template.id]);
         const { resolveCardForAdd } = require('./collection');
         const user = { id: req.user.id, tcg_api_key: req.user.tcg_api_key };
         for (const component of template.components) {
@@ -1004,8 +1014,10 @@ router.get('/sealed/units', async (req, res) => {
         ORDER BY u.opened_at DESC`,
       [req.user.id, ...params]
     );
+    // One memo per request: every unit of a product asks the same recipe questions.
+    const memo = recipeMemo();
     for (const unit of units) {
-      const progress = await unitCardProgress(req.user.id, unit.id);
+      const progress = await unitCardProgress(req.user.id, unit.id, memo);
       unit.expected_cards = progress?.expected_cards ?? null;
       unit.linked_cards = progress?.linked_cards ?? 0;
       delete unit.purchase_owner_id;
@@ -1161,16 +1173,19 @@ router.post('/sealed/templates', async (req, res) => {
               c.expected_cards]
         );
       }
-      // Attach purchases made before this recipe existed (e.g. imports).
+      // Attach the saver's own purchases made before this recipe existed (e.g.
+      // imports). Only theirs: this used to attach every user's purchases of the
+      // product, so one member's recipe decided which cards opening another
+      // member's box put in their collection.
       if (product_id) {
         await db.run(
-          `UPDATE sealed_purchases SET template_id = ? WHERE template_id IS NULL AND product_id = ? AND game = ?`,
-          [templateId, product_id, game]
+          `UPDATE sealed_purchases SET template_id = ? WHERE template_id IS NULL AND product_id = ? AND game = ? AND user_id = ?`,
+          [templateId, product_id, templateGame, req.user.id]
         );
       } else {
         await db.run(
-          `UPDATE sealed_purchases SET template_id = ? WHERE template_id IS NULL AND product_id IS NULL AND product_name = ? COLLATE NOCASE AND game = ?`,
-          [templateId, String(product_name).trim(), game]
+          `UPDATE sealed_purchases SET template_id = ? WHERE template_id IS NULL AND product_id IS NULL AND product_name = ? COLLATE NOCASE AND game = ? AND user_id = ?`,
+          [templateId, String(product_name).trim(), templateGame, req.user.id]
         );
       }
       if (!existing && expectedCards == null) {

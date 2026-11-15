@@ -422,10 +422,12 @@ const dbMod = require('../src/db');
   const rawRow = async (p) => JSON.parse((await dbMod.get(
     `SELECT results_json FROM tcgcsv_cache WHERE path = ? AND data_version = ?`, [p, remoteVersion]
   )).results_json);
+  // A group's publish date and supplemental flag are kept for the "not published
+  // yet" notice (tcgplayerCatalog.unpublishedSets); modifiedOn and the category are not.
   assert.deepStrictEqual(await rawRow('/tcgplayer/3/groups'), [
-    { groupId: 30, name: 'Fixture Group', abbreviation: 'FG' },
-    { groupId: 31, name: 'Gone Group', abbreviation: 'GG' },
-    { groupId: 32, name: 'Html Group', abbreviation: 'HG' },
+    { groupId: 30, name: 'Fixture Group', abbreviation: 'FG', publishedOn: '2026-01-01T00:00:00', isSupplemental: false },
+    { groupId: 31, name: 'Gone Group', abbreviation: 'GG', publishedOn: null, isSupplemental: null },
+    { groupId: 32, name: 'Html Group', abbreviation: 'HG', publishedOn: null, isSupplemental: null },
   ]);
   assert.deepStrictEqual(await rawRow('/tcgplayer/3/30/products'),
     [{ productId: 1001, name: 'Charizard', number: '004/102', rarity: 'Holo Rare', imageUrl: 'https://img.example.test/1001.jpg' },

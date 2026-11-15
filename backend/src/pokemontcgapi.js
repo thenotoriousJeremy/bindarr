@@ -8,8 +8,9 @@ const languages = require('./utils/languages');
 const { cacheNormalizedCards } = require('./utils/cardCache');
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
-const { parseCardRow, parseSqliteUtc, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
-const metrics = require('./utils/metrics');
+const { sameNumber } = require('./utils/setCatalogueMatch');
+const { parseCardRow, parseSqliteUtc, recordPrice, shouldSweepPrices, markPricesSwept, WISHLIST_CARDS_SQL } = require('./utils/priceHelpers');
+const { createProviderClient, USER_AGENT } = require('./utils/providerClient');
 
 const BASE = 'https://api.pokemontcgapi.com/v1';
 const PREFIX = 'pokemontcgapi-';
@@ -29,17 +30,28 @@ const CARD_INCLUDE = 'images,prices,translations';
 // have the sweep pick cards getCardById then refuses to refresh.
 const PRICE_AGE_DAYS = 3;
 const REGIONS = { en: 'WEST', ja: 'JP', 'zh-cn': 'CN' };
-const client = axios.create({
-  baseURL: BASE, timeout: 15000, maxRedirects: 0,
-  headers: { Accept: 'application/json', 'User-Agent': `Bindarr/${require('../package.json').version}` },
-  validateStatus: status => status === 200 || status === 304,
+// A 429 pauses every request for its Retry-After — at least a minute, up to a day,
+// since a metered provider's 429 is usually the day's credits — and every caller
+// fails fast meanwhile (utils/providerClient). Not serialized: the response cache
+// below is what keeps the request count down.
+const pokemontcgapi = createProviderClient({
+  name: 'pokemontcgapi',
+  label: 'pokemontcgapi.com',
+  client: axios.create({
+    baseURL: BASE, timeout: 15000, maxRedirects: 0,
+    headers: { Accept: 'application/json', 'User-Agent': USER_AGENT },
+    validateStatus: status => status === 200 || status === 304,
+  }),
+  serial: false,
+  defaultCooldownMs: 60000,
+  minCooldownMs: 60000,
+  maxCooldownMs: DAY,
 });
-metrics.instrumentAxiosClient(client, 'pokemontcgapi');
+const { client } = pokemontcgapi;
 const hasKey = () => !!(process.env.POKEMONTCGAPI_KEY || '').trim();
 const providerId = id => String(id || '').replace(/^pokemontcgapi-/, '');
 const quote = value => `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 const pending = new Map();
-let pausedUntil = 0;
 
 // Follow only cursors, never an arbitrary URL returned by an upstream. The API
 // key belongs to this origin alone; redirects are disabled for the same reason.
@@ -54,6 +66,37 @@ function nextCursor(body, path) {
   return next.searchParams.get('cursor');
 }
 
+// The response cache, bounded separately from card_cache, which holds the durable
+// card identity: eviction only means re-fetching a page later. By count AND by
+// size, newest kept first. A count alone let it hold 1,024 whole responses — a
+// 250-card page is hundreds of kilobytes — in the main database, which every
+// backup copies. The newest response is always kept, however large.
+//
+// Trimmed every TRIM_EVERY writes rather than on each one: finding the oldest rows
+// reads every row's record, and the bound only has to hold roughly.
+const MAX_CACHED_RESPONSES = 1024;
+const MAX_CACHED_BYTES = 64 * 1024 * 1024;
+const TRIM_EVERY = 16;
+let writesSinceTrim = TRIM_EVERY;   // trim on the first write after a start
+async function trimResponseCache({ force = false } = {}) {
+  if (!force && ++writesSinceTrim < TRIM_EVERY) return;
+  writesSinceTrim = 0;
+  try {
+    // octet_length reads the size from the record header, not the body.
+    await db.run(`DELETE FROM pokemontcgapi_cache WHERE request IN (
+      SELECT request FROM (
+        SELECT request,
+               ROW_NUMBER() OVER (ORDER BY fetched_at DESC) AS n,
+               SUM(octet_length(body)) OVER (ORDER BY fetched_at DESC ROWS UNBOUNDED PRECEDING) AS bytes
+          FROM pokemontcgapi_cache)
+       WHERE n > ? OR (n > 1 AND bytes > ?))`, [MAX_CACHED_RESPONSES, MAX_CACHED_BYTES]);
+  } catch {
+    // An SQLite without window functions or octet_length: the count bound alone.
+    await db.run(`DELETE FROM pokemontcgapi_cache WHERE request IN (
+      SELECT request FROM pokemontcgapi_cache ORDER BY fetched_at DESC LIMIT -1 OFFSET ${MAX_CACHED_RESPONSES})`);
+  }
+}
+
 async function request(path, params = {}, ttl = DAY) {
   const key = (process.env.POKEMONTCGAPI_KEY || '').trim();
   if (!key) throw new Error('POKEMONTCGAPI_KEY_REQUIRED');
@@ -65,30 +108,22 @@ async function request(path, params = {}, ttl = DAY) {
   const work = (async () => {
     const cached = await db.get('SELECT * FROM pokemontcgapi_cache WHERE request = ?', [cacheKey]);
     if (cached && Date.now() - cached.fetched_at < ttl) return JSON.parse(cached.body);
-    if (Date.now() < pausedUntil) throw new Error('UPSTREAM_UNAVAILABLE');
+    if (pokemontcgapi.coolingDown()) throw new Error('UPSTREAM_UNAVAILABLE');
     try {
-      const response = await client.get(path, {
+      const response = await pokemontcgapi.get(path, {
         params, headers: { 'X-Api-Key': key, ...(cached?.etag ? { 'If-None-Match': cached.etag } : {}) },
-      });
+      }, { interactive: true });
       if (response.status === 304 && !cached) throw new Error('UPSTREAM_UNAVAILABLE');
       const body = response.status === 304 ? JSON.parse(cached.body) : response.data;
       if (!body || typeof body !== 'object') throw new Error('UPSTREAM_UNAVAILABLE');
       await db.run(`INSERT INTO pokemontcgapi_cache (request, body, etag, fetched_at) VALUES (?, ?, ?, ?)
         ON CONFLICT(request) DO UPDATE SET body = excluded.body, etag = excluded.etag, fetched_at = excluded.fetched_at`,
       [cacheKey, JSON.stringify(body), response.status === 304 ? cached.etag : response.headers.etag || null, Date.now()]);
-      // Bound the response cache separately from card_cache, which holds the
-      // durable card identity. Eviction only means re-fetching a page later.
-      await db.run(`DELETE FROM pokemontcgapi_cache WHERE request IN (
-        SELECT request FROM pokemontcgapi_cache ORDER BY fetched_at DESC LIMIT -1 OFFSET 1024)`);
+      await trimResponseCache();
       return body;
     } catch (error) {
+      // A 429 has already paused the client for its Retry-After (above).
       const status = error.response?.status;
-      if (status === 429) {
-        const retry = error.response.headers?.['retry-after'];
-        const seconds = Number(retry);
-        const delay = retry && Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retry) - Date.now();
-        pausedUntil = Date.now() + Math.max(60000, Number.isFinite(delay) ? delay : 60000);
-      }
       // Do not propagate Axios errors: their config carries X-Api-Key, and
       // several route handlers log the whole error object.
       throw new Error(status === 404 ? 'CARD_NOT_FOUND' : status === 401 ? 'POKEMONTCGAPI_KEY_INVALID' : 'UPSTREAM_UNAVAILABLE');
@@ -290,7 +325,7 @@ async function searchCards({ name = '', number = '', set = '', scope = 'database
       const normalized = rows.filter(c => c.print_region === REGIONS[code]).map(normalizeCard);
       await cacheListedCards(normalized);
       for (const card of normalized) {
-        if (!number || card.number === number || (/^\d+$/.test(number) && /^\d+$/.test(card.number) && Number(card.number) === Number(number))) matches.push(card);
+        if (!number || sameNumber(card.number, number)) matches.push(card);
       }
       if (matches.length >= offset + limit) return { cards: matches.slice(offset, offset + limit), total: null };
     }
@@ -333,14 +368,15 @@ async function getCardById(id, { refresh = false } = {}) {
 // Then, within a due sweep, only cards whose stored price is actually stale are
 // asked about: never priced (a listing row that entered the collection while the
 // quota was exhausted), or older than PRICE_AGE_DAYS. A card refreshed yesterday
-// costs nothing today. Owned and decked cards only; a browsed card is never paid for.
+// costs nothing today. Owned, decked and wishlisted cards only; a browsed card is
+// never paid for.
 async function updateCollectionPrices() {
   const provider = require('./utils/pokemonProvider');
   if (!hasKey() || await provider.configured() !== provider.POKEMONTCGAPI) return;
   if (!await shouldSweepPrices('pokemontcgapi')) return;
   try {
     const owned = await db.all(`SELECT id FROM card_cache WHERE id LIKE 'pokemontcgapi-%'
-      AND id IN (SELECT card_id FROM collection UNION SELECT card_id FROM deck_cards)
+      AND id IN (SELECT card_id FROM collection UNION SELECT card_id FROM deck_cards UNION ${WISHLIST_CARDS_SQL})
       AND (price_trend IS NULL OR last_updated IS NULL OR last_updated <= datetime('now', '-${PRICE_AGE_DAYS} days'))`);
     if (!owned.length) {
       await markPricesSwept('pokemontcgapi');
@@ -371,6 +407,7 @@ async function refreshPrices(ids) {
 }
 
 module.exports = { client, hasKey, providerId, normalizeCard, extractPrices, cacheCards, listSets, fetchAndCacheSets,
+  trimResponseCache, MAX_CACHED_RESPONSES, MAX_CACHED_BYTES,
   // getSetCards is the name tcgdexApi lists a set under too, for callers holding either client.
   getCardsBySet, getSetCards: getCardsBySet, searchCards, getCardById, hydrateCard, updateCollectionPrices, refreshPrices,
   LIST_INCLUDE, CARD_INCLUDE };

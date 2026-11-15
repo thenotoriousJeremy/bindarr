@@ -2,6 +2,9 @@
   "name": "bindarr-monorepo",
   "private": true,
   "description": "Monorepo for Bindarr Pokémon Card Collection Manager",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "install:all": "npm install && npm install --prefix backend && npm install --prefix frontend",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",

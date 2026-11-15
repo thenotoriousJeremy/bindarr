@@ -28,7 +28,7 @@ function defaultSize() {
 async function inProcessEmbedder(model) {
   const sharp = require('sharp');
   const ort = require('onnxruntime-node');
-  const { SIZE, toTensorData } = require('./utils/miloInput');
+  const { EMBED_SIZE, imagenetChw } = require('../../shared/scanModel.mjs');
   const session = await ort.InferenceSession.create(model, {
     intraOpNumThreads: 1, interOpNumThreads: 1, executionMode: 'sequential',
   });
@@ -36,9 +36,9 @@ async function inProcessEmbedder(model) {
     size: 1,
     workers: 0,
     async embed(buf) {
-      const { data } = await sharp(buf).resize(SIZE, SIZE, { fit: 'fill' })
+      const { data } = await sharp(buf).resize(EMBED_SIZE, EMBED_SIZE, { fit: 'fill' })
         .removeAlpha().raw().toBuffer({ resolveWithObject: true });
-      const out = await session.run({ image: new ort.Tensor('float32', toTensorData(data), [1, 3, SIZE, SIZE]) });
+      const out = await session.run({ image: new ort.Tensor('float32', imagenetChw(data, EMBED_SIZE, 3), [1, 3, EMBED_SIZE, EMBED_SIZE]) });
       return Float32Array.from(out.embedding.data);
     },
     async close() { try { await session.release?.(); } catch { /* best effort */ } },

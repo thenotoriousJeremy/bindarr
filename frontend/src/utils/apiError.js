@@ -36,6 +36,9 @@ const KEYS = {
   registration_disabled: 'apiError.registrationDisabled',
   username_taken: 'apiError.usernameTaken',
   wrong_password: 'apiError.wrongPassword',
+  restore_too_many_cards: 'apiError.restoreTooManyCards',
+  restore_claimed_units: 'apiError.restoreClaimedUnits',
+  api_key_shown_once: 'apiError.apiKeyShownOnce',
   // The PWA answers a write made offline itself (utils/offline.js).
   offline: 'offline.writeBlocked',
 };

@@ -122,6 +122,19 @@ async function recordPrice(cardId, price) {
   return true;
 }
 
+// Record the price the card_cache row holds NOW, not the one a provider just
+// returned. cacheNormalizedCards keeps a TCGCSV price over a provider's own (see
+// utils/cardCache), so what a refresh fetched is not always what was stored, and
+// recording the fetched number put a Cardmarket point into a TCGplayer series
+// every day. The stored one keeps a card's history in one source and one
+// currency; a repeat of the price already recorded adds nothing.
+async function recordStoredPrice(cardId) {
+  if (!cardId) return false;
+  const db = require('../db');
+  const row = await db.get(`SELECT price_trend FROM card_cache WHERE id = ?`, [cardId]);
+  return row ? recordPrice(cardId, row.price_trend) : false;
+}
+
 // Scryfall: "We only update prices for cards once per day. Fetching card data
 // more frequently than 24 hours will not yield new prices."
 // (https://scryfall.com/docs/api/rate-limits). Sweeping more often than daily
@@ -217,11 +230,19 @@ async function markPricesSwept(game) {
   }
 }
 
+// The cards on a wishlist, as a SELECT of card_id for a price sweep's UNION. A
+// sweep prices the cards held and the cards in decks, and these: price alerts
+// watch wanted cards too (notify.js), and since wanted cards left the collection
+// for the Lists feature's wishlists (WEB-03) nothing else would keep their prices
+// and price history moving.
+const WISHLIST_CARDS_SQL = `SELECT wi.card_id FROM card_list_items wi JOIN card_lists wl ON wl.id = wi.list_id WHERE wl.kind = 'wishlist'`;
+
 module.exports = {
   parseSqliteUtc,
   shouldSweepPrices,
   markPricesSwept,
   SWEEP_COLUMN,
+  WISHLIST_CARDS_SQL,
   priceRefreshDays,
   DEFAULT_PRICE_REFRESH_DAYS,
   PRICE_SWEEP_INTERVAL_MS,
@@ -229,5 +250,6 @@ module.exports = {
   parseCardRow,
   rebalanceCompartmentPositions,
   isVintageSet,
-  recordPrice
+  recordPrice,
+  recordStoredPrice
 };

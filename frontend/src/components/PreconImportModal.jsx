@@ -10,7 +10,8 @@ import { useT } from '../utils/i18n';
 // than silently left out.
 const MODES = ['collection', 'deck', 'both'];
 
-export default function PreconImportModal({ onClose, showToast }) {
+// onImported runs after cards or a deck were written, so the open tabs refetch.
+export default function PreconImportModal({ onClose, showToast, onImported }) {
   const { t } = useT();
 
   const [q, setQ] = useState('');
@@ -99,6 +100,7 @@ export default function PreconImportModal({ onClose, showToast }) {
       }
       setResult(body);
       showToast(t('precon.imported', { name: deck ? deck.name : selected }));
+      if (onImported) onImported();
     } catch (err) {
       setError(err.message || t('precon.errImport'));
     } finally {
@@ -112,7 +114,6 @@ export default function PreconImportModal({ onClose, showToast }) {
 
   return (
     <Modal onClose={onClose} label={t('precon.title')} dirty={!!selected}
-      overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       className="glass-panel" style={{ width: '620px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           {selected && (

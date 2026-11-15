@@ -151,6 +151,8 @@ export function SortBuilder({ value, onChange }) {
                 className="btn btn-secondary"
                 style={{ padding: '0.2rem', minWidth: 'auto' }}
                 onClick={() => removeCriteria(item.id)}
+                aria-label={t('sort.removeRule')}
+                title={t('sort.removeRule')}
               >
                 <X size={14} />
               </button>
@@ -296,6 +298,8 @@ export function FilterBuilder({ value, onChange, setsList = [], fieldOptions = {
               className="btn btn-secondary"
               style={{ padding: '0.2rem', minWidth: 'auto' }}
               onClick={() => removeRule(rule.id)}
+              aria-label={t('filter.removeRule')}
+              title={t('filter.removeRule')}
             >
               <X size={14} />
             </button>

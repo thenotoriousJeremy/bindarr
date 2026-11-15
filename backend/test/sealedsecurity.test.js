@@ -185,7 +185,7 @@ async function main() {
   for (const [field, value] of [
     ['unit_price', -1], ['unit_price', 'abc'], ['unit_price', 'Infinity'],
     ['expected_packs', -1], ['expected_packs', 2.5], ['expected_cards', 'x'],
-    ['market_value', -5], ['market_value', 'NaN'], ['game', 'yugioh'],
+    ['market_value', -5], ['market_value', 'NaN'], ['game', 'netrunner'],
   ]) {
     await expect400(`purchase ${field}=${value}`, 'POST', '/sealed/purchases', { product_name: 'X', [field]: value });
   }
@@ -209,8 +209,8 @@ async function main() {
   const component = (extra) => ({ component_type: 'product', product_name: 'Pack', quantity: 1, ...extra });
   await expect400('component quantity 1001', 'POST', '/sealed/templates', { product_name: 'T', components: [component({ quantity: 1001 })] });
   await expect400('component quantity 0', 'POST', '/sealed/templates', { product_name: 'T', components: [component({ quantity: 0 })] });
-  await expect400('component game', 'POST', '/sealed/templates', { product_name: 'T', components: [component({ game: 'yugioh' })] });
-  await expect400('template game', 'POST', '/sealed/templates', { product_name: 'T', game: 'yugioh', components: [component()] });
+  await expect400('component game', 'POST', '/sealed/templates', { product_name: 'T', components: [component({ game: 'netrunner' })] });
+  await expect400('template game', 'POST', '/sealed/templates', { product_name: 'T', game: 'netrunner', components: [component()] });
   await expect400('recipe total', 'POST', '/sealed/templates', { product_name: 'T', components: [component({ quantity: 600 }), component({ quantity: 600 })] });
   await expect400('component expected_cards', 'POST', '/sealed/templates', { product_name: 'T', components: [component({ expected_cards: -3 })] });
   assert.strictEqual((await db.get(`SELECT COUNT(*) n FROM sealed_templates WHERE product_name = 'T'`)).n, 0);

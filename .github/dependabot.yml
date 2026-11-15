@@ -55,32 +55,53 @@ updates:
     ignore:
       # A Capacitor major means migrating the committed native projects under
       # frontend/android and frontend/ios, which a version bump cannot do. Those
-      # are done by hand.
-      - dependency-name: '@capacitor/*'
+      # are done by hand. Named one by one rather than '@capacitor/*' so that
+      # @capacitor/assets, a dev-only icon generator with nothing native to
+      # migrate (its 3 -> 4 major carries the fixes for the frontend's dev
+      # advisories), still gets its majors proposed. Add a new plugin here.
+      - dependency-name: '@capacitor/android'
+        update-types: [version-update:semver-major]
+      - dependency-name: '@capacitor/app'
+        update-types: [version-update:semver-major]
+      - dependency-name: '@capacitor/cli'
+        update-types: [version-update:semver-major]
+      - dependency-name: '@capacitor/core'
+        update-types: [version-update:semver-major]
+      - dependency-name: '@capacitor/file-transfer'
+        update-types: [version-update:semver-major]
+      - dependency-name: '@capacitor/filesystem'
+        update-types: [version-update:semver-major]
+      - dependency-name: '@capacitor/ios'
+        update-types: [version-update:semver-major]
+      - dependency-name: '@capacitor/share'
+        update-types: [version-update:semver-major]
+      - dependency-name: '@capacitor/status-bar'
         update-types: [version-update:semver-major]
 
+  # Third-party actions are pinned by commit SHA with the version in a comment;
+  # Dependabot keeps both current.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ['*']
 
   # node:<major>-slim / node:<major>-alpine float on the major, so every image
-  # build already picks up that line's patches; what this proposes is the next
-  # major. Accepting one means moving the workflows' node-version and the docs
-  # (AGENTS.md, README, PROJECT.md) in the same PR — the Dockerfile is only one of
-  # the places the version lives.
-  #
-  # Only even majors become LTS; an odd one (25, 27, ...) is supported for about
-  # six months and then dropped, so it is never proposed. The ranges below are
-  # Ruby requirements ("~> 25.0" is >= 25, < 26), which is what Dependabot reads
-  # for Docker; add the next odd major when the last listed one gets close.
+  # build already picks up that line's patches. A new major is not proposed at
+  # all: Node moves deliberately, in one PR that also moves the workflows'
+  # node-version, .nvmrc, the engines fields and the docs (AGENTS.md, README,
+  # PROJECT.md) — the Dockerfile is only one of the places the version lives, and
+  # a Docker-only bump (#173) leaves CI testing a different Node from the image.
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     ignore:
       - dependency-name: node
-        versions: ['~> 25.0', '~> 27.0', '~> 29.0', '~> 31.0', '~> 33.0']
+        update-types: [version-update:semver-major]

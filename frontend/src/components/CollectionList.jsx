@@ -22,11 +22,16 @@ import { useApi } from '../utils/useApi';
 import { LatestRequest, fetchJson, isAbortError } from '../utils/request';
 import { loadCollectionPages } from '../utils/collectionPages';
 import { useStableCallback } from '../utils/useStableCallback';
+import { useShownTrigger } from '../utils/useShownTrigger';
 import VirtualGrid from './VirtualGrid';
+import SelectionBar, { BarDivider } from './SelectionBar';
+import ViewToggle from './ViewToggle';
 import CardInspectorModal from './CardInspectorModal';
 import TrashModal from './TrashModal';
 import AddToDeckSelect from './AddToDeckSelect';
 import AddToListSelect from './AddToListSelect';
+import { AddSelectedToWishlist } from './WishlistHeart';
+import WishlistTab from './WishlistTab';
 import ExportShownButton from './ExportShownButton';
 import PackPriceSplitter from './PackPriceSplitter';
 import CardImage from './CardImage';
@@ -220,10 +225,10 @@ const CollectionRow = memo(function CollectionRow({ item, selected, selectMode, 
             </div>
             {!selectMode && (
               <div style={{ display: 'flex', gap: '0.35rem', marginTop: '2px' }}>
-                <button className="btn btn-secondary btn-icon-only" style={{ width: '18px', height: '18px', padding: 0, borderRadius: '3px' }} onClick={() => onEdit(item)} title={t('common.edit')}>
+                <button className="btn btn-secondary btn-icon-only" style={{ width: '18px', height: '18px', padding: 0, borderRadius: '3px' }} onClick={() => onEdit(item)} title={t('common.edit')} aria-label={t('common.edit')}>
                   <Edit2 size={9} />
                 </button>
-                <button className="btn btn-danger btn-icon-only" style={{ width: '18px', height: '18px', padding: 0, borderRadius: '3px' }} onClick={() => onDelete(item)} title={t('common.delete')}>
+                <button className="btn btn-danger btn-icon-only" style={{ width: '18px', height: '18px', padding: 0, borderRadius: '3px' }} onClick={() => onDelete(item)} title={t('common.delete')} aria-label={t('common.delete')}>
                   <Trash2 size={9} />
                 </button>
               </div>
@@ -241,10 +246,18 @@ const CollectionRow = memo(function CollectionRow({ item, selected, selectMode, 
   );
 });
 
-function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter, setSelectedCardFilter, onNavigate, setSelectedLocationId, setFocusEntryId }) {
+function CollectionList({ active = true, statsTrigger, onUpdate, showToast, selectedCardFilter, setSelectedCardFilter, onNavigate, setSelectedLocationId, setFocusEntryId }) {
   const { t } = useT();
-  const [locations, setLocations] = useState([]);
-  const [setsList, setSetsList] = useState([]);
+  // statsTrigger as this tab should see it: held while another tab is showing,
+  // so an add or scan elsewhere does not refetch 20,000 rows nobody is looking
+  // at, and caught up once this tab is shown again.
+  const shownTrigger = useShownTrigger(statsTrigger, active);
+  // Containers (the location filter, Move to container) and sets (set order
+  // for sorting), refetched with the grid.
+  const { data: locationsData } = useApi('/api/locations', null, { deps: [shownTrigger] });
+  const locations = useMemo(() => (Array.isArray(locationsData) ? locationsData : []), [locationsData]);
+  const { data: setsData } = useApi('/api/sets', null, { deps: [shownTrigger] });
+  const setsList = useMemo(() => (Array.isArray(setsData) ? setsData : []), [setsData]);
 
   useEffect(() => {
     if (selectedCardFilter) {
@@ -310,22 +323,25 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const [sealedUnits, setSealedUnits] = useState([]);
   useEffect(() => {
     if (!selectMode) return;
-    fetch('/api/sealed/units?opened=1&unlinked=1')
-      .then(r => r.json())
-      .then(d => setSealedUnits(d.units || []))
+    let cancelled = false;
+    fetchJson('/api/sealed/units?opened=1&unlinked=1')
+      .then(({ data }) => { if (!cancelled) setSealedUnits(Array.isArray(data?.units) ? data.units : []); })
       .catch(() => {});
+    return () => { cancelled = true; };
   }, [selectMode]);
 
   // The grid's rows: the slim column set, a first page to paint the first
   // screen, then the rest in a few large pages committed together. A refetch
-  // (any change elsewhere bumps statsTrigger) keeps the grid as it is until the
-  // new rows are in, rather than blanking it to a spinner; and a newer request
-  // (switching to Wishlist mid-load) always wins over an older one.
-  const collectionUrl = `/api/collection?list_type=${subTab === 'wishlist' ? 'wishlist' : 'collection'}&fields=grid${tradeOnly ? '&is_trade=1' : ''}`;
+  // (any change elsewhere bumps statsTrigger; a hidden tab waits until shown)
+  // keeps the grid as it is until the new rows are in, rather than blanking it
+  // to a spinner; and a newer request (Trade only ticked mid-load) always wins
+  // over an older one. Every row is an owned copy: the Wishlist sub-tab is the
+  // Lists feature's default Wishlist (WishlistTab), not rows of this table.
+  const collectionUrl = `/api/collection?list_type=collection&fields=grid${tradeOnly ? '&is_trade=1' : ''}`;
   const { data: collectionData, loading: firstLoad, refreshing, error: loadError, refetch: fetchCollection, mutate, optimistic } = useApi(
     collectionUrl,
     ({ signal, hasData, push }) => loadCollectionPages(collectionUrl, { signal, push: hasData ? null : push }),
-    { deps: [statsTrigger] }
+    { deps: [shownTrigger] }
   );
   const collection = useMemo(() => collectionData || [], [collectionData]);
   const loading = firstLoad && !collectionData;
@@ -337,32 +353,6 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- toast once per failure
   }, [loadError]);
-
-  useEffect(() => {
-    fetchLocations();
-    fetchSets();
-  }, [statsTrigger]);
-
-  const fetchLocations = async () => {
-    try {
-      const response = await fetch('/api/locations');
-      if (response.ok) {
-        const data = await response.json();
-        setLocations(data);
-      }
-    } catch (err) {
-      console.error('Error fetching locations:', err);
-    }
-  };
-
-  const fetchSets = async () => {
-    try {
-      const response = await fetch('/api/sets');
-      if (response.ok) setSetsList(await response.json());
-    } catch (err) {
-      console.error('Error fetching sets:', err);
-    }
-  };
 
   const handleDelete = async (entryId, cardName) => {
     if (!window.confirm(t('collection.confirmDeleteCard', { name: cardName }))) {
@@ -635,26 +625,41 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     />
   ), [selectedIds, selectMode, activateCard, onToggle, openEdit, confirmDelete, pressHandlers, t]);
 
+  const subTabs = (
+    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+      <button
+        className={`btn ${subTab === 'collection' ? 'btn-primary' : 'btn-secondary'}`}
+        onClick={() => setSubTab('collection')}
+        style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
+      >
+        {t('nav.collection')}
+      </button>
+      <button
+        className={`btn ${subTab === 'wishlist' ? 'btn-primary' : 'btn-secondary'}`}
+        onClick={() => { exitSelectMode(); setSubTab('wishlist'); }}
+        style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
+      >
+        {t('collection.wishlist')}
+      </button>
+    </div>
+  );
+  const headerStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem', flexWrap: 'wrap', gap: '0.75rem' };
+
+  // The wanted cards: the default Wishlist, drawn by the Lists view's detail.
+  if (subTab === 'wishlist') {
+    return (
+      <div>
+        <div style={headerStyle}>{subTabs}</div>
+        <WishlistTab active={active} statsTrigger={shownTrigger} showToast={showToast} />
+      </div>
+    );
+  }
+
   return (
     <div>
       {/* Header: sub-tabs + selection hint + view toggle */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <button
-            className={`btn ${subTab === 'collection' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setSubTab('collection')}
-            style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
-          >
-            {t('nav.collection')}
-          </button>
-          <button
-            className={`btn ${subTab === 'wishlist' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setSubTab('wishlist')}
-            style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
-          >
-            {t('collection.wishlist')}
-          </button>
-        </div>
+      <div style={headerStyle}>
+        {subTabs}
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           <button
@@ -676,25 +681,10 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
             {t(selectMode ? 'bulk.done' : 'collection.select')}
           </button>
 
-          {/* View Toggle */}
-          <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-            <button
-              className={`btn btn-icon-only ${viewMode === 'gallery' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setViewMode('gallery')}
-              style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
-              title={t('collection.galleryView')}
-            >
-              <LayoutGrid size={14} />
-            </button>
-            <button
-              className={`btn btn-icon-only ${viewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setViewMode('list')}
-              style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
-              title={t('collection.listView')}
-            >
-              <List size={14} />
-            </button>
-          </div>
+          <ViewToggle value={viewMode} onChange={setViewMode} options={[
+            { value: 'gallery', label: t('collection.galleryView'), icon: LayoutGrid },
+            { value: 'list', label: t('collection.listView'), icon: List },
+          ]} />
         </div>
       </div>
 
@@ -943,14 +933,12 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                 </label>
               </div>
 
-              {subTab === 'collection' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <input type="checkbox" id="notCheckedOutOpt" checked={notCheckedOutOnly} onChange={(e) => setNotCheckedOutOnly(e.target.checked)} style={{ width: '14px', height: '14px', cursor: 'pointer' }} />
-                  <label htmlFor="notCheckedOutOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
-                    {t('collection.notInCheckedOutDeck')}
-                  </label>
-                </div>
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input type="checkbox" id="notCheckedOutOpt" checked={notCheckedOutOnly} onChange={(e) => setNotCheckedOutOnly(e.target.checked)} style={{ width: '14px', height: '14px', cursor: 'pointer' }} />
+                <label htmlFor="notCheckedOutOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  {t('collection.notInCheckedOutDeck')}
+                </label>
+              </div>
 
               {activeFilterCount > 0 && (
                 <button className="btn btn-secondary" onClick={clearAllFilters} style={{ marginLeft: 'auto', fontSize: '0.72rem', padding: '0.3rem 0.7rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
@@ -983,16 +971,25 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
 
       {/* Bulk action bar */}
       {selectMode && (
-        <div className="glass-panel bulk-action-bar" style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', position: 'sticky', top: '0.5rem', zIndex: 30 }}>
-          <span style={{ fontWeight: 800, color: 'var(--text-strong)', fontSize: '0.85rem' }}>{t('bulk.selected', { count: selectedIds.size })}</span>
-          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={() => setSelectedIds(new Set(filteredCollection.map(i => i.entry_id)))}>{t('bulk.selectAll', { count: filteredCollection.length })}</button>
-          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={clearSelection}>{t('bulk.clear')}</button>
-          <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
+        <SelectionBar
+          count={selectedIds.size}
+          total={filteredCollection.length}
+          onSelectAll={() => setSelectedIds(new Set(filteredCollection.map(i => i.entry_id)))}
+          onClear={clearSelection}
+          onDone={exitSelectMode}
+        >
+          <BarDivider />
           <button className="btn btn-danger" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('delete', null, t('bulk.confirmDelete', { count: selectedIds.size }))}>{t('bulk.delete')}</button>
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('trade', null)}>{t('bulk.markTrade')}</button>
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('untrade', null)}>{t('bulk.untrade')}</button>
-          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('list_type', subTab === 'wishlist' ? 'collection' : 'wishlist', null)}>{t(subTab === 'wishlist' ? 'bulk.moveToCollection' : 'bulk.moveToWishlist')}</button>
-          <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
+          {/* Wants the cards and leaves the copies where they are. */}
+          <AddSelectedToWishlist
+            cardIds={() => filteredCollection.filter(i => selectedIds.has(i.entry_id)).map(i => i.card_id)}
+            showToast={showToast}
+            disabled={!selectedIds.size}
+            style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }}
+          />
+          <BarDivider />
           <select className="select-control" value="" disabled={!selectedIds.size} onChange={(e) => { if (e.target.value) runBulk('condition', e.target.value); e.target.value = ''; }} style={{ fontSize: '0.72rem', maxWidth: '150px', padding: '0.3rem 0.4rem' }}>
             <option value="">{t('bulk.setCondition')}</option>
             {CONDITIONS.map(c => <option key={c} value={c}>{conditionLabel(t, c)}</option>)}
@@ -1005,7 +1002,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
             <option value="">{t('bulk.setLanguage')}</option>
             {getLanguageNamesForGame(gameFilter).map(l => <option key={l} value={l}>{l}</option>)}
           </select>
-          <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
+          <BarDivider />
           <PackPriceSplitter
             entryIds={Array.from(selectedIds)}
             showToast={showToast}
@@ -1028,7 +1025,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
             {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
           </select>
           <button className="btn btn-primary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!bulkMoveTarget || !selectedIds.size} onClick={() => runBulk('move', bulkMoveTarget === 'unassign' ? null : bulkMoveTarget)}>{t('bulk.applyMove')}</button>
-          <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
+          <BarDivider />
           <AddToDeckSelect
             onAdd={(id) => runBulk('add_to_deck', id)}
             disabled={!selectedIds.size}
@@ -1041,8 +1038,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
             disabled={!selectedIds.size}
             style={{ fontSize: '0.72rem', maxWidth: '160px', padding: '0.3rem 0.4rem' }}
           />
-          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem', marginLeft: 'auto' }} onClick={exitSelectMode}>{t('bulk.done')}</button>
-        </div>
+        </SelectionBar>
       )}
 
       {loading ? (

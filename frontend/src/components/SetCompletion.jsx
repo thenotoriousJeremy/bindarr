@@ -1,10 +1,13 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, RefreshCw, ShoppingCart, Heart } from 'lucide-react';
+import { memo, useState, useEffect, useCallback, useRef } from 'react';
+import { Search, RefreshCw, ShoppingCart } from 'lucide-react';
 import CardImage from './CardImage';
 import CardImageZoom from './CardImageZoom';
 import AddToListSelect from './AddToListSelect';
 import WishlistHeart, { AddSelectedToWishlist } from './WishlistHeart';
+import UnpublishedSetsNotice from './UnpublishedSetsNotice';
+import SelectionBar, { BarDivider } from './SelectionBar';
 import { useT } from '../utils/i18n';
+import { useShownTrigger } from '../utils/useShownTrigger';
 import { onActivateKey } from '../utils/a11y';
 import { priceText } from '../utils/formatPrice';
 import { useFx } from '../utils/useFx';
@@ -34,8 +37,11 @@ const SET_PREFIX_RE = new RegExp(`^(?:${GAMES.map(g => g.setIdPrefix).filter(Boo
 //
 // `focusSet` ({ setId, game?, lang? }) is how the dashboard's set-progress list
 // opens a set here; a new object each time, so the same set can be reopened.
-export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
+function SetCompletion({ active = true, focusSet, statsTrigger, showToast }) {
   const { t } = useT();
+  // Ownership is re-read when cards change elsewhere, but only once this tab is
+  // shown: a hidden Browse tab does not refetch on every scan.
+  const shownTrigger = useShownTrigger(statsTrigger, active);
   const { fx, currency: displayCurrency, show: showPrice } = useFx();
   const [game, setGame] = useState(() => defaultGame());
   const [lang, setLang] = useState('en');
@@ -130,7 +136,7 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
       .then(rows => { if (!cancelled) setMySets(Array.isArray(rows) ? rows : []); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [game, statsTrigger]);
+  }, [game, shownTrigger]);
 
   const load = useCallback(async (tgt, { refresh = false } = {}) => {
     if (!tgt) return;
@@ -157,8 +163,9 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
   }, [t]);
 
   // Reloaded when something was added elsewhere, so the grid fills in as cards
-  // are scanned. The listing is cached server-side; only ownership is re-read.
-  useEffect(() => { load(target); }, [target, statsTrigger, load]);
+  // are scanned (on returning to it, when it was hidden meanwhile). The listing
+  // is cached server-side; only ownership is re-read.
+  useEffect(() => { load(target); }, [target, shownTrigger, load]);
 
   // A bare dashboard link learns its game and language from the answer.
   useEffect(() => {
@@ -309,6 +316,7 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
           </div>
         )}
       </div>
+      <UnpublishedSetsNotice game={game} lang={lang} />
 
       {!target && !loading && (
         <div className="glass-panel" style={{ textAlign: 'center', padding: '2.5rem 1.5rem', color: 'var(--text-secondary)' }}>
@@ -427,18 +435,22 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
           </div>
 
           {selectMode && (
-            <div className="glass-panel" style={{ marginBottom: '1rem', padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', position: 'sticky', top: '0.5rem', zIndex: 30 }}>
-              <span style={{ fontWeight: 800, color: 'var(--text-strong)', fontSize: '0.85rem' }}>{t('bulk.selected', { count: selected.size })}</span>
-              <button type="button" className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={() => setSelected(new Set(shown.map(c => c.id)))}>{t('bulk.selectAll', { count: shown.length })}</button>
-              <button type="button" className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={summary.missing === 0}
-                onClick={() => setSelected(new Set(data.cards.filter(c => !isComplete(c, variantView)).map(c => c.id)))}>{t('sets.selectMissing')}</button>
-              <button type="button" className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={() => setSelected(new Set())}>{t('bulk.clear')}</button>
-              <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
+            <SelectionBar
+              count={selected.size}
+              total={shown.length}
+              onSelectAll={() => setSelected(new Set(shown.map(c => c.id)))}
+              onClear={() => setSelected(new Set())}
+              selectExtras={(
+                <button type="button" className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={summary.missing === 0}
+                  onClick={() => setSelected(new Set(data.cards.filter(c => !isComplete(c, variantView)).map(c => c.id)))}>{t('sets.selectMissing')}</button>
+              )}
+            >
+              <BarDivider />
               <AddSelectedToWishlist cardIds={() => [...selected]} showToast={showToast} disabled={selected.size === 0}
                 onDone={exitSelect} style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} />
               <AddToListSelect cardIds={() => [...selected]} game={data.game} showToast={showToast} disabled={selected.size === 0}
                 style={{ fontSize: '0.72rem', maxWidth: '160px', padding: '0.3rem 0.4rem' }} />
-            </div>
+            </SelectionBar>
           )}
 
           {shown.length === 0 ? (
@@ -460,14 +472,8 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
                       {selectMode ? (
                         <div aria-hidden="true" className={`select-check${isSelected ? ' on' : ''}`}>{isSelected ? '✓' : ''}</div>
                       ) : (
+                        // The one heart: on the Wishlist or not, and one tap to switch.
                         <WishlistHeart card={{ ...card, name: displayName(card) }} showToast={showToast} corner="bottom" />
-                      )}
-                      {/* On the collection's own wishlist (Collection > Cards > Wishlist). */}
-                      {!have && card.wishlisted && (
-                        <span title={t('sets.wishlisted')} aria-label={t('sets.wishlisted')}
-                          style={{ position: 'absolute', top: '6px', left: '6px', zIndex: 10, display: 'flex', padding: '3px', borderRadius: '50%', background: 'rgba(0,0,0,0.6)', color: 'var(--accent-red)' }}>
-                          <Heart size={12} fill="currentColor" />
-                        </span>
                       )}
                     </div>
                     <div className="tcg-card-info">
@@ -504,3 +510,6 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
     </div>
   );
 }
+
+// Memoized: App re-renders on every toast, and its props here are stable.
+export default memo(SetCompletion);

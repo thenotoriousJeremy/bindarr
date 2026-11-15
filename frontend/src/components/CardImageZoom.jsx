@@ -20,17 +20,12 @@ export default function CardImageZoom({ card, onClose }) {
       onClose={onClose}
       label={card?.name}
       style={{ display: 'flex', maxHeight: '88vh', maxWidth: '88vw' }}
+      // .modal-overlay places and centres it (it opens after, so over, the
+      // popup it enlarges from); only the darker, blurred backdrop is its own.
       overlayStyle={{
-        position: 'fixed',
-        top: 0, left: 0, right: 0, bottom: 0,
         backgroundColor: 'rgba(0,0,0,0.92)',
         backdropFilter: 'blur(12px)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1100,
         cursor: 'zoom-out',
-        padding: 'max(1rem, max(env(safe-area-inset-top, 0px), var(--sat, 0px))) 1rem max(1rem, max(env(safe-area-inset-bottom, 0px), var(--sab, 0px))) 1rem'
       }}
     >
       <button

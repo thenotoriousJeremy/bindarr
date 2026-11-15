@@ -27,10 +27,23 @@ async function syncSets(force = false) {
   for (const game of await tcgcsvGames.activated()) await tcgcsvGames.fetchAndCacheSets(game, force);
 }
 
+// The daily set check: one set-list request per provider, so a release shows up
+// within a day instead of at the next weekly refresh (#170). Cheap by design:
+// Scryfall and Lorcast answer with one list each, the Pokémon provider's list
+// is one request too (pokemontcg.io pages, which is two), and TCGdex fetches set
+// details only for sets that do not have them yet — the new ones. Riftbound is
+// left to the weekly refresh: its set list IS its whole catalogue.
+async function checkSets() {
+  const pokemon = await require('./pokemonProvider').apiFor('English');
+  await pokemon.fetchAndCacheSets(true);
+  await scryfallApi.fetchAndCacheSets(true);
+  await lorcastApi.fetchAndCacheSets(true);
+}
+
 // Every provider's price refresh, through utils/priceSweeps: its one ordered list,
 // run sequentially and single-flight. Each sweep asks shouldSweepPrices whether it
 // is due, so ticking far more often than price_refresh_days costs one indexed read
 // per provider. Resolves, never rejects.
 const sweepPrices = () => require('./priceSweeps').runPriceSweeps();
 
-module.exports = { syncSets, sweepPrices };
+module.exports = { syncSets, checkSets, sweepPrices };

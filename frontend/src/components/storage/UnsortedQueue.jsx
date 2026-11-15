@@ -83,13 +83,15 @@ export default function UnsortedQueue({
             <MousePointerClick size={12} />
             {t(unsortedSelectMode ? 'bulk.done' : 'collection.select')}
           </button>
-          <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+          <div style={{ display: 'flex', background: 'var(--surface-2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
             <button
               type="button"
               className={`btn btn-icon-only ${unsortedViewMode === 'grid' ? 'btn-primary' : 'btn-secondary'}`}
               onClick={() => setUnsortedViewMode('grid')}
               style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
               title={t('loc.gridView')}
+              aria-label={t('loc.gridView')}
+              aria-pressed={unsortedViewMode === 'grid'}
             >
               <LayoutGrid size={13} />
             </button>
@@ -99,6 +101,8 @@ export default function UnsortedQueue({
               onClick={() => setUnsortedViewMode('detail')}
               style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
               title={t('loc.detailView')}
+              aria-label={t('loc.detailView')}
+              aria-pressed={unsortedViewMode === 'detail'}
             >
               <List size={13} />
             </button>
@@ -107,7 +111,7 @@ export default function UnsortedQueue({
       </div>
 
       {unsortedSelectMode && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', background: 'rgba(0,0,0,0.25)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginTop: '0.25rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', background: 'var(--surface-2)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginTop: '0.25rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-strong)' }}>{t('bulk.selectedCount', { count: unsortedSelectedIds.size })}</span>
             <div style={{ display: 'flex', gap: '0.3rem' }}>
@@ -121,6 +125,7 @@ export default function UnsortedQueue({
               className="select-control"
               value={unsortedBulkLocation}
               onChange={(e) => setUnsortedBulkLocation(e.target.value)}
+              aria-label={t('loc.fileSelectedTo')}
               style={{ fontSize: '0.7rem', padding: '0.25rem 0.4rem', flex: 1, minWidth: 0 }}
             >
               <option value="">{t('loc.fileSelectedTo')}</option>
@@ -133,7 +138,7 @@ export default function UnsortedQueue({
               onClick={() => {
                 if (!unsortedBulkLocation) return;
                 const locObj = locations.find(l => String(l.id) === String(unsortedBulkLocation));
-                runUnsortedBulk('move', unsortedBulkLocation, t('loc.confirmBulkFile', { count: unsortedSelectedIds.size, name: locObj?.name || t('loc.containerLower') }));
+                runUnsortedBulk('move', unsortedBulkLocation, t('loc.confirmFileCards', { count: unsortedSelectedIds.size, name: locObj?.name || t('loc.containerLower') }));
                 setUnsortedBulkLocation('');
               }}
               style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem', fontWeight: 'bold' }}
@@ -367,7 +372,7 @@ export default function UnsortedQueue({
                     {isHighlighted ? '✓ ' : ''}{displayName(card)}
                   </div>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.4rem', alignItems: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    <span>{card.set_name || 'Unset'} {card.number ? `#${card.number}` : ''}</span>
+                    <span>{card.set_name || t('loc.unknownSet')} {card.number ? `#${card.number}` : ''}</span>
                     {card.condition && (
                       <span style={{ padding: '1px 3px', borderRadius: '2px', background: 'rgba(0,0,0,0.4)', fontSize: '0.55rem', fontWeight: 700 }}>
                         {conditionLabel(t, card.condition)}

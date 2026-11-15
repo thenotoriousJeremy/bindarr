@@ -25,6 +25,16 @@ export const DATA_PREFIX = 'bindarr-data-';
 export const MAX_IMAGES = 500;
 export const MAX_API = 150;
 
+// Trimming lists every key in the cache, which cost more than the write it
+// followed. So a cache is trimmed on its first write after the worker starts and
+// then every TRIM_EVERY writes: the caps above can run over by that many at most.
+export const TRIM_EVERY = 25;
+
+// writesSinceTrim: null when this worker has not trimmed that cache yet.
+export function shouldTrim(writesSinceTrim) {
+  return writesSinceTrim === null || writesSinceTrim >= TRIM_EVERY;
+}
+
 // Set on a response served from the cache because the network failed, so the
 // page can tell "offline" apart from "online but slow".
 export const OFFLINE_HEADER = 'X-Bindarr-Offline';
@@ -105,14 +115,17 @@ export function classifyRequest({ method, url, origin, mode, destination, author
 // after a deploy, say) with index.html and a 200, so an asset that comes back as
 // HTML is a miss, never something to cache; the page's stale-chunk handling
 // needs to see it fail.
-export function isCacheableResponse(kind, { status, type, contentType }) {
-  if (kind === 'image') return status === 200 || type === 'opaque';
+//
+// An opaque image (a host that sends no CORS headers) is not kept: its size is
+// hidden, so Chrome charges every one ~7 MB against the origin's storage quota,
+// and a few hundred of them crowd out everything else. It still shows online.
+export function isCacheableResponse(kind, { status, contentType }) {
   if (status !== 200) return false;
   const ct = (contentType || '').toLowerCase();
   if (kind === 'api') return ct.includes('application/json');
   if (kind === 'asset') return !ct.includes('text/html');
   if (kind === 'navigate') return ct.includes('text/html');
-  return true;
+  return true;   // 'image', 'shell'
 }
 
 // Which caches to drop. Shell caches from other builds go when the new worker

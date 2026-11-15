@@ -1,12 +1,16 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, Suspense } from 'react';
-import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords, StickyNote, Package, ListChecks, Smartphone, Library } from 'lucide-react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useSyncExternalStore, Suspense } from 'react';
+import { Sparkles, LogOut, Smartphone } from 'lucide-react';
 import Login from './components/Login';
 import Logo from './components/Logo';
+import Toast from './components/Toast';
+import NavMoreMenu from './components/NavMoreMenu';
+import { showToast as pushToast, dismissToast, getToast, subscribeToast } from './utils/toast';
 import { App as CapacitorApp } from '@capacitor/app';
 import { useRouteSync, goToTab, initialTab } from './utils/router';
 import { useT } from './utils/i18n';
 import { useStableCallback } from './utils/useStableCallback';
 import { clearApiCache } from './utils/useApi';
+import { isAbortError } from './utils/request';
 import { isNative, isDeviceMode, setDeviceMode } from './apiBase';
 import { parseOidcReturn, takeVerifier } from './utils/nativeOidc';
 import { isSessionExpired } from './utils/sessionExpiry';
@@ -15,9 +19,11 @@ import { readOidcCode } from './utils/webOidc';
 import { clearOfflineData, isOffline, isWriteMethod, noteApiResponse, noteApiUnreachable, offlineWriteResponse, setWriteBlockedText, subscribeOffline } from './utils/offline';
 import { lazyWithReload } from './utils/lazyWithReload';
 import { useNameDictionaries } from './utils/useNameDictionaries';
-import { navBarTabs, litNavTab, collectionTarget, isCollectionView } from './utils/navTabs';
+import { navBarTabs, moreTabs, litNavTab, collectionTarget, isCollectionView } from './utils/navTabs';
+import { NAV_TAB_META } from './utils/navTabMeta';
 import { wishlist } from './utils/wishlist';
 import CollectionViews from './components/CollectionViews';
+import { oidcErrorKey } from './utils/oidcErrors';
 
 // View components are code-split so heavy deps (recharts in the chart views)
 // load on demand instead of in the initial bundle. A view whose chunk an upgrade
@@ -37,21 +43,8 @@ const Notes = lazyWithReload(() => import('./components/Notes'));
 const SealedList = lazyWithReload(() => import('./components/SealedList'));
 const SetCompletion = lazyWithReload(() => import('./components/SetCompletion'));
 
-// Each nav-bar tab's label and icon. Which of them the bar shows is the user's
-// choice (utils/navTabs.js, Settings).
-const NAV_TAB_META = {
-  dashboard: ['nav.dashboard', LayoutDashboard],
-  'add-cards': ['nav.addCards', Plus],
-  collection: ['nav.collection', Database],
-  sets: ['nav.browse', Library],
-  storage: ['nav.storage', MapPin],
-  deckbuilder: ['nav.deckBuilder', Swords],
-  lists: ['nav.lists', ListChecks],
-  notes: ['nav.notes', StickyNote],
-  sealed: ['nav.sealed', Package],
-  settings: ['nav.settings', SettingsIcon],
-  admin: ['nav.admin', ShieldAlert],
-};
+// The header's Settings, Admin and log-out buttons share one look.
+const HEADER_BUTTON_STYLE = { padding: '0.4rem 0.5rem', borderRadius: 'var(--radius-sm)' };
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -76,10 +69,11 @@ class ErrorBoundary extends React.Component {
     if (this.state.hasError) {
       // Class component, so no hook: App hands t down as a prop.
       const t = this.props.t;
+      // Theme tokens: the old pink-on-dark error text was unreadable in the light theme.
       return (
-        <div style={{ padding: '2rem', color: 'var(--text-strong)', background: 'rgba(255,0,0,0.1)', border: '1px solid red', borderRadius: '8px', margin: '2rem' }}>
+        <div style={{ padding: '2rem', color: 'var(--text-strong)', background: 'var(--surface-1)', border: '1px solid var(--accent-red)', borderRadius: '8px', margin: '2rem' }}>
           <h2 style={{ fontSize: '1.2rem', marginBottom: '1rem', color: 'var(--accent-red)' }}>{t('error.crashed')}</h2>
-          <pre style={{ whiteSpace: 'pre-wrap', color: '#ff8888', background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '4px', fontSize: '0.85rem' }}>{this.state.error && this.state.error.toString()}</pre>
+          <pre style={{ whiteSpace: 'pre-wrap', color: 'var(--text-strong)', background: 'var(--surface-2)', padding: '1rem', borderRadius: '4px', fontSize: '0.85rem' }}>{this.state.error && this.state.error.toString()}</pre>
           <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.75rem', marginTop: '1rem', color: 'var(--text-secondary)' }}>{this.state.error && this.state.error.stack}</pre>
           <button className="btn btn-primary" style={{ marginTop: '1.5rem' }} onClick={() => window.location.reload()}>{t('error.reload')}</button>
         </div>
@@ -136,7 +130,10 @@ window.fetch = function (input, options = {}) {
     }
     return response;
   }, err => {
-    if (!isApi) throw err;
+    // A request the page cancelled itself (a newer one replaced it, its view
+    // closed) says nothing about the server: marking it unreachable flashed the
+    // offline banner and refused writes until the next answer came in.
+    if (!isApi || isAbortError(err)) throw err;
     noteApiUnreachable();
     if (!write) throw err;
     window.dispatchEvent(new Event('bindarr_offline_write'));
@@ -171,7 +168,8 @@ function App() {
   const [selectedLocationId, setSelectedLocationId] = useState(null);
   const [focusEntryId, setFocusEntryId] = useState(null);
   const [selectedCardFilter, setSelectedCardFilter] = useState('');
-  const [toast, setToast] = useState(null);
+  // utils/toast.js holds it, so the login screen and the app draw the same one.
+  const toast = useSyncExternalStore(subscribeToast, getToast, getToast);
   const [statsTrigger, setStatsTrigger] = useState(0);
   // The set the Sets tab should open, from the dashboard's set-progress list. A
   // new object per click, so reopening the same set still reaches the tab.
@@ -247,9 +245,7 @@ function App() {
   // showToast(message) for a note; showToast(message, { onAction, actionLabel })
   // adds a button (Undo by default) and keeps the toast up long enough to use it.
   // Stable identity: the tabs are memoized and receive it as a prop.
-  const showToast = useCallback((message, options) => {
-    setToast({ message, ...(options || {}), id: Date.now() + Math.random() });
-  }, []);
+  const showToast = useCallback((message, options) => pushToast(message, options), []);
 
   // Web SSO return. The callback sends the browser back with ?oidc_code=..., a
   // one-time code that redeems only together with the HttpOnly cookie set when
@@ -305,7 +301,8 @@ function App() {
       if (!verifier) return;
 
       if (ret.error) {
-        showToast(ret.error);
+        // A code (routes/auth.js oidcReturn), never text a link could plant.
+        showToast(t(oidcErrorKey(ret.error)));
         return;
       }
       fetch('/api/auth/oidc/exchange', {
@@ -351,7 +348,7 @@ function App() {
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => {
-        setToast(null);
+        dismissToast(toast.id);
       }, toast.onAction ? 6000 : 2500);
       return () => clearTimeout(timer);
     }
@@ -359,8 +356,8 @@ function App() {
 
   // Fit the tab bar by measuring, not by breakpoint. How much room the tabs
   // need depends on Android's system font scale (the WebView honours it), the
-  // language (German and Russian labels run long) and whether the admin tab is
-  // shown — no media query can see any of that. Each pass starts from the
+  // language (German and Russian labels run long) and how many tabs are pinned
+  // — no media query can see any of that. Each pass starts from the
   // least compact state, so widening the window brings labels and the greeting
   // back, then steps down only while something still doesn't fit:
   //   .nav-tight on the header   -> greeting hidden (top bar only, index.css)
@@ -430,10 +427,10 @@ function App() {
   useEffect(() => subscribeOffline(setOffline), []);
   useEffect(() => {
     setWriteBlockedText(t('offline.writeBlocked'));
-    const onBlocked = () => setToast(t('offline.writeBlocked'));
+    const onBlocked = () => showToast(t('offline.writeBlocked'));
     window.addEventListener('bindarr_offline_write', onBlocked);
     return () => window.removeEventListener('bindarr_offline_write', onBlocked);
-  }, [t]);
+  }, [t, showToast]);
 
   // Handle automatic logout on 401
   useEffect(() => {
@@ -503,14 +500,15 @@ function App() {
 
   // Device mode → back to the login screen to pick a server. The collection stays
   // in the on-device database, so choosing "This device" again finds it intact.
-  const handleLeaveDevice = () => {
+  // Stable, like every handler a (memoized) tab receives.
+  const handleLeaveDevice = useStableCallback(() => {
     setDeviceMode(false);
     setToken(null);
     setUser(null);
     localStorage.removeItem('bindarr_token');
     localStorage.removeItem('bindarr_user');
     resetTabs();
-  };
+  });
 
   const handleLogout = () => {
     // Revoke token on server asynchronously
@@ -526,14 +524,21 @@ function App() {
     showToast(t('toast.loggedOut'));
   };
 
-  const handleUpdateUser = (updatedUser) => {
+  const handleUpdateUser = useStableCallback((updatedUser) => {
     setUser(updatedUser);
     saveStoredUser(updatedUser);
-  };
+  });
 
   const triggerRefresh = useCallback(() => {
     setStatsTrigger(prev => prev + 1);
   }, []);
+
+  // An import, restore or precon import (Settings) wrote cards behind every open
+  // tab's back: drop the cached answers and have each tab refetch when shown.
+  const handleDataChanged = useCallback(() => {
+    clearApiCache();
+    triggerRefresh();
+  }, [triggerRefresh]);
 
   // Render shared collection view if URL matches /share/:token. ?container=<id>
   // narrows it to one binder or box, drawn as that container rather than a list.
@@ -549,12 +554,12 @@ function App() {
 
   // Render login screen if unauthenticated. The toast too: "your session expired"
   // and a failed SSO hand-off are said exactly when this screen is showing, and
-  // without it here they were never seen.
+  // without it here they were never seen. The same <Toast> as the app below.
   if (!token || !user) {
     return (
       <>
         <Login onLoginSuccess={handleLoginSuccess} />
-        {toast && <div className="toast">{toast}</div>}
+        <Toast toast={toast} onDismiss={dismissToast} />
       </>
     );
   }
@@ -564,19 +569,43 @@ function App() {
   // Settings (see InstanceSettings).
   const deviceMode = isDeviceMode();
   const showAdmin = user.role === 'admin' && !deviceMode;
-  const barTabs = navBarTabs(user.nav_tabs, { showAdmin, activeTab });
+  const barTabs = navBarTabs(user.nav_tabs, { activeTab });
   const litTab = litNavTab(activeTab, barTabs);
+  // What the bar leaves out, under More (utils/navTabs.js).
+  const moreItems = moreTabs(barTabs).map(tab => ({ tab, label: t(NAV_TAB_META[tab][0]), Icon: NAV_TAB_META[tab][1] }));
+  // Settings and Admin are header buttons, not tabs on the bar (#107).
+  const headerTabButton = (tab, iconStyle) => {
+    const [labelKey, Icon] = NAV_TAB_META[tab];
+    const label = t(labelKey);
+    return (
+      <button
+        type="button"
+        onClick={() => goTab(tab)}
+        className="btn btn-secondary btn-icon-only header-tab-btn"
+        title={label}
+        aria-label={label}
+        aria-current={activeTab === tab ? 'page' : undefined}
+        style={HEADER_BUTTON_STYLE}
+      >
+        <Icon size={14} style={iconStyle} aria-hidden="true" />
+      </button>
+    );
+  };
 
+  // Every tab learns whether it is the one shown (`active`): a hidden tab holds
+  // its statsTrigger refetches until it is shown again (utils/useShownTrigger).
   const renderTab = (tab) => {
+    const active = tab === activeTab;
     switch (tab === 'admin' && !showAdmin ? 'dashboard' : tab) {
       case 'dashboard':
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
       case 'add-cards':
-        return <AddCards active={activeTab === 'add-cards'} onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab} />;
+        return <AddCards active={active} onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab} />;
       case 'collection':
         return (
-          <CollectionList 
-            statsTrigger={statsTrigger} 
+          <CollectionList
+            active={active}
+            statsTrigger={statsTrigger}
             onUpdate={triggerRefresh} 
             showToast={showToast} 
             token={token} 
@@ -590,6 +619,7 @@ function App() {
       case 'storage':
         return (
           <LocationManager
+            active={active}
             statsTrigger={statsTrigger}
             onUpdate={triggerRefresh}
             showToast={showToast}
@@ -600,21 +630,21 @@ function App() {
           />
         );
       case 'sets':
-        return <SetCompletion focusSet={focusSet} statsTrigger={statsTrigger} showToast={showToast} />;
+        return <SetCompletion active={active} focusSet={focusSet} statsTrigger={statsTrigger} showToast={showToast} />;
       case 'deckbuilder':
-        return <DeckBuilder showToast={showToast} />;
+        return <DeckBuilder active={active} statsTrigger={statsTrigger} onUpdate={triggerRefresh} showToast={showToast} />;
       case 'lists':
-        return <Lists active={activeTab === 'lists'} statsTrigger={statsTrigger} showToast={showToast} />;
+        return <Lists active={active} statsTrigger={statsTrigger} showToast={showToast} />;
       case 'notes':
-        return <Notes showToast={showToast} />;
+        return <Notes active={active} showToast={showToast} />;
       case 'sealed':
-        return <SealedList showToast={showToast} />;
+        return <SealedList active={active} statsTrigger={statsTrigger} showToast={showToast} />;
       case 'settings':
-        return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} onLeaveDevice={handleLeaveDevice} />;
+        return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} onLeaveDevice={handleLeaveDevice} onDataChanged={handleDataChanged} />;
       case 'admin':
         return <AdminPanel user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
       default:
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
     }
   };
 
@@ -637,7 +667,8 @@ function App() {
         {/* Navigation Tabs (Nested inside header for unified layout). Each tab
             carries its name as aria-label/title: on narrow screens, or when the
             labels don't fit (navRef check above), the label span is hidden for
-            all but the active tab (index.css). */}
+            all but the active tab (index.css). More, last, holds the tabs the
+            bar leaves out. */}
         <nav ref={navRef} className="nav-tabs" style={{ margin: 0 }}>
           {barTabs.map(tab => {
             const [labelKey, Icon] = NAV_TAB_META[tab];
@@ -651,34 +682,41 @@ function App() {
                 title={label}
                 aria-current={litTab === tab ? 'page' : undefined}
               >
-                <Icon size={18} style={tab === 'admin' ? { color: 'var(--accent-red)' } : undefined} />
+                <Icon size={18} />
                 <span className="nav-tab-label">{label}</span>
               </button>
             );
           })}
+          {moreItems.length > 0 && <NavMoreMenu items={moreItems} onSelect={goTab} />}
         </nav>
 
-        <div className="header-actions" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <div className="header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
           {deviceMode ? (
             // Nobody to greet and nothing to log out of; say where the data is.
-            <div className="header-greeting" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-              <Smartphone size={14} style={{ color: 'var(--accent-yellow)' }} />
-              <span>{t('header.onDevice')}</span>
-            </div>
-          ) : (
             <>
               <div className="header-greeting" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                <Smartphone size={14} style={{ color: 'var(--accent-yellow)' }} />
+                <span>{t('header.onDevice')}</span>
+              </div>
+              {headerTabButton('settings')}
+            </>
+          ) : (
+            <>
+              <div className="header-greeting header-user" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                 <Sparkles size={14} style={{ color: 'var(--accent-yellow)' }} />
                 <span>{t('header.greeting')} <strong style={{ color: 'var(--text-strong)' }}>{user.username}</strong> ({t(`role.${user.role}`)})</span>
               </div>
+              {showAdmin && headerTabButton('admin', { color: 'var(--accent-red)' })}
+              {headerTabButton('settings')}
               <button
+                type="button"
                 onClick={handleLogout}
                 className="btn btn-secondary btn-icon-only"
                 title={t('header.logOut')}
                 aria-label={t('header.logOut')}
-                style={{ padding: '0.4rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
+                style={HEADER_BUTTON_STYLE}
               >
-                <LogOut size={14} />
+                <LogOut size={14} aria-hidden="true" />
               </button>
             </>
           )}
@@ -711,21 +749,7 @@ function App() {
         ))}
       </main>
 
-      {/* Toast Notification */}
-      {toast && (
-        <div key={toast.id} className={toast.onAction ? 'toast toast-action' : 'toast'} role="status">
-          <span>{toast.message}</span>
-          {toast.onAction && (
-            <button
-              type="button"
-              className="toast-action-btn"
-              onClick={() => { const run = toast.onAction; setToast(null); run(); }}
-            >
-              {toast.actionLabel || t('toast.undo')}
-            </button>
-          )}
-        </div>
-      )}
+      <Toast toast={toast} onDismiss={dismissToast} />
     </div>
   );
 }

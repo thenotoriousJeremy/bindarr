@@ -52,6 +52,12 @@ async function startServer(routes) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       return res.end('not found');
     }
+    // `failFirst`: answer this many requests with `failStatus` before the body.
+    if (route.failFirst > 0) {
+      route.failFirst--;
+      res.writeHead(route.failStatus || 503, { 'Content-Type': 'text/plain' });
+      return res.end('upstream trouble');
+    }
     res.writeHead(route.status || 200, {
       'Content-Type': route.type || 'application/json',
       ...(route.headers || {}),
@@ -371,5 +377,60 @@ test('optional categories are checked by name and only taken while they fit the 
     assert.equal(r.code, 0, r.stderr);
     assert.ok(!server.requests.some(q => /^\/tcgplayer\/68\/\d+\//.test(q.path)), 'no product or price request for a category that does not fit');
     assert.match(r.stdout + r.stderr, /skipped 68/);
+  });
+});
+
+test('a group that 404s is skipped, and the rest of the run completes', async () => {
+  const routes = fixtureRoutes();
+  routes.delete('/tcgplayer/3/102/products');
+  routes.delete('/tcgplayer/3/102/prices');
+  await withFixture(routes, async ({ server, out, base }) => {
+    const r = await runSync(base);
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stderr, /\/tcgplayer\/3\/102\/products is not on TCGCSV \(404\); skipping this group/);
+    const files = await listFiles(out);
+    assert.ok(!files.includes('/tcgplayer/3/102/products'), 'the missing group is left out of the tree');
+    assert.ok(files.includes('/tcgplayer/85/201/prices'), 'groups after it are still mirrored');
+    assert.ok(files.includes('/last-updated.txt'), 'and the run is marked complete');
+    assert.equal(server.requests.filter(q => q.path === '/tcgplayer/3/102/products').length, 1, 'a 404 is not retried');
+    assert.ok(!server.requests.some(q => q.path === '/tcgplayer/3/102/prices'), 'a group with no products costs no prices request');
+  });
+});
+
+test('a group whose prices alone 404 keeps its products', async () => {
+  const routes = fixtureRoutes();
+  routes.delete('/tcgplayer/85/201/prices');
+  await withFixture(routes, async ({ out, base }) => {
+    const r = await runSync(base);
+    assert.equal(r.code, 0, r.stderr);
+    const files = await listFiles(out);
+    assert.ok(files.includes('/tcgplayer/85/201/products'));
+    assert.ok(!files.includes('/tcgplayer/85/201/prices'));
+  });
+});
+
+test('a 5xx is retried, and the retried answer is mirrored byte for byte', async () => {
+  const routes = fixtureRoutes();
+  routes.get('/tcgplayer/3/101/prices').failFirst = 1;
+  await withFixture(routes, async ({ server, out, base }) => {
+    const r = await runSync(base);
+    assert.equal(r.code, 0, r.stderr);
+    const asked = server.requests.filter(q => q.path === '/tcgplayer/3/101/prices');
+    assert.equal(asked.length, 2, 'asked once more after the 503');
+    assert.ok(asked[1].at - asked[0].at >= 900, 'after a backoff well beyond the usual gap');
+    const written = await readFile(path.join(out, 'tcgplayer', '3', '101', 'prices'));
+    assert.ok(written.equals(Buffer.from(routes.get('/tcgplayer/3/101/prices').body)));
+  });
+});
+
+test('a 5xx that persists ends the run after a bounded number of retries', async () => {
+  const routes = fixtureRoutes();
+  Object.assign(routes.get('/tcgplayer/3/101/products'), { failFirst: 99, failStatus: 500 });
+  await withFixture(routes, async ({ server, out, base }) => {
+    const r = await runSync(base);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /HTTP 500 for \/tcgplayer\/3\/101\/products/);
+    assert.equal(server.requests.filter(q => q.path === '/tcgplayer/3/101/products').length, 3, 'one try and two retries');
+    assert.ok(!(await listFiles(out)).includes('/last-updated.txt'), 'nothing is marked complete');
   });
 });

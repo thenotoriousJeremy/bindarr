@@ -141,7 +141,7 @@ async function build(args) {
   const languages = backend('./src/utils/languages');
   const segments = backend('./src/utils/catalogSegments');
   const releaseAssets = backend('./src/utils/releaseAssets');
-  const { MODEL_ID } = backend('./src/utils/miloInput');
+  const { MODEL_ID } = backend('./src/utils/modelAssets');
   await db.initDb();
 
   if (!catalog.GAMES.includes(game)) throw new Error(`${game} has no scanner`);

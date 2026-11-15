@@ -10,13 +10,13 @@
 // Prices are never stored converted. These rates only feed GET /api/fx and the
 // dashboard totals, so a stale or missing rate can at worst leave a price in the
 // currency its marketplace quoted — the behaviour before any of this existed.
-const axios = require('axios');
 const db = require('./db');
+const { createProviderClient, USER_AGENT } = require('./utils/providerClient');
 
-const { version } = require('../package.json');
 const ECB_URL = 'https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml';
-const USER_AGENT = `Bindarr/${version} exchange-rate sync (+https://github.com/thenotoriousJeremy/bindarr)`;
 const DAY_MS = 24 * 60 * 60 * 1000;
+// Through the shared client for its User-Agent and, unlike before, its metrics.
+const ecb = createProviderClient({ name: 'ecb', label: 'ECB', timeout: 15000, serial: false });
 
 // <Cube time='2026-11-06'> then <Cube currency='USD' rate='1.1165'/> per currency.
 // A regex rather than an XML parser: the format has been fixed since 1999, the
@@ -61,10 +61,9 @@ async function latestRates() {
 }
 
 async function fetchEcbXml() {
-  const res = await axios.get(ECB_URL, {
-    timeout: 15000,
+  const res = await ecb.get(ECB_URL, {
     responseType: 'text',
-    headers: { 'User-Agent': USER_AGENT, Accept: 'application/xml, text/xml' },
+    headers: { Accept: 'application/xml, text/xml' },
   });
   return res.data;
 }

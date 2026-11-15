@@ -14,7 +14,9 @@
 'use strict';
 
 const BULK_INDEX = 'https://api.scryfall.com/bulk-data';
-const USER_AGENT = `Bindarr/${require('../package.json').version} (+https://github.com/thenotoriousJeremy/bindarr)`;
+// The index goes through Scryfall's shared queue (scryGetRetried); the file comes
+// from its CDN, outside the API's rate limit, with the same User-Agent.
+const USER_AGENT = require('./utils/providerClient').USER_AGENT;
 
 // Find a bulk file's download URL. `type`: 'default_cards' (every print, in
 // English or its only printed language) or 'all_cards' (every language).

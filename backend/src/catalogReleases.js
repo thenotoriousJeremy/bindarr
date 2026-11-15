@@ -27,9 +27,9 @@ const releaseAssets = require('./utils/releaseAssets');
 const segments = require('./utils/catalogSegments');
 const languages = require('./utils/languages');
 const games = require('./utils/games');
-const { MODEL_ID } = require('./utils/miloInput');
-
-const MODEL_DIR = process.env.CV_MODEL_DIR || path.join(__dirname, '..', 'data', 'models');
+// Where the models and catalogs live, and which embedding space this version
+// scans in: both defined once, in modelAssets.
+const { MODEL_DIR, MODEL_ID } = require('./utils/modelAssets');
 const ROOT = path.join(MODEL_DIR, 'bindarr');
 const keyFor = (game, lang) => `${game}-${languages.toCode(lang || 'English')}`;
 const dirFor = (key) => path.join(ROOT, key);

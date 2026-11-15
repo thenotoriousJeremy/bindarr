@@ -5,22 +5,37 @@ name: Tests
 # Docker workflow) and the locale checker (only on locale-only pull requests);
 # the frontend utility tests and the frontend build ran nowhere before merge.
 #
+# The release workflows (docker-build, server-release, mobile-release) call this
+# one on a tag push, and build nothing until it passes. A pull request or a push
+# to main already ran it here, so they do not run it again.
+#
 # Each job installs only its own package. No scan models or catalogs exist on a
-# runner, which is the state of a fresh install: model-dependent unit tests skip,
-# and /api/scan-match answers 503 notBuilt (asserted in test/e2e/malformed.test.js).
+# runner, which is the state of a fresh install: model-dependent unit tests skip
+# (reported as SKIP; scan-tests.yml runs them weekly with the models), and
+# /api/scan-match answers 503 notBuilt (asserted in test/e2e/malformed.test.js).
+# The e2e suites run offline and fail on any outbound connection (test/e2e/run.js).
 on:
   pull_request:
   push:
     branches: [ main ]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
-# A newer push to the same branch makes the older run's answer irrelevant.
+# A newer push to the same branch makes the older run's answer irrelevant. The
+# workflow name is in the group because a caller's run of this file carries the
+# caller's name and ref: three release workflows calling it for one tag must not
+# cancel one another.
 concurrency:
-  group: tests-${{ github.ref }}
+  group: tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+# onnxruntime-node's install script otherwise downloads about 245 MB of CUDA
+# libraries on Linux, which nothing here uses (inference is CPU-only).
+env:
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
 
 jobs:
   backend:

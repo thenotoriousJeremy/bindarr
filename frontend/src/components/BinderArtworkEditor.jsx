@@ -11,6 +11,7 @@ import BinderArtPiece from './BinderArtPiece';
 import CardImage from './CardImage';
 import Modal from './Modal';
 import { useT } from '../utils/i18n';
+import { apiErrorText } from '../utils/apiError';
 
 // Upload, place and print artwork for one binder page or spread (issue #104).
 //
@@ -255,7 +256,7 @@ function BinderArtworkEditor({ location, compartments, pageIndex, cardsByCompart
     try {
       const res = await fetch('/api/binder-art', { method: 'POST', headers: { 'Content-Type': file.type }, body: file });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || t('binderArt.errUpload'));
+      if (!res.ok) throw new Error(apiErrorText(t, data, 'binderArt.errUpload'));
       const next = data.artwork;
       patch({
         artwork: { id: next.id, width: next.width, height: next.height },
@@ -291,7 +292,7 @@ function BinderArtworkEditor({ location, compartments, pageIndex, cardsByCompart
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || t('binderArt.errSave'));
+      if (!res.ok) throw new Error(apiErrorText(t, data, 'binderArt.errSave'));
       setSaved(JSON.stringify({ target, ...draft }));
       onSaved();
       showToast(t('binderArt.saved'));
@@ -314,7 +315,7 @@ function BinderArtworkEditor({ location, compartments, pageIndex, cardsByCompart
     try {
       const res = await fetch(`/api/compartments/${anchor.id}/binder-art`, { method: 'DELETE' });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || t('binderArt.errSave'));
+      if (!res.ok) throw new Error(apiErrorText(t, data, 'binderArt.errSave'));
       const empty = { artwork: null, transform: null, mask: [], pocket };
       setDraft(empty);
       setSaved(JSON.stringify({ target, ...empty }));
@@ -385,7 +386,6 @@ function BinderArtworkEditor({ location, compartments, pageIndex, cardsByCompart
 
   return (
     <Modal onClose={onClose} label={t('binderArt.title')} dirty={dirty} closeOnBackdrop={false}
-      overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       className="glass-panel" style={{ width: 'min(1100px, 100%)', maxHeight: '100%', overflow: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', background: 'var(--bg-secondary)' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: '14rem' }}>

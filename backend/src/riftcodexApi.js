@@ -35,9 +35,9 @@
 //     RiftCodex id) keeps the plain id; every other gets '~' plus its RiftCodex id.
 //
 // Printings are never merged by name: names repeat across printings by design.
-const axios = require('axios');
 const db = require('./db');
 const { parseCardRow } = require('./utils/priceHelpers');
+const { createProviderClient } = require('./utils/providerClient');
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
 const { cacheNormalizedCards } = require('./utils/cardCache');
@@ -55,54 +55,36 @@ const MAX_PAGES = 100;
 // the whole catalogue.
 const MISS_REFRESH_MS = 60 * 60 * 1000;
 
-const { version } = require('../package.json');
-const USER_AGENT = `Bindarr/${version} (+https://github.com/thenotoriousJeremy/bindarr)`;
-
-const client = axios.create({
+// One request at a time, a short gap between them, and a pause on 429 (Retry-After,
+// else 30s) — utils/providerClient's queue. It is a free community service; a
+// catalogue refresh is ~16 requests and has all day.
+const MIN_GAP_MS = Number(process.env.RIFTCODEX_GAP_MS ?? 150);
+const riftcodex = createProviderClient({
+  name: 'riftcodex',
+  label: 'RiftCodex',
   baseURL: BASE_URL,
   timeout: 20000,
-  headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+  minGapMs: MIN_GAP_MS,
+  defaultCooldownMs: 30000,
 });
-
-// One request at a time, a short gap between them, and a pause on 429. It is a
-// free community service; a catalogue refresh is ~16 requests and has all day.
-const MIN_GAP_MS = Number(process.env.RIFTCODEX_GAP_MS ?? 150);
-let queue = Promise.resolve();
-let lastAt = 0;
-let cooldownUntil = 0;
-
-function get(path, config) {
-  const run = queue.then(async () => {
-    for (;;) {
-      const wait = Math.max(cooldownUntil - Date.now(), MIN_GAP_MS - (Date.now() - lastAt), 0);
-      if (wait <= 0) break;
-      await new Promise(r => setTimeout(r, wait));
-    }
-    lastAt = Date.now();
-    try {
-      return await client.get(path, config);
-    } catch (error) {
-      if (error.response && error.response.status === 429) {
-        const ra = parseInt(error.response.headers?.['retry-after'], 10);
-        cooldownUntil = Date.now() + (Number.isFinite(ra) ? ra * 1000 : 30000);
-        console.warn(`RiftCodex rate-limited us — pausing for ${Math.round((cooldownUntil - Date.now()) / 1000)}s.`);
-      }
-      throw error;
-    }
-  });
-  queue = run.then(() => {}, () => {});
-  return run;
-}
+const { client } = riftcodex;
+const get = (path, config) => riftcodex.get(path, config);
 
 // --- ids -----------------------------------------------------------------------
 
 const SAFE = /^[a-z0-9-]$/;
 
+// TextEncoder/TextDecoder rather than Buffer: these run on the phone too (device
+// mode bundles this module), where there is no Buffer. Same bytes, and the same
+// U+FFFD for a malformed sequence that Buffer's utf8 decoding gives.
+const utf8Encoder = new TextEncoder();
+const utf8Decoder = new TextDecoder('utf-8');
+
 function encodeCode(riftboundId) {
   let out = '';
   for (const ch of String(riftboundId || '').trim().toLowerCase()) {
     if (SAFE.test(ch)) out += ch;
-    else for (const byte of Buffer.from(ch, 'utf8')) out += `.${byte.toString(16).padStart(2, '0')}`;
+    else for (const byte of utf8Encoder.encode(ch)) out += `.${byte.toString(16).padStart(2, '0')}`;
   }
   return out;
 }
@@ -121,7 +103,7 @@ function decodeCode(code) {
       bytes.push(s.charCodeAt(i));
     }
   }
-  return Buffer.from(bytes).toString('utf8');
+  return utf8Decoder.decode(Uint8Array.from(bytes));
 }
 
 // The Bindarr card id for a riftbound_id, and for the non-canonical printing of a

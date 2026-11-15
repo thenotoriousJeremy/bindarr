@@ -15,7 +15,7 @@
 // art and set completion that follow are confidently wrong. So every way two
 // candidates can tie, or a number can land on a differently named card, comes back
 // `ambiguous` and stays on its old id for a person to look at.
-const { matcher, normId, fold } = require('./setCatalogueMatch');
+const { matcher, normId, fold, numberKey } = require('./setCatalogueMatch');
 
 // Every other provider prefixes the ids it mints (see cardApi.js); pokemontcg.io's
 // are a bare `<set>-<number>`. Its set codes are lower-case letters and digits and
@@ -38,16 +38,11 @@ const isLegacyId = (id) => parseLegacyId(id) !== null;
 // A collector number as both providers can agree on it.
 //
 // pokemontcg.io writes `1`, `TG01`, `SV1`; TCGdex writes `001`, `TG01`, `SV001`;
-// TCGplayer writes `004/165`. So: drop a `/total`, separators and case, and the
-// zeros padding a digit run, whether it starts the number or follows a letter.
-// Letters are kept, never stripped: `28a` is not card 28, and `TG12` and `SV12`
-// are different cards of one set.
-function numKey(raw) {
-  let s = fold(String(raw == null ? '' : raw)).trim().toUpperCase();
-  s = s.split('/')[0].trim().replace(/^#/, '');
-  s = s.replace(/[\s_.-]+/g, '');
-  return s.replace(/^0+(?=\d)/, '').replace(/([A-Z])0+(?=\d)/g, '$1');
-}
+// TCGplayer writes `004/165`. The shared rule (setCatalogueMatch.numberKey) drops a
+// `/total`, separators and case, and the zeros padding a digit run, whether it
+// starts the number or follows a letter. Letters are kept, never stripped: `28a`
+// is not card 28, and `TG12` and `SV12` are different cards of one set.
+const numKey = numberKey;
 
 // Names as a cross-check, never as the key. The providers spell the same card
 // differently often enough ("M Charizard-EX" / "Mega Charizard EX", a trainer's

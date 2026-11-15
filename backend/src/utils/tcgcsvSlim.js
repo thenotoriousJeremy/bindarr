@@ -7,7 +7,8 @@
 // stored. Readers, checked when this was written:
 //
 //   groups    tcgcsvApi.buildGroupMatcher, tcgplayerCatalog.groupToSet/start
-//             -> groupId, name, abbreviation
+//             -> groupId, name, abbreviation; tcgplayerCatalog.unpublishedSets
+//             -> publishedOn, isSupplemental
 //   products  tcgcsvApi.priceSet (numberOf, productId), tcgplayerCatalog.start
 //             (numberOf, productId, name, imageUrl), pokemonTcgplayer (rarity,
 //             whether there is an image) -> productId, name, number, rarity,
@@ -71,7 +72,10 @@ const SEALED_ONLY_CATEGORIES = new Set(Object.values(SEALED_ONLY_CATEGORY));
 const positive = (v) => (typeof v === 'number' && v > 0 ? v : null);
 
 function slimGroup(g) {
-  return { groupId: g.groupId, name: g.name ?? null, abbreviation: g.abbreviation ?? null };
+  return {
+    groupId: g.groupId, name: g.name ?? null, abbreviation: g.abbreviation ?? null,
+    publishedOn: g.publishedOn ?? null, isSupplemental: g.isSupplemental ?? null,
+  };
 }
 
 function rawNumber(p) {

@@ -25,12 +25,13 @@
 // which it is good at. This module supplies prices and product ids only.
 const axios = require('axios');
 const db = require('./db');
-const { recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
-const { normId, normName, fold } = require('./utils/setCatalogueMatch');
+const { recordPrice, shouldSweepPrices, markPricesSwept, WISHLIST_CARDS_SQL } = require('./utils/priceHelpers');
+const { normId, normName, numberKey } = require('./utils/setCatalogueMatch');
 const metrics = require('./utils/metrics');
 const {
   slimResults, SEALED_ONLY_CATEGORY, SLIM_VERSION, CATALOGUE_CATEGORY, BUNDLE_KINDS, bundlePath, INDEX_PATH,
 } = require('./utils/tcgcsvSlim');
+const { createProviderClient } = require('./utils/providerClient');
 
 // The project's daily mirror of TCGCSV (.github/workflows/tcgcsv-mirror.yml), not
 // tcgcsv.com itself. TCGCSV is one person's free service; every install syncing
@@ -185,9 +186,7 @@ const client = axios.create({
 metrics.instrumentAxiosClient(client, 'tcgcsv');
 
 let loggedCooldownUntil;
-let lastRequestAt = 0;
 let requestsSent = 0;   // every request that left the process; runSync logs its share
-let requestQueue = Promise.resolve();
 let syncPromise = null;
 
 class TcgcsvCooldownError extends Error {
@@ -294,17 +293,24 @@ function logRequestFailure(path, error) {
   );
 }
 
-function pacedGet(path, config = {}) {
-  const request = requestQueue.then(async () => {
-    const delay = TCGCSV_MIN_REQUEST_INTERVAL_MS - (Date.now() - lastRequestAt);
-    if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
-    await check403Cooldown();
-    lastRequestAt = Date.now();
-    requestsSent++;
-    try {
-      return await client.get(path, config);
-    } catch (error) {
-      logRequestFailure(path, error);
+// One request at a time, TCGCSV_MIN_REQUEST_INTERVAL_MS apart: utils/providerClient's
+// queue, around this module's own client, whose headers stay exactly as they are.
+// TCGCSV's stop signal is its own: a 403 starts the persisted 24-hour cooldown
+// (checked before every request, so a refusal sends nothing), and no in-memory
+// pause is armed on top of it.
+const tcgcsvQueue = createProviderClient({
+  name: 'tcgcsv',
+  label: 'TCGCSV',
+  client,
+  minGapMs: TCGCSV_MIN_REQUEST_INTERVAL_MS,
+  cooldownStatuses: [],
+  hooks: {
+    before: async () => {
+      await check403Cooldown();
+      requestsSent++;
+    },
+    error: async (error, { url }) => {
+      logRequestFailure(url, error);
       if (error && error.response && error.response.status === 403) {
         try {
           await start403Cooldown();
@@ -312,12 +318,11 @@ function pacedGet(path, config = {}) {
           console.error('Could not save TCGCSV 403 cooldown:', cooldownError.message);
         }
       }
-      throw error;
-    }
-  });
-  requestQueue = request.then(() => undefined, () => undefined);
-  return request;
-}
+    },
+  },
+});
+
+const pacedGet = (path, config = {}) => tcgcsvQueue.get(path, config);
 
 function parseResults(path, data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
@@ -663,17 +668,31 @@ async function syncIfUpdated({ explicit = false } = {}) {
   if (process.env.BINDARR_DISABLE_TCGCSV_SYNC === '1') {
     return { updated: false, disabled: true };
   }
-  if (syncPromise) return syncPromise;
-  const categories = await demandedCategories({ explicit });
-  if (!categories.length) {
-    if (!noDemandLogged) {
-      console.log('TCGCSV sync skipped: nothing on this instance needs TCGCSV prices yet (no Pokémon cards or sealed purchases).');
-      noDemandLogged = true;
-    }
-    return { updated: false, skipped: 'no-demand', requests: 0 };
+  if (syncPromise) {
+    if (!explicit || syncPromise.explicit) return syncPromise;
+    // An admin's explicit sync arriving while an on-demand one runs: that run may
+    // have found nothing demanded, so wait for it and then sync as asked. Whatever
+    // it already stored is reused, so this costs no request twice.
+    await syncPromise.catch(() => {});
+    return syncIfUpdated({ explicit });
   }
-  noDemandLogged = false;
-  const running = runSync(categories);
+  // Claimed before the first await. The demand check below awaits the database,
+  // and when the claim came after it, the scheduler and a settings change could
+  // both get past the check above and run two syncs side by side, each asking
+  // the mirror for every path.
+  const running = (async () => {
+    const categories = await demandedCategories({ explicit });
+    if (!categories.length) {
+      if (!noDemandLogged) {
+        console.log('TCGCSV sync skipped: nothing on this instance needs TCGCSV prices yet (no Pokémon cards or sealed purchases).');
+        noDemandLogged = true;
+      }
+      return { updated: false, skipped: 'no-demand', requests: 0 };
+    }
+    noDemandLogged = false;
+    return runSync(categories);
+  })();
+  running.explicit = explicit;
   syncPromise = running;
   try {
     return await running;
@@ -815,14 +834,11 @@ function buildGroupMatcher(groupsByCategory) {
 // A card number as both sides can agree on.
 //
 // TCGplayer writes '004/102' where TCGdex writes '4', and TCGplayer's own newer
-// sets use bare numbers with letter suffixes ('TG12', 'SV107'). So: take the part
-// before the slash, then drop leading zeros from the digit run while KEEPING any
-// letters — 'TG12' and 'SWSH284' are numbers too, and stripping their letters
-// would collide every promo in a set into one key.
-function normNumber(n) {
-  const head = String(n == null ? '' : n).split('/')[0].trim();
-  return fold(head).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^0+(?=\d)/, '');
-}
+// sets use bare numbers with letter suffixes ('TG12', 'SV107'). The shared rule
+// (setCatalogueMatch.numberKey) takes the part before the slash and drops padding
+// zeros while KEEPING any letters — 'TG12' and 'SWSH284' are numbers too, and
+// stripping their letters would collide every promo in a set into one key.
+const normNumber = numberKey;
 
 // Cached products carry the slim `number`; a raw TCGCSV product carries it in
 // extendedData. Both are accepted so a caller can hand either.
@@ -912,14 +928,14 @@ function pricesByProduct(rows) {
 // The (set, language) pairs to price, newest-largest first.
 //
 // `scope` decides how much of the cache is worth a request:
-//   'owned' — sets the user actually holds cards from, which is what the daily
-//             sweep needs. One TCGCSV request per set, so this is the difference
-//             between ~30 requests and ~670.
+//   'owned' — sets the user actually holds cards from (or has in a deck, or on a
+//             wishlist), which is what the daily sweep needs. One TCGCSV request
+//             per set, so this is the difference between ~30 requests and ~670.
 //   'all'   — every cached set. For the one-off backfill.
 async function setsToPrice(scope = 'owned') {
   const owned = `
     WHERE cc.game = 'pokemon' AND cc.id IN (
-      SELECT card_id FROM collection UNION SELECT card_id FROM deck_cards
+      SELECT card_id FROM collection UNION SELECT card_id FROM deck_cards UNION ${WISHLIST_CARDS_SQL}
     )`;
   const rows = await db.all(`
     SELECT cc.set_id, cc.set_name, cc.language, COUNT(*) AS n
@@ -1028,7 +1044,7 @@ async function updateCollectionPrices(force = false, scope = 'owned') {
     const match = buildGroupMatcher(groups);
 
     console.log(`Starting TCGCSV price update for ${sets.length} Pokémon sets (${scope})...`);
-    let priced = 0, unmatched = [];
+    let priced = 0, unmatched = [], answered = 0, lastError = null;
     const groupDataCache = new Map();
     // Sequential: this is one request per set against somebody else's free mirror,
     // and the sweep has all day to finish.
@@ -1036,13 +1052,19 @@ async function updateCollectionPrices(force = false, scope = 'owned') {
       try {
         const r = await priceSet(s, match, groupDataCache);
         if (!r.matched) unmatched.push(`${s.set_id} (${s.language})`);
+        else answered++;
         priced += r.priced;
       } catch (e) {
         // Reads come from the cache, never the network, so there is no 403 to
         // stop for here: one set failing must not abandon the rest.
+        lastError = e;
         console.warn(`TCGCSV: ${s.set_id} (${s.language}) failed: ${e.message}`);
       }
     }
+    // Every set it could place failed: the cache cannot answer, which is not a
+    // sweep done. The error goes to the handler below — a cache miss waits for the
+    // next sync, any other failure is reported — and the sweep stays due.
+    if (lastError && !answered) throw lastError;
     await markPricesSwept('tcgcsv');
     console.log(`TCGCSV price update complete: ${priced} cards priced.`);
     // Named, not just counted. An unmatched set is a silent price gap otherwise,

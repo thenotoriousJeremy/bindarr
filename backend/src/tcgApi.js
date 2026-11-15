@@ -1,21 +1,24 @@
-const axios = require('axios');
 const db = require('./db');
-const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
+const { parseCardRow, recordStoredPrice, shouldSweepPrices, markPricesSwept, WISHLIST_CARDS_SQL } = require('./utils/priceHelpers');
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
 const { cacheNormalizedCards } = require('./utils/cardCache');
-const metrics = require('./utils/metrics');
+const { createProviderClient } = require('./utils/providerClient');
 
 const API_BASE_URL = 'https://api.pokemontcg.io/v2';
 const API_KEY = process.env.POKEMON_TCG_API_KEY || ''; // Optional user key
 
-// Axios instance with rate limit handling headers if key is available
-const tcgClient = axios.create({
+// Axios instance with rate limit handling headers if key is available. Through
+// utils/providerClient for the User-Agent it never sent and its metrics; not
+// serialized, as it never was (the sweep spaces its own requests).
+const tcgClient = createProviderClient({
+  name: 'pokemontcg',
+  label: 'pokemontcg.io',
   baseURL: API_BASE_URL,
   timeout: 6000,
-  headers: API_KEY ? { 'X-Api-Key': API_KEY } : {}
-});
-metrics.instrumentAxiosClient(tcgClient, 'pokemontcg');
+  headers: API_KEY ? { 'X-Api-Key': API_KEY } : {},
+  serial: false,
+}).client;
 
 // api.pokemontcg.io answers 5xx (and occasionally stalls past the timeout) often
 // enough that a single failed GET made searches look broken most of the time —
@@ -49,6 +52,9 @@ const CACHE_AGE_LIMIT_MS = 1000 * 60 * 60 * 24 * CACHE_AGE_LIMIT_DAYS;
 // so this is politeness rather than a limit the sweep is anywhere near.
 // Overridable so the test suite need not spend a real second per card.
 const PRICE_REQUEST_GAP_MS = Number(process.env.POKEMON_PRICE_GAP_MS || 1000);
+// A sweep whose first this-many requests all fail stops there: see
+// updateCollectionPrices.
+const SWEEP_ABORT_AFTER = 5;
 
 function extractPrice(card) {
   if (card.tcgplayer && card.tcgplayer.prices) {
@@ -492,6 +498,24 @@ async function runSearch(meta, nameQuery = '', numberQuery = '', setQuery = '', 
   }
 }
 
+// Fetch one card from pokemontcg.io, cache it, and answer with the row as stored.
+// Throws on a failed request, so a caller can tell a refresh that happened from
+// one that did not. The stored row rather than the fetched card: the cache keeps
+// a TCGCSV price over this API's own (utils/cardCache), and the card a caller
+// shows, adds or records a price for is the one in card_cache. Null when the API
+// has no such card.
+async function fetchAndCache(id, apiKey = '') {
+  console.log(`Querying Pokémon TCG API for card ID: ${id}`);
+  const response = await tcgClient.get(`/cards/${id}`, {
+    headers: apiKey ? { 'X-Api-Key': apiKey } : {}
+  });
+  const card = response.data.data;
+  if (!card) return null;
+  await cacheCards([card]);
+  const row = await db.get(`SELECT * FROM card_cache WHERE id = ?`, [card.id]);
+  return row ? parseCardRow(row) : null;
+}
+
 // Fetch single card by ID (with caching)
 async function getCardById(id, apiKey = '') {
   const cached = await db.get(`SELECT * FROM card_cache WHERE id = ?`, [id]);
@@ -510,35 +534,8 @@ async function getCardById(id, apiKey = '') {
   }
 
   try {
-    console.log(`Querying Pokémon TCG API for card ID: ${id}`);
-    const response = await tcgClient.get(`/cards/${id}`, {
-      headers: apiKey ? { 'X-Api-Key': apiKey } : {}
-    });
-    const card = response.data.data;
-    
-    if (card) {
-      await cacheCards([card]);
-      const detailed = extractDetailedPrices(card);
-      return {
-        id: card.id,
-        name: card.name,
-        supertype: card.supertype,
-        subtypes: card.subtypes || [],
-        types: card.types || [],
-        rarity: card.rarity,
-        set_id: card.set ? card.set.id : '',
-        set_name: card.set ? card.set.name : '',
-        number: card.number,
-        image_url: card.images ? (card.images.small || card.images.large) : '',
-        price_trend: extractPrice(card),
-        price_normal: detailed.normal,
-        price_holofoil: detailed.holofoil,
-        price_reverse_holofoil: detailed.reverseHolofoil,
-        price_avg1: detailed.avg1,
-        price_avg7: detailed.avg7,
-        price_avg30: detailed.avg30
-      };
-    }
+    const stored = await fetchAndCache(id, apiKey);
+    if (stored) return stored;
   } catch (error) {
     if (error.response) {
       if (error.response.status === 429) {
@@ -632,8 +629,9 @@ async function updateCollectionPrices(force = false) {
     // pokemontcg.io about an "mtg-" id would just 404. English only — non-English
     // Pokémon rows come from TCGdex and are swept by its own updateCollectionPrices.
     //
-    // Driven from collection/deck_cards and joined to card_cache by primary key,
-    // which is what keeps the added clause cheap; see #49 for the shape to avoid.
+    // Driven from collection/deck_cards (and the wishlists, which price alerts
+    // watch) and joined to card_cache by primary key, which is what keeps the
+    // added clause cheap; see #49 for the shape to avoid.
     const staleClause = `cc.game = 'pokemon' AND cc.language = 'English' AND cc.id NOT LIKE 'pokemontcgapi-%' AND cc.id NOT LIKE 'tcgplayer-%'
         AND (cc.last_updated IS NULL OR cc.last_updated <= datetime('now', '-${CACHE_AGE_LIMIT_DAYS} days'))`;
     const cardsInUse = await db.all(`
@@ -642,6 +640,9 @@ async function updateCollectionPrices(force = false) {
       UNION
       SELECT DISTINCT d.card_id FROM deck_cards d
       JOIN card_cache cc ON d.card_id = cc.id WHERE ${staleClause}
+      UNION
+      SELECT DISTINCT w.card_id FROM (${WISHLIST_CARDS_SQL}) w
+      JOIN card_cache cc ON w.card_id = cc.id WHERE ${staleClause}
     `);
 
     if (!cardsInUse.length) {
@@ -651,15 +652,29 @@ async function updateCollectionPrices(force = false) {
     }
 
     console.log(`Starting background price update for ${cardsInUse.length} stale cards...`);
+    let answered = 0;
+    let failed = 0;
+    let lastError = null;
     for (let i = 0; i < cardsInUse.length; i++) {
       const item = cardsInUse[i];
       try {
-        // Fetching will force update the cache and price
-        const updatedCard = await getCardById(item.card_id, process.env.POKEMON_TCG_API_KEY);
-        // Record the new price, but only if it actually moved.
-        if (updatedCard) await recordPrice(item.card_id, updatedCard.price_trend);
+        // Every selected row is stale, so this fetches; it throws when the request
+        // fails, which getCardById would have hidden behind the cached row.
+        await fetchAndCache(item.card_id, process.env.POKEMON_TCG_API_KEY);
+        answered++;
+        // The price now stored, which a TCGCSV price outranks; only if it moved.
+        await recordStoredPrice(item.card_id);
       } catch (itemErr) {
+        failed++;
+        lastError = itemErr;
         console.error(`Failed to update price for card ${item.card_id}:`, itemErr.message);
+      }
+      // Not one answer: pokemontcg.io is down, not a few cards missing. Marking
+      // the sweep done would skip a whole interval in silence, so the catch below
+      // reports it and the next tick tries again. Given up after a handful rather
+      // than the whole list, which would be hours of timeouts on a large collection.
+      if (!answered && (failed >= SWEEP_ABORT_AFTER || i === cardsInUse.length - 1)) {
+        throw new Error(`every price request failed (${failed} of ${cardsInUse.length} cards tried): ${lastError && lastError.message}`);
       }
       // A second between requests, to respect the rate limit. Between, not after:
       // the old loop also paid it once the last card was already done.

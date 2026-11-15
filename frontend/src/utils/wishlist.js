@@ -8,6 +8,8 @@
 // server's answer then replaces the set, so it never drifts from the list.
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
+// Cards per add request: the server takes at most this many (routes/lists.js BULK_MAX).
+const ADD_MAX = 500;
 
 export function createWishlistStore(fetchFn = (...args) => globalThis.fetch(...args)) {
   let ids = new Set();
@@ -41,35 +43,51 @@ export function createWishlistStore(fetchFn = (...args) => globalThis.fetch(...a
     return pending;
   }
 
-  // Resolves to { added, already, failed, error }.
+  // Resolves to { added, already, failed, error }. A selection can be the whole
+  // collection (the bulk bars), so it is sent ADD_MAX cards at a time, the most
+  // the server takes in one request; a refused part is undone on its own.
   async function add(cardIds) {
     const wanted = [...new Set((cardIds || []).filter(Boolean))];
     if (wanted.length === 0) return { added: 0, already: 0, failed: [], error: null };
-    const fresh = wanted.filter(id => !ids.has(id));
-    const undo = () => {
-      if (!fresh.length) return;
-      ids = new Set([...ids].filter(id => !fresh.includes(id)));
+    const fresh = new Set(wanted.filter(id => !ids.has(id)));
+    const undo = (part) => {
+      const gone = part.filter(id => fresh.has(id));
+      if (!gone.length) return;
+      ids = new Set([...ids].filter(id => !gone.includes(id)));
       emit();
     };
-    if (fresh.length) {
+    if (fresh.size) {
       ids = new Set([...ids, ...fresh]);
       emit();
     }
+    const out = { added: 0, already: 0, failed: [], error: null };
+    let serverIds = null;
     inflight++;
     try {
-      const res = await fetchFn('/api/lists/default/items', {
-        method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ card_ids: wanted }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        undo();
-        return { added: 0, already: 0, failed: wanted, error: body.error || null };
+      for (let i = 0; i < wanted.length; i += ADD_MAX) {
+        const part = wanted.slice(i, i + ADD_MAX);
+        try {
+          const res = await fetchFn('/api/lists/default/items', {
+            method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ card_ids: part }),
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            undo(part);
+            out.failed.push(...part);
+            out.error = out.error || body.error || null;
+            continue;
+          }
+          out.added += body.added || 0;
+          out.already += body.already || 0;
+          out.failed.push(...(body.failed || []));
+          if (Array.isArray(body.card_ids)) serverIds = body.card_ids;
+        } catch {
+          undo(part);
+          out.failed.push(...part);
+        }
       }
-      if (inflight === 1 && Array.isArray(body.card_ids)) replace(body.card_ids);
-      return { added: body.added || 0, already: body.already || 0, failed: body.failed || [], error: null };
-    } catch {
-      undo();
-      return { added: 0, already: 0, failed: wanted, error: null };
+      if (inflight === 1 && serverIds) replace(serverIds);
+      return out;
     } finally {
       inflight--;
     }

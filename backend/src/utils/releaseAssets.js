@@ -3,7 +3,9 @@
 //
 // Release assets, not the GitHub API: an asset URL is a plain CDN download with no
 // API rate limit, and it needs no token. CATALOG_RELEASE_URL points an install at
-// another copy (a fork's release, or a local folder served for tests).
+// another copy (a fork's release, or a local folder served for tests); `off` makes
+// every file read as not published, without a request (an offline install, and
+// the end-to-end tests, which fail on any outbound connection).
 //
 // fetch(), not axios: a phone running the app routes fetch through Capacitor's
 // native HTTP layer, and nothing here needs more than GET.
@@ -11,7 +13,9 @@
 
 const DEFAULT_BASE = 'https://github.com/thenotoriousJeremy/bindarr/releases/download/scan-catalogs';
 const base = () => String(process.env.CATALOG_RELEASE_URL || DEFAULT_BASE).replace(/\/+$/, '');
-const USER_AGENT = `Bindarr/${require('../../package.json').version} (+https://github.com/thenotoriousJeremy/bindarr)`;
+const disabled = () => String(process.env.CATALOG_RELEASE_URL || '').trim().toLowerCase() === 'off';
+// Bindarr's own name (utils/providerClient), as every other outbound request has.
+const USER_AGENT = require('./providerClient').USER_AGENT;
 
 const urlFor = (name) => `${base()}/${encodeURIComponent(name)}`;
 
@@ -26,6 +30,7 @@ class AssetMissingError extends Error {
 // has run, or for a catalog nobody publishes, "not there" is an answer, not a
 // failure.
 async function fetchAsset(name, { timeoutMs = 120000 } = {}) {
+  if (disabled()) throw new AssetMissingError(name);
   const res = await fetch(urlFor(name), {
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/octet-stream, application/json' },
     redirect: 'follow',
@@ -46,4 +51,4 @@ async function fetchJson(name, opts) {
   }
 }
 
-module.exports = { fetchAsset, fetchJson, urlFor, base, AssetMissingError, DEFAULT_BASE };
+module.exports = { fetchAsset, fetchJson, urlFor, base, disabled, AssetMissingError, DEFAULT_BASE };

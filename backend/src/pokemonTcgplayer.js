@@ -264,6 +264,9 @@ function ensure(lang) {
   if (inflight.has(meta.code)) return inflight.get(meta.code);
   const run = (async () => {
     if (await pokemonProvider.providerFor(meta.code) !== pokemonProvider.TCGDEX) return null;
+    // Nothing to write the cards from, and never will be: no TCGCSV data and the
+    // sync switched off (an offline install, the tests). Not worth a download.
+    if (process.env.BINDARR_DISABLE_TCGCSV_SYNC === '1' && !(await tcgcsv.currentVersion())) return null;
     const coverage = await loadCoverage(meta);
     if (!coverage) return null;
     let result = await materialize(meta.name, coverage);

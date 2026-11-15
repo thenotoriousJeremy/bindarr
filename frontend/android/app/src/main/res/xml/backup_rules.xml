@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android Auto Backup, Android 11 and older (android:fullBackupContent).
+     Everything is backed up except the scan data device mode downloads
+     (src/device/scanAssets.js, files/scan/): ~70 MB that can be downloaded again
+     would fill the 25 MB backup quota, and then the backup stops covering the
+     collection database (databases/), which is the part that matters.
+     Android 12 and newer read data_extraction_rules.xml instead. -->
+<full-backup-content>
+    <exclude domain="file" path="scan" />
+</full-backup-content>

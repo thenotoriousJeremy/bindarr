@@ -29,7 +29,8 @@ to ship.
 backend/
   src/
     server.js              Express app: middleware, route mounts, static SPA, health, job list, startup/shutdown
-    db.js                  SQLite connection (promisified run/get/all), schema init, password hashing
+    db.js                  Facade over db/: connection.js (connection, lock, run/get/all, withTransaction),
+                           schema.js (CREATE statements), migrations.js (initDb, addColumns)
     scheduler.js           Background jobs on clocks kept in job_runs, checked every 15 minutes
     middleware/auth.js     authenticateToken (session lookup), requireAdmin, rate limiters
     routes/
@@ -77,7 +78,8 @@ frontend/
     components/            One component per screen/widget (see Frontend section)
     utils/                 Pure helpers: sorting, pricing, printing/rarity styling, language, shuffle
 Dockerfile, docker-compose.yml, .github/workflows/docker-build.yml   Container build + smoke test + CI publish to GHCR
-.github/workflows/test.yml, audit.yml, .github/dependabot.yml        Test gate on every PR, dependency audit, weekly update PRs
+.github/workflows/test.yml, audit.yml, .github/dependabot.yml        Test gate on every PR (and before every release), dependency audit, weekly update PRs
+.github/workflows/android.yml, scan-tests.yml                        Android debug build on native PRs; weekly scan tests with the models
 ```
 
 Regenerable/large artifacts live in `backend/data/models` (the two ONNX files and
@@ -91,7 +93,9 @@ The two models are in neither the repository nor the image, and that is a
 licensing decision rather than an omission: they are AGPL-3.0 while Bindarr is MIT,
 so the operator fetches them into `CV_MODEL_DIR` as a deliberate step
 (`node scripts/fetch-models.mjs`, optionally `--catalogs` for the published
-fallbacks). Startup says so when they are absent, because that is the ordinary
+fallbacks). Every file comes from one pinned Hugging Face commit and must match
+the SHA-256 recorded for it in `utils/modelAssets.js`, on a server and on a
+phone alike. Startup says so when they are absent, because that is the ordinary
 state of a fresh install, and `/api/scan-match` answers `503 notBuilt` rather than
 failing obscurely at session creation.
 
@@ -112,6 +116,15 @@ any username posted to it, because the name has to be knowable to whoever set
 `DEFAULT_ADMIN_PASSWORD` and is what `db.adoptOrphanRows` is reached through. No
 password is ever logged.
 
+While no account exists, bootstrap also needs a one-time **setup code**, so that
+whoever reaches a new server first cannot claim it. `routes/auth.js` makes one at
+startup (or takes `SETUP_CODE`) and prints it as a `SETUP:` log line once the
+database confirms the `users` table is empty; `/api/auth/config` reports
+`setupCodeRequired`. A request straight from loopback with no proxy headers needs
+no code (a local install, and the test suites), which in practice means Docker's
+port mapping and any reverse proxy always ask for it. The first SSO login that
+would create the owner is gated the same way (`/api/auth/oidc/login?setup_code=`).
+
 Startup also probes `CV_MODEL_DIR` with a real write — `fs.access(W_OK)` reports
 permission bits, which is not the same question as whether the filesystem will
 accept a file — and warms the two ONNX sessions and the default catalog, so the
@@ -119,7 +132,9 @@ first scan of a session does not pay for the load. An unwritable model directory
 is reported and survived: everything except catalog builds still works.
 
 The listener starts at once and never waits on network work; `/api/health`
-answers 503 until `initDb` finishes. A database that cannot be opened or
+answers 503 until `initDb` finishes, and so does every other `/api` request (with
+`Retry-After`, from `routes/mounts.js`'s `whenReady` gate), so nothing runs
+against a schema a migration is still changing. A database that cannot be opened or
 migrated is fatal: the error is logged and the process exits 1, so a
 supervisor restarts it instead of a live process answering 503 forever.
 Before a different release migrates a database that holds data, `initDb`
@@ -136,7 +151,9 @@ and a failure is recorded and retried after an hour.
 
 | Job | Every | Notes |
 |-----|-------|-------|
-| `sets-refresh` | 7 days | Forced set refresh for all three games, set-cache reload, catalog auto-update. Run (forced) during startup when overdue; otherwise startup only fills empty set tables. |
+| `sets-refresh` | 7 days | Forced set refresh for all three games, set-cache reload, catalog auto-update. Run (forced) during startup when overdue; otherwise startup only fills empty set tables. The auto-update (`CATALOG_AUTO_UPDATE`) builds every catalog that is behind, the oldest-built first (`catalog.autoUpdates`), each as only the sets it is missing or that grew, within the scope it was built with (recorded in its meta), so no game waits behind another and a scoped catalog stays scoped. |
+| `sets-check` | 1 day | `utils/syncJobs.checkSets`: one set-list request per provider, so a new set appears within a day rather than at the next weekly refresh. `GET /api/sets/tcgplayer-unpublished` lists the TCGplayer groups no Pokémon set matches yet, which Browse shows as a notice. |
+| `scan-catalog-releases` | 1 day | `catalogReleases.updateInstalled`: one manifest request per installed Bindarr catalog, then only the delta segments it lacks; nothing at all with none installed. Off with `CATALOG_AUTO_UPDATE=0`. |
 | `tcgcsv-sync` | 1 hour | `tcgcsvApi.syncIfUpdated`, whose own gate reads `last-updated.txt` at most daily. A 403 cooldown is not an error. Off with `BINDARR_DISABLE_TCGCSV_SYNC=1`. |
 | `price-sweeps` | 1 hour | `utils/priceSweeps.runPriceSweeps`: one ordered list, sequential, TCGCSV last, single-flight, failures isolated. Each provider's `shouldSweepPrices` gate decides whether it is actually due. |
 | `session-purge` | 1 day | Deletes expired sessions. |
@@ -182,29 +199,33 @@ Authentication is DB-backed session tokens, not JWTs:
 - `POST /api/auth/login` verifies a PBKDF2 password hash and inserts a row into `sessions` (`user_id`, `token`, `expires_at`).
 - `authenticateToken` (`middleware/auth.js`) reads the `Bearer` token, looks up its SHA-256 (`authHelpers.hashSessionToken`; the table never holds the token itself) in `sessions` where `expires_at > now`, and sets `req.user = { id, username, role, tcg_api_key, ... }`.
 - `requireAdmin` gates admin-only routes on `req.user.role === 'admin'`.
-- A bearer token that matches no session is then checked against `users.api_key` — a long-lived read-only credential for external scripts (issue #33). It sets `req.user.via_api_key`, which makes `authenticateToken` refuse any non-GET (403) and `requireAdmin` refuse it outright. No user object the server returns (`/auth/me`, login, settings) carries a key: they report `has_*` flags, provider keys are write-only, and the API key is read on demand from `GET /auth/api-key` (login session only). The gate's 401s carry `code: 'session_expired'`; a password change revokes the user's other sessions, an admin reset all of them. Read-only is the whole reason a non-expiring credential is acceptable here; anything that weakens it has to replace it with something scoped.
-- Rate limiters (`authLimiter`, `searchLimiter`, `importLimiter`) protect login and expensive endpoints.
+- A bearer token that matches no session is then checked against `users.api_key` — a long-lived read-only credential for external scripts (issue #33). It sets `req.user.via_api_key`, which makes `authenticateToken` refuse any non-GET (403) and `requireAdmin` refuse it outright. No user object the server returns (`/auth/me`, login, settings) carries a key: they report `has_*` flags and provider keys are write-only. The API key itself is stored as a SHA-256, like a session token, and shown once, in the response that creates it; `GET /auth/api-key` answers 410, and a lost key is replaced, not read back. Keys from before the change were hashed in place at boot and keep working. The gate's 401s carry `code: 'session_expired'`; a password change revokes the user's other sessions, an admin reset all of them. Read-only is the whole reason a non-expiring credential is acceptable here; anything that weakens it has to replace it with something scoped.
+- Rate limiters (`authLimiter`, `loginLimiter`, `passwordLimiter`, `searchLimiter`, `importLimiter`) protect login and expensive endpoints. Signed-in limits count per account, not per IP, so a household behind one router does not share a budget; sign-in counts failures only; a password change allows ten wrong current passwords per 15 minutes per account. Password hashing is asynchronous (off the event loop), and a lookup of an unknown or SSO-only user still runs one hash, so timing does not reveal which usernames exist. `TRUST_PROXY=true` is read as one hop: Express's `true` would trust the client's whole X-Forwarded-For.
+- Public share links have their own limiter (60 a minute per IP, artwork images exempt) and reuse a built view for 15 seconds, inside `routes/shared.js`.
 
-`server.js` mounts ONE `app.use('/api', authenticateToken)` gate, and every
-router below it requires a valid session. Only the deliberate public mounts sit
+Every `/api` router is listed once in `routes/mounts.js`, and `server.js` mounts
+from that table: the public entries, then ONE `app.use('/api', authenticateToken)`
+gate, then the body parsers and the rest, every one of which requires a valid
+session. Only the deliberate public mounts sit
 above it — `/api/health`, `/api/auth` (whose non-public routes carry
 `authenticateToken` themselves), `/api/shared` (GET-only), `/api/admin` (opens with
 `authenticateToken` + `requireAdmin`) and `/api/card-art` (public reads, admin-gated
 writes). `backend/test/invariants.test.js` inspects the composed app and fails if
 anything else appears above the gate, if an exported rate limiter is not mounted, or
-if `card_cache` gains a writer other than `cacheNormalizedCards`.
+if `card_cache` gains a writer other than `cacheNormalizedCards`;
+`backend/test/apimounts.test.js` fails on a router mounted outside the table.
 
 ### Route map
 
 | Mount | File | Responsibility |
 |-------|------|----------------|
-| `/api/auth` | auth.js | `register`, `login`, `logout`, `me`, `PUT /settings` (per-user, e.g. `tcg_api_key`), `POST/DELETE /api-key` (read-only external key) |
+| `/api/auth` | auth.js | `config` (incl. `setupCodeRequired`, `version`), `bootstrap`, `register`, `login`, `logout`, `me`, `PUT /settings` (per-user, e.g. `tcg_api_key`), `POST/DELETE /api-key` (read-only external key, shown once) |
 | `/api` | collection.js | Card `search`, `scan-match`, `collection/cert/:certNumber`; `collection` CRUD + `bulk` + `:id/market-value/fetch`; `locations` & `compartments` CRUD; `recommend(-batch)`, `apply-all`, `resort`; `stats`, `stats/history`, `stats/networth`, `export`, `import`; `cards/:id/price-history` |
 | `/api/decks` | decks.js | Deck CRUD, `:id/cards`, `:id/checkout`, `:id/return`, `:id/locations` (checkout/check-in locator payload) |
-| `/api/sets` | sets.js | Set catalog for dividers and scan scoping; non-English Pokémon set lists come from TCGdex, whose ids differ per language |
+| `/api/sets` | sets.js | Set catalog for dividers and scan scoping; non-English Pokémon set lists come from TCGdex, whose ids differ per language; `tcgplayer-unpublished` (sets TCGplayer lists before the Pokémon provider does) |
 | `/api/settings` | settings.js | App-wide settings (read any; write requires admin) |
 | `/api/notifications` | notifications.js | Per-user notification channels (Discord/ntfy/webhook/Apprise; URL and token write-only, reported as `has_url`/`has_token`), `channels/:id/test`, price-move thresholds (`PUT /prefs`) |
-| `/api/shared` | shared.js | Public, read-only collection view by `share_token` (no auth) |
+| `/api/shared` | shared.js | Public, read-only collection view by `share_token` (no auth); `?list=trade` the copies for trade, `?list=wishlist` the owner's default Wishlist in the same row shape |
 | `/api` | backup.js | `GET /backup` (the whole account as one JSON file), `POST /backup/restore` (replace the account's contents from one; ids renumbered, card data only ever added) |
 | `/api/admin` | admin.js | User management, admin-only collection and runtime metrics, card cache seeding, `catalogs` (list / `build` / `stop` / `progress`), DB backups |
 
@@ -231,10 +252,20 @@ It does that by running these same route modules inside its WebView, rather than
 by reimplementing them:
 
 - `embedded/index.js` is the composition root, the device's `server.js`. It mounts
-  the routers in the same order behind the same `authenticateToken` gate, and
-  answers `501 { deviceMode: true }` for `/api/shared`, `/api/admin` and
-  `/api/card-art`. It also answers `/api/scan-match` with the route's own
-  `503 notBuilt` shape before the route reaches for Node's `Buffer`.
+  the same table as the server (`routes/mounts.js`) in the same order behind the
+  same `authenticateToken` gate: an entry marked `device: 'mount'` runs on the
+  phone too, one marked `device: 501` answers `501 { deviceMode: true }` there
+  (`/api/shared`, `/api/admin`, `/api/card-art`, notifications, binder art,
+  `/api/health`). It also answers `/api/scan-match` with the route's own
+  `503 notBuilt` shape before the route reaches for Node's `Buffer`, and a scan
+  whose on-device embedding failed with `scanFailed`, not `notBuilt`.
+- Requests and background database work take turns (`embedded/units.js`, one
+  FIFO lock). A WebView cannot carry an async context across awaits, so the
+  `async_hooks` stand-in cannot tell a transaction's statements from another
+  caller's; taking turns keeps every transaction to one caller. Each request
+  holds the lock for its duration; a background unit (exchange rates, the trash
+  purge, the product map) lets it go for its network fetches and between its
+  transactions. A slow provider call therefore delays the phone's other requests.
 - `frontend/scripts/build-device-backend.mjs` bundles it with Vite (Rolldown, CJS
   in, one ESM file out) before every dev/build run. `embedded/aliases.js` is the
   single table of swapped modules: `express` becomes `embedded/router.js` (the
@@ -253,7 +284,14 @@ by reimplementing them:
   runs the server's startup jobs from `utils/syncJobs.js`. Set lists get a forced
   refresh whenever a launch finds the last one a week old, tracked in a
   device-only `device_state` table, because a weekly timer never fires in an app
-  that is opened and closed all day.
+  that is opened and closed all day. The same clocks run the daily set check, the
+  daily trash purge and the TCGCSV sync, which on a phone runs at most weekly (a
+  scan-data download's product-map build counts as that week's sync). Leaving
+  device mode for a server stops every timer.
+- Scan data downloads from the same pinned Hugging Face commit the server uses
+  and must match its SHA-256 (`utils/modelAssets.js`). It is stored where the OS
+  does not back it up: Android's backup rules exclude it, iOS keeps it in
+  Library/NoCloud (an earlier download in Documents is moved there on launch).
 - The SQLite driver (`frontend/src/utils/deviceSqlite.js`) maps db.js's statements
   onto `@capacitor-community/sqlite`. It sends BEGIN/COMMIT/ROLLBACK through the
   plugin's transaction calls, passes `transaction: false` on every run (so
@@ -267,7 +305,13 @@ by reimplementing them:
   scanEngine.js`, onnxruntime-web) and swaps it into the body, and
   `cvScan.setSource()` supplies the published catalogs the phone downloaded
   (`device/scanAssets.js`), so `cvScan.match` skips only the decode and the
-  forward pass. Riftbound has no published catalog and answers `503 notBuilt`.
+  forward pass. A game with no catalog on the phone answers `503 notBuilt`.
+  The model sizes, the sharpness gate, the ImageNet normalisation and the
+  corners-to-homography step live once, in `shared/scanModel.mjs`, for the
+  server, the browser and the phone: a catalog embedded with one preprocessing
+  must be queried with the same, so `backend/test/scanshared.test.js` pins them
+  byte for byte. Corners that make no card fall back to the whole frame on the
+  phone as on the server.
 
 `backend/test/embedded.test.js` loads the real routes through the same alias table
 and drives them through `handle()`, against node-sqlite3 as the driver; it also
@@ -364,6 +408,20 @@ pauses further upstream calls for Retry-After (at least one minute), without
 sleeping in the request handler or automatically retrying a paid request.
 `card_cache` remains the normalized, durable store, written through
 `cacheNormalizedCards`. Cached cards can still answer when the API is unavailable.
+
+`cacheNormalizedCards` also keeps what other writers put in a row. A write marked
+`incomplete` (a set brief from a catalog build: name, number and image only)
+never overwrites an existing row; the TCGplayer product id and marketplace links
+survive a provider that omits them; and a price whose `price_source` is `tcgcsv`
+or `tcgcsv-en` is not replaced by a provider's own price when a card is
+re-cached by a search, an add or a background refresh. Before this, every
+catalog build reset rarity, types, prices and product ids on owned cards.
+
+Every provider client goes through `utils/providerClient.js`: pacing per
+endpoint, one cooldown per provider after a 429 (Retry-After in seconds or as a
+date, capped at five minutes), during which interactive calls fail fast while
+background sweeps wait, a retry policy, one `Bindarr/<version>` User-Agent, and
+the metrics hooks. TCGCSV sends the same headers it always has.
 
 Price normalization chooses ungraded Cardmarket EUR, then TCGplayer USD, and
 keeps every printing/average column in that source and currency. It ignores slab
@@ -585,6 +643,15 @@ that do get through are cards whose *artwork* is reprinted elsewhere — right a
 wrong printing, which no similarity gate can separate and which the client's
 same-name check already routes to the picker.
 
+The server now says so itself. Above `STRONG_SIM` the card is known, and when
+the candidates within `STRONG_MARGIN` of the top share its artwork,
+`scanCandidates.breakPrintingTies` orders them by the printing the user owns,
+then the scan's language, then the newest, and the response carries
+`ambiguousPrinting: true`. The scanner (`components/scanner/scanDecision.js`)
+treats that as a printing to pick rather than a confident add; without the
+field, its own same-name check still decides. Scores and the margin are
+unchanged; only the order inside a same-art group is.
+
 ### Why embeddings replaced the ORB stack
 
 The previous pipeline was a 64-bit dHash sweep plus a bag-of-visual-words lookup
@@ -629,8 +696,12 @@ nobody indexed, searched or browsed simply was not there: Pokémon held 7,118 of
 owner happened to have.
 
 Both phases resume. Phase 1 is idempotent; phase 2 keeps every embedding whose
-**embedded** source url is unchanged, and a cancelled build still writes what it
-has, because a partial catalog is valid and resuming reuses all of it. A set with
+**embedded** source url is unchanged. A cancelled build — the Stop button, or a
+`docker stop` during one — writes what it has **plus** the previous catalog's
+vectors for every card it did not reach, so stopping a rebuild never shrinks the
+catalog, and resuming reuses all of it. Local Magic builds embed back faces too,
+as `<id>_back`, the way the published catalogs do. Each catalog's meta records
+the scope it was built with, which the weekly auto-update rebuilds within. A set with
 no data in the chosen language raises an *absent* error rather than a failure —
 per-language provider coverage is patchy enough that counting gaps as failures
 would abort every non-English build partway through.
@@ -670,15 +741,21 @@ milo takes batch size 1 only, so threads are the way to use more cores. A
 stopped build keeps every vector it did not reach, and a card whose image fails
 to download keeps its previous vector.
 
-**Weekly update.** `catalog.setsBehind` compares the provider's set list (the
-build's own universe: `listAllSets`, every reachable Magic code) against the sets
-the catalog has already seen (`scan_catalog_state`), and the weekly job builds
-exactly the difference, for every built catalog in turn. A catalog built before
-this was tracked is baselined on first sight rather than mass-built, a first
-scoped build's scope sticks, a new set with no data upstream is retried by four
-builds and then dropped, and a failed set is retried. The old count compared the
-`sets` table with card_cache and never reached zero for Magic (114 digital and
-unreachable sets), so it rebuilt the whole game every week.
+**Weekly update.** `catalog.setsBehind` lists the sets a build of the catalog
+would walk (`listAllSets`, the build's own universe, in the provider's own ids)
+that have nothing cached in the catalog's language — for a scoped catalog, only
+its own sets (`scope` in its meta, the union of every scoped build). A set a
+build found empty upstream (`set_data_gaps`) is retried by four builds, since
+providers list a set before its cards, and then stops counting. `grownSets` adds
+the sets the catalog already has that are unfinished: cached cards with art the
+catalog lacks, or a provider total above what is cached; a set that stays
+unfinished with nothing changing for eight builds is left until something moves
+(`catalog_set_checks`). The weekly job builds every behind catalog in turn, the
+one built longest ago first (`catalog.autoUpdates`), each as exactly those sets.
+The old count compared the `sets` table with card_cache and never reached zero
+for Magic (114 digital and unreachable sets), so it rebuilt the whole game every
+week, and it took only the first behind catalog, so Magic, Lorcana and Riftbound
+were never updated at all.
 
 Locally built catalogs are keyed by `card_cache.id`, so every hit resolves by
 construction. The published fallback catalogs (`milo-<game>.npz`, read by
@@ -805,7 +882,16 @@ it (`PUT /collection/:id`, source `manual`) or fetches it
 (`POST /collection/:id/market-value/fetch`, source `pokemonpricetracker`). The
 fetch path lives in `gradedPrices.js` and exists because no card API prices
 slabs. It is per-request and never swept: the only free provider meters at 100
-lookups a day. `frontend/src/utils/resolveCardPrice.js` mirrors the same order
+lookups a day. Its sale prices are in US dollars and are converted to the card's
+own `price_currency` before they are stored, because a copy's `market_value` is
+read in that currency (409 when there is no exchange rate yet).
+
+A price sweep in which every request failed throws instead of being recorded as
+done, so the failure notification fires and the sweep is retried within the
+hour. TCGdex rows take every finish's price from one source (TCGplayer when it
+has any, else Cardmarket), so a row never mixes dollars and euros, and the price
+chart plots Cardmarket's 1/7/30-day averages only beside a trend in their
+currency. `frontend/src/utils/resolveCardPrice.js` mirrors the same order
 for cards not yet saved.
 
 ### Notifications
@@ -817,8 +903,8 @@ their failure paths (`price_sweep_failed`, `backup_failed`,
 scheduler's `price-sweeps` job emits `price_sweep_done` with the
 `utils/priceSweeps` summary once a run finishes (a sweep that threw is reported
 from that summary). That runs the price-move check: for each user with a price channel, every owned (and, if
-enabled, wishlisted — `collection.list_type = 'wishlist'` or `card_lists` when
-present) card's latest `price_history` point is compared with the price the user
+enabled, wanted — on any of their `card_lists` of kind `wishlist`, which every
+price sweep prices too) card's latest `price_history` point is compared with the price the user
 was last told about (`notification_price_state`). Over either per-user bar
 (`notification_prefs.price_pct` / `price_abs`, `min_price` floor) it joins one
 digest message; a card is reported at most once per 20 h.
@@ -837,9 +923,11 @@ always refused.
 `utils/compartmentSort.js` decides where a card physically files:
 
 - A **location** (binder/box/etc.) contains ordered **compartments** (binder pages / box rows).
-- `recommendSlot()` picks the compartment + slot for a card based on the location's `sort_order` scheme and per-compartment `rule_config` filters.
+- Filing is planned in memory (`FilingPlan`): the container is read once and sorted once with the comparator in `shared/cardSort.mjs` (the one the frontend draws with too), then every card is placed in one pass that honours capacity, the per-compartment `rule_config` filters, stacking and fixed slots. A re-sort is planned before its transaction and written in chunked UPDATEs, so 1,000 cards take about 0.2 s instead of half a minute holding the database. `recommendSlot()` answers the same question for one card.
+- Custom-order binders are never renumbered: a new card takes the first empty pocket. Stacking containers count pockets, not rows, and give each stack one position. A write that cannot place everything says so instead of overfilling a page: `unplaced` on an add, `unplaced_copies` on a quantity change, `rule_rejected` on a bulk move (a refused card stays where it was).
 - **Slot encoding**: a card's `position` is `slot * 1000` (slot 1 → 1000, slot 2 → 2000). `Math.floor(position / 1000)` recovers the human slot number. The gaps leave room for manual reordering.
 - Sort schemes are either `custom` (manual order, honored via stored `position`) or structured (name / set-number / price / type-color / language), optionally foil-aware (`foil_sorting`). Structured schemes also drive the visual set/category **dividers** in the binder view.
+- The Storage view holds only what it shows: `GET /api/collection?location_id=none&fields=storage` (Unsorted) and `?location_id=<open container>&fields=storage`, slim rows; opening another container swaps its copies in, and one-card actions re-read just the compartments and entries they touched (`utils/storageQueries.js`). The card popup reads the full row by id.
 
 ---
 
@@ -847,10 +935,11 @@ always refused.
 
 | Table | Purpose / key columns |
 |-------|-----------------------|
-| `users` | `id`, `username`, `password_hash` (PBKDF2, iterations embedded), `role`, `share_token`, `share_enabled`, `tcg_api_key`, `psa_api_token`, `graded_price_api_key`, `api_key` (read-only external credential) |
+| `users` | `id`, `username`, `password_hash` (PBKDF2, iterations embedded), `role`, `share_token`, `share_enabled`, `tcg_api_key`, `psa_api_token`, `graded_price_api_key`, `api_key` (SHA-256 of the read-only external credential, which is shown once) |
 | `sessions` | `user_id`, `token` (`sha256:` + hash of the bearer token), `expires_at` — Bearer-token auth |
-| `card_cache` | Normalized card metadata keyed by provider `id`: `name` (searchable) and `printed_name` (as printed), `language`, `set_id`/`set_name`, `number`, `image_url`, `types`/`subtypes`/`supertype`, `rarity`, `cmc`, `color_identity`, `price_*` with `price_source`/`price_currency`, `tcgplayer_product_id`, `tcgplayer_url`/`cardmarket_url`, `game`, `last_updated`. Written only through `utils/cardCache.cacheNormalizedCards`, which upserts — `INSERT OR REPLACE` re-created the row and reset every column outside the provider's own list |
-| `collection` | One row per owned stack: `id` (entry_id), `user_id`, `card_id`→card_cache, `quantity`, `condition`, `printing`, `language`, `purchase_price`, `location_id`, `compartment_id`, `position`, `list_type` (`collection`/`trade`), `is_trade`, `game`, `added_at`; per-copy grading (`grader`, `grade`, `cert_number`) and per-copy value (`market_value`, `market_value_source`, `market_value_at`) |
+| `card_cache` | Normalized card metadata keyed by provider `id`: `name` (searchable) and `printed_name` (as printed), `language`, `set_id`/`set_name`, `number`, `image_url`, `types`/`subtypes`/`supertype`, `rarity`, `cmc`, `color_identity`, `price_*` with `price_source`/`price_currency`, `tcgplayer_product_id`, `tcgplayer_url`/`cardmarket_url`, `game`, `last_updated`. Written only through `utils/cardCache.cacheNormalizedCards`, which upserts — `INSERT OR REPLACE` re-created the row and reset every column outside the provider's own list — and keeps a fuller row's data, product ids and TCGCSV prices on a re-cache (see Card data sources) |
+| `collection` | One row per owned stack: `id` (entry_id), `user_id`, `card_id`→card_cache, `quantity`, `condition`, `printing`, `language`, `purchase_price`, `location_id`, `compartment_id`, `position`, `list_type` (always `collection`: a wanted card is an item on the user's default Wishlist, see `card_lists`; the `wishlist` rows older releases wrote are moved there at boot by `utils/wishlistMigration.js`, and readers still count only `collection` as owned, `utils/collectionMetrics.OWNED_SQL`), `is_trade`, `game`, `added_at`; per-copy grading (`grader`, `grade`, `cert_number`) and per-copy value (`market_value`, `market_value_source`, `market_value_at`) |
+| `card_lists` / `card_list_items` | Wishlists, buylists, "missing" lists (`kind`, optional `game`, `deck_id`); one item per wanted card (`quantity_wanted`, `any_printing`, `condition_min`, `language`, `notes`), owned/missing worked out against `collection` on read (`utils/listOwnership.js`). `is_default` marks each user's default Wishlist: the hearts, Collection › Wishlist and the public wishlist link all read it, and every request that still says `list_type: 'wishlist'` (older apps, files and trash) lands on it (`utils/defaultWishlist.js`) |
 | `locations` | Physical containers: `user_id`, `name`, `type`, `sort_order`, `foil_sorting`, `rule_type`, `rule_config`, `game` |
 | `compartments` | Pages/rows within a location: `location_id`, `idx`, `label`, `capacity`, `rule_config` |
 | `compartment_assignments` | Maps sort categories to specific compartments (category→page filing) |
@@ -972,8 +1061,8 @@ only `decks.checked_out` changes.
 
 Setup and Docker deployment: see [README.md](README.md). Quick reference:
 
-- Runtime: Node 24 in the image (`node:24-slim`, Debian/glibc) and in every workflow; Node 22.12+ works locally. Bump the Dockerfile, the workflows and these docs together.
+- Runtime: Node 24 in the image (`node:24-slim`, Debian/glibc), in every workflow and in `.nvmrc`; Node 22.12+ works locally (the `engines` field of each package.json). Bump the Dockerfile, the workflows, `.nvmrc` and these docs together.
 - Backend: `cd backend && npm run dev` (nodemon) or `npm start`; port `3001`.
 - Frontend: `cd frontend && npm run dev` (Vite, port `5173`, proxies `/api` → `3001`).
-- Tests: `npm test` from the root runs every suite — the unit suites in `backend/test/`, the e2e suites under `backend/test/e2e/`, the frontend utility tests, the locale check and the TCGCSV mirror test — each whether or not an earlier one failed, then prints one summary (`scripts/test-all.mjs`). `cd backend && npm test` runs both backend runners the same way; `npm run test:unit` / `npm run test:e2e` run one. No framework — each file is a plain `node` script, and each e2e server takes a free port (`backend/test/freePort.js`), so two runs can overlap.
+- Tests: `npm test` from the root runs every suite — the unit suites in `backend/test/`, the e2e suites under `backend/test/e2e/`, the frontend utility tests, the locale check and the TCGCSV mirror test — each whether or not an earlier one failed, then prints one summary (`scripts/test-all.mjs`). `cd backend && npm test` runs both backend runners the same way; `npm run test:unit` / `npm run test:e2e` run one. No framework — each file is a plain `node` script. A unit test that cannot run here (the scan tests, without the models) exits 77 and is reported as SKIP; `scan-tests.yml` runs those weekly with the models. Every e2e server is started by `backend/test/e2e/harness.js` on a free port, so two runs can overlap, and runs offline: `offline.js` answers the provider clients and `netguard.js` refuses any other connection off the machine, which fails the e2e run.
 - Lint (matches CI): `cd frontend && npm run lint`.

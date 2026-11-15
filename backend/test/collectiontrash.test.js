@@ -156,7 +156,7 @@ async function main() {
   const squatter = await addCopy(alice, 'c5', { locId: binder.locId, compId: binder.comps[0], position: 2000 });
   res = await call(alice, 'POST', `/api/collection/trash/${batch1}/restore`);
   assert.strictEqual(res.status, 200, JSON.stringify(res.body));
-  assert.deepStrictEqual(res.body, { restored: 1, skipped: 0, unsorted: 1 });
+  assert.deepStrictEqual(res.body, { restored: 1, skipped: 0, unsorted: 1, wishlisted: 0 });
   let back = await rowOf(graded);
   assert.ok(back, 'back under its original id');
   assert.strictEqual(back.user_id, alice);
@@ -176,7 +176,7 @@ async function main() {
 
   // --- restore into a box row: back in order -------------------------------------
   res = await call(alice, 'POST', `/api/collection/trash/${batch2}/restore`);
-  assert.deepStrictEqual(res.body, { restored: 2, skipped: 0, unsorted: 0 });
+  assert.deepStrictEqual(res.body, { restored: 2, skipped: 0, unsorted: 0, wishlisted: 0 });
   const order = (await db.all(`SELECT id FROM collection WHERE compartment_id = ? ORDER BY position`, [box.comps[0]])).map(r => r.id);
   assert.deepStrictEqual(order, [boxA, boxB, boxC], 'back in their old order ahead of the card that followed');
   console.log('PASS: restore puts copies back in their box row in order');
@@ -198,7 +198,7 @@ async function main() {
   const reAdded = await addCopy(alice, 'c1', {}, { grader: 'PSA', cert_number: 'CERT-1' });
   const batch3 = res.body.trash_batch;
   res = await call(alice, 'POST', `/api/collection/trash/${batch3}/restore`);
-  assert.deepStrictEqual(res.body, { restored: 0, skipped: 1, unsorted: 0 });
+  assert.deepStrictEqual(res.body, { restored: 0, skipped: 1, unsorted: 0, wishlisted: 0 });
   assert.ok(await rowOf(reAdded), 'the new row is untouched');
   await db.run(`DELETE FROM collection WHERE id = ?`, [reAdded]);
   const extra = await addCopy(alice, 'c1');

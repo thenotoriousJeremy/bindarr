@@ -24,8 +24,13 @@
 //   - a User-Agent naming the mirror and linking the project;
 //   - /last-updated.txt first, and a full sync only when it moved;
 //   - strictly serial, at least 100 ms between requests;
-//   - a hard request cap far below the daily allowance;
+//   - a hard request cap far below the daily allowance, retries included;
 //   - 403 or 429 ends the run at once, with no retry;
+//   - a 5xx is retried a bounded number of times, with backoff, then ends the run;
+//   - a group whose products or prices are gone (404) is skipped and left out of
+//     the tree, exactly as TCGCSV serves it, rather than ending the run: one bad
+//     group used to stop every install's daily prices, and the backend already
+//     records a missing group as empty (tcgcsvApi.syncResults);
 //   - no price archives, ever (only the four paths above can be requested).
 //
 // Exit codes: 0 synced (publish), 78 unchanged (skip publish), 1 error, 2 bad
@@ -63,6 +68,10 @@ const DEFAULT_INTERVAL_MS = 200;    // double the floor: the run has all night
 const DEFAULT_MAX_REQUESTS = 4500;
 const MAX_REQUESTS_CEILING = 5000;
 const REQUEST_TIMEOUT_MS = 30000;
+// A server error is TCGCSV having a bad moment, not saying stop: asked again up to
+// this many times, waiting ten request intervals and then twice that.
+const MAX_5XX_RETRIES = 2;
+const RETRY_BACKOFF_INTERVALS = 10;
 
 // The only paths the mirror ever asks for. Anything else (archives above all) is
 // refused before a socket opens. Digits-only ids also make every path safe to
@@ -81,6 +90,10 @@ class UsageError extends Error {}
 // 403 and 429 are TCGCSV saying stop. Retrying either is how an app gets blocked.
 export class BlockedError extends Error {}
 
+// 404: TCGCSV has no such path. For one group's products or prices that is a
+// group gone or not published yet, which the run steps over.
+export class NotFoundError extends Error {}
+
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 class PoliteClient {
@@ -93,17 +106,29 @@ class PoliteClient {
   }
 
   // One request at a time: every caller awaits, and nothing here runs in parallel.
+  // A 5xx is asked again, MAX_5XX_RETRIES times at most, each retry a request the
+  // cap counts like any other; 403 and 429 never are.
   async get(urlPath) {
     if (!ALLOWED_PATHS.some(re => re.test(urlPath))) {
       throw new Error(`refusing to fetch ${urlPath}: not a path the mirror serves`);
     }
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.once(urlPath, attempt ? this.intervalMs * RETRY_BACKOFF_INTERVALS * 2 ** (attempt - 1) : 0);
+      } catch (e) {
+        if (!(e.status >= 500) || attempt >= MAX_5XX_RETRIES) throw e;
+      }
+    }
+  }
+
+  async once(urlPath, extraWaitMs) {
     if (this.count >= this.maxRequests) {
       throw new Error(`request cap of ${this.maxRequests} reached before ${urlPath}`);
     }
     // Spacing is measured from the end of the previous response, so a slow reply
     // never shortens the gap. Looped because a timer may wake a millisecond early.
     if (this.count > 0) {
-      const due = this.lastEnd + this.intervalMs;
+      const due = this.lastEnd + Math.max(this.intervalMs, extraWaitMs);
       while (performance.now() < due) await sleep(Math.max(1, due - performance.now()));
     }
     this.count++;
@@ -120,7 +145,8 @@ class PoliteClient {
           `HTTP ${res.status} for ${urlPath}${retryAfter ? ` (retry-after ${retryAfter})` : ''}; stopping without retry`
         );
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status} for ${urlPath}`);
+      if (res.status === 404) throw new NotFoundError(`HTTP 404 for ${urlPath}`);
+      if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status} for ${urlPath}`), { status: res.status });
       return Buffer.from(await res.arrayBuffer());
     } finally {
       this.lastEnd = performance.now();
@@ -374,6 +400,7 @@ export async function sync(options, log = console) {
   }
 
   let groupCount = 0, productFetches = 0;
+  let missing = 0;   // group files TCGCSV answered 404 for
   for (const { categoryId, groups, due, body } of plan) {
     groupCount += groups.length;
     bytes += await writeMirrored(out, `/tcgplayer/${categoryId}/groups`, body);
@@ -393,7 +420,22 @@ export async function sync(options, log = console) {
           continue;
         }
         if (kind === 'products') productFetches++;
-        const fetched = await client.get(urlPath);
+        let fetched;
+        try {
+          fetched = await client.get(urlPath);
+        } catch (e) {
+          if (!(e instanceof NotFoundError)) throw e;
+          // Left out of the tree, so an install reading the mirror sees the same
+          // 404 and records the group as empty — yesterday's copy included, which
+          // the previous tree may still hold. A group with no products has no
+          // prices worth a request either.
+          log.warn(`${urlPath} is not on TCGCSV (404); skipping ${kind === 'products' ? 'this group' : 'its prices'}`);
+          missing++;
+          for (const k of kind === 'products' ? ['products', 'prices'] : ['prices']) {
+            await rm(fileOf(out, `/tcgplayer/${categoryId}/${groupId}/${k}`), { force: true });
+          }
+          break;
+        }
         const envelope = parseEnvelope(urlPath, fetched);
         // Mirrored anyway: an instance reading the mirror should see what it
         // would have seen from TCGCSV, not a different answer.
@@ -428,11 +470,12 @@ export async function sync(options, log = console) {
   log.log(
     `Mirrored TCGCSV ${current}: ${groupCount} groups in categories ${plan.map(p => p.categoryId).join(',')}` +
     `${skipped.length ? ` (skipped ${skipped.join(',')})` : ''}, ${productFetches} product lists re-fetched, ` +
-    `${client.count} requests, ${(bytes / 1048576).toFixed(1)} MiB written.`
+    `${client.count} requests, ${(bytes / 1048576).toFixed(1)} MiB written` +
+    `${missing ? `, ${missing} path(s) skipped as missing upstream` : ''}.`
   );
   return {
     status: 'synced', lastUpdated: current, requests: client.count, groups: groupCount, bytes,
-    categories: plan.map(p => p.categoryId), skipped, productFetches,
+    categories: plan.map(p => p.categoryId), skipped, productFetches, missing,
   };
 }
 

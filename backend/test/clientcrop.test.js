@@ -1,13 +1,15 @@
 // The browser dewarps the card itself and uploads only the rectified square
 // (CameraScanner.localDewarp -> cvScan.match with `cropped`). That is two
-// implementations of one geometry — a JS warp in the page and sharp/warpRgb on
-// the server — and if they ever disagree the failure is silent: milo still
+// samplers over one geometry — warpPerspective in the page, sharp plus
+// warpPerspectiveRgb on the server (both shared/imgproc.mjs, deliberately not
+// rounding alike) — and if they ever disagree the failure is silent: milo still
 // returns a card, just a slightly worse-framed one, and accuracy drifts with
 // nothing pointing at the cause.
 //
 // So this replays the client path in Node and asserts both paths land on the
-// same card with near-identical cosine. Needs the ONNX models and an MTG
-// catalog; skips rather than fails when the install has neither.
+// same card with near-identical cosine. Needs the ONNX models, an MTG catalog
+// and captured frames (data/scan-debug/*-frame.jpg); without any of them it
+// exits 77, which test/run.js reports as SKIP rather than PASS.
 //
 // Run: node test/clientcrop.test.js
 const assert = require('assert');
@@ -62,7 +64,7 @@ async function main() {
   const files = frames();
   if (!fs.existsSync(path.join(MODEL_DIR, 'cornelius.onnx')) || !cvScan.isBuilt('mtg') || !files.length) {
     console.log('clientcrop.test.js: no models/catalog/frames present — skipped');
-    return;
+    process.exit(77);
   }
   const session = await ort.InferenceSession.create(path.join(MODEL_DIR, 'cornelius.onnx'),
     { intraOpNumThreads: 1, interOpNumThreads: 1 });

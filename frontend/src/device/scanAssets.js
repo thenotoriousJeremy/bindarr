@@ -10,17 +10,28 @@
 // (backend/src/utils/modelAssets.js, handed over by the bundled backend), so a
 // size or a file name is written down once. The same rules apply as on a server:
 // the models are AGPL-3.0 and Bindarr is MIT, so nothing is fetched until the
-// owner asks, and every file is checked against its exact size (a release segment
-// against its SHA-256 too), because a truncated model fails obscurely and a
-// truncated catalog scores every card wrong.
+// owner asks, and every file is checked against its exact size and SHA-256,
+// because a truncated model fails obscurely and a truncated catalog scores every
+// card wrong.
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { FileTransfer } from '@capacitor/file-transfer';
 import { loadNpz } from '../utils/npz';
+import { wasmSimdSupported, NO_SIMD_MESSAGE } from './wasmSupport';
 
 const DIR = 'scan';
 const HF = 'https://huggingface.co';
-const at = (name) => ({ path: `${DIR}/${name}`, directory: Directory.Data });
+// Kept out of the phone's backups (MOB-12). Everything here can be downloaded
+// again, and it is big enough to crowd out what cannot: on iOS, Directory.Data is
+// Documents, which goes to iCloud (~77 MB of it), so the files live in
+// Library/NoCloud instead. Android maps both to the app's files directory, and
+// the app's backup rules leave scan/ out there (android/app/src/main/res/xml/
+// backup_rules.xml and data_extraction_rules.xml) so the 25 MB backup quota
+// keeps room for the collection database.
+const HOME = Directory.LibraryNoCloud;
+// Where Bindarr 1.9.0 downloaded them; moved out on the next launch.
+const OLD_HOME = Directory.Data;
+const at = (name, directory = HOME) => ({ path: `${DIR}/${name}`, directory });
 // The previous cornelius export, which modelAssets also accepts.
 const ALSO_OK = { 'cornelius.onnx': [4407545] };
 // A phone keeps each game's English catalog: the artwork is the same in every
@@ -39,6 +50,8 @@ let installed = new Map();    // game -> the state of its release catalog here
 let present = new Set();      // model and .npz files on disk at their exact size
 let busy = null;              // { name, fraction } while a download runs
 let error = null;
+// False where the scan models cannot run at all (no WebAssembly SIMD).
+let supported = true;
 let snapshot = null;
 const listeners = new Set();
 
@@ -76,6 +89,7 @@ function emit() {
     modelsReady: models.length > 0 && models.every(m => present.has(m.name)),
     busy,
     error,
+    supported,
   };
   listeners.forEach(fn => fn());
 }
@@ -121,7 +135,7 @@ export async function refresh() {
   const mine = new Map();
   let files = [];
   try {
-    files = (await Filesystem.readdir({ path: DIR, directory: Directory.Data })).files.map(f => (typeof f === 'string' ? f : f.name));
+    files = (await Filesystem.readdir({ path: DIR, directory: HOME })).files.map(f => (typeof f === 'string' ? f : f.name));
   } catch { /* nothing downloaded yet */ }
   for (const f of files) {
     const m = STATE_RE.exec(f);
@@ -136,6 +150,36 @@ export async function refresh() {
   }
   installed = mine;
   emit();
+}
+
+// Scan data an earlier version downloaded into OLD_HOME: moved to HOME once. A
+// file that will not move is deleted instead (it can be downloaded again, and
+// left where it is it would stay in the backup); the scan tab then simply offers
+// the download again. Where the two directories are the same folder (Android),
+// there is nothing to do.
+async function moveFromOldHome(names) {
+  let from;
+  let to;
+  try {
+    from = (await Filesystem.getUri({ path: DIR, directory: OLD_HOME })).uri;
+    to = (await Filesystem.getUri({ path: DIR, directory: HOME })).uri;
+  } catch {
+    return;
+  }
+  if (from === to) return;
+  const old = await Filesystem.readdir({ path: DIR, directory: OLD_HOME }).catch(() => null);
+  if (!old || !old.files || !old.files.length) return;
+  await Filesystem.mkdir({ path: DIR, directory: HOME, recursive: true }).catch(() => {});
+  for (const entry of old.files) {
+    const name = typeof entry === 'string' ? entry : entry.name;
+    if (!names.includes(name)) continue;   // a .part left by an interrupted download
+    try {
+      await Filesystem.rename({ from: `${DIR}/${name}`, to: `${DIR}/${name}`, directory: OLD_HOME, toDirectory: HOME });
+    } catch (err) {
+      console.warn(`Scan data: could not move ${name} out of the backed-up folder; it will be downloaded again.`, err);
+    }
+  }
+  await Filesystem.rmdir({ path: DIR, directory: OLD_HOME, recursive: true }).catch(() => {});
 }
 
 // What the release offers, for sizes and dates before anything is downloaded. Not
@@ -157,14 +201,28 @@ export async function initScanAssets({ MODELS, CATALOGS, release: rel }) {
   models = MODELS;
   snapshots = CATALOGS;
   release = rel || null;
+  supported = wasmSimdSupported();
+  if (!supported) error = NO_SIMD_MESSAGE;
+  await moveFromOldHome([...MODELS, ...CATALOGS].map(a => a.name)).catch(err => console.warn('Scan data move failed:', err));
   await refresh();
-  loadIndex();
+  if (supported) loadIndex();
 }
 
-// One file to DIR/name through the native downloader, checked against its size.
-async function downloadTo(url, name, bytes, acceptSizes = []) {
+// The descriptors come from modelAssets.js, which pins each file to one Hugging
+// Face commit and records its SHA-256, and a release manifest records each
+// segment's. The phone checks the same hash, so it never scans with a file the
+// server would refuse.
+async function sha256Hex(bytes) {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// One file to DIR/name through the native downloader, checked against its size
+// and SHA-256, then renamed into place, so an interrupted download can never pass
+// for a finished one. Resolves to the bytes it hashed, or null when it could not.
+async function downloadTo(url, name, bytes, { sha256 = null, acceptSizes = [] } = {}) {
   const part = `${name}.part`;
-  await Filesystem.mkdir({ path: DIR, directory: Directory.Data, recursive: true }).catch(() => {});
+  await Filesystem.mkdir({ path: DIR, directory: HOME, recursive: true }).catch(() => {});
   const { uri } = await Filesystem.getUri(at(part));
   const listener = await FileTransfer.addListener('progress', (p) => {
     if (p.url !== url) return;
@@ -181,21 +239,25 @@ async function downloadTo(url, name, bytes, acceptSizes = []) {
     await Filesystem.deleteFile(at(part)).catch(() => {});
     throw new Error(`${name} downloaded ${size} bytes, expected ${bytes}`);
   }
-  // Rename into place, so an interrupted download can never pass for a finished one.
+  let data = null;
+  if (sha256 && globalThis.crypto?.subtle) {
+    data = await readBytes(part);
+    const digest = await sha256Hex(data);
+    if (digest !== sha256) {
+      await Filesystem.deleteFile(at(part)).catch(() => {});
+      throw new Error(`${name} has SHA-256 ${digest}, expected ${sha256}`);
+    }
+  }
   await Filesystem.deleteFile(at(name)).catch(() => {});
-  await Filesystem.rename({ from: `${DIR}/${part}`, to: `${DIR}/${name}`, directory: Directory.Data, toDirectory: Directory.Data });
+  await Filesystem.rename({ from: `${DIR}/${part}`, to: `${DIR}/${name}`, directory: HOME, toDirectory: HOME });
+  return data;
 }
 
-// A model or a snapshot, from the revision the server's list pins (utils/modelAssets),
+// A model or a snapshot, from the commit the server's list pins (utils/modelAssets),
 // so a phone and a server always fetch the same file.
 function downloadAsset(asset) {
   const url = `${HF}/${asset.repo}/resolve/${asset.revision || 'main'}/${asset.file}`;
-  return downloadTo(url, asset.name, asset.bytes, ALSO_OK[asset.name] || []);
-}
-
-async function sha256(bytes) {
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+  return downloadTo(url, asset.name, asset.bytes, { sha256: asset.sha256, acceptSizes: ALSO_OK[asset.name] || [] });
 }
 
 // Bring the game's release catalog up to its manifest: the segments this phone
@@ -218,13 +280,8 @@ async function syncRelease(game) {
     if (!/^[\w.-]+\.seg$/.test(s.name)) throw new Error(`refusing a segment named ${s.name}`);
     busy = { name: s.name, fraction: 0 };
     emit();
-    await downloadTo(`${release.base}/${s.name}`, s.name, s.bytes);
-    const bytes = await readBytes(s.name);
-    if (await sha256(bytes) !== s.sha256) {
-      await Filesystem.deleteFile(at(s.name)).catch(() => {});
-      throw new Error(`${s.name} does not match its manifest`);
-    }
-    release.segments.decodeSegment(bytes);   // refuses anything that would not load
+    const data = await downloadTo(`${release.base}/${s.name}`, s.name, s.bytes, { sha256: s.sha256 });
+    release.segments.decodeSegment(data || await readBytes(s.name));   // refuses anything that would not load
   }
   const state = {
     key, game, generation: manifest.generation, model: manifest.model, rows: manifest.rows,
@@ -243,6 +300,12 @@ async function syncRelease(game) {
 // The models (if missing) plus this game's catalog. One file at a time.
 export async function downloadForGame(game) {
   if (busy) return;
+  // Not ~70 MB for models this phone cannot run (MOB-04).
+  if (!supported) {
+    error = NO_SIMD_MESSAGE;
+    emit();
+    throw Object.assign(new Error(NO_SIMD_MESSAGE), { code: 'noWasmSimd' });
+  }
   error = null;
   try {
     for (const m of models.filter(a => !present.has(a.name))) {
@@ -288,7 +351,7 @@ export async function downloadForGame(game) {
 // only what is new. Resolves true when anything changed (the caller then reloads
 // the scanner). Quiet on failure: scanning keeps the catalog it has.
 export async function updateReleases({ force = false } = {}) {
-  if (busy || !release) return false;
+  if (busy || !release || !supported) return false;
   let changed = false;
   for (const [game, s] of [...installed]) {
     if (!force && Date.now() - (s.checkedAt || 0) < RECHECK_MS) continue;

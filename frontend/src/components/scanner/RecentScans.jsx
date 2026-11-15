@@ -2,12 +2,13 @@ import { memo } from 'react';
 import { onActivateKey } from '../../utils/a11y';
 import { getCardDisplayName } from '../../utils/langHelper';
 import Price from '../Price';
+import { AddSelectedToWishlist } from '../WishlistHeart';
 import { useT } from '../../utils/i18n';
 
 // The strip of cards this session added, with long-press multi-select and
 // bulk actions. Moved out of CameraScanner unchanged and memoized.
 function RecentScans({
-  recentSelect, setRecentScans, recentScans, activateRecent,
+  recentSelect, setRecentScans, recentScans, activateRecent, showToast,
 }) {
   const { t } = useT();
   return (
@@ -25,7 +26,13 @@ function RecentScans({
           <span style={{ fontWeight: 800, color: 'var(--text-strong)', fontSize: '0.8rem', marginRight: '0.25rem' }}>{recentSelect.selectedIds.size} selected</span>
           <button className="btn btn-danger" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!recentSelect.selectedIds.size} onClick={() => recentSelect.runBulk('delete', null, t('bulk.confirmDelete', { count: recentSelect.selectedIds.size }))}>{t('bulk.delete')}</button>
           <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!recentSelect.selectedIds.size} onClick={() => recentSelect.runBulk('trade', null)}>{t('bulk.markTrade')}</button>
-          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!recentSelect.selectedIds.size} onClick={() => recentSelect.runBulk('list_type', 'wishlist')}>{t('bulk.moveToWishlist')}</button>
+          {/* Wants the cards; the copies just scanned stay (Delete is beside it). */}
+          <AddSelectedToWishlist
+            cardIds={() => recentScans.filter(s => recentSelect.selectedIds.has(s.entry_id)).map(s => s.card_id)}
+            showToast={showToast}
+            disabled={!recentSelect.selectedIds.size}
+            style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }}
+          />
         </div>
       )}
 

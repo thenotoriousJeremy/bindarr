@@ -6,18 +6,55 @@ const {
   loadCompartments,
   locationAcceptsCard,
   compartmentAcceptsCard,
-  sortCards,
   rebalanceCompartmentByScheme,
-  STACK_KEY_SQL,
+  rebalanceCompartments,
+  FilingPlan,
+  planResort,
+  writePlacements,
+  occupancySql,
   normalizeFixedSlots
 } = require('../utils/compartmentSort');
 const { defaultCompartmentPlan, normalizeRuleConfig } = require('../utils/collectionHelpers');
+const sortSchemes = require('../../../shared/sortSchemes.json');
 
 const router = express.Router();
 
+// Ids per statement: a selection can be the whole collection, and one IN (...) per
+// id passed SQLite's limit on bound variables at about 32,000.
+const ID_CHUNK = 500;
+function chunked(list) {
+  const out = [];
+  for (let i = 0; i < list.length; i += ID_CHUNK) out.push(list.slice(i, i + ID_CHUNK));
+  return out;
+}
+
+// Rows written on the shared connection since it opened (SQLite's
+// total_changes()). Equal before a plan was read and once the write transaction
+// holds the connection means nothing was written in between, so the plan still
+// holds. Null when it cannot be read, which callers treat as "changed".
+async function writeCount() {
+  try {
+    const row = await db.get(`SELECT total_changes() AS n`);
+    return row ? row.n : null;
+  } catch {
+    return null;
+  }
+}
+
+// Unfile these copies: no container, no compartment, Unsorted.
+async function unfile(entryIds, userId) {
+  for (const part of chunked(entryIds)) {
+    await db.run(
+      `UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0
+        WHERE user_id = ? AND id IN (${part.map(() => '?').join(',')})`,
+      [userId, ...part]
+    );
+  }
+}
+
 // The card rows behind a list of collection entry ids, keyed by id.
 //
-// One query for the whole batch. Both batch endpoints below used to run this same
+// One query per chunk of ids. Both batch endpoints below used to run this same
 // SELECT once per entry inside their loop — filing 200 cards meant 200 round trips
 // to fetch data one statement could return — and they carried two near-identical
 // copies of the column list, which had already drifted apart (one aliased entry_id
@@ -27,21 +64,43 @@ const router = express.Router();
 // sent: placement is sequential, each card filling the slot the one before it left.
 async function loadEntries(entryIds, userId) {
   if (!entryIds.length) return new Map();
-  const holes = entryIds.map(() => '?').join(',');
-  const rows = await db.all(`
-    SELECT c.id, c.id AS entry_id, c.card_id, c.printing, c.language, c.favorite, c.is_trade, c.list_type,
-           cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.supertype, cc.rarity, cc.image_url, cc.orientation,
-           cc.game, cc.cmc, cc.color_identity,
-           cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
-    FROM collection c
-    JOIN card_cache cc ON c.card_id = cc.id
-    WHERE c.user_id = ? AND c.id IN (${holes})
-  `, [userId, ...entryIds]);
+  const rows = [];
+  for (const part of chunked(entryIds)) {
+    rows.push(...await db.all(`
+      SELECT c.id, c.id AS entry_id, c.card_id, c.printing, c.language, c.favorite, c.is_trade, c.list_type, c.added_at,
+             cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.supertype, cc.rarity, cc.image_url, cc.orientation,
+             cc.game, cc.cmc, cc.color_identity,
+             cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
+      FROM collection c
+      JOIN card_cache cc ON c.card_id = cc.id
+      WHERE c.user_id = ? AND c.id IN (${part.map(() => '?').join(',')})
+    `, [userId, ...part]));
+  }
   for (const r of rows) {
     try { r.types = JSON.parse(r.types || '[]'); } catch { r.types = []; }
   }
   return new Map(rows.map(r => [String(r.id), r]));
 }
+
+// What a container may be sorted by: Custom, a named scheme, or a list of
+// criteria on fields the sort knows. Anything else was stored as given and then
+// sorted by nothing, with no word to the user. Returns the value to store, or
+// throws with a client-safe message.
+const SORT_FIELDS = ['favorite', 'added_at', 'entry_id', 'name', 'price', 'set', 'number', 'printing', 'type', 'language', 'cmc', 'color_identity', 'color', 'rarity'];
+function normalizeSortOrder(value) {
+  if (value === 'custom' || (typeof value === 'string' && Object.prototype.hasOwnProperty.call(sortSchemes, value))) return value;
+  let criteria = value;
+  if (typeof value === 'string' && value.startsWith('[') && value.length <= 4000) {
+    try { criteria = JSON.parse(value); } catch { criteria = null; }
+  }
+  const ok = Array.isArray(criteria) && criteria.length > 0 && criteria.length <= 20 && criteria.every(c =>
+    c && typeof c === 'object' && SORT_FIELDS.includes(c.by)
+    && (c.dir === undefined || c.dir === 'asc' || c.dir === 'desc')
+    && (c.divider === undefined || typeof c.divider === 'boolean'));
+  if (!ok) throw new Error(`sort_order must be 'custom', a named sort, or a list of { by, dir } on: ${SORT_FIELDS.join(', ')}`);
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+const FOIL_SORTINGS = ['normals_first', 'foils_first'];
 
 async function loadCompartmentOrder(locationId) {
   return db.all(`SELECT * FROM compartments WHERE location_id = ? ORDER BY idx ASC`, [locationId]);
@@ -98,9 +157,7 @@ router.get('/locations', async (req, res) => {
              -- Measured against total_capacity, which counts slots: on a stacking
              -- container the duplicates sharing a pocket are one occupant, so
              -- counting cards there would report a nine-pocket page as overfull.
-             (SELECT CASE WHEN l.allow_stacking
-                       THEN COUNT(DISTINCT ${STACK_KEY_SQL})
-                       ELSE COALESCE(SUM(quantity), 0) END
+             (SELECT ${occupancySql('l.allow_stacking')}
                 FROM collection
                 WHERE user_id = l.user_id
                   AND compartment_id IN (SELECT id FROM compartments WHERE location_id = l.id)) as total_cards
@@ -156,6 +213,15 @@ router.post('/locations', async (req, res) => {
   if (!GAME_RESTRICTIONS.includes(game)) {
     return res.status(400).json({ error: 'Invalid game restriction' });
   }
+  if (foil_sorting && !FOIL_SORTINGS.includes(foil_sorting)) {
+    return res.status(400).json({ error: `foil_sorting must be one of: ${FOIL_SORTINGS.join(', ')}` });
+  }
+  let sortOrder;
+  try {
+    sortOrder = normalizeSortOrder(sort_order);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
   let ruleConfigJson;
   try {
     ruleConfigJson = normalizeRuleConfig(rule_config);
@@ -192,7 +258,7 @@ router.post('/locations', async (req, res) => {
       const result = await db.run(`
         INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, rule_config, game, fixed_slots, page_columns, user_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [name, type, sort_order, foil_sorting || 'normals_first', rule_type, ruleConfigJson, game, fixedSlotsJson, pageColumns, req.user.id]);
+      `, [name, type, sortOrder, foil_sorting || 'normals_first', rule_type, ruleConfigJson, game, fixedSlotsJson, pageColumns, req.user.id]);
       await db.createCompartments(result.lastID, compartmentCount, Math.max(1, parseInt(plan.capacity, 10) || 40));
       return result.lastID;
     });
@@ -231,6 +297,15 @@ router.put('/locations/:id', async (req, res) => {
   if (game !== undefined && !GAME_RESTRICTIONS.includes(game)) {
     return res.status(400).json({ error: 'Invalid game restriction' });
   }
+  if (foil_sorting !== undefined && foil_sorting !== null && !FOIL_SORTINGS.includes(foil_sorting)) {
+    return res.status(400).json({ error: `foil_sorting must be one of: ${FOIL_SORTINGS.join(', ')}` });
+  }
+  let sortOrder;
+  try {
+    sortOrder = sort_order === undefined || sort_order === null ? sort_order : normalizeSortOrder(sort_order);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
   let ruleConfigJson;
   try {
     ruleConfigJson = rule_config !== undefined ? normalizeRuleConfig(rule_config) : undefined;
@@ -250,77 +325,79 @@ router.put('/locations/:id', async (req, res) => {
     return res.status(400).json({ error: e.message });
   }
   try {
-    const loc = await db.get(`SELECT id, sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-    if (!loc) {
-      return res.status(404).json({ error: 'Location not found' });
-    }
+    // One transaction from the first read to the last eviction: the old scheme is
+    // baked in, the settings change and the copies the new rules refuse leave, or
+    // none of it happens.
+    const outcome = await db.withTransaction(async () => {
+      const loc = await db.get(`SELECT id, sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+      if (!loc) return { status: 404, body: { error: 'Location not found' } };
 
-    if (name) {
-      const dup = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ? AND id != ?`, [name, req.user.id, id]);
-      if (dup) {
-        return res.status(400).json({ error: 'A location with this name already exists', code: 'location_name_taken' });
-      }
-    }
-
-    // Switching to Custom: bake the outgoing scheme into stored positions so the
-    // manual order starts from the currently-sorted layout instead of stale
-    // positions (which would render jumbled). Must run before the UPDATE, while
-    // loc.sort_order still holds the old scheme.
-    if (sort_order === 'custom' && loc.sort_order && loc.sort_order !== 'custom') {
-      const comps = await db.all(`SELECT id FROM compartments WHERE location_id = ?`, [id]);
-      for (const c of comps) {
-        await rebalanceCompartmentByScheme(db, c.id, loc.sort_order, foil_sorting || loc.foil_sorting);
-      }
-    }
-
-    await db.run(`
-      UPDATE locations
-      SET
-        name = COALESCE(?, name),
-        type = COALESCE(?, type),
-        sort_order = COALESCE(?, sort_order),
-        foil_sorting = COALESCE(?, foil_sorting),
-        rule_type = COALESCE(?, rule_type),
-        rule_config = COALESCE(?, rule_config),
-        game = COALESCE(?, game),
-        locked = COALESCE(?, locked),
-        allow_stacking = COALESCE(?, allow_stacking)
-      WHERE id = ? AND user_id = ?
-    `, [name, type, sort_order, foil_sorting, rule_type, ruleConfigJson, game,
-        locked === undefined ? null : (locked ? 1 : 0),
-        allow_stacking === undefined ? null : (allow_stacking ? 1 : 0),
-        id, req.user.id]);
-    // Its own statement: null is how the client turns it off, which COALESCE can't express.
-    if (fixedSlotsJson !== undefined) {
-      await db.run(`UPDATE locations SET fixed_slots = ? WHERE id = ? AND user_id = ?`, [fixedSlotsJson, id, req.user.id]);
-    }
-    // Same reason: null puts the page back on the automatic layout.
-    if (pageColumns !== undefined) {
-      await db.run(`UPDATE locations SET page_columns = ? WHERE id = ? AND user_id = ?`, [pageColumns, id, req.user.id]);
-    }
-
-    let evicted = 0;
-    if (rule_type !== undefined || rule_config !== undefined || game !== undefined) {
-      const updated = await db.get(`SELECT id, rule_type, rule_config, game FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-      const stored = await db.all(`
-        SELECT c.id as entry_id, c.printing, c.language, c.favorite, c.is_trade, c.list_type,
-               cc.name, cc.printed_name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.game,
-               cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
-        FROM collection c
-        JOIN card_cache cc ON c.card_id = cc.id
-        WHERE c.location_id = ? AND c.user_id = ?
-      `, [id, req.user.id]);
-      for (const entry of stored) {
-        entry.printing = entry.printing || 'Normal';
-        entry.language = entry.language || 'English';
-        try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
-        if (!locationAcceptsCard(updated, entry)) {
-          await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE id = ? AND user_id = ?`, [entry.entry_id, req.user.id]);
-          evicted++;
+      if (name) {
+        const dup = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ? AND id != ?`, [name, req.user.id, id]);
+        if (dup) {
+          return { status: 400, body: { error: 'A location with this name already exists', code: 'location_name_taken' } };
         }
       }
-    }
-    res.json({ message: 'Location updated', evicted });
+
+      // Switching to Custom: bake the outgoing scheme into stored positions so the
+      // manual order starts from the currently-sorted layout instead of stale
+      // positions (which would render jumbled). Must run before the UPDATE, while
+      // loc.sort_order still holds the old scheme.
+      if (sortOrder === 'custom' && loc.sort_order && loc.sort_order !== 'custom') {
+        const comps = await db.all(`SELECT id FROM compartments WHERE location_id = ?`, [id]);
+        for (const c of comps) {
+          await rebalanceCompartmentByScheme(db, c.id, loc.sort_order, foil_sorting || loc.foil_sorting);
+        }
+      }
+
+      await db.run(`
+        UPDATE locations
+        SET
+          name = COALESCE(?, name),
+          type = COALESCE(?, type),
+          sort_order = COALESCE(?, sort_order),
+          foil_sorting = COALESCE(?, foil_sorting),
+          rule_type = COALESCE(?, rule_type),
+          rule_config = COALESCE(?, rule_config),
+          game = COALESCE(?, game),
+          locked = COALESCE(?, locked),
+          allow_stacking = COALESCE(?, allow_stacking)
+        WHERE id = ? AND user_id = ?
+      `, [name, type, sortOrder, foil_sorting, rule_type, ruleConfigJson, game,
+          locked === undefined ? null : (locked ? 1 : 0),
+          allow_stacking === undefined ? null : (allow_stacking ? 1 : 0),
+          id, req.user.id]);
+      // Its own statement: null is how the client turns it off, which COALESCE can't express.
+      if (fixedSlotsJson !== undefined) {
+        await db.run(`UPDATE locations SET fixed_slots = ? WHERE id = ? AND user_id = ?`, [fixedSlotsJson, id, req.user.id]);
+      }
+      // Same reason: null puts the page back on the automatic layout.
+      if (pageColumns !== undefined) {
+        await db.run(`UPDATE locations SET page_columns = ? WHERE id = ? AND user_id = ?`, [pageColumns, id, req.user.id]);
+      }
+
+      const refused = [];
+      if (rule_type !== undefined || rule_config !== undefined || game !== undefined) {
+        const updated = await db.get(`SELECT id, rule_type, rule_config, game FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+        const stored = await db.all(`
+          SELECT c.id as entry_id, c.printing, c.language, c.favorite, c.is_trade, c.list_type,
+                 cc.name, cc.printed_name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.game,
+                 cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
+          FROM collection c
+          JOIN card_cache cc ON c.card_id = cc.id
+          WHERE c.location_id = ? AND c.user_id = ?
+        `, [id, req.user.id]);
+        for (const entry of stored) {
+          entry.printing = entry.printing || 'Normal';
+          entry.language = entry.language || 'English';
+          try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
+          if (!locationAcceptsCard(updated, entry)) refused.push(entry.entry_id);
+        }
+        await unfile(refused, req.user.id);
+      }
+      return { status: 200, body: { message: 'Location updated', evicted: refused.length } };
+    });
+    res.status(outcome.status).json(outcome.body);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to update location' });
@@ -330,14 +407,17 @@ router.put('/locations/:id', async (req, res) => {
 router.delete('/locations/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-    if (!loc) {
+    // Both or neither: the cards leave the container and the container goes.
+    const found = await db.withTransaction(async () => {
+      const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+      if (!loc) return false;
+      await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
+      await db.run(`DELETE FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+      return true;
+    });
+    if (!found) {
       return res.status(404).json({ error: 'Location not found' });
     }
-
-    await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
-
-    await db.run(`DELETE FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     res.json({ message: 'Location deleted successfully (any stored cards moved to Unsorted)' });
   } catch (error) {
     console.error(error);
@@ -392,20 +472,19 @@ router.post('/locations/:id/compartments', async (req, res) => {
     const loc = await db.get(`SELECT id, type FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) return res.status(404).json({ error: 'Location not found' });
 
-    const existing = await loadCompartmentOrder(id);
-    const defaultCapacity = existing.length > 0 ? existing[existing.length - 1].capacity : (loc.type === 'Binder' ? 9 : 400);
-    const targetCapacity = Math.max(1, parseInt(capacity, 10) || defaultCapacity);
-
-    const insertPos = await resolveCompartmentInsertPosition(id, before_id, after_id, idx);
-    const insertAt = insertPos.insertAt;
-
-    let created = null;
-    await db.withTransaction(async () => {
+    // The order is read inside the transaction it is rewritten in: read before it,
+    // two pages added at once could each renumber the pages from an order that no
+    // longer held the other.
+    const created = await db.withTransaction(async () => {
+      const existing = await loadCompartmentOrder(id);
+      const defaultCapacity = existing.length > 0 ? existing[existing.length - 1].capacity : (loc.type === 'Binder' ? 9 : 400);
+      const targetCapacity = Math.max(1, parseInt(capacity, 10) || defaultCapacity);
+      const { insertAt } = await resolveCompartmentInsertPosition(id, before_id, after_id, idx);
       const insertResult = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [id, 1000000, targetCapacity]);
       const newOrder = existing.map(c => c.id);
       newOrder.splice(insertAt, 0, insertResult.lastID);
       await renumberCompartmentOrder(id, newOrder);
-      created = await db.get(`SELECT * FROM compartments WHERE id = ?`, [insertResult.lastID]);
+      return db.get(`SELECT * FROM compartments WHERE id = ?`, [insertResult.lastID]);
     });
 
     res.status(201).json({ ...created, display_label: compartmentLabel(created, loc.type) });
@@ -547,19 +626,15 @@ router.put('/locations/:id/compartments/:comp_id', async (req, res) => {
     if (rule_config !== undefined) { updates.push('rule_config = ?'); params.push(ruleConfigJson); }
     if (locked !== undefined) { updates.push('locked = ?'); params.push(locked ? 1 : 0); }
 
-    if (updates.length > 0) {
-      params.push(comp_id, id);
-      await db.run(`UPDATE compartments SET ${updates.join(', ')} WHERE id = ? AND location_id = ?`, params);
-    }
-
-    if (Array.isArray(assignedFilters)) {
-      await db.run(`DELETE FROM compartment_assignments WHERE compartment_id = ?`, [comp_id]);
-      for (const filterVal of assignedFilters) {
-        if (filterVal) {
-          await db.run(`INSERT OR IGNORE INTO compartment_assignments (compartment_id, filter_value) VALUES (?, ?)`, [comp_id, filterVal]);
-        }
+    // The settings and the filter list are replaced together: a failure between the
+    // DELETE and the INSERTs used to leave the page assigned to nothing.
+    await db.withTransaction(async () => {
+      if (updates.length > 0) {
+        params.push(comp_id, id);
+        await db.run(`UPDATE compartments SET ${updates.join(', ')} WHERE id = ? AND location_id = ?`, params);
       }
-    }
+      if (Array.isArray(assignedFilters)) await replaceFilters(comp_id, assignedFilters);
+    });
 
     res.json({ message: 'Compartment updated successfully' });
   } catch (error) {
@@ -579,13 +654,16 @@ router.delete('/locations/:id/compartments/:comp_id', async (req, res) => {
     const comp = await db.get(`SELECT id FROM compartments WHERE id = ? AND location_id = ?`, [comp_id, id]);
     if (!comp) return res.status(404).json({ error: 'Compartment not found' });
 
-    const totalComps = await db.get(`SELECT COUNT(*) as count FROM compartments WHERE location_id = ?`, [id]);
-    if (totalComps.count <= 1) {
+    const deleted = await db.withTransaction(async () => {
+      const totalComps = await db.get(`SELECT COUNT(*) as count FROM compartments WHERE location_id = ?`, [id]);
+      if (totalComps.count <= 1) return false;
+      await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE compartment_id = ? AND user_id = ?`, [comp_id, req.user.id]);
+      await db.run(`DELETE FROM compartments WHERE id = ? AND location_id = ?`, [comp_id, id]);
+      return true;
+    });
+    if (!deleted) {
       return res.status(400).json({ error: 'Cannot delete the last compartment of a location', code: 'last_compartment' });
     }
-
-    await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE compartment_id = ? AND user_id = ?`, [comp_id, req.user.id]);
-    await db.run(`DELETE FROM compartments WHERE id = ? AND location_id = ?`, [comp_id, id]);
 
     res.json({ message: 'Compartment deleted successfully (cards inside moved to Unsorted)' });
   } catch (error) {
@@ -603,6 +681,15 @@ async function getOwnedCompartment(compId, userId) {
     WHERE cp.id = ? AND l.user_id = ?`, [compId, userId]);
 }
 
+// The categories a compartment is assigned to, replaced wholesale. Callers run it
+// inside their transaction.
+async function replaceFilters(compartmentId, filters) {
+  await db.run(`DELETE FROM compartment_assignments WHERE compartment_id = ?`, [compartmentId]);
+  for (const filterVal of filters) {
+    if (filterVal) await db.run(`INSERT OR IGNORE INTO compartment_assignments (compartment_id, filter_value) VALUES (?, ?)`, [compartmentId, filterVal]);
+  }
+}
+
 router.patch('/compartments/:id', async (req, res) => {
   const { id } = req.params;
   const updateAll = req.query.updateAll === 'true';
@@ -617,18 +704,19 @@ router.patch('/compartments/:id', async (req, res) => {
       catch { return res.status(400).json({ error: 'rule_config must be valid JSON' }); }
     }
 
-    if (capacity !== undefined) {
-      const cap = Math.max(1, parseInt(capacity, 10) || 1);
-      if (updateAll) await db.run(`UPDATE compartments SET capacity = ? WHERE location_id = ?`, [cap, comp.loc_id]);
-      else await db.run(`UPDATE compartments SET capacity = ? WHERE id = ?`, [cap, id]);
-    }
-    if (label !== undefined) await db.run(`UPDATE compartments SET label = ? WHERE id = ?`, [label || null, id]);
-    if (locked !== undefined) await db.run(`UPDATE compartments SET locked = ? WHERE id = ?`, [locked ? 1 : 0, id]);
-    if (rule_config !== undefined) await db.run(`UPDATE compartments SET rule_config = ? WHERE id = ?`, [ruleConfigJson, id]);
+    // One transaction: the new settings and the evictions they cause land together.
+    const evicted = await db.withTransaction(async () => {
+      if (capacity !== undefined) {
+        const cap = Math.max(1, parseInt(capacity, 10) || 1);
+        if (updateAll) await db.run(`UPDATE compartments SET capacity = ? WHERE location_id = ?`, [cap, comp.loc_id]);
+        else await db.run(`UPDATE compartments SET capacity = ? WHERE id = ?`, [cap, id]);
+      }
+      if (label !== undefined) await db.run(`UPDATE compartments SET label = ? WHERE id = ?`, [label || null, id]);
+      if (locked !== undefined) await db.run(`UPDATE compartments SET locked = ? WHERE id = ?`, [locked ? 1 : 0, id]);
+      if (rule_config !== undefined) await db.run(`UPDATE compartments SET rule_config = ? WHERE id = ?`, [ruleConfigJson, id]);
 
-    // Evict cards this row/page no longer accepts after a rule change.
-    let evicted = 0;
-    if (rule_config !== undefined) {
+      // Evict cards this row/page no longer accepts after a rule change.
+      if (rule_config === undefined) return 0;
       const cfg = ruleConfigJson ? JSON.parse(ruleConfigJson) : null;
       const compForCheck = { ruleConfig: cfg };
       const stored = await db.all(`
@@ -637,14 +725,14 @@ router.patch('/compartments/:id', async (req, res) => {
                cc.price_trend, cc.cmc, cc.color_identity
         FROM collection c JOIN card_cache cc ON c.card_id = cc.id
         WHERE c.compartment_id = ? AND c.user_id = ?`, [id, req.user.id]);
+      const refused = [];
       for (const entry of stored) {
         try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
-        if (!compartmentAcceptsCard(compForCheck, entry)) {
-          await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE id = ? AND user_id = ?`, [entry.entry_id, req.user.id]);
-          evicted++;
-        }
+        if (!compartmentAcceptsCard(compForCheck, entry)) refused.push(entry.entry_id);
       }
-    }
+      await unfile(refused, req.user.id);
+      return refused.length;
+    });
     res.json({ message: 'Compartment updated', evicted });
   } catch (error) {
     console.error(error);
@@ -657,10 +745,14 @@ router.delete('/compartments/:id', async (req, res) => {
   try {
     const comp = await getOwnedCompartment(id, req.user.id);
     if (!comp) return res.status(404).json({ error: 'Compartment not found' });
-    const total = await db.get(`SELECT COUNT(*) AS count FROM compartments WHERE location_id = ?`, [comp.loc_id]);
-    if (total.count <= 1) return res.status(400).json({ error: 'Cannot delete the last compartment of a location', code: 'last_compartment' });
-    await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE compartment_id = ? AND user_id = ?`, [id, req.user.id]);
-    await db.run(`DELETE FROM compartments WHERE id = ?`, [id]);
+    const deleted = await db.withTransaction(async () => {
+      const total = await db.get(`SELECT COUNT(*) AS count FROM compartments WHERE location_id = ?`, [comp.loc_id]);
+      if (total.count <= 1) return false;
+      await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE compartment_id = ? AND user_id = ?`, [id, req.user.id]);
+      await db.run(`DELETE FROM compartments WHERE id = ?`, [id]);
+      return true;
+    });
+    if (!deleted) return res.status(400).json({ error: 'Cannot delete the last compartment of a location', code: 'last_compartment' });
     res.json({ message: 'Compartment deleted (cards inside moved to Unsorted)' });
   } catch (error) {
     console.error(error);
@@ -674,10 +766,7 @@ router.put('/compartments/:id/filters', async (req, res) => {
   try {
     const comp = await getOwnedCompartment(id, req.user.id);
     if (!comp) return res.status(404).json({ error: 'Compartment not found' });
-    await db.run(`DELETE FROM compartment_assignments WHERE compartment_id = ?`, [id]);
-    for (const filterVal of (Array.isArray(filters) ? filters : [])) {
-      if (filterVal) await db.run(`INSERT OR IGNORE INTO compartment_assignments (compartment_id, filter_value) VALUES (?, ?)`, [id, filterVal]);
-    }
+    await db.withTransaction(() => replaceFilters(id, Array.isArray(filters) ? filters : []));
     res.json({ message: 'Filters updated' });
   } catch (error) {
     console.error(error);
@@ -720,11 +809,12 @@ router.post('/locations/:id/recommend-batch', async (req, res) => {
     if (!location) return res.status(404).json({ error: 'Location not found' });
     if (!Array.isArray(entry_ids) || entry_ids.length === 0) return res.status(400).json({ error: 'entry_ids is required' });
 
-    let workingCompartments = await loadCompartments(db, id, req.user.id);
-    const mockCards = [];
     const recommendations = [];
-
     const entries = await loadEntries(entry_ids, req.user.id);
+    // Each card is recommended against the ones recommended before it, in every
+    // container it could overflow into: on a stacking container that is what lets
+    // the next copy in this same batch find its twin's pocket.
+    const plan = await FilingPlan.open(db, location);
 
     for (const entryId of entry_ids) {
       const entry = entries.get(String(entryId));
@@ -735,47 +825,14 @@ router.post('/locations/:id/recommend-batch', async (req, res) => {
         continue;
       }
 
-      const recommended = await recommendSlot(db, location, entry, workingCompartments, mockCards);
+      const recommended = await plan.recommend(entry);
       if (!recommended) {
         recommendations.push({ entry, recommended: null, full: true });
         continue;
       }
 
       recommendations.push({ entry, recommended });
-
-      if (!recommended.stacked) {
-        workingCompartments = workingCompartments.map(c =>
-          c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
-        );
-      }
-
-      // card_id and position, not just the display fields: on a stacking
-      // container they are what lets the next copy in this same batch recognise
-      // its twin and land in the pocket this one just claimed.
-      mockCards.push({
-        entry_id: entry.entry_id,
-        card_id: entry.card_id,
-        position: recommended.position,
-        compartment_id: recommended.compartment_id,
-        image_url: entry.image_url,
-        printing: entry.printing,
-        language: entry.language,
-        name: entry.name,
-        supertype: entry.supertype,
-        game: entry.game,
-        types: JSON.stringify(entry.types),
-        // An MTG card's type sort reads its type line, which lives here.
-        subtypes: entry.subtypes,
-        rarity: entry.rarity,
-        set_name: entry.set_name,
-        number: entry.number,
-        cmc: entry.cmc,
-        color_identity: entry.color_identity,
-        price_trend: entry.price_trend,
-        price_normal: entry.price_normal,
-        price_holofoil: entry.price_holofoil,
-        price_reverse_holofoil: entry.price_reverse_holofoil
-      });
+      plan.commit(entry, recommended);
     }
 
     res.json(recommendations);
@@ -795,29 +852,37 @@ router.post('/locations/:id/apply-all', async (req, res) => {
       return res.status(400).json({ error: 'entry_ids is required' });
     }
 
-    let workingCompartments = await loadCompartments(db, id, req.user.id);
-    let filed = 0;
+    // One transaction: the slots chosen cannot be taken by another request before
+    // they are written, and the batch lands whole or not at all.
+    const filed = await db.withTransaction(async () => {
+      const entries = await loadEntries(entry_ids, req.user.id);
+      const plan = await FilingPlan.open(db, location);
+      const placements = [];
+      const seen = new Set();
+      for (const entryId of entry_ids) {
+        const entry = entries.get(String(entryId));
+        if (!entry || seen.has(entry.entry_id)) continue;
+        seen.add(entry.entry_id);
 
-    const entries = await loadEntries(entry_ids, req.user.id);
-
-    for (const entryId of entry_ids) {
-      const entry = entries.get(String(entryId));
-      if (!entry) continue;
-
-      const recommended = await recommendSlot(db, location, entry, workingCompartments);
-      if (!recommended) continue;
-
-      await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`, [
-        id, recommended.compartment_id, recommended.position, entryId, req.user.id
-      ]);
-
-      if (!recommended.stacked) {
-        workingCompartments = workingCompartments.map(c =>
-          c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
-        );
+        const recommended = await plan.recommend(entry);
+        if (!recommended) continue;
+        plan.commit(entry, recommended);
+        // The container the slot is in: a card that overflowed sits in another one,
+        // and filing it under this one made deleting this container evict it.
+        placements.push({
+          id: entry.entry_id,
+          location_id: recommended.location_id || Number(id),
+          compartment_id: recommended.compartment_id,
+          position: recommended.position,
+        });
       }
-      filed++;
-    }
+      await writePlacements(db, placements, req.user.id);
+      // Each position above is the copy's place among the cards already there, so
+      // one filed between two cards shares a number with the next until its
+      // compartment is renumbered (filing 200 cards left 200 pockets holding two).
+      await rebalanceCompartments(db, plan.touched());
+      return placements.length;
+    });
 
     res.json({ message: `Filed ${filed} of ${entry_ids.length} card(s).`, filed, total: entry_ids.length });
   } catch (error) {
@@ -828,49 +893,44 @@ router.post('/locations/:id/apply-all', async (req, res) => {
 
 router.post('/locations/:id/resort', async (req, res) => {
   const { id } = req.params;
+  const locate = () => db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
   try {
-    // One transaction from the first read to the last placement. The re-sort
-    // empties every slot before refilling them, so an error part way used to
-    // leave the rest of the container's cards in it with no slot at all.
+    // Planned before the write transaction, so the database is free while it runs:
+    // the plan reads the container once and files every card in one pass
+    // (planResort). This used to re-read and re-sort the whole container for each
+    // card inside the transaction, and 1,000 cards held every other request,
+    // health checks included, for half a minute.
+    const mark = await writeCount();
+    const location = await locate();
+    if (!location) return res.status(404).json({ error: 'Location not found' });
+    let resort = await planResort(db, location);
+
+    // One transaction for every write. The re-sort empties every slot before
+    // refilling them, so an error part way used to leave the rest of the
+    // container's cards in it with no slot at all.
     const results = await db.withTransaction(async () => {
-      const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-      if (!location) return null;
-
-      const cards = await db.all(`
-        SELECT c.id as entry_id, c.card_id, c.printing, c.language, c.quantity, c.favorite, c.is_trade, c.list_type,
-               cc.name, cc.printed_name, cc.set_id, cc.set_name, cc.number, cc.types, cc.subtypes, cc.rarity, cc.supertype, cc.image_url, cc.orientation, cc.game,
-               cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
-        FROM collection c
-        JOIN card_cache cc ON c.card_id = cc.id
-        WHERE c.location_id = ? AND c.user_id = ?
-      `, [id, req.user.id]);
-      cards.forEach(c => { try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; } });
-
-      if (cards.length === 0) return [];
+      // Anything written since the plan was read — a card filed, a price updated —
+      // could change it. Plan again, now that nothing else can write.
+      if (mark === null || (await writeCount()) !== mark) {
+        const current = await locate();
+        if (!current) return null;
+        resort = await planResort(db, current);
+      }
+      const { placed, plan } = resort;
+      if (placed.length === 0) return [];
 
       await db.run(`UPDATE collection SET compartment_id = NULL, position = 0 WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
-
-      const ordered = sortCards(cards, location.sort_order, location.foil_sorting);
-
-      let workingCompartments = await loadCompartments(db, id, req.user.id);
-      const placed = [];
-
-      for (const entry of ordered) {
-        const recommended = await recommendSlot(db, location, entry, workingCompartments, []);
-        if (!recommended) { placed.push({ entry, recommended: null }); continue; }
-
-        const finalLoc = recommended.location_id || Number(id);
-        await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`, [
-          finalLoc, recommended.compartment_id, recommended.position, entry.entry_id, req.user.id
-        ]);
-        placed.push({ entry, recommended });
-
-        if (finalLoc === Number(id) && !recommended.stacked) {
-          workingCompartments = workingCompartments.map(c =>
-            c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
-          );
-        }
-      }
+      await writePlacements(db, placed.filter(p => p.recommended).map(p => ({
+        id: p.entry.entry_id,
+        location_id: p.recommended.location_id || Number(id),
+        compartment_id: p.recommended.compartment_id,
+        position: p.recommended.position,
+      })), req.user.id);
+      // This container is refilled in order, so its own positions are final. Cards
+      // that overflowed were filed into another container's order: renumber those
+      // compartments by their own scheme, as any other add into them is.
+      const own = new Set(plan.primary.comps.map(c => c.id));
+      await rebalanceCompartments(db, plan.touched().filter(compId => !own.has(compId)));
       return placed;
     });
     if (!results) return res.status(404).json({ error: 'Location not found' });

@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const path = require('path');
 const db = require('../db');
 const tcgApi = require('../tcgApi');
 const scryfallApi = require('../scryfallApi');
@@ -9,9 +10,10 @@ const languages = require('../utils/languages');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const metrics = require('../utils/metrics');
 const getCollectionMetrics = require('../utils/collectionMetrics');
-const { revokeSessions } = require('../utils/authHelpers');
+const { revokeSessions, hashPassword } = require('../utils/authHelpers');
 const { BACKUP_DIR, listBackups, createBackup, resolveBackupFile } = require('../backup');
 const binderArtStore = require('../utils/binderArtStore');
+const { sendFileAt } = require('../utils/sendFileAt');
 
 const router = express.Router();
 
@@ -167,32 +169,22 @@ router.get('/users', async (req, res) => {
       ORDER BY username ASC
     `);
 
-    // Fetch stats for each user
-    const usersWithStats = [];
-    for (const u of users) {
-      const stats = await db.get(`
-        SELECT COUNT(c.id) as unique_cards, SUM(c.quantity) as total_cards,
-          SUM(c.quantity * CASE
-            WHEN c.printing = 'Holofoil' AND cc.price_holofoil IS NOT NULL AND cc.price_holofoil > 0 THEN cc.price_holofoil
-            WHEN c.printing = 'Reverse Holofoil' AND cc.price_reverse_holofoil IS NOT NULL AND cc.price_reverse_holofoil > 0 THEN cc.price_reverse_holofoil
-            WHEN c.printing = 'Normal' AND cc.price_normal IS NOT NULL AND cc.price_normal > 0 THEN cc.price_normal
-            WHEN c.printing = '1st Edition' AND cc.price_1st_edition IS NOT NULL AND cc.price_1st_edition > 0 THEN cc.price_1st_edition
-            ELSE cc.price_trend
-          END) as total_value
-        FROM collection c
-        JOIN card_cache cc ON c.card_id = cc.id
-        WHERE c.user_id = ?
-      `, [u.id]);
-
-      usersWithStats.push({
+    // The same counts and value as the dashboard and /metrics, from one grouped
+    // query (utils/collectionMetrics): owned copies only (wishlist rows left
+    // out), a graded copy at its own value, and every currency converted into
+    // one reporting unit rather than added together.
+    const metrics = await getCollectionMetrics(db);
+    const statsById = new Map(metrics.users.map(u => [u.id, u]));
+    res.json(users.map((u) => {
+      const stats = statsById.get(u.id) || {};
+      return {
         ...u,
-        total_cards: stats.total_cards || 0,
-        unique_cards: stats.unique_cards || 0,
-        total_value: parseFloat((stats.total_value || 0).toFixed(2))
-      });
-    }
-
-    res.json(usersWithStats);
+        total_cards: Number(stats.total_cards || 0),
+        unique_cards: Number(stats.unique_cards || 0),
+        total_value: Number(stats.total_value || 0),
+        value_currency: metrics.valueCurrency,
+      };
+    }));
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to retrieve users list' });
@@ -226,13 +218,15 @@ router.post('/users', async (req, res) => {
       return res.status(400).json({ error: 'Username is already taken' });
     }
 
-    const passwordHash = db.hashPassword(password);
+    const passwordHash = await hashPassword(password);
     const shareToken = crypto.randomBytes(16).toString('hex');
 
-    await db.run(`
+    const created = await db.run(`
       INSERT INTO users (username, password_hash, role, share_token, share_enabled)
       VALUES (?, ?, ?, ?, ?)
     `, [cleanUsername, passwordHash, role, shareToken, 0]);
+    // A binder and a box to put the first card in, as every new account gets.
+    await db.seedStarterLocations(created.lastID, { newAccount: true });
 
     res.status(201).json({ message: `User "${cleanUsername}" created successfully.` });
   } catch (error) {
@@ -252,20 +246,12 @@ router.put('/users/:id', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    if (password !== undefined) {
-      if (typeof password !== 'string' || password.length < 8) {
-        return res.status(400).json({ error: 'Password must be at least 8 characters' });
-      }
-      const newHash = db.hashPassword(password);
-      await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, id]);
-      // A reset happens because the old password was forgotten or got out, so
-      // every session made with it goes too. An admin resetting their OWN password
-      // here keeps the session doing it, the same as a change from Settings.
-      await revokeSessions(targetUser.id, {
-        exceptTokenHash: targetUser.id === req.user.id ? req.sessionTokenHash : null
-      });
+    // Every field is checked before anything is written. The password used to be
+    // saved (and the user signed out everywhere) before the role was even looked
+    // at, so an edit refused for its role still changed the password.
+    if (password !== undefined && (typeof password !== 'string' || password.length < 8)) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
-
     if (role !== undefined) {
       if (role !== 'member' && role !== 'admin') {
         return res.status(400).json({ error: 'Invalid role' });
@@ -274,8 +260,23 @@ router.put('/users/:id', async (req, res) => {
       if (parseInt(id, 10) === req.user.id && role !== 'admin') {
         return res.status(400).json({ error: 'You cannot demote yourself from Administrator role.' });
       }
-      await db.run(`UPDATE users SET role = ? WHERE id = ?`, [role, id]);
     }
+
+    const newHash = password !== undefined ? await hashPassword(password) : null;
+    await db.withTransaction(async () => {
+      if (newHash) {
+        await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, id]);
+        // A reset happens because the old password was forgotten or got out, so
+        // every session made with it goes too. An admin resetting their OWN password
+        // here keeps the session doing it, the same as a change from Settings.
+        await revokeSessions(targetUser.id, {
+          exceptTokenHash: targetUser.id === req.user.id ? req.sessionTokenHash : null
+        });
+      }
+      if (role !== undefined) {
+        await db.run(`UPDATE users SET role = ? WHERE id = ?`, [role, id]);
+      }
+    });
 
     res.json({ message: 'User updated successfully' });
   } catch (error) {
@@ -488,7 +489,13 @@ router.get('/backups/:file/download', (req, res) => {
   if (!full) {
     return res.status(404).json({ error: 'Backup not found' });
   }
-  res.download(full);
+  // sendFileAt, not res.download: Express 5's send refuses any path with a
+  // dot-folder in it, and a database under ~/.local/share/... answered every
+  // download with a 404. resolveBackupFile has already vetted the file itself.
+  res.attachment(path.basename(full));
+  sendFileAt(res, full, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: 'Backup not found' });
+  });
 });
 
 module.exports = router;

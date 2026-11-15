@@ -1,14 +1,42 @@
 import { useState, useEffect } from 'react';
-import { User, Lock, ArrowRight, Eye, EyeOff, Server, Shield, Smartphone } from 'lucide-react';
+import { User, Lock, ArrowRight, Eye, EyeOff, Server, Shield, Smartphone, KeyRound } from 'lucide-react';
 import { isNative, canRunOnDevice, getServerUrl, setServerUrl, setDeviceMode } from '../apiBase';
 import { useT } from '../utils/i18n';
 import { apiErrorText } from '../utils/apiError';
 import { getOrCreateVerifier, challengeFor } from '../utils/nativeOidc';
 import Logo from './Logo';
+import { oidcErrorKey } from '../utils/oidcErrors';
 
 // Must match OWNER_USERNAME in backend/src/routes/auth.js — the bootstrap route
 // ignores whatever username is posted and always creates `admin`.
 const OWNER_USERNAME = 'admin';
+
+// SSO error codes in ?oidc_error= map to messages in utils/oidcErrors.js.
+
+// The setup code the server asks for (backend routes/auth.js "Claiming a fresh
+// install"), refused with one of these codes.
+const SETUP_CODE_ERRORS = {
+  setup_code_required: 'login.setupCodeMissing',
+  setup_code_invalid: 'login.setupCodeInvalid',
+};
+
+// [major, minor] of a version string, or null.
+function minorVersion(version) {
+  const m = /^v?(\d+)\.(\d+)/.exec(String(version || ''));
+  return m ? [Number(m[1]), Number(m[2])] : null;
+}
+
+// Whether a server is older than this app, by major.minor. A server that does not
+// say (null) predates the release that started saying, so it is older too.
+function serverIsOlder(serverVersion, appVersion) {
+  const app = minorVersion(appVersion);
+  if (!app) return false;
+  const server = minorVersion(serverVersion);
+  if (!server) return true;
+  return server[0] < app[0] || (server[0] === app[0] && server[1] < app[1]);
+}
+
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || '';
 
 function Login({ onLoginSuccess }) {
   const { t } = useT();
@@ -22,6 +50,8 @@ function Login({ onLoginSuccess }) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  // A string, or { key } for a message worded at render time (the SSO return's
+  // code is read before the locale has necessarily loaded).
   const [error, setError] = useState(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -29,7 +59,7 @@ function Login({ onLoginSuccess }) {
       if (oidcErr) {
         // Clean URL parameter without reloading
         window.history.replaceState({}, document.title, window.location.pathname);
-        return oidcErr;
+        return { key: oidcErrorKey(oidcErr) };
       }
     } catch { /* ignore */ }
     return '';
@@ -41,6 +71,13 @@ function Login({ onLoginSuccess }) {
   // A server with no accounts at all: the form creates the owner account instead
   // of signing in, so nobody has to dig a generated password out of the logs.
   const [setupRequired, setSetupRequired] = useState(false);
+  // ...and, unless this browser is on the server's own machine, asks for the
+  // one-time setup code the server printed to its log.
+  const [setupCodeRequired, setSetupCodeRequired] = useState(false);
+  const [setupCode, setSetupCode] = useState('');
+  // Native only: the server is older than this app (its version, or '' when it is
+  // too old to say), so some of the app's features will not work against it.
+  const [olderServer, setOlderServer] = useState(null);
   // OIDC / SSO status
   const [oidcEnabled, setOidcEnabled] = useState(false);
   const [oidcProviderName, setOidcProviderName] = useState('Single Sign-On');
@@ -87,6 +124,11 @@ function Login({ onLoginSuccess }) {
           if (cancelled) return;
           setRegistrationEnabled(!!data.registrationEnabled);
           setSetupRequired(!!data.setupRequired);
+          setSetupCodeRequired(!!data.setupCodeRequired);
+          // Store apps update themselves and self-hosted servers do not: say so
+          // here rather than let the app meet 404s later. Not a block — most of
+          // the app still works against an older server.
+          setOlderServer(isNative && serverIsOlder(data.version, APP_VERSION) ? (data.version || '') : null);
           setOidcEnabled(!!data.oidcEnabled);
           if (data.oidcProviderName) setOidcProviderName(data.oidcProviderName);
           // The owner account's name is the server's to decide, not the
@@ -141,6 +183,11 @@ function Login({ onLoginSuccess }) {
         return;
       }
     }
+    if (setupRequired && setupCodeRequired && !setupCode.trim()) {
+      setError(t('login.setupCodeMissing'));
+      setLoading(false);
+      return;
+    }
 
     const endpoint = setupRequired ? '/api/auth/bootstrap'
       : isRegister ? '/api/auth/register'
@@ -150,12 +197,12 @@ function Login({ onLoginSuccess }) {
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify(setupRequired && setupCodeRequired ? { username, password, setup_code: setupCode } : { username, password })
       });
 
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(apiErrorText(t, data, 'login.errFailed'));
+        throw new Error(SETUP_CODE_ERRORS[data?.code] ? t(SETUP_CODE_ERRORS[data.code]) : apiErrorText(t, data, 'login.errFailed'));
       }
 
       onLoginSuccess(data.token, data.user);
@@ -261,6 +308,23 @@ function Login({ onLoginSuccess }) {
           </div>
         )}
 
+        {target === 'server' && olderServer !== null && (
+          <div role="status" style={{
+            padding: '0.75rem 1rem',
+            marginBottom: '1.5rem',
+            borderLeft: '3px solid var(--text-muted)',
+            background: 'rgba(255,255,255,0.03)',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '0.8rem',
+            color: 'var(--text-secondary)',
+            lineHeight: 1.5
+          }}>
+            {olderServer
+              ? t('login.serverOlder', { server: olderServer, app: APP_VERSION })
+              : t('login.serverOlderUnknown', { app: APP_VERSION })}
+          </div>
+        )}
+
         {error && (
           <div className="glass-panel" style={{
             padding: '0.75rem 1rem',
@@ -271,7 +335,7 @@ function Login({ onLoginSuccess }) {
             marginBottom: '1.5rem',
             borderRadius: 'var(--radius-sm)'
           }}>
-            {error}
+            {typeof error === 'string' ? error : t(error.key)}
           </div>
         )}
 
@@ -371,6 +435,35 @@ function Login({ onLoginSuccess }) {
                     disabled={loading}
                   />
                   <Server size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                </div>
+              </div>
+            )}
+
+            {setupRequired && setupCodeRequired && (
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label htmlFor="login-setup-code" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('login.setupCode')}</label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    id="login-setup-code"
+                    type="text"
+                    name="setup-code"
+                    autoComplete="one-time-code"
+                    autoCapitalize="characters"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    className="input-control"
+                    style={{ width: '100%', paddingLeft: '2.5rem', fontFamily: 'monospace', letterSpacing: '0.08em' }}
+                    placeholder="XXXX-XXXX-XXXX"
+                    value={setupCode}
+                    onChange={(e) => setSetupCode(e.target.value)}
+                    required
+                    readOnly={loading}
+                    aria-describedby="login-setup-code-hint"
+                  />
+                  <KeyRound size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                </div>
+                <div id="login-setup-code-hint" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: 1.45 }}>
+                  {t('login.setupCodeHint')}
                 </div>
               </div>
             )}

@@ -37,8 +37,24 @@ router.get('/:cardId.png', (req, res) => {
 // would be editing what everybody else sees.
 router.use(authenticateToken, requireAdmin);
 
+// The upload's own parser, here behind the admin gate rather than in server.js:
+// this router sits above the /api gate, so a parser there would read anyone's
+// body before they signed in. The image is up to cardArt.MAX_UPLOAD_BYTES, which
+// base64 inflates by a third, and the global 1 MB limit used to refuse anything
+// over about 786 KB of it.
+const artJson = express.json({ limit: Math.ceil(cardArt.MAX_UPLOAD_BYTES * 4 / 3) + 64 * 1024 });
+function parseArt(req, res, next) {
+  artJson(req, res, (err) => {
+    if (!err) return next();
+    if (err.type === 'entity.too.large') {
+      return res.status(413).json({ error: `That image is over ${Math.round(cardArt.MAX_UPLOAD_BYTES / (1024 * 1024))} MB.` });
+    }
+    return res.status(400).json({ error: 'Could not read that upload.' });
+  });
+}
+
 // Upload art for a card. Body: { image: "data:image/png;base64,..." }.
-router.post('/:cardId', async (req, res) => {
+router.post('/:cardId', parseArt, async (req, res) => {
   const { cardId } = req.params;
   if (!cardArt.isValidId(cardId)) {
     return res.status(400).json({ error: 'Invalid card id' });

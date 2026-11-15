@@ -17,8 +17,8 @@ const mtgjsonApi = require('../mtgjsonApi');
 const scryfallApi = require('../scryfallApi');
 const languages = require('../utils/languages');
 const { importLimiter } = require('../middleware/auth');
-const { resolveCompartmentAndPosition } = require('../utils/collectionHelpers');
-const { rebalanceCompartmentByScheme } = require('../utils/compartmentSort');
+const { placeCopies } = require('../utils/collectionHelpers');
+const { rebalanceCompartments } = require('../utils/compartmentSort');
 
 const router = express.Router();
 
@@ -183,38 +183,35 @@ router.post('/import', importLimiter, async (req, res) => {
     const name = String(deckName || '').trim().slice(0, 100) || deck.name;
     await db.withTransaction(async () => {
       if (toCollection) {
-        const touched = new Set();
+        // A copy is a row, as everywhere else (#64), each placed against the
+        // copies filed before it.
+        const copies = [];
         for (const e of entries) {
           const cardId = resolved.get(e);
           if (!cardId) continue;
           const printing = e.isFoil || e.isEtched ? 'Holofoil' : 'Normal';
           const language = languages.toName(e.language);
-          // A copy is a row, as everywhere else (#64), placed one at a time so
-          // each lands against the copies already filed.
-          for (let i = 0; i < e.count; i++) {
-            const spot = locationId
-              ? (await resolveCompartmentAndPosition({ locationId, userId: req.user.id, cardId, printing, language })) || {}
-              : {};
-            const compartmentId = spot.compartment_id || null;
-            if (locationId && !compartmentId) unplaced++;
-            if (compartmentId) touched.add(compartmentId);
-            await db.run(
-              `INSERT INTO collection
-                 (card_id, user_id, quantity, condition, printing, language, purchase_price,
-                  location_id, compartment_id, position, list_type, game)
-               VALUES (?, ?, 1, 'Near Mint', ?, ?, 0, ?, ?, ?, 'collection', 'mtg')`,
-              [cardId, req.user.id, printing, language,
-                compartmentId ? (spot.location_id || locationId) : null, compartmentId, compartmentId ? spot.position : 0]
-            );
-            added++;
-          }
+          for (let i = 0; i < e.count; i++) copies.push({ card_id: cardId, printing, language });
         }
-        if (touched.size) {
-          const loc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [locationId, req.user.id]);
-          for (const compartmentId of touched) {
-            await rebalanceCompartmentByScheme(db, compartmentId, loc && loc.sort_order, loc && loc.foil_sorting);
-          }
+        const { placements, plan } = await placeCopies({ locationId, userId: req.user.id, copies });
+        for (let i = 0; i < copies.length; i++) {
+          const spot = placements[i];
+          const compartmentId = spot.compartment_id || null;
+          if (locationId && !compartmentId) unplaced++;
+          await db.run(
+            `INSERT INTO collection
+               (card_id, user_id, quantity, condition, printing, language, purchase_price,
+                location_id, compartment_id, position, list_type, game)
+             VALUES (?, ?, 1, 'Near Mint', ?, ?, 0, ?, ?, ?, 'collection', 'mtg')`,
+            [copies[i].card_id, req.user.id, copies[i].printing, copies[i].language,
+              compartmentId ? (spot.location_id || locationId) : null, compartmentId, compartmentId ? spot.position : 0]
+          );
+          added++;
         }
+        // Each compartment is renumbered by its own container's order: one a copy
+        // overflowed into used to be re-sorted by the scheme of the container the
+        // import was filed to.
+        if (plan) await rebalanceCompartments(db, plan.touched());
       }
       if (toDeck) {
         const commander = (deck.boards.commander || []).length > 0 || /commander/i.test(deck.type);

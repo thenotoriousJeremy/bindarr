@@ -21,6 +21,60 @@ function deckQuantity(raw) {
   return Number.isInteger(n) && n >= 1 && n <= MAX_DECK_QUANTITY ? n : null;
 }
 
+// A pasted decklist as [card_id, quantity] pairs, in line order, from cached cards
+// only: the printing a line names (set code and collector number, English first)
+// when it is cached, else the first cached card of that name. Lines that match
+// nothing are dropped, as they always were.
+//
+// One query per kind of lookup for the whole list, not one per line: matching a
+// lower-cased name cannot use an index, so every line was a scan of card_cache —
+// 8 ms a line at 20,000 cached cards.
+async function resolveDecklistLines(text, game) {
+  // The name without the set code, collector number and *F* marker an MTG Arena
+  // or Moxfield line carries: with them it matched no card.
+  const lines = text.split('\n').map(parseDecklistLine).filter(p => p && p.quantity > 0);
+  // Lower-cased the way SQLite's LOWER() does it: ASCII letters only.
+  const lower = (v) => String(v || '').replace(/[A-Z]/g, c => c.toLowerCase());
+  const CHUNK = 300;
+  const byPrinting = new Map();
+  const printings = [...new Set(lines.filter(p => p.set_code && p.collector_number)
+    .map(p => JSON.stringify([lower(p.set_code), String(p.collector_number)])))].map(k => JSON.parse(k));
+  for (let i = 0; i < printings.length; i += CHUNK) {
+    const part = printings.slice(i, i + CHUNK);
+    const rows = await db.all(
+      `SELECT id, LOWER(set_id) AS set_key, number FROM card_cache
+        WHERE game = ? AND (LOWER(set_id), number) IN (VALUES ${part.map(() => '(?, ?)').join(', ')})
+        ORDER BY language = 'English' DESC, rowid`,
+      [game, ...part.flat()]
+    );
+    for (const r of rows) {
+      const key = JSON.stringify([r.set_key, r.number]);
+      if (!byPrinting.has(key)) byPrinting.set(key, r.id);
+    }
+  }
+  const byName = new Map();
+  const names = [...new Set(lines.map(p => lower(p.name)).filter(Boolean))];
+  for (let i = 0; i < names.length; i += CHUNK) {
+    const part = names.slice(i, i + CHUNK);
+    const rows = await db.all(
+      `SELECT id, LOWER(name) AS name_key FROM card_cache
+        WHERE game = ? AND LOWER(name) IN (${part.map(() => '?').join(', ')})
+        ORDER BY rowid`,
+      [game, ...part]
+    );
+    for (const r of rows) if (!byName.has(r.name_key)) byName.set(r.name_key, r.id);
+  }
+  const out = [];
+  for (const p of lines) {
+    const printing = p.set_code && p.collector_number
+      ? byPrinting.get(JSON.stringify([lower(p.set_code), String(p.collector_number)]))
+      : null;
+    const cardId = printing || byName.get(lower(p.name));
+    if (cardId) out.push([cardId, p.quantity]);
+  }
+  return out;
+}
+
 // An allocation refusal carries its own status (and, for a short checkout, the
 // cards missing); anything else is a genuine 500.
 function sendAllocationError(res, error, fallback) {
@@ -95,17 +149,16 @@ router.post('/', async (req, res) => {
     const rules = await loadRules();
     const anyPrinting = rules.supportsAnyPrinting(deckGame)
       && (any_printing === undefined ? rules.defaultAnyPrinting(deckGame) : !!any_printing);
-    const result = await db.run(
-      `INSERT INTO decks (name, description, game, format, category, accent_color, target_size, any_printing, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [name, description, deckGame, format, category, accent_color, targetSizeNum, anyPrinting ? 1 : 0, req.user.id]
-    );
-    const newDeckId = result.lastID;
 
-    // Optional decklist import. ManaBox identifies a printing by set and
-    // collector number, so resolve those identifiers in batches instead of
-    // guessing from a card name shared by many printings.
+    // Optional decklist import, resolved to [card_id, quantity] pairs BEFORE
+    // anything is written: the deck used to be inserted first and the cards looked
+    // up after, so a Scryfall failure left half a deck, and the retry made another.
+    let deckCards = [];
     if (decklist_text && typeof decklist_text === 'string') {
       if (decklist_format === 'manabox' && deckGame === 'mtg') {
+        // ManaBox identifies a printing by set and collector number, so resolve
+        // those identifiers in batches instead of guessing from a card name shared
+        // by many printings.
         const items = parseManaboxText(decklist_text);
         const { cards, pairs } = await scryfallApi.bulkFetchByIdentifier(items.map(item => ({
           ...item,
@@ -113,37 +166,27 @@ router.post('/', async (req, res) => {
           number: item.collector_number
         })));
         await scryfallApi.cacheCards(cards);
-        for (const { row, card } of pairs) {
-          await db.run(
-            `INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, ?, ?)
-             ON CONFLICT(deck_id, card_id) DO UPDATE SET quantity = quantity + EXCLUDED.quantity`,
-            [newDeckId, card.id, row.quantity]
-          );
-        }
+        deckCards = pairs.map(({ row, card }) => [card.id, row.quantity]);
       } else {
-        const lines = decklist_text.split('\n');
-        for (const line of lines) {
-          // The name without the set code, collector number and *F* marker an
-          // MTG Arena or Moxfield line carries: with them it matched no card.
-          const parsed = parseDecklistLine(line);
-          if (parsed && parsed.quantity > 0) {
-            const qty = parsed.quantity;
-            // The printing the line names, when it is cached; else any by name.
-            const card = (parsed.set_code && parsed.collector_number && await db.get(
-              `SELECT id FROM card_cache WHERE game = ? AND LOWER(set_id) = LOWER(?) AND number = ?
-               ORDER BY language = 'English' DESC LIMIT 1`,
-              [deckGame, parsed.set_code, parsed.collector_number]
-            )) || await db.get(`SELECT id FROM card_cache WHERE LOWER(name) = LOWER(?) AND game = ? LIMIT 1`, [parsed.name, deckGame]);
-            if (card) {
-              await db.run(
-                `INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, ?, ?) ON CONFLICT(deck_id, card_id) DO UPDATE SET quantity = quantity + EXCLUDED.quantity`,
-                [newDeckId, card.id, qty]
-              );
-            }
-          }
-        }
+        deckCards = await resolveDecklistLines(decklist_text, deckGame);
       }
     }
+
+    // The deck and its cards together, or neither.
+    const newDeckId = await db.withTransaction(async () => {
+      const result = await db.run(
+        `INSERT INTO decks (name, description, game, format, category, accent_color, target_size, any_printing, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [name, description, deckGame, format, category, accent_color, targetSizeNum, anyPrinting ? 1 : 0, req.user.id]
+      );
+      for (const [cardId, quantity] of deckCards) {
+        await db.run(
+          `INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, ?, ?)
+           ON CONFLICT(deck_id, card_id) DO UPDATE SET quantity = quantity + EXCLUDED.quantity`,
+          [result.lastID, cardId, quantity]
+        );
+      }
+      return result.lastID;
+    });
 
     res.status(201).json({ message: 'Deck created successfully', id: newDeckId });
   } catch (error) {

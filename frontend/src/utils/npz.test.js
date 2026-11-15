@@ -62,4 +62,15 @@ for (const deflate of [false, true]) {
   assert.deepStrictEqual(npz.card_ids.data, ['ab', 'xyz'], `UTF-32 strings, ${deflate ? 'deflated' : 'stored'}`);
 }
 
+// No second copy of an aligned array (MOB-08): a stored member whose payload lands
+// on a 4-byte boundary is read in place, out of the archive's own buffer. One
+// that does not is copied, and reads the same either way.
+for (const name of ['e.npy', 'em.npy', 'emb.npy', 'embe.npy']) {
+  const archive = zip([{ name, data: npy('<f4', [2, 2], new Uint8Array(floats.buffer)) }]);
+  const arr = (await loadNpz(archive))[name.replace(/\.npy$/, '')];
+  assert.deepStrictEqual(Array.from(arr.data), [0.5, -1, 2, 0.25], `${name} reads correctly`);
+  const aligned = (30 + name.length + 128) % 4 === 0;
+  assert.strictEqual(arr.data.buffer === archive.buffer, aligned, `${name}: ${aligned ? 'a view, not a copy' : 'copied, as it must be'}`);
+}
+
 console.log('npz.test.js OK');
