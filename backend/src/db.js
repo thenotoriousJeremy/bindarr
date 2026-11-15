@@ -1490,7 +1490,9 @@ async function initDb() {
   // Rows written before `game` existed were all Pokémon (categories 3 and 85 are
   // the only ones the old build walked), and summary() counts by game, so an
   // upgraded install reported a 0-row product map until it was rebuilt.
-  // Idempotent: only NULLs are touched.
+  // Idempotent: only NULLs are touched. It runs every boot but reads only the
+  // NULL-game rows, through idx_tcgplayer_catalog_no_game (the index block below):
+  // it used to scan the whole catalog, hundreds of thousands of rows, to find none.
   await run(
     `UPDATE tcgplayer_catalog SET game = 'pokemon' WHERE game IS NULL AND category_id IN (3, 85)`
   );
@@ -1913,11 +1915,19 @@ async function initDb() {
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_user_card ON collection(user_id, card_id)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_comp_user_qty ON collection(compartment_id, user_id, quantity)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_loc_pos ON collection(location_id, position)`);
+  // The collection list, newest first, a page at a time: GET /collection orders by
+  // added_at DESC, id DESC within one list, and without this sorted the whole
+  // collection for every page.
+  await run(`CREATE INDEX IF NOT EXISTS idx_collection_user_list_added ON collection(user_id, list_type, added_at, id)`);
   // The copies pulled from a sealed unit. Partial, because most copies came from
   // no unit at all. Without it every unit's linked-card count (and the foreign-key
   // check when a unit is deleted) scanned the whole collection: listing 300 units
   // took four seconds.
   await run(`CREATE INDEX IF NOT EXISTS idx_collection_sealed_unit ON collection(sealed_unit_id) WHERE sealed_unit_id IS NOT NULL`);
+  // The product-map rows written before `game` existed, for the backfill above that
+  // runs every boot. Nothing writes a NULL game any more, so this holds no rows,
+  // costs nothing to keep, and turns that backfill's full scan into a lookup.
+  await run(`CREATE INDEX IF NOT EXISTS idx_tcgplayer_catalog_no_game ON tcgplayer_catalog(category_id) WHERE game IS NULL`);
   await run(`CREATE INDEX IF NOT EXISTS idx_card_cache_set_num ON card_cache(set_id, number)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_deck_cards_checkout ON deck_cards(deck_id, checked_out)`);
   // Indexes on the retired tags/audit_logs tables. A fresh database never creates
