@@ -1,4 +1,4 @@
-import { useState, lazy, Suspense } from 'react';
+import { memo, useState, lazy, Suspense } from 'react';
 import { Camera, Search, Award } from 'lucide-react';
 import CameraScanner from './CameraScanner';
 import CardSearch from './CardSearch';
@@ -82,4 +82,5 @@ function AddCards({ active = true, onAddSuccess, showToast, setActiveTab, initia
   );
 }
 
-export default AddCards;
+// Memoized: App re-renders on every toast, and its props here are stable.
+export default memo(AddCards);

@@ -486,6 +486,9 @@ export default function CatalogPanel({ showToast }) {
   const [engine, setEngine] = useState(null);
   const [mapGame, setMapGame] = useState('pokemon');
   const timer = useRef(null);
+  // Bumped when a poll fails. State changes re-arm the poll below, and a failed
+  // poll changes none, so without this the bar froze until the panel reopened.
+  const [pollRetry, setPollRetry] = useState(0);
 
   const load = async () => {
     try {
@@ -529,6 +532,8 @@ export default function CatalogPanel({ showToast }) {
       try {
         if (progress) {
           const r = await fetch('/api/admin/catalogs/progress');
+          // An error answer has no progress in it, which read as "the build finished".
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
           const j = await r.json();
           setProgress(j.progress || null);
           setLast(j.last || null);
@@ -537,20 +542,22 @@ export default function CatalogPanel({ showToast }) {
         }
         if (engine?.progress || mapRunning) {
           const e = await fetch('/api/admin/models');
-          if (e.ok) {
-            const ej = await e.json();
-            setEngine(ej);
-            // A finished download changes what is installed, and a downloaded
-            // catalog changes what the list reports as published.
-            const stillRunning = Object.values(ej.productMaps || {}).some(m => m?.progress);
-            if (!ej.progress && !stillRunning) load();
-          }
+          if (!e.ok) throw new Error(`HTTP ${e.status}`);
+          const ej = await e.json();
+          setEngine(ej);
+          // A finished download changes what is installed, and a downloaded
+          // catalog changes what the list reports as published.
+          const stillRunning = Object.values(ej.productMaps || {}).some(m => m?.progress);
+          if (!ej.progress && !stillRunning) load();
         }
-      } catch { /* a dropped poll is not worth surfacing; the next one retries */ }
+      } catch {
+        // A dropped poll is not worth surfacing; schedule the next one.
+        setPollRetry(n => n + 1);
+      }
     }, POLL_MS);
     return () => clearTimeout(timer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [progress, engine?.progress, JSON.stringify(engine?.productMaps)]);
+  }, [progress, engine?.progress, JSON.stringify(engine?.productMaps), pollRetry]);
 
   const download = async (what) => {
     try {
@@ -608,7 +615,9 @@ export default function CatalogPanel({ showToast }) {
   const stop = async () => {
     try {
       const r = await fetch('/api/admin/catalogs/stop', { method: 'POST' });
-      const j = await r.json();
+      const j = await r.json().catch(() => ({}));
+      // A refusal is not progress: storing its body showed the build as stopped.
+      if (!r.ok) return showToast?.(t('catalog.errStop', { message: j.error || `HTTP ${r.status}` }));
       setProgress(j.progress);
       showToast?.(t('catalog.stoppingToast'));
     } catch (e) {

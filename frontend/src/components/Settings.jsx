@@ -1,5 +1,6 @@
-import { useState, useEffect, lazy, Suspense } from 'react';
-import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload, Eye, EyeOff, SlidersHorizontal, Info, Bug, Lightbulb, MessagesSquare, ScrollText, Github, Layers, Languages, Smartphone, Server, PackageOpen } from 'lucide-react';
+import { useState, useEffect, lazy, Suspense, memo } from 'react';
+import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload, Eye, EyeOff, SlidersHorizontal, Info, Bug, Lightbulb, MessagesSquare, ScrollText, Layers, Languages, Smartphone, Server, PackageOpen } from 'lucide-react';
+import GithubIcon from './GithubIcon';
 import { GAMES, enabledGames, setGameEnabled, gameOptions, defaultGame, isGameEnabled } from '../utils/games';
 import RiotNotice from './RiotNotice';
 import { CURRENCIES, getCurrency, setCurrency } from '../utils/formatPrice';
@@ -83,8 +84,11 @@ function KeyField({ id, label, hint, link, linkLabel, configured, value, onChang
   );
 }
 
-function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
+// onDataChanged: an import, restore or precon import wrote cards, so the other
+// open tabs (and useApi's cache) must refetch.
+function Settings({ user, onUpdateUser, showToast, onLeaveDevice, onDataChanged }) {
   const { locale, setLocale, t } = useT();
+  const dataChanged = () => { if (onDataChanged) onDataChanged(); };
   // Device mode (no server): sharing, passwords and the read-only API key all
   // exist for other people or other machines, so their panels are left out.
   const deviceMode = isDeviceMode();
@@ -242,6 +246,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
       const result = await response.json().catch(() => ({}));
       if (response.ok) {
         showToast(t('settings.restoreOk', { cards: result.cards, locations: result.locations, decks: result.decks }));
+        dataChanged();
       } else {
         showToast(t('settings.restoreFailed', { error: result.error || t('settings.unknownError') }));
       }
@@ -287,6 +292,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
         const result = await response.json();
         if (response.ok) {
           showToast(result.message || t('settings.importOk'));
+          dataChanged();
         } else {
           showToast(t('settings.importFailed', { error: apiErrorText(t, result, 'settings.unknownError') }));
         }
@@ -550,7 +556,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {showPrecons && <PreconImportModal onClose={() => setShowPrecons(false)} showToast={showToast} />}
+      {showPrecons && <PreconImportModal onClose={() => setShowPrecons(false)} showToast={showToast} onImported={dataChanged} />}
       {/* Title Panel */}
       <div className="glass-panel">
         <h2 style={{ fontSize: '1.25rem', color: 'var(--text-strong)' }}>{t('settings.title')}</h2>
@@ -1304,7 +1310,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
                 <ScrollText size={16} /> {t('settings.changelog')}
               </a>
               <a className="btn btn-secondary" href={REPO_URL} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
-                <Github size={16} /> {t('settings.source')}
+                <GithubIcon size={16} /> {t('settings.source')}
               </a>
             </div>
             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem', lineHeight: 1.4 }}>
@@ -1324,4 +1330,4 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
   );
 }
 
-export default Settings;
+export default memo(Settings);

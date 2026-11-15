@@ -23,6 +23,9 @@ import { undoToast } from '../utils/undo';
 import RiotNotice from './RiotNotice';
 import { isLandscape } from '../utils/riftbound';
 import { apiErrorText } from '../utils/apiError';
+import { LatestRequest, isAbortError } from '../utils/request';
+import { bulkResultText } from '../utils/bulkResult';
+import { localizedPreview, savedPrintingFields } from '../utils/inspectorCard';
 
 // MTG color identity pip colors (WUBRG), approximating the printed mana colors.
 const MTG_COLOR_BG = {
@@ -85,6 +88,10 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
   const [printingsFilter, setPrintingsFilter] = useState('');
   const [printingsTotal, setPrintingsTotal] = useState(null);
   const hasToggledRef = useRef(false);
+  // The localized printing a language switch looks up. Only the newest answer
+  // may land, and never one for a card that has since been closed or replaced.
+  const langRequest = useRef(null);
+  if (!langRequest.current) langRequest.current = new LatestRequest();
 
 
   const targetEntryId = card?.entry_id || card?.id;
@@ -103,59 +110,67 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     ? { name: activeCard.name, game: activeCard.game, image_url: activeCard.image_url_back }
     : activeCard;
 
+  // The containers the edit form offers, read each time a card opens rather than
+  // once: the screens that host this popup stay mounted all session, so a
+  // container made since was never in the list.
   useEffect(() => {
+    if (!targetEntryId) return undefined;
+    let cancelled = false;
     fetch('/api/locations')
       .then(r => r.ok ? r.json() : [])
-      .then(setLocations)
+      .then(list => { if (!cancelled && Array.isArray(list)) setLocations(list); })
       .catch(() => {});
-  }, []);
+    return () => { cancelled = true; };
+  }, [targetEntryId]);
+
+  // The form as the card stands: when another card opens, and on Cancel, so an
+  // abandoned edit (a language switch included) leaves nothing behind.
+  const loadForm = (from) => {
+    langRequest.current.cancel();
+    setLocalizedCard(null);
+    setQ(from.quantity ?? 1);
+    setCondition(from.condition || 'Near Mint');
+    setPrinting(from.printing || 'Normal');
+    setLanguage(from.language || 'English');
+    setPurchasePrice(from.purchase_price || 0);
+    setLocationId(from.location_id || '');
+    setIsTrade(from.is_trade ? 1 : 0);
+    setFavorite(from.favorite ? 1 : 0);
+    setListType(from.list_type || 'collection');
+    setNotes(from.notes || '');
+    setGrader(from.grader || 'Raw');
+    setGrade(from.grade == null ? '' : String(from.grade));
+    setCertNumber(from.cert_number || '');
+    setMarketValue(from.market_value == null ? '' : String(from.market_value));
+  };
 
   useEffect(() => {
-    if (!card) return;
-    setLocalizedCard(null);
+    if (!card) { langRequest.current.cancel(); return; }
     setPrintings(null);
     hasToggledRef.current = false;
     setMode(startInEdit ? 'edit' : 'view');
-    setQ(card.quantity ?? 1);
-    setCondition(card.condition || 'Near Mint');
-    setPrinting(card.printing || 'Normal');
-    setLanguage(card.language || 'English');
-    setPurchasePrice(card.purchase_price || 0);
-    setLocationId(card.location_id || '');
-    setIsTrade(card.is_trade ? 1 : 0);
-    setFavorite(card.favorite ? 1 : 0);
-    setListType(card.list_type || 'collection');
-    setNotes(card.notes || '');
-    setGrader(card.grader || 'Raw');
-    setGrade(card.grade == null ? '' : String(card.grade));
-    setCertNumber(card.cert_number || '');
-    setMarketValue(card.market_value == null ? '' : String(card.market_value));
+    loadForm(card);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset form only when the entry changes, not on every card mutation
   }, [targetEntryId, startInEdit]);
 
+  // A preview of the printing in the chosen language, on a copy: the caller's
+  // card is left alone until the edit is saved (handleSave), so a Cancel or a
+  // close takes it back. Assigning onto the caller's object used to keep the
+  // switch even after a cancel.
   const handleLanguageChange = async (newLang) => {
     setLanguage(newLang);
     if (!activeCard) return;
+    const req = langRequest.current.begin();
     try {
       const cardId = activeCard.card_id || activeCard.id;
-      const resp = await fetch(`/api/cards/${encodeURIComponent(cardId)}/printing?lang=${encodeURIComponent(newLang)}&game=${activeCard.game || activeCard.supertype || ''}`);
+      const resp = await fetch(`/api/cards/${encodeURIComponent(cardId)}/printing?lang=${encodeURIComponent(newLang)}&game=${activeCard.game || activeCard.supertype || ''}`, { signal: req.signal });
       if (resp.ok) {
         const localized = await resp.json();
-        if (localized && localized.id) {
-          const updated = {
-            ...(card || {}),
-            ...localized,
-            card_id: localized.id,
-            language: newLang,
-          };
-          if (card) {
-            Object.assign(card, updated);
-          }
-          setLocalizedCard(updated);
-        }
+        if (!req.isLatest()) return;
+        if (localized && localized.id) setLocalizedCard(localizedPreview(card, localized, newLang));
       }
     } catch (e) {
-      console.warn('Could not switch to localized printing:', e);
+      if (!isAbortError(e)) console.warn('Could not switch to localized printing:', e);
     }
   };
 
@@ -207,6 +222,13 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         })
       });
       if (res.ok) {
+        // Saved, so the caller's object now mirrors the server, for a screen that
+        // keeps it without refetching (the scanner's recent strip). A language
+        // switch saved with it brings the localized printing's identity along:
+        // the server moved the entry to that printing.
+        if (localizedCard && localizedCard.language === language) {
+          Object.assign(card, savedPrintingFields(localizedCard));
+        }
         card.quantity = qNum;
         card.condition = condition;
         card.printing = printing;
@@ -326,7 +348,11 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         body: JSON.stringify({ entry_ids: [targetEntryId], action: 'add_to_deck', value: deckId })
       });
       const data = await res.json().catch(() => ({}));
-      showToast && showToast(res.ok ? (data.message || t('inspector.addedToDeck')) : apiErrorText(t, data, 'inspector.errAddDeck'));
+      // In the interface language, from the answer's count (utils/bulkResult);
+      // the server's English only when a deck refused the card and says why.
+      showToast && showToast(res.ok
+        ? (typeof data.affected === 'number' || data.message ? bulkResultText(t, 'add_to_deck', deckId, data) : t('inspector.addedToDeck'))
+        : apiErrorText(t, data, 'inspector.errAddDeck'));
     } catch (err) {
       console.error(err);
       showToast && showToast(t('inspector.errAddDeckGeneric'));
@@ -428,16 +454,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
 
   return (
     <>
-    <Modal onClose={handleClose} label={activeCard.name} closeOnBackdrop={mode !== 'edit'} overlayStyle={{
-      position: 'fixed',
-      top: 0, left: 0, right: 0, bottom: 0,
-      backgroundColor: 'rgba(0,0,0,0.75)',
-      backdropFilter: 'blur(8px)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 999
-    }} className={`glass-panel card-inspector ${mode === 'edit' ? 'mode-edit' : ''}`}>
+    <Modal onClose={handleClose} label={activeCard.name} closeOnBackdrop={mode !== 'edit'} className={`glass-panel card-inspector ${mode === 'edit' ? 'mode-edit' : ''}`}>
         <button className="btn btn-secondary btn-icon-only" onClick={handleClose} aria-label={t('common.close')} style={{
           position: 'absolute',
           top: '1rem',
@@ -566,12 +583,12 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                   <span key={color} className={`mtg-color-pip mtg-color-${color.toLowerCase()}`} style={{
                     fontSize: '0.6rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em',
                     padding: '0.15rem 0.45rem', borderRadius: '999px',
-                    background: MTG_COLOR_BG[color] || 'rgba(255,255,255,0.1)',
-                    color: MTG_COLOR_FG[color] || '#fff', border: '1px solid rgba(0,0,0,0.2)'
+                    background: MTG_COLOR_BG[color] || 'var(--surface-3)',
+                    color: MTG_COLOR_FG[color] || 'var(--text-strong)', border: '1px solid rgba(0,0,0,0.2)'
                   }}>{color}</span>
                 ))}
                 {(!activeCard.types || activeCard.types.length === 0) && (
-                  <span style={{ fontSize: '0.6rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.15rem 0.45rem', borderRadius: '999px', background: 'rgba(180,180,180,0.25)', color: '#eee' }}>{t('inspector.colorless')}</span>
+                  <span style={{ fontSize: '0.6rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.15rem 0.45rem', borderRadius: '999px', background: 'var(--surface-3)', color: 'var(--text-strong)' }}>{t('inspector.colorless')}</span>
                 )}
                 {Array.isArray(activeCard.subtypes) && activeCard.subtypes.length > 0 && (
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{activeCard.subtypes.join(' ')}</span>
@@ -611,7 +628,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                   </label>
                 </div>
               ) : (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.02)', padding: '0.6rem 0.9rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--surface-1)', padding: '0.6rem 0.9rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
                   <input type="checkbox" checked={isTrade === 1} onChange={(e) => setIsTrade(e.target.checked ? 1 : 0)} id="isTrade" style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
                   <label htmlFor="isTrade" style={{ cursor: 'pointer', margin: 0, fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.85rem' }}>
                     {t('inspector.listedInTrade')}
@@ -680,7 +697,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               </div>
 
               <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.25rem' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setMode('view')} style={{ flex: 1 }}>{t('common.cancel')}</button>
+                <button type="button" className="btn btn-secondary" onClick={() => { loadForm(card); setMode('view'); }} style={{ flex: 1 }}>{t('common.cancel')}</button>
                 <button type="submit" className="btn btn-primary" style={{ flex: 2 }}>{t('inspector.saveChanges')}</button>
               </div>
             </form>
@@ -785,7 +802,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               <PriceHistoryChart cardId={activeCard.card_id || activeCard.id} currency={activeCard.price_currency} height={100} defaultRange="30d" />
 
               {/* Specifications Details Grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem 1rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-glass)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem 1rem', background: 'var(--surface-1)', border: '1px solid var(--border-glass)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem' }}>
                 {/* A slab reports its grade where a raw card reports its condition:
                     they answer the same question, and showing 'Near Mint' for a
                     PSA 9 states an opinion the grader already overruled. */}
@@ -803,7 +820,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               </div>
 
               {activeCard.sealed_unit_id != null && activeCard.sealed_product_name && (
-                <div style={{ display: 'flex', gap: '0.75rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.75rem' }}>
+                <div style={{ display: 'flex', gap: '0.75rem', background: 'var(--surface-1)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.75rem' }}>
                   {activeCard.sealed_product_image_url && (
                     <img
                       src={activeCard.sealed_product_image_url}
@@ -944,7 +961,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               )}
 
               {activeCard.notes && (
-                <div style={{ background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.6rem 0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.6rem 0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                   {activeCard.notes}
                 </div>
               )}
@@ -987,11 +1004,12 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 <button
                   type="button"
                   className={`btn ${favorite === 1 ? 'btn-primary' : 'btn-secondary'} btn-icon-only`}
-                  style={{ borderRadius: 'var(--radius-sm)', padding: '0.6rem', ...(favorite === 1 ? { backgroundColor: 'rgba(250,204,21,0.2)', color: '#facc15', border: '1px solid rgba(250,204,21,0.3)' } : {}) }}
+                  style={{ borderRadius: 'var(--radius-sm)', padding: '0.6rem', ...(favorite === 1 ? { backgroundColor: 'rgba(250,204,21,0.2)', color: 'var(--accent-yellow)', border: '1px solid var(--accent-yellow-glow)' } : {}) }}
                   onClick={() => handleQuickToggle('favorite', favorite === 1 ? 0 : 1)}
                   title={t(favorite === 1 ? 'inspector.unfavorite' : 'inspector.favorite')}
+                  aria-label={t(favorite === 1 ? 'inspector.unfavorite' : 'inspector.favorite')}
                 >
-                  <Star size={16} fill={favorite === 1 ? '#facc15' : 'none'} />
+                  <Star size={16} fill={favorite === 1 ? 'currentColor' : 'none'} />
                 </button>
 
                 <button
@@ -1000,6 +1018,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                   style={{ borderRadius: 'var(--radius-sm)', padding: '0.6rem' }}
                   onClick={handleDelete}
                   title={t('inspector.deleteCard')}
+                  aria-label={t('inspector.deleteCard')}
                 >
                   <Trash2 size={16} />
                 </button>

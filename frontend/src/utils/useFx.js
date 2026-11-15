@@ -42,8 +42,9 @@ const subscribeCurrency = (cb) => {
 };
 
 export function useFx() {
-  const fx = useSyncExternalStore(subscribeFx, getFx);
-  const currency = useSyncExternalStore(subscribeCurrency, getCurrency);
+  // Each snapshot doubles as the server one, for react-dom/server (renderSmoke.test.js).
+  const fx = useSyncExternalStore(subscribeFx, getFx, getFx);
+  const currency = useSyncExternalStore(subscribeCurrency, getCurrency, getCurrency);
   useEffect(() => { loadFx(); }, []);
   // (amount, rowCurrency) -> the displayPrice result, in the display currency.
   const show = useCallback((amount, from) => displayPrice(amount, from, currency, fx), [currency, fx]);

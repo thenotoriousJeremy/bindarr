@@ -104,12 +104,15 @@ export function setTabParam(tab, value, { replace = false } = {}) {
   else navigate(path, { replace });
 }
 
+// Each snapshot doubles as the server snapshot, which react-dom/server requires
+// (utils/renderSmoke.test.js renders the app under Node).
 export function useRoutePath() {
-  return useSyncExternalStore(subscribe, currentPath);
+  return useSyncExternalStore(subscribe, currentPath, currentPath);
 }
 
 export function useTabParam(tab) {
-  return useSyncExternalStore(subscribe, () => getTabParam(tab));
+  const snapshot = () => getTabParam(tab);
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 
 // App.jsx's half: keeps the shown tab in step with the URL, and carries a deep

@@ -14,7 +14,6 @@ export default function DeckSimulatorDialog({
 
   return (
     <Modal onClose={() => setShowSimulator(false)} label={t('deck.handSimulator')} closeOnBackdrop={false}
-      overlayStyle={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}
       className="glass-panel" style={{ maxWidth: '1000px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem', position: 'relative' }}>
         <button className="btn btn-secondary btn-icon-only" onClick={() => setShowSimulator(false)} aria-label={t('common.close')} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
           <X size={16} />

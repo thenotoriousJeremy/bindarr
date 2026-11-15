@@ -7,7 +7,7 @@ import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrint
 import { defaultGameFilter, gameOptions, showGamePicker, gameLabel } from '../utils/games';
 import { useT } from '../utils/i18n';
 import { onActivateKey } from '../utils/a11y';
-import { lazyNamed } from '../utils/lazyWithReload';
+import { lazyNamed, lazyWithReload } from '../utils/lazyWithReload';
 import ChartFallback from './charts/ChartFallback';
 
 // The plots are code-split (charts/DashboardCharts): recharts is the largest
@@ -17,44 +17,19 @@ const ValueTimeline = lazyNamed(charts, 'ValueTimeline');
 const SetValueBars = lazyNamed(charts, 'SetValueBars');
 const DistributionDonut = lazyNamed(charts, 'DistributionDonut');
 import { useApi } from '../utils/useApi';
-import CardInspectorModal from './CardInspectorModal';
+import { useShownTrigger } from '../utils/useShownTrigger';
+import { CHART_PALETTE, typeChartColor } from '../utils/dashboardColors';
 import CardImage from './CardImage';
 import { PokemonMigrationNotice } from './PokemonMigrationBanner';
 import RiotNotice from './RiotNotice';
 import Price from './Price';
 
-const COLORS = [
-  '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
-  '#ec4899', '#14b8a6', '#f43f5e', '#a855f7', '#6366f1'
-];
+// The card popup is the largest thing the landing tab would otherwise load up
+// front (it carries the edit form, price history and deck/list pickers), and it
+// is only needed once a card is clicked.
+const CardInspectorModal = lazyWithReload(() => import('./CardInspectorModal'));
 
-const TYPE_COLORS = {
-  'Grass': '#4ade80',
-  'Fire': '#f87171',
-  'Water': '#60a5fa',
-  'Lightning': '#facc15',
-  'Psychic': '#c084fc',
-  'Fighting': '#f97316',
-  'Darkness': '#475569',
-  'Metal': '#94a3b8',
-  'Dragon': '#a855f7',
-  'Fairy': '#f472b6',
-  'Colorless': '#cbd5e1',
-  'White': '#fef08a',
-  'Blue': '#3b82f6',
-  'Black': '#334155',
-  'Red': '#ef4444',
-  'Green': '#10b981',
-  'Land': '#d97706',
-  'Amber': '#f59e0b',
-  'Amethyst': '#a855f7',
-  'Emerald': '#10b981',
-  'Ruby': '#ef4444',
-  'Sapphire': '#3b82f6',
-  'Steel': '#94a3b8'
-};
-
-function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId, setFocusEntryId, onUpdate, showToast }) {
+function Dashboard({ active = true, statsTrigger, onNavigate, onOpenSet, setSelectedLocationId, setFocusEntryId, onUpdate, showToast }) {
   const { t, locale } = useT();
   // Money and dates follow the interface language, not the browser's: a user who
   // picked German sees 1.234,56 and 3.8.2026 even on an en-US browser.
@@ -75,7 +50,10 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
   // neither blanks the page to do it: the figures already on screen stay until
   // the new ones arrive. Switching game, period or currency mid-request cannot
   // leave the older answer on screen, because only the latest request lands.
-  const statsQuery = useApi(`/api/stats?currency=${displayCurrency}${gameFilter ? `&game=${gameFilter}` : ''}`, null, { deps: [statsTrigger] });
+  // While another tab is shown the changes only pile up (useShownTrigger), and
+  // one refetch catches up when the Dashboard is shown again.
+  const shownTrigger = useShownTrigger(statsTrigger, active);
+  const statsQuery = useApi(`/api/stats?currency=${displayCurrency}${gameFilter ? `&game=${gameFilter}` : ''}`, null, { deps: [shownTrigger] });
   const stats = statsQuery.data || null;
   const loading = statsQuery.loading && !stats;
   const error = !stats && statsQuery.error ? (statsQuery.error.status ? t('dash.errStats') : statsQuery.error.message) : null;
@@ -84,7 +62,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
   const historyQuery = useApi(
     `/api/stats/history?period=${timePeriod}&currency=${displayCurrency}${gameFilter ? `&game=${gameFilter}` : ''}`,
     null,
-    { enabled: !!(stats && stats.summary.totalCards > 0), deps: [statsTrigger] }
+    { enabled: !!(stats && stats.summary.totalCards > 0), deps: [shownTrigger] }
   );
   const historyData = Array.isArray(historyQuery.data) ? historyQuery.data : [];
   const loadingHistory = historyQuery.loading && !historyQuery.data;
@@ -151,16 +129,13 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
 
   const { summary, types, rarities, sets, topValuable, recentAdditions = [], setProgress } = stats;
 
-  // Match type name to its color case-insensitively; fall back to a distinct
-  // palette color by index so slices are never all the same gray.
-  const typeColorLookup = Object.fromEntries(
-    Object.entries(TYPE_COLORS).map(([k, v]) => [k.toLowerCase(), v])
-  );
+  // Each type in its card-category colour (utils/dashboardColors), or a distinct
+  // palette colour by index so slices are never all the same gray.
   const typeChartData = types.map((t, i) => {
-    const fill = typeColorLookup[String(t.name).toLowerCase()] || COLORS[i % COLORS.length];
+    const fill = typeChartColor(t.name, i);
     return { name: t.name, value: t.value, color: fill, fill };
   });
-  const rarityChartData = rarities.map((r, i) => ({ ...r, fill: COLORS[i % COLORS.length] }));
+  const rarityChartData = rarities.map((r, i) => ({ ...r, fill: CHART_PALETTE[i % CHART_PALETTE.length] }));
 
   // What the money on this page is in. `valueCurrency` is the display currency
   // when the server could convert everything, the collection's one currency when
@@ -187,7 +162,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
               <span className="metric-icon" style={{ width: '28px', height: '28px' }}><TrendingUp size={16} /></span>
               {t('dash.netWorth')}
             </span>
-            <div style={{ display: 'flex', gap: '4px', background: 'rgba(255,255,255,0.05)', padding: '2px', borderRadius: '4px' }}>
+            <div style={{ display: 'flex', gap: '4px', background: 'var(--surface-2)', padding: '2px', borderRadius: '4px' }}>
               {['7d', '30d', '1y', '5y'].map(p => (
                 <button 
                   key={p} 
@@ -277,7 +252,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                 <span>{t('dash.unrealizedGain')}</span>
                 <span className="metric-icon"><ArrowUpRight size={18} style={{ transform: isPositive ? 'none' : 'rotate(90deg)' }} /></span>
               </div>
-              <div className="metric-value" style={{ color: isPositive ? '#22c55e' : '#ef4444' }}>
+              <div className="metric-value" style={{ color: isPositive ? 'var(--accent-green)' : 'var(--accent-red)' }}>
                 {noRate ? '—' : `${isPositive ? '+' : '−'}${currencySymbol()}${money(Math.abs(roi.abs))}`}
               </div>
               <div className="metric-footer">
@@ -390,8 +365,8 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                   style={{ 
                     display: 'flex', 
                     gap: '0.75rem', 
-                    alignItems: 'center', 
-                    background: 'rgba(255, 255, 255, 0.02)', 
+                    alignItems: 'center',
+                    background: 'var(--surface-1)',
                     padding: '0.5rem', 
                     borderRadius: 'var(--radius-sm)', 
                     border: '1px solid var(--border-glass)',
@@ -437,7 +412,7 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
                   <div
                     key={idx}
                     role="button" tabIndex={0} onClick={() => setInspectorCard(card)} onKeyDown={onActivateKey(() => setInspectorCard(card))}
-                    style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', cursor: 'pointer', transition: 'all 0.2s ease' }}
+                    style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', background: 'var(--surface-1)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', cursor: 'pointer', transition: 'all 0.2s ease' }}
                     className="dashboard-card-clickable"
                   >
                     <CardImage card={card} style={{ width: '48px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '5px', boxShadow: '0 2px 6px rgba(0,0,0,0.4)' }} />
@@ -498,19 +473,24 @@ function Dashboard({ statsTrigger, onNavigate, onOpenSet, setSelectedLocationId,
         </div>
       </div>
 
-      {/* Card Inspector Modal Overlay */}
-      <CardInspectorModal
-        card={inspectorCard}
-        onClose={() => setInspectorCard(null)}
-        onUpdate={onUpdate}
-        showToast={showToast}
-        onViewStorage={(card) => {
-          if (setSelectedLocationId) setSelectedLocationId(card.location_id || 'unsorted');
-          if (setFocusEntryId) setFocusEntryId(card.entry_id || card.id);
-          onNavigate('storage');
-          setInspectorCard(null);
-        }}
-      />
+      {/* Card Inspector Modal Overlay. Mounted only while a card is open, so its
+          chunk is fetched on the first click rather than with the Dashboard. */}
+      {inspectorCard && (
+        <Suspense fallback={<div className="modal-overlay" aria-busy="true"><div className="spinner" aria-label={t('common.loading')} /></div>}>
+          <CardInspectorModal
+            card={inspectorCard}
+            onClose={() => setInspectorCard(null)}
+            onUpdate={onUpdate}
+            showToast={showToast}
+            onViewStorage={(card) => {
+              if (setSelectedLocationId) setSelectedLocationId(card.location_id || 'unsorted');
+              if (setFocusEntryId) setFocusEntryId(card.entry_id || card.id);
+              onNavigate('storage');
+              setInspectorCard(null);
+            }}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

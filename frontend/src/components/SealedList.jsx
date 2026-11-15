@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { memo, useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil, RefreshCw, Link2, Share2, Search, SlidersHorizontal, LayoutGrid, List, MousePointerClick } from 'lucide-react';
 import { useT } from '../utils/i18n';
@@ -6,10 +6,15 @@ import { gameLabel, gameOptions } from '../utils/games';
 import { formatPrice } from '../utils/formatPrice';
 import { printingLabel } from '../utils/cardOptions';
 import { useLongPress } from '../utils/useLongPress';
+import { useApi } from '../utils/useApi';
+import { LatestRequest, fetchJson, isAbortError } from '../utils/request';
+import { useShownTrigger } from '../utils/useShownTrigger';
+import { linkableCardsUrl, purchasesUrl, purchasesFrom } from '../utils/sealedQueries';
 import SealedPurchaseForm from './SealedPurchaseForm';
 import Modal from './Modal';
 import PackPriceSplitter from './PackPriceSplitter';
 import MultiSelectDropdown from './MultiSelectDropdown';
+import ViewToggle from './ViewToggle';
 
 // Loose match on a sealed product's TCGplayer group name against a card's own
 // set name ('SV: Scarlet & Violet 151' vs 'Scarlet & Violet 151') — punctuation
@@ -43,17 +48,22 @@ function LinkCardsPanel({ unit, purchase, showToast, onLinked }) {
   const [cardQuery, setCardQuery] = useState('');
   const [loading, setLoading] = useState(true);
 
+  // Only this purchase's game, and only the grid's slim columns
+  // (utils/sealedQueries): the panel lists names and sets, and used to download
+  // the whole collection, every column, to do it. An error body is reported,
+  // never shown as an empty list.
   useEffect(() => {
-    fetch('/api/collection?list_type=collection')
-      .then(r => r.json())
-      .then(d => {
-        const rows = (Array.isArray(d.collection) ? d.collection : Array.isArray(d) ? d : [])
+    const controller = new AbortController();
+    fetchJson(linkableCardsUrl(purchase.game), { signal: controller.signal })
+      .then(({ data }) => {
+        const rows = (Array.isArray(data) ? data : [])
           .filter(c => !c.sealed_unit_id && c.game === purchase.game)
           .sort((a, b) => new Date(b.added_at) - new Date(a.added_at));
         setCollectionCards(rows);
       })
-      .catch(() => showToast?.(t('sealed.errLoadCards')))
-      .finally(() => setLoading(false));
+      .catch(err => { if (!isAbortError(err)) showToast?.(t('sealed.errLoadCards')); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unit.id]);
 
@@ -181,11 +191,21 @@ function LinkedCardsPanel({ unitId, expectedCards, refreshKey, showToast, onChan
   const [cards, setCards] = useState(null);
   const [progress, setProgress] = useState(null);
 
+  // Newest read wins: an unlink reloads while a refreshKey reload may still be
+  // on its way.
+  const req = useRef(null);
+  if (!req.current) req.current = new LatestRequest();
+  useEffect(() => () => req.current.cancel(), []);
+
   const load = () => {
-    fetch(`/api/sealed/units/${unitId}/cards`)
-      .then(r => r.json())
-      .then(d => { setCards(d.cards || []); setProgress(d.progress || null); })
-      .catch(() => setCards([]));
+    const mine = req.current.begin();
+    fetchJson(`/api/sealed/units/${unitId}/cards`, { signal: mine.signal })
+      .then(({ data }) => {
+        if (!mine.isLatest()) return;
+        setCards(Array.isArray(data?.cards) ? data.cards : []);
+        setProgress(data?.progress || null);
+      })
+      .catch(err => { if (!isAbortError(err) && mine.isLatest()) setCards([]); });
   };
 
   useEffect(load, [unitId, refreshKey]);
@@ -250,22 +270,29 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
 
   useEffect(() => {
     if (!purchase.template_id) { setRecipe(null); return; }
-    fetch(`/api/sealed/templates/${purchase.template_id}`)
-      .then(r => r.json())
-      .then(d => setRecipe(d.template || null))
-      .catch(() => setRecipe(null));
+    let cancelled = false;
+    fetchJson(`/api/sealed/templates/${purchase.template_id}`)
+      .then(({ data }) => { if (!cancelled) setRecipe(data?.template || null); })
+      .catch(() => { if (!cancelled) setRecipe(null); });
+    return () => { cancelled = true; };
   }, [purchase.template_id]);
 
+  // Newest read wins: flipping "show claimed by others" asks for a different
+  // list, and the older answer must not land on top of it.
+  const unitsReq = useRef(null);
+  if (!unitsReq.current) unitsReq.current = new LatestRequest();
+  useEffect(() => () => unitsReq.current.cancel(), []);
+
   const loadUnits = () => {
+    const req = unitsReq.current.begin();
     setUnits(null);
     setUnitsError(false);
-    fetch(`/api/sealed/purchases/${purchase.id}${showClaimedByOthers ? '?show_claimed_by_others=1' : ''}`)
-      .then(async response => {
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || t('sealed.errLoad'));
-        setUnits(data.units || []);
+    fetchJson(`/api/sealed/purchases/${purchase.id}${showClaimedByOthers ? '?show_claimed_by_others=1' : ''}`, { signal: req.signal })
+      .then(({ data }) => {
+        if (req.isLatest()) setUnits(Array.isArray(data?.units) ? data.units : []);
       })
-      .catch(() => {
+      .catch(err => {
+        if (isAbortError(err) || !req.isLatest()) return;
         setUnitsError(true);
         showToast?.(t('sealed.errLoad'));
       });
@@ -286,7 +313,11 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
     if (opening && Array.isArray(data.applied) && data.applied.length > 0) {
       const cardCount = data.applied.filter(c => c.component_type === 'card').reduce((n, c) => n + (c.quantity || 1), 0);
       const productCount = data.applied.filter(c => c.component_type === 'product').reduce((n, c) => n + (c.quantity || 1), 0);
-      showToast?.(t('sealed.recipeApplied', { cards: cardCount, packs: productCount }));
+      // Two counts, so each is its own plural phrase inside the sentence.
+      showToast?.(t('sealed.recipeAppliedParts', {
+        cards: t('sealed.cardCount', { count: cardCount }),
+        packs: t('sealed.packCount', { count: productCount }),
+      }));
     }
   };
 
@@ -298,7 +329,7 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
       if (!res.ok) { showToast?.(data.error || t('sealed.errSave')); return; }
       loadUnits();
       onChanged?.();
-      showToast?.(t('sealed.markedAllOpen', { count: data.opened }));
+      showToast?.(t('sealed.markedOpen', { count: Number(data.opened) || 0 }));
     } catch {
       showToast?.(t('sealed.errSave'));
     } finally {
@@ -518,7 +549,7 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
               )}
               {(purchase.expected_cards_per_unit > 0 || purchase.contents_note) && (
                 <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                  {purchase.expected_cards_per_unit > 0 ? t('sealed.nCards', { n: purchase.expected_cards_per_unit }) : ''}
+                  {purchase.expected_cards_per_unit > 0 ? t('sealed.cardCount', { count: Number(purchase.expected_cards_per_unit) }) : ''}
                   {purchase.expected_cards_per_unit > 0 && purchase.contents_note ? ' + ' : ''}
                   {purchase.contents_note ? ` (${purchase.contents_note})` : ''}
                 </div>
@@ -575,7 +606,8 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
               <button type="button" className="btn btn-secondary btn-icon-only" title={t('common.edit')} aria-label={t('common.edit')} onClick={() => onEdit?.(purchase)}>
                 <Pencil size={14} />
               </button>
-              <button type="button" className="btn btn-secondary btn-icon-only" style={{ color: 'var(--accent-red)' }} onClick={remove}>
+              <button type="button" className="btn btn-secondary btn-icon-only" style={{ color: 'var(--accent-red)' }} onClick={remove}
+                title={t('common.delete')} aria-label={t('common.delete')}>
                 <Trash2 size={14} />
               </button>
             </>
@@ -589,10 +621,6 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
           onClose={() => setOpen(false)}
           label={t('sealed.purchaseDetails')}
           className="glass-panel"
-          overlayStyle={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}
           style={{
             maxWidth: '760px', width: '100%', maxHeight: '90vh', overflowY: 'auto',
             overscrollBehavior: 'contain', padding: '1.25rem', position: 'relative',
@@ -630,10 +658,8 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, selected, onSele
 // The "Sealed" tab: purchases (store, date, price, quantity) with per-unit
 // sealed/opened tracking, and a way to link opened-unit cards back to the
 // purchase they came from.
-export default function SealedList({ showToast }) {
+function SealedList({ showToast, active = true, statsTrigger }) {
   const { t } = useT();
-  const [purchases, setPurchases] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingPurchase, setEditingPurchase] = useState(null);
   const [viewMode, setViewMode] = useState('gallery');
@@ -648,6 +674,26 @@ export default function SealedList({ showToast }) {
   const [selectMode, setSelectMode] = useState(false);
   const [savingSharing, setSavingSharing] = useState(false);
 
+  // The purchases (useApi): the newest request wins when "show claimed by
+  // others" flips mid-load, a reload keeps the list on screen instead of
+  // blanking it to "Loading", and a change elsewhere (cards linked or deleted
+  // in another tab) is picked up once this tab is shown again.
+  const shownTrigger = useShownTrigger(statsTrigger, active);
+  const listUrl = purchasesUrl(showClaimedByOthers);
+  const purchasesQuery = useApi(
+    listUrl,
+    async ({ signal }) => purchasesFrom((await fetchJson(listUrl, { signal })).data),
+    { deps: [shownTrigger] }
+  );
+  const purchases = useMemo(() => purchasesQuery.data || [], [purchasesQuery.data]);
+  // Nothing yet and no error: the first load (useApi starts it in an effect).
+  const loading = purchasesQuery.data === undefined && !purchasesQuery.error;
+  const load = purchasesQuery.refetch;
+  useEffect(() => {
+    if (purchasesQuery.error) showToast?.(t('sealed.errLoad'));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- toast once per failure
+  }, [purchasesQuery.error]);
+
   const armPurchaseSelection = (id) => {
     const purchase = purchases.find(item => item.id === id);
     if (!purchase || !purchase.is_owner || (purchase.sealed_count || 0) <= 0) return;
@@ -660,16 +706,6 @@ export default function SealedList({ showToast }) {
     setSelectedPurchaseIds(new Set());
   };
 
-  const load = (includeClaimedByOthers = showClaimedByOthers) => {
-    setLoading(true);
-    fetch(`/api/sealed/purchases${includeClaimedByOthers ? '?show_claimed_by_others=1' : ''}`)
-      .then(r => r.json())
-      .then(d => setPurchases(d.purchases || []))
-      .catch(() => showToast?.(t('sealed.errLoad')))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     setSelectedPurchaseIds(current => {
       const ownedIds = new Set(purchases.filter(purchase => purchase.is_owner && (purchase.sealed_count || 0) > 0
@@ -718,8 +754,8 @@ export default function SealedList({ showToast }) {
     setTypeFilter('');
     setStatusFilter('');
     setExpansionFilter([]);
+    // A different list (useApi refetches on the new key).
     setShowClaimedByOthers(false);
-    load(false);
   };
   const toggleFilteredSelection = () => {
     const filteredIds = filteredOwnedPurchases.map(purchase => purchase.id);
@@ -756,7 +792,7 @@ export default function SealedList({ showToast }) {
         return;
       }
       setSelectedPurchaseIds(new Set());
-      showToast?.(t('sealed.bulkSharingUpdated', { count: data.updated }));
+      showToast?.(t('sealed.sharingUpdated', { count: Number(data.updated) || 0 }));
       load();
     } catch {
       showToast?.(t('sealed.errSave'));
@@ -823,28 +859,10 @@ export default function SealedList({ showToast }) {
             )}
           </button>
 
-          <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-            <button
-              type="button"
-              className={`btn btn-icon-only ${viewMode === 'gallery' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setViewMode('gallery')}
-              style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
-              title={t('collection.galleryView')}
-              aria-label={t('collection.galleryView')}
-            >
-              <LayoutGrid size={14} />
-            </button>
-            <button
-              type="button"
-              className={`btn btn-icon-only ${viewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setViewMode('list')}
-              style={{ borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.5rem', width: '32px', height: '32px' }}
-              title={t('collection.listView')}
-              aria-label={t('collection.listView')}
-            >
-              <List size={14} />
-            </button>
-          </div>
+          <ViewToggle value={viewMode} onChange={setViewMode} options={[
+            { value: 'gallery', label: t('collection.galleryView'), icon: LayoutGrid },
+            { value: 'list', label: t('collection.listView'), icon: List },
+          ]} />
         </div>
 
         {showFilters && (
@@ -886,11 +904,7 @@ export default function SealedList({ showToast }) {
                   type="checkbox"
                   id="showClaimedByOthers"
                   checked={showClaimedByOthers}
-                  onChange={event => {
-                    const checked = event.target.checked;
-                    setShowClaimedByOthers(checked);
-                    load(checked);
-                  }}
+                  onChange={event => setShowClaimedByOthers(event.target.checked)}
                   style={{ width: '16px', height: '16px', cursor: 'pointer' }}
                 />
                 <label htmlFor="showClaimedByOthers" style={{ cursor: 'pointer', margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
@@ -937,7 +951,6 @@ export default function SealedList({ showToast }) {
 
       {(showForm || editingPurchase) && (
         <Modal onClose={() => { setShowForm(false); setEditingPurchase(null); }} label={t('sealed.addPurchase')} closeOnBackdrop={false}
-          overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
           style={{ maxWidth: '560px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
             <SealedPurchaseForm
               initial={editingPurchase || undefined}
@@ -971,3 +984,6 @@ export default function SealedList({ showToast }) {
     </div>
   );
 }
+
+// Memoized: App re-renders on every toast, and its props here are stable.
+export default memo(SealedList);

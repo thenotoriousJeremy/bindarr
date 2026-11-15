@@ -64,7 +64,6 @@ export default function TrashModal({ onClose, onRestored, showToast }) {
 
   return (
     <Modal onClose={onClose} label={t('trash.title')}
-      overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       className="glass-panel" style={{ width: '560px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.9rem', background: 'var(--bg-secondary)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
           <h3 style={{ margin: 0 }}>{t('trash.title')}</h3>
