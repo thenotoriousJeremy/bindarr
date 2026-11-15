@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { zoomRange, initialZoom } from '../../utils/cameraZoom';
 import { pickPreferredCamera } from '../../utils/cameraPick';
 
@@ -87,6 +88,79 @@ export function useCameraStream({ showToast, t, onBeforeOpen }) {
       streamRef.current?.getTracks().forEach(track => track.stop());
     };
   }, []);
+
+  // The app (or the tab) going to the background releases the camera, and coming
+  // back opens the same lens again (MOB-13). Android cuts a background app off
+  // the camera anyway, and a stream it has cut off comes back as a frozen
+  // preview; on the web, a hidden tab has no business holding the camera either.
+  // `hidden` covers a camera open still in flight when the app left: startCamera
+  // and switchCamera hand such a stream back here instead of keeping it.
+  const hidden = useRef(false);
+  const paused = useRef(null);   // { deviceId } of the lens to reopen, while paused
+  useEffect(() => {
+    const pause = () => {
+      hidden.current = true;
+      const current = streamRef.current;
+      if (!current) return;
+      paused.current = { deviceId: current.getVideoTracks?.()[0]?.getSettings?.().deviceId || null };
+      stopTracks(current);
+      streamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
+      setStream(null);
+      setIsTorchOn(false);
+    };
+    const resume = async () => {
+      hidden.current = false;
+      const lens = paused.current;
+      if (!lens || unmounted.current) return;
+      paused.current = null;
+      let next = null;
+      try {
+        next = await openCamera(lens.deviceId);
+      } catch {
+        try { next = await openCamera(null); } catch (err) { console.error('Error reopening camera:', err); }
+      }
+      if (unmounted.current) { stopTracks(next); return; }
+      if (hidden.current) {
+        // Left again while it opened.
+        stopTracks(next);
+        paused.current = lens;
+        return;
+      }
+      if (!next) {
+        setCameraActive(false);
+        setCameraErrorKey('scan.errCameraPermissions');
+        return;
+      }
+      streamRef.current = next;
+      setStream(next);
+    };
+    const onVisibility = () => (document.visibilityState === 'hidden' ? pause() : resume());
+    document.addEventListener('visibilitychange', onVisibility);
+    // The app's own signal too: a WebView does not always report itself hidden.
+    let appListener = null;
+    let disposed = false;
+    if (Capacitor.isNativePlatform()) {
+      import('@capacitor/app')
+        .then(({ App }) => App.addListener('appStateChange', ({ isActive }) => (isActive ? resume() : pause())))
+        .then((handle) => { if (disposed) handle.remove(); else appListener = handle; })
+        .catch(() => {});
+    }
+    return () => {
+      disposed = true;
+      document.removeEventListener('visibilitychange', onVisibility);
+      appListener?.remove();
+    };
+  }, []);
+
+  // A stream that arrived while the app was in the background: let it go, and
+  // reopen that lens on return.
+  const parkIfHidden = (mediaStream) => {
+    if (!hidden.current) return false;
+    paused.current = { deviceId: mediaStream.getVideoTracks?.()[0]?.getSettings?.().deviceId || null };
+    stopTracks(mediaStream);
+    return true;
+  };
 
   // Detect manual-exposure support on the live track. Present on most Android
   // Chrome back cameras; absent on iOS Safari and many desktop webcams (slider
@@ -247,10 +321,11 @@ export function useCameraStream({ showToast, t, onBeforeOpen }) {
         }
       }
 
-      streamRef.current = mediaStream;
       setIsTorchOn(false);
-      setStream(mediaStream);
       setCameraActive(true);
+      if (parkIfHidden(mediaStream)) return;
+      streamRef.current = mediaStream;
+      setStream(mediaStream);
     } catch (err) {
       console.error('Error opening camera:', err);
       setCameraErrorKey('scan.errCameraPermissions');
@@ -280,6 +355,7 @@ export function useCameraStream({ showToast, t, onBeforeOpen }) {
     }
     switchingCamera.current = false;
     if (unmounted.current) { stopTracks(next); return; }
+    if (next && parkIfHidden(next)) return;
     if (!next) {
       setStream(null);
       setCameraActive(false);
