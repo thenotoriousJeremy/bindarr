@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useMemo, useRef } from 'react';
+import { memo, useState, useEffect, useMemo, useRef, Suspense } from 'react';
 import { DndContext, DragOverlay, MouseSensor, useSensor, useSensors, pointerWithin } from '@dnd-kit/core';
 import { X, Lock } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
@@ -9,7 +9,9 @@ import { isBinderType as computeIsBinder } from '../utils/cardOptions';
 import { displayName } from '../utils/languages';
 import ContainerOverview from './ContainerOverview';
 import CreateContainerModal from './CreateContainerModal';
-import BinderArtworkEditor from './BinderArtworkEditor';
+import { lazyWithReload } from '../utils/lazyWithReload';
+import { useShownTrigger } from '../utils/useShownTrigger';
+import { createLatestLoader, createCardStore, readCardPatch, applyCardPatch, evictedText, applyAllText, importContainerText } from '../utils/storageQueries';
 import { useBinderArt } from '../utils/useBinderArt';
 import { isDeviceMode } from '../apiBase';
 import { artPocketsByPage } from '../utils/binderArtGeometry';
@@ -24,7 +26,10 @@ import BoxViewPanel from './storage/BoxViewPanel';
 import UnsortedQueue from './storage/UnsortedQueue';
 import { FilingGuidePanel, FilingBar } from './storage/FilingGuide';
 
-function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, focusEntryId }) {
+// Only opened from a binder's page bar, so it is its own chunk, not Storage's.
+const BinderArtworkEditor = lazyWithReload(() => import('./BinderArtworkEditor'));
+
+function LocationManager({ active = true, statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, focusEntryId }) {
   const { t } = useT();
   const [locations, setLocations] = useState([]);
   const [activeLocationId, setActiveLocationId] = useState(null);
@@ -33,12 +38,33 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [loading, setLoading] = useState(true);
   const [setsList, setSetsList] = useState([]);
 
+  // Latest-wins reads, one loader per kind (utils/storageQueries), and the
+  // bookkeeping that lets a one-card action patch allCards instead of reading
+  // the whole collection again.
+  const [loaders] = useState(() => ({
+    sets: createLatestLoader(),
+    locations: createLatestLoader(),
+    cards: createLatestLoader(),
+    compartments: createLatestLoader(),
+  }));
+  const [cardStore] = useState(createCardStore);
+
   useEffect(() => {
-    fetch('/api/sets')
-      .then(res => res.json())
-      .then(data => setSetsList(data))
+    loaders.sets.load('/api/sets')
+      .then(result => { if (Array.isArray(result.data)) setSetsList(result.data); })
       .catch(err => console.error(err));
-  }, []);
+  }, [loaders]);
+
+  // This tab's own writes reload what they changed themselves, then tell App
+  // (notifyChanged) so the other tabs refetch. The statsTrigger bump that comes
+  // back here is skipped instead of downloading the collection a second time.
+  const statsTriggerRef = useRef(statsTrigger);
+  statsTriggerRef.current = statsTrigger;
+  const ownTriggerRef = useRef(null);
+  const notifyChanged = () => {
+    ownTriggerRef.current = statsTriggerRef.current + 1;
+    if (onUpdate) onUpdate();
+  };
 
 
   const [showCreate, setShowCreate] = useState(false);
@@ -99,7 +125,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   } = useMultiSelect({
     showToast,
     onChanged: () => {
-      onUpdate && onUpdate();
+      notifyChanged();
       refreshAll();
     }
   });
@@ -108,8 +134,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   // arming and bulk actions (guard); a successful action exits select mode.
   const storage = useMultiSelect({
     showToast,
-    guard: () => selectedLoc?.locked ? 'Container is locked. Unlock it first to modify stored cards.' : null,
-    onChanged: () => { storage.exitSelectMode(); refreshAll(); onUpdate(); },
+    guard: () => selectedLoc?.locked ? t('loc.lockedModifyCards') : null,
+    onChanged: () => { storage.exitSelectMode(); refreshAll(); notifyChanged(); },
   });
 
   const activateUnsortedCard = (card) => {
@@ -190,8 +216,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         if (compIdx !== -1) setActivePageIndex(compIdx);
       } else {
         setActiveCompartmentId(rec.compartment_id);
-        const posIdx = Math.floor(rec.position / 1000) - 1;
-        setCoverflowActiveIndex(Math.max(0, posIdx));
       }
       
       let attempts = 0;
@@ -216,7 +240,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const focusNavRef = useRef(null); // focusEntryId already navigated to (run-once guard)
 
   const [activeCompartmentId, setActiveCompartmentId] = useState(null);
-  const [, setCoverflowActiveIndex] = useState(0); // value unused; setter drives filing-snap resets
 
   // Box map and coverflow, kept in step: boxSeek asks the open row to centre a
   // slot (CompartmentView's seekTo), boxCursor is the slot it reports back.
@@ -263,7 +286,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     setActivePageIndex(0);
     setBinderActiveEntryId(null);
     if (!filingReadOnly) setFilingQueue([]);
-    setCoverflowActiveIndex(0);
     setBoxSeek(null);
     setBoxCursor(null);
     storage.exitSelectMode();
@@ -284,10 +306,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   }, [compartments, activeCompartmentId]);
 
   useEffect(() => {
-    setCoverflowActiveIndex(0);
-  }, [activeCompartmentId]);
-
-  useEffect(() => {
     if (activePageIndex >= compartments.length && compartments.length > 0) {
       setActivePageIndex(compartments.length - 1);
     }
@@ -295,23 +313,34 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   const fetchLocations = async () => {
     try {
-      const res = await fetch('/api/locations');
-      if (res.ok) setLocations(await res.json());
+      const result = await loaders.locations.load('/api/locations');
+      if ('data' in result) setLocations(result.data);
     } catch (err) { console.error(err); }
   };
 
+  // The whole collection, unpaged: the Unsorted queue and the filter-value
+  // suggestions need every unplaced card, and /api/collection has no filter for
+  // those (nor for one container) yet.
   const fetchAllCards = async () => {
+    const stamp = cardStore.beginRead();
     try {
-      const res = await fetch('/api/collection');
-      if (res.ok) setAllCards(await res.json());
-    } catch (err) { console.error(err); }
+      const result = await loaders.cards.load('/api/collection');
+      if ('data' in result) setAllCards(cardStore.landRead(result.data, stamp));
+    } catch (err) {
+      cardStore.failRead(stamp);
+      console.error(err);
+    }
   };
 
+  // Latest wins, and only for the container still open: pages read for one
+  // container must never land under another one opened meanwhile.
+  const activeLocationIdRef = useRef(activeLocationId);
+  activeLocationIdRef.current = activeLocationId;
   const fetchCompartments = async (locId) => {
-    if (!locId) { setCompartments([]); return; }
+    if (!locId) { loaders.compartments.cancel(); setCompartments([]); return; }
     try {
-      const res = await fetch(`/api/locations/${locId}/compartments`);
-      if (res.ok) setCompartments(await res.json());
+      const result = await loaders.compartments.load(`/api/locations/${locId}/compartments`);
+      if ('data' in result && locId === activeLocationIdRef.current) setCompartments(result.data);
     } catch (err) { console.error(err); }
   };
 
@@ -320,20 +349,42 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     if (activeLocationId) await fetchCompartments(activeLocationId);
   };
 
+  // After a one-card action: read back only the compartments and entries it
+  // touched and patch them into allCards, in the order the actions happened.
+  // A failed read falls back to reading everything.
+  const patchChainRef = useRef(Promise.resolve());
+  const refreshCards = (touched) => {
+    const ticket = cardStore.issue();
+    const read = readCardPatch(touched);
+    const step = patchChainRef.current.then(() => read).then((patch) => {
+      if (cardStore.accept(ticket, patch)) setAllCards(prev => applyCardPatch(prev, patch));
+    });
+    patchChainRef.current = step.catch(() => {});
+    return step.catch((err) => { console.error(err); return fetchAllCards(); });
+  };
+
+  // statsTrigger as this tab should see it: held while the tab is hidden, so an
+  // add on another tab does not download the whole collection behind the
+  // user's back, and caught up once Storage is shown again.
+  const shownTrigger = useShownTrigger(statsTrigger, active);
   useEffect(() => {
+    const own = ownTriggerRef.current;
+    ownTriggerRef.current = null;
+    if (own !== null && shownTrigger === own) return; // this tab's own write, already reloaded
     (async () => {
       if (locations.length === 0 && allCards.length === 0) {
         setLoading(true);
       }
-      await Promise.all([fetchLocations(), fetchAllCards()]);
+      await refreshAll();
       setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- length reads only gate the first-load spinner; adding them would loop on refetch
-  }, [statsTrigger]);
+  }, [shownTrigger]);
 
   useEffect(() => {
     fetchCompartments(activeLocationId);
-  }, [activeLocationId, statsTrigger]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new container; refreshAll covers each statsTrigger
+  }, [activeLocationId]);
 
   useEffect(() => {
     if (selectedLocationId) {
@@ -517,7 +568,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         setShowCreate(false);
         await fetchLocations();
         setActiveLocationId(data.id);
-        onUpdate();
+        notifyChanged();
       } else {
         showToast(apiErrorText(t, data, 'loc.errCreate'));
       }
@@ -531,19 +582,20 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     const file = event.target.files[0];
     if (!file) return;
     const reader = new FileReader();
+    const name = file.name.replace(/\.[^.]+$/, '');
     reader.onload = async () => {
       try {
         const response = await fetch('/api/import-container', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ data: String(reader.result || ''), name: file.name.replace(/\.[^.]+$/, '') })
+          body: JSON.stringify({ data: String(reader.result || ''), name })
         });
         const data = await response.json();
         if (!response.ok) throw new Error(apiErrorText(t, data, 'loc.errCreate'));
-        showToast(data.message);
+        showToast(importContainerText(t, data, name));
         setActiveLocationId(data.id);
         await refreshAll();
-        onUpdate();
+        notifyChanged();
       } catch (error) {
         console.error(error);
         showToast(error.message);
@@ -566,7 +618,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         showToast(t('loc.containerDeleted', { name }));
         if (activeLocationId === locId) setActiveLocationId(null);
         await refreshAll();
-        onUpdate();
+        notifyChanged();
       } else {
         showToast(t('loc.errDelete'));
       }
@@ -590,9 +642,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       });
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
-        showToast(data.evicted ? `Container updated. ${data.evicted} card${data.evicted === 1 ? '' : 's'} moved to Unsorted.` : 'Container updated.');
+        showToast(evictedText(t, data, 'loc.containerUpdated', 'loc.containerUpdatedEvicted'));
         await refreshAll();
-        onUpdate();
+        notifyChanged();
       } else {
         const data = await res.json().catch(() => ({}));
         showToast(apiErrorText(t, data, 'loc.errUpdateContainer'));
@@ -726,7 +778,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       const res = await fetch(`/api/locations/${selectedLoc.id}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locked: next })
       });
-      if (res.ok) { showToast(next ? `"${selectedLoc.name}" locked — filing will skip it.` : `"${selectedLoc.name}" unlocked.`); await fetchLocations(); }
+      if (res.ok) { showToast(t(next ? 'loc.containerLocked' : 'loc.containerUnlocked', { name: selectedLoc.name })); await fetchLocations(); }
       else showToast(t('loc.errLock'));
     } catch (err) { console.error(err); showToast(t('loc.errLockGeneric')); }
   };
@@ -737,7 +789,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       return;
     }
     try {
-      await fetch(`/api/compartments/${compartmentId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) });
+      const res = await fetch(`/api/compartments/${compartmentId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) });
+      if (!res.ok) showToast(apiErrorText(t, await res.json().catch(() => null), 'loc.errRename'));
       await fetchCompartments(activeLocationId);
     } catch (err) { console.error(err); showToast(t('loc.errRename')); }
   };
@@ -753,7 +806,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     }
     const updateAll = forceUpdateAll || false;
     try {
-      await fetch(`/api/compartments/${compartmentId}${updateAll ? '?updateAll=true' : ''}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ capacity }) });
+      const res = await fetch(`/api/compartments/${compartmentId}${updateAll ? '?updateAll=true' : ''}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ capacity }) });
+      if (!res.ok) showToast(apiErrorText(t, await res.json().catch(() => null), 'loc.errResize'));
       await fetchCompartments(activeLocationId);
     } catch (err) { console.error(err); showToast(t('loc.errResize')); }
   };
@@ -763,12 +817,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       showToast(t('loc.lockedMove'));
       return;
     }
+    const from = allCards.find(c => c.entry_id === entryId)?.compartment_id;
     try {
       const res = await fetch(`/api/collection/${entryId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ compartment_id: compartmentId })
       });
-      if (res.ok) { showToast(t('loc.cardMoved')); await refreshAll(); }
+      if (res.ok) { showToast(t('loc.cardMoved')); await refreshCards({ compartments: [from, compartmentId], entries: [entryId] }); }
       else {
         const errData = await res.json().catch(()=>({}));
         showToast(apiErrorText(t, errData, 'loc.errMove'));
@@ -799,6 +854,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     const body = { compartment_id: compartmentId };
     if (isBinderType && occupantEntryId) body.swap_with = occupantEntryId;
     else body.slot = slotNumber;
+    // A swap trades the two cards' places; a placement takes the card out of
+    // wherever it was. Either way only these compartments and cards change.
+    const from = allCards.find(c => c.entry_id === entryId)?.compartment_id;
     try {
       const res = await fetch(`/api/collection/${entryId}/place`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -806,9 +864,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        showToast(body.swap_with ? 'Cards swapped.' : (data.placement?.label ? `Placed → ${data.placement.label}` : 'Card placed.'));
+        const placedIn = data.placement && compartments.find(c => c.id === data.placement.compartment_id);
+        showToast(body.swap_with ? t('loc.cardsSwapped')
+          : placedIn ? t('loc.cardPlacedAt', { compartment: placedIn.display_label, slot: Math.max(1, Math.round(data.placement.position / 1000)) })
+            : t('loc.cardPlaced'));
         setPickedEntryId(null);
-        await refreshAll(); onUpdate();
+        await Promise.all([
+          refreshCards({ compartments: [compartmentId, from], entries: [entryId, occupantEntryId] }),
+          fetchLocations(),
+        ]);
+        notifyChanged();
       } else {
         showToast(apiErrorText(t, data, 'loc.errPlace'));
       }
@@ -835,6 +900,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       showToast(t('loc.lockedArrange'));
       return;
     }
+    const card = allCards.find(c => c.entry_id === entryId);
     try {
       const res = await fetch('/api/collection/bulk', {
         method: 'POST',
@@ -846,11 +912,12 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         showToast(apiErrorText(t, body, 'loc.errPlace'));
         return;
       }
-      showToast(t('loc.movedToUnsorted'), undoToast(placementUndo(allCards.find(c => c.entry_id === entryId)), {
-        showToast, t, onDone: async () => { await refreshAll(); onUpdate(); }
+      showToast(t('loc.movedToUnsorted'), undoToast(placementUndo(card), {
+        showToast, t, onDone: async () => { await refreshAll(); notifyChanged(); }
       }));
       setPickedEntryId(null);
-      await refreshAll(); onUpdate();
+      await Promise.all([refreshCards({ compartments: [card?.compartment_id], entries: [entryId] }), fetchLocations()]);
+      notifyChanged();
     } catch (err) { console.error(err); showToast(t('loc.errPlace')); }
   };
 
@@ -873,14 +940,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       return;
     }
     if (!window.confirm(t('loc.confirmRemoveCard'))) return;
+    const from = allCards.find(c => c.entry_id === entryId)?.compartment_id;
     try {
       const res = await fetch(`/api/collection/${entryId}`, { method: 'DELETE' });
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
         showToast(t('loc.cardRemoved'), undoToast(data.trash_batch && { kind: 'trash', batch: data.trash_batch }, {
-          showToast, t, onDone: async () => { await refreshAll(); onUpdate(); }
+          showToast, t, onDone: async () => { await refreshAll(); notifyChanged(); }
         }));
-        await refreshAll(); onUpdate();
+        await Promise.all([refreshCards({ compartments: [from], entries: [entryId] }), fetchLocations()]);
+        notifyChanged();
       }
       else showToast(t('loc.errRemoveCard'));
     } catch (err) { console.error(err); showToast(t('loc.errRemoveCardGeneric')); }
@@ -925,10 +994,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       });
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
-        showToast(data.evicted ? `Row rules updated. ${data.evicted} card${data.evicted === 1 ? '' : 's'} moved to Unsorted.` : 'Row rules updated.');
+        showToast(evictedText(t, data, 'loc.compartmentRulesUpdated', 'loc.compartmentRulesUpdatedEvicted'));
         setRulesComp(null);
         await refreshAll();
-        onUpdate();
+        notifyChanged();
       } else {
         showToast(t('loc.errRowRules'));
       }
@@ -945,7 +1014,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         body: JSON.stringify({ entry_ids: unsortedCards.map(c => c.entry_id) })
       });
       const data = await res.json();
-      if (res.ok) { showToast(data.message); await refreshAll(); onUpdate(); }
+      if (res.ok) { showToast(applyAllText(t, data)); await refreshAll(); notifyChanged(); }
       else showToast(apiErrorText(t, data, 'loc.errFileBatch'));
     } catch (err) { console.error(err); showToast(t('loc.errFileBatch')); }
   };
@@ -1035,7 +1104,11 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         // Filled up since the recommendation was made: the card stays unfiled.
         const filed = await res.json().catch(() => ({}));
         if (filed.container_full) showToast(t('loc.containerFull'));
-        await refreshAll();
+        // Read back only the page or row it landed in (the server picks the
+        // slot, and re-sorts that compartment), not the whole collection per card.
+        const landed = !filed.container_full && filed.placement && filed.placement.compartment_id;
+        if (landed) await Promise.all([refreshCards({ compartments: [landed], entries: [entryId] }), fetchLocations()]);
+        else await refreshAll();
         advanceFiling();
       } else {
         showToast(t('loc.errFileCard'));
@@ -1284,7 +1357,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         <div className="sub-nav-tabs storage-pane-tabs" style={{ gridColumn: '1 / -1', marginBottom: 0, position: 'sticky', top: 0, zIndex: 50 }}>
           <button type="button" className={`sub-nav-tab ${mobilePane === 'container' ? 'active' : ''}`} onClick={() => setMobilePane('container')}>{t('loc.paneContainer')}</button>
           <button type="button" className={`sub-nav-tab ${mobilePane === 'unsorted' ? 'active' : ''}`} onClick={() => { if (filingMode) { setFilingMode(false); setFilingReadOnly(false); refreshAll(); } setMobilePane('unsorted'); }}>
-            Unsorted <span className={`tab-count-badge ${unsortedCards.length > 0 ? 'has-unsorted' : ''}`}>{unsortedCards.length}</span>
+            {t('loc.paneUnsorted')} <span className={`tab-count-badge ${unsortedCards.length > 0 ? 'has-unsorted' : ''}`}>{unsortedCards.length}</span>
           </button>
         </div>
       )}
@@ -1332,7 +1405,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 <Lock size={16} color="var(--accent-yellow)" style={{ flexShrink: 0 }} />
                 <span style={{ flex: 1 }}>{t('loc.lockedBanner')}</span>
                 <button type="button" className="btn btn-secondary" onClick={handleToggleContainerLock} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.68rem', padding: '0.25rem 0.6rem', flexShrink: 0, borderColor: 'var(--accent-yellow)', color: 'var(--accent-yellow)' }}>
-                  <Lock size={13} /> Unlock
+                  <Lock size={13} /> {t('loc.unlockContainer')}
                 </button>
               </div>
             )}
@@ -1352,7 +1425,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               <div style={{ background: 'rgba(255,71,71,0.1)', border: '1px solid var(--accent-red)', padding: '0.5rem 0.7rem', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', color: 'var(--text-primary)' }}>
                 {pickedEntryId
                   ? t(isBinderType ? 'loc.arrangeStepPocket' : 'loc.arrangeStepSlot')
-                  : 'Tap a card here or in Unsorted to pick it up.'}
+                  : t('loc.arrangeStepPick')}
               </div>
             )}
 
@@ -1520,16 +1593,18 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       )}
 
       {artworkOpen && selectedLoc && artworkAvailable && compartments.length > 0 && (
-        <BinderArtworkEditor
-          location={selectedLoc}
-          compartments={compartments}
-          pageIndex={activePageIndex}
-          cardsByCompartment={cardsByCompartment}
-          layers={binderArt.layers}
-          onClose={() => setArtworkOpen(false)}
-          onSaved={binderArt.reload}
-          showToast={showToast}
-        />
+        <Suspense fallback={null}>
+          <BinderArtworkEditor
+            location={selectedLoc}
+            compartments={compartments}
+            pageIndex={activePageIndex}
+            cardsByCompartment={cardsByCompartment}
+            layers={binderArt.layers}
+            onClose={() => setArtworkOpen(false)}
+            onSaved={binderArt.reload}
+            showToast={showToast}
+          />
+        </Suspense>
       )}
 
       <CardInspectorModal

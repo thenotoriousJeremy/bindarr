@@ -3,6 +3,7 @@ import { SortBuilder, FilterBuilder } from '../SortFilterBuilder';
 import PageColumnsSelect from '../PageColumnsSelect';
 import Modal from '../Modal';
 import { useT } from '../../utils/i18n';
+import { fillParts } from '../../utils/translate';
 
 // The container's editors: its own settings, one row/page's filing rules, and
 // the "apply this capacity to every row?" question. Drafts and the save
@@ -12,12 +13,11 @@ import { useT } from '../../utils/i18n';
 export function CompartmentRulesModal({ rulesComp, setRulesComp, isBinderType, compRuleDraft, setCompRuleDraft, setsList, filterFieldOptions, saveCompartmentRules }) {
   const { t } = useT();
   return (
-    <Modal onClose={() => setRulesComp(null)} label={`${rulesComp.display_label}: Accepts`} closeOnBackdrop={false}
-      overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+    <Modal onClose={() => setRulesComp(null)} label={t('loc.compartmentRulesTitle', { name: rulesComp.display_label })} closeOnBackdrop={false}
       className="glass-panel" style={{ width: '480px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', background: 'var(--bg-secondary)' }}>
-        <h3 style={{ margin: 0 }}>{rulesComp.display_label}: Accepts</h3>
+        <h3 style={{ margin: 0 }}>{t('loc.compartmentRulesTitle', { name: rulesComp.display_label })}</h3>
         <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0 }}>
-          Rules controlling which cards may be filed into this {isBinderType ? 'page' : 'row'}. No rules = accepts anything the container allows.
+          {t(isBinderType ? 'loc.compartmentRulesHintPage' : 'loc.compartmentRulesHintRow')}
         </p>
         <FilterBuilder value={compRuleDraft} onChange={setCompRuleDraft} setsList={setsList} fieldOptions={filterFieldOptions} />
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
@@ -32,11 +32,10 @@ export function CapacitySyncModal({ capacityUpdatePending, setCapacityUpdatePend
   const { t } = useT();
   return (
     <Modal onClose={() => setCapacityUpdatePending(null)} label={t('loc.syncCapacity')} closeOnBackdrop={false}
-      overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       className="glass-panel" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--bg-secondary)' }}>
         <h3 style={{ margin: 0 }}>{t('loc.syncCapacity')}</h3>
         <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0 }}>
-          Do you want to apply the capacity <strong>{capacityUpdatePending.capacity}</strong> to ALL compartments in this container, or just this specific one?
+          {fillParts(t('loc.syncCapacityPrompt'), { capacity: <strong key="capacity">{capacityUpdatePending.capacity}</strong> })}
         </p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
           <button className="btn btn-secondary" onClick={() => { handleSetCapacity(capacityUpdatePending.id, capacityUpdatePending.capacity, false); setCapacityUpdatePending(null); }}>{t('loc.justThisOne')}</button>
@@ -56,7 +55,6 @@ export default function ContainerSettingsModal({
   const { t } = useT();
   return (
     <Modal onClose={() => setShowRulesModal(false)} label={t('loc.containerSettings')} closeOnBackdrop={false}
-      overlayStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
       className="glass-panel" style={{ width: '400px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--bg-secondary)' }}>
         <h3 style={{ margin: 0 }}>{t('loc.containerSettings')}</h3>
 
@@ -86,7 +84,7 @@ export default function ContainerSettingsModal({
           </label>
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-            Cards per {isBinderType ? 'page' : 'row'}
+            {t(isBinderType ? 'container.page.perLabel' : 'container.row.perLabel')}
             <input
               type="number"
               min="1"

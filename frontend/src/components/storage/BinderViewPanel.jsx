@@ -186,6 +186,7 @@ export default function BinderViewPanel({
             className="select-control"
             value=""
             onChange={(e) => { if (e.target.value) handleMoveCard(activeCard.entry_id, parseInt(e.target.value, 10)); }}
+            aria-label={t('compartment.moveTo')}
             style={{ fontSize: '0.65rem', padding: '0.15rem 0.3rem', width: '110px', flexShrink: 0 }}
           >
             <option value="">{t('compartment.moveTo')}</option>
