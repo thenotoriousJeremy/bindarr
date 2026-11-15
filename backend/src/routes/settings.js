@@ -223,13 +223,17 @@ router.put('/', requireAdmin, async (req, res) => {
     if (provider !== undefined && previous !== provider) {
       console.log(`Pokémon provider changed to ${provider} — re-syncing sets and the TCGplayer product map.`);
       (async () => {
+        // First, and apart from the rest: Bindarr's Pokémon scan catalog is keyed by
+        // TCGdex ids, so it goes on with TCGdex and off without, whether or not the
+        // provider below can be reached. Local work only (state files).
+        await require('../catalogReleases').applyProvider().catch((e) => {
+          console.error(`Provider switch: the Pokémon scan catalog could not follow: ${e.message}`);
+        });
         try {
           const source = await require('../utils/pokemonProvider').apiFor('en');
           await source.fetchAndCacheSets(true);
           await require('../utils/compartmentSort').loadSetsCache(db);
           require('../tcgplayerCatalog').start();
-          // Bindarr's Pokémon scan catalog is keyed by TCGdex ids: on with it, off without.
-          await require('../catalogReleases').applyProvider();
         } catch (e) {
           console.error(`Provider switch follow-up failed: ${e.message}`);
         }

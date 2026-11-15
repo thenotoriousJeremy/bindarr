@@ -98,6 +98,26 @@ async function main() {
   assert.deepStrictEqual(coverage.fallbackGroups, [200, 300], 'groups with cards and no TCGdex set; sealed-only groups are not cards');
   assert.deepStrictEqual(coverage.artFill, { 'tcgdex-en-sv01-002': 2 }, 'the art-less TCGdex card borrows its TCGplayer picture');
   assert.strictEqual(await tcgplayer.computeCoverage('French'), null, 'no TCGplayer catalogue for French');
+  assert.deepStrictEqual(coverage.unknownGroups, []);
+
+  // A day TCGCSV has no product list for a group (the mirror keeps `[]` for a 404)
+  // says nothing about its cards: given last week's coverage, a fallback group
+  // stays one and art it lent stays lent. Dropping the group would have every
+  // install delete its cards that day.
+  const held = { 100: PRODUCTS[100], 200: PRODUCTS[200] };
+  PRODUCTS[100] = [];
+  PRODUCTS[200] = [];
+  const gap = await tcgplayer.computeCoverage('English', { previous: coverage });
+  assert.deepStrictEqual(gap.fallbackGroups, [200, 300], 'last week\'s fallback group is kept');
+  assert.deepStrictEqual(gap.artFill, { 'tcgdex-en-sv01-002': 2 }, 'and the art it lent');
+  assert.deepStrictEqual(gap.unknownGroups, [100, 200], 'both are named');
+  const blind = await tcgplayer.computeCoverage('English');
+  assert.deepStrictEqual([blind.fallbackGroups, blind.artFill], [[300], {}], 'with no last week, there is nothing to keep');
+  // The sets whose TCGplayer-only cards can be vouched for today leave them out,
+  // so the weekly build keeps their published rows (build.mjs).
+  assert.deepStrictEqual([...await tcgplayer.knownSetIds('English')].sort(), ['tcgp-en-g300', 'tcgp-en-so']);
+  Object.assign(PRODUCTS, held);
+  assert.strictEqual((await tcgplayer.knownSetIds('English')).has('tcgp-en-wcd'), true);
 
   // --- an install's side ---
   const first = await tcgplayer.materialize('English', coverage);
@@ -143,6 +163,16 @@ async function main() {
   PRICES = { ...PRICES, 200: PRICES[200].map(p => (p.productId === 22 ? { ...p, midPrice: 0.5 } : p)) };
   assert.deepStrictEqual(await tcgplayer.materialize('English', coverage), { cards: 2, art: 0 });
   assert.strictEqual((await db.get(`SELECT price_normal FROM card_cache WHERE id = 'tcgplayer-22'`)).price_normal, 0.5);
+  // A day with no product list for a listed group: nothing of it is touched — not
+  // its cards, not its set's size — and the next day rewrites it only if it changed.
+  version = 'v3-gap';
+  PRODUCTS[200] = [];
+  assert.deepStrictEqual(await tcgplayer.materialize('English', coverage), { cards: 0, art: 0 });
+  assert.strictEqual((await db.get(`SELECT price_normal FROM card_cache WHERE id = 'tcgplayer-22'`)).price_normal, 0.5);
+  assert.strictEqual((await db.get(`SELECT total FROM sets WHERE id = 'tcgp-en-wcd'`)).total, 2, 'its set is not emptied');
+  PRODUCTS[200] = held[200];
+  version = 'v3-back';
+  assert.deepStrictEqual(await tcgplayer.materialize('English', coverage), { cards: 0, art: 0 }, 'back unchanged: nothing rewritten');
 
   // The card lookups every caller goes through.
   const viaCardApi = await require('../src/utils/cardApi').getCardById('tcgplayer-31', { game: 'pokemon' });
@@ -209,6 +239,18 @@ async function main() {
   assert.strictEqual((await db.get(`SELECT COUNT(*) AS n FROM card_cache WHERE set_id = 'tcgp-en-wcd'`)).n, 0);
   assert.strictEqual(await db.get(`SELECT id FROM sets WHERE id = 'tcgp-en-wcd'`), undefined, 'and its set');
   assert.ok(await db.get(`SELECT id FROM card_cache WHERE id = 'tcgplayer-31'`), 'the held card from before is still there');
+
+  // A group TCGplayer deletes outright: today's group list cannot say which set it
+  // went in as, so the set recorded when it was written is used.
+  GROUPS[3].push({ groupId: 500, name: 'Gone Tomorrow', abbreviation: 'GT' });
+  PRODUCTS[500] = [{ productId: 51, name: 'Ditto', number: '1' }];
+  assert.deepStrictEqual(await tcgplayer.materialize('English', { ...coverage, fallbackGroups: [500] }), { cards: 1, art: 0 });
+  assert.strictEqual((await db.get(`SELECT set_id FROM card_cache WHERE id = 'tcgplayer-51'`)).set_id, 'tcgp-en-gt');
+  GROUPS[3] = GROUPS[3].filter(g => g.groupId !== 500);
+  delete PRODUCTS[500];
+  assert.deepStrictEqual(await tcgplayer.materialize('English', { ...coverage, fallbackGroups: [] }), { cards: 0, art: 0 });
+  assert.strictEqual(await db.get(`SELECT id FROM card_cache WHERE id = 'tcgplayer-51'`), undefined, 'its cards go all the same');
+  assert.strictEqual(await db.get(`SELECT id FROM sets WHERE id = 'tcgp-en-gt'`), undefined, 'and its set');
 
   // Ids and set ids.
   assert.strictEqual(tcgplayer.isFallbackId('tcgplayer-5'), true);

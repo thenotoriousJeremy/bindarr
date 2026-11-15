@@ -46,10 +46,6 @@ const backend = createRequire(path.join(ROOT, 'backend', 'package.json'));
 
 const MAX_DELTAS = 26;        // about six months of weekly changes
 const REBASE_SHARE = 0.25;    // deltas holding a quarter of the catalog: start over
-// A build that loses more than this share of last week's rows is a provider
-// outage, not a week of removed cards. Publishing it would delete those cards
-// from every install's scanner; failing the job keeps last week's catalog.
-const MAX_REMOVED_SHARE = 0.03;
 const KEY_RE = /^([a-z0-9]+)-([a-z]{2}(?:-[a-z]{2})?)$/;
 
 function parseArgs(argv) {
@@ -140,6 +136,7 @@ async function build(args) {
   const games = backend('./src/utils/games');
   const languages = backend('./src/utils/languages');
   const segments = backend('./src/utils/catalogSegments');
+  const catalogDiff = backend('./src/utils/catalogDiff');
   const releaseAssets = backend('./src/utils/releaseAssets');
   const { MODEL_ID } = backend('./src/utils/modelAssets');
   await db.initDb();
@@ -199,14 +196,16 @@ async function build(args) {
     const tcgcsv = backend('./src/tcgcsvApi');
     const synced = await tcgcsv.syncIfUpdated({ explicit: true });
     if (synced && synced.disabled) throw new Error('TCGCSV sync is disabled (BINDARR_DISABLE_TCGCSV_SYNC=1)');
+    const lastWeek = await releaseAssets.fetchJson(tcgplayer.coverageAsset(code)).catch(() => null);
     if ((cacheRun.failedSets || []).length) {
       // A TCGdex set that failed to download reads, to computeCoverage, exactly like
       // one TCGdex does not serve, and its TCGplayer group would be published as a
       // fallback for every install. Last week's coverage stands instead.
-      coverage = await releaseAssets.fetchJson(tcgplayer.coverageAsset(code)).catch(() => null);
+      coverage = lastWeek;
       console.warn(`${key}: ${cacheRun.failedSets.length} TCGdex set(s) failed to download; ${coverage ? "reusing last week's TCGplayer coverage" : 'no TCGplayer fallback this run'}`);
     } else {
-      coverage = await tcgplayer.computeCoverage(lang);
+      // A group with no product list today keeps last week's answer (computeCoverage).
+      coverage = await tcgplayer.computeCoverage(lang, { previous: lastWeek });
       coverageIsNew = true;
     }
     if (coverage) {
@@ -240,34 +239,29 @@ async function build(args) {
     listed.add(r.id);
     rowSets[r.id] = normSet(r.set_id);
   }
-  const baseId = (id) => String(id).replace(/_back$/, '');
+  const { baseId } = catalogDiff;
+
+  // The sets this run knows the whole of: those it fetched and, for Pokémon's
+  // TCGplayer-only cards, the groups whose product list came back — only when this
+  // run wrote those cards from a coverage; with none, none of them is known.
+  const known = new Set(fetched);
+  if (coverage) for (const s of await tcgplayer.knownSetIds(lang)) known.add(normSet(s));
 
   // A published card this build did not embed is removed only when it is provably
-  // gone: no longer listed at all, from a set this run fetched (or, for Pokémon's
-  // TCGplayer-only cards, not in the coverage this run wrote them from). A set
-  // that failed or came back empty, an image that would not download, art that is
-  // missing this week: last week's vector stays. Publishing those as removals
-  // would take the cards out of every install's scanner for a week.
+  // gone (utils/catalogDiff.js); everything else keeps last week's vector.
   const diffable = reuse && prev.dim === dim;
   const ids = [...built];
-  const carried = [];   // indices into prev
+  let carried = [];   // indices into prev
   let removes = [];
   if (diffable) {
-    const now = new Set(built);
-    const gone = (id) => {
-      const b = baseId(id);
-      if (listed.has(b)) return false;
-      if (b.startsWith('tcgplayer-')) return !!coverage;
-      const set = prev.sets ? prev.sets[b] : undefined;
-      return set != null && fetched.has(set);
-    };
-    prev.ids.forEach((id, j) => {
-      if (now.has(id)) return;
-      if (gone(id)) removes.push(id);
-      else { carried.push(j); ids.push(id); if (prev.srcs[id]) srcs[id] = prev.srcs[id]; }
-    });
+    ({ removes, carried } = catalogDiff.diffPublished({ prevIds: prev.ids, prevSets: prev.sets || null, built, listed, known }));
+    for (const j of carried) {
+      const id = prev.ids[j];
+      ids.push(id);
+      if (prev.srcs[id]) srcs[id] = prev.srcs[id];
+    }
     // A provider listing far fewer cards than last week is broken, not pruned.
-    const limit = Math.max(50, Math.ceil(prev.ids.length * MAX_REMOVED_SHARE));
+    const limit = catalogDiff.removalLimit(prev.ids.length);
     if (removes.length > limit && !args['allow-removals']) {
       throw new Error(`${key}: ${removes.length} of ${prev.ids.length} published cards are gone (limit ${limit}) — `
         + 'a provider failing, most likely. Nothing published; rerun with --allow-removals if it is real.');
@@ -365,6 +359,9 @@ async function build(args) {
     failedSets.length ? `**Sets that failed to download (${failedSets.length})**, their published cards kept: ${failedSets.slice(0, 30).join(', ')}${failedSets.length > 30 ? ', …' : ''}.` : '',
     carried.length ? `${carried.length} published card(s) not rebuilt this run kept their vectors.` : '',
     coverage ? `TCGplayer fallback: ${coverage.fallbackGroups.length} group(s)${!coverageIsNew ? " (last week's, kept)" : files.includes(tcgplayer.coverageAsset(code)) ? ' (updated)' : ' (unchanged)'}.` : '',
+    coverage && (coverage.unknownGroups || []).length && coverageIsNew
+      ? `TCGplayer groups with no product data today (${coverage.unknownGroups.length}), last week's answer kept: ${coverage.unknownGroups.slice(0, 30).join(', ')}${coverage.unknownGroups.length > 30 ? ', …' : ''}.`
+      : '',
   ].filter(s => s !== undefined));
 
   // Best effort: on Windows the open database keeps the folder until exit.

@@ -357,10 +357,13 @@ set anyway) and published as `pokemon-tcgplayer.<lang>.json`; an install reads
 that file, never TCGdex, and writes the rows in the background of a Pokémon search
 or set list (`ensure`, which never syncs TCGCSV itself and does nothing until the
 cache holds Pokémon). Only groups whose products or prices changed are rewritten.
-A group the coverage stops listing (TCGdex serves the set now) is taken out with
-the rows that only described its cards; a card anything else refers to stays,
-"anything" being every table with a `card_id` column, read from the database so
-that a table added later counts too. These sets are priced by `pokemonTcgplayer.refresh` in the
+A group the coverage stops listing (TCGdex serves the set now, or TCGplayer dropped
+it) is taken out with the rows that only described its cards; a card anything else
+refers to stays, "anything" being every table with a `card_id` column, read from
+the database so that a table added later counts too. A group with no product list
+in the day's TCGCSV data (the mirror keeps `[]` for a 404) is unknown, not empty:
+the weekly coverage keeps last week's answer for it, and an install leaves its
+rows alone until a day with data. These sets are priced by `pokemonTcgplayer.refresh` in the
 daily sweep, not by `tcgcsvApi`'s set matcher, and the weekly catalog update never
 asks TCGdex for them.
 
@@ -810,10 +813,12 @@ embedded (`artKey` resume). The result is compared with the published float16 bi
 and the difference becomes one delta segment. A new base, under the next
 generation, is written when nothing is published yet, on `--rebase`/`--fresh`,
 after 26 deltas, or once the deltas hold a quarter of the rows. A published card
-the build did not embed is removed only when it is provably gone: no longer listed,
-from a set this run downloaded (the state file records each row's set). A set that
-failed to download, or an image that would not, keeps last week's vector, and the
-run's summary names the failed sets. A build that would still remove more than 3%
+the build did not embed is removed only when it is provably gone
+(`utils/catalogDiff.js`): no longer listed, from a set this run knows the whole of
+— one it downloaded or, for Pokémon's TCGplayer-only cards, a group whose product
+list came back. The state file records each row's set. A set that failed to
+download, a group TCGCSV had no data for, or an image that would not download
+keeps last week's vector, and the run's summary names the failed sets and groups. A build that would still remove more than 3%
 of the published rows is refused: that is a provider failing, and publishing it
 would delete those cards from every scanner. For Pokémon the build also works out
 which TCGplayer groups TCGdex lacks (`pokemonTcgplayer.computeCoverage`), publishes

@@ -84,10 +84,26 @@ const priceColumns = (q) => ({
 
 // --- coverage: built by the scan-catalogs workflow -------------------------------
 
+// A group's product list as the TCGCSV cache holds it today, or null when it holds
+// none. An EMPTY list counts as none: it is what a day TCGCSV had no data for the
+// group looks like (the mirror keeps `[]` for a 404), not a group without cards —
+// TCGplayer does not keep empty groups. Whatever depends on the group keeps its
+// last answer until a day with data.
+async function productsToday(meta, groupId) {
+  let products;
+  try { products = await tcgcsv.getProducts(meta.categoryId, groupId); } catch { return null; }
+  return Array.isArray(products) && products.length ? products : null;
+}
+
 // After a full TCGdex walk of `lang` (catalog cachePhase), with the TCGCSV cache
 // synced: which TCGplayer groups TCGdex covers, which it does not, and which TCGdex
 // cards have no art that TCGplayer has.
-async function computeCoverage(lang) {
+//
+// `previous` is last week's published coverage. A group with no product list today
+// keeps last week's answer — its membership, and the art it lent — rather than
+// dropping out: dropped, every install would delete its cards that day. Such
+// groups are listed in `unknownGroups`.
+async function computeCoverage(lang, { previous = null } = {}) {
   const meta = langMeta(lang);
   if (!meta) return null;
   const tcgdexApi = require('./tcgdexApi');
@@ -103,19 +119,33 @@ async function computeCoverage(lang) {
     const hit = match(s.id, s.name, meta.name);
     if (hit && hit.categoryId === meta.categoryId && !covered.has(hit.group.groupId)) covered.set(hit.group.groupId, s.id);
   }
+  const before = previous && Array.isArray(previous.fallbackGroups) ? previous : { fallbackGroups: [], artFill: {} };
+  const wasFallback = new Set(before.fallbackGroups);
   const fallbackGroups = [];
+  const unknownGroups = [];
   const artFill = {};
+  const bareCards = (setId) => db.all(
+    `SELECT id, number FROM card_cache WHERE id LIKE ? AND LOWER(set_id) = ? AND (image_url IS NULL OR image_url = '')`,
+    [`tcgdex-${meta.code}-%`, String(setId).toLowerCase()]
+  );
   for (const g of groups) {
-    let products;
-    try { products = await tcgcsv.getProducts(meta.categoryId, g.groupId); } catch { continue; }
-    const cards = products.filter(p => p.number);
-    if (!cards.length) continue;
     const setId = covered.get(g.groupId);
+    const products = await productsToday(meta, g.groupId);
+    if (!products) {
+      unknownGroups.push(g.groupId);
+      if (setId) {
+        for (const card of await bareCards(setId)) {
+          if (before.artFill && before.artFill[card.id] != null) artFill[card.id] = before.artFill[card.id];
+        }
+      } else if (wasFallback.has(g.groupId)) {
+        fallbackGroups.push(g.groupId);
+      }
+      continue;
+    }
+    const cards = products.filter(p => p.number);
+    if (!cards.length) continue;   // sealed products only
     if (!setId) { fallbackGroups.push(g.groupId); continue; }
-    const bare = await db.all(
-      `SELECT id, number FROM card_cache WHERE id LIKE ? AND LOWER(set_id) = ? AND (image_url IS NULL OR image_url = '')`,
-      [`tcgdex-${meta.code}-%`, String(setId).toLowerCase()]
-    );
+    const bare = await bareCards(setId);
     if (!bare.length) continue;
     const byNumber = new Map();
     for (const p of cards) {
@@ -129,8 +159,24 @@ async function computeCoverage(lang) {
   }
   return {
     format: 1, language: meta.name, categoryId: meta.categoryId, generatedAt: new Date().toISOString(),
-    fallbackGroups: fallbackGroups.sort((a, b) => a - b), artFill,
+    fallbackGroups: fallbackGroups.sort((a, b) => a - b), artFill, unknownGroups,
   };
+}
+
+// The sets whose TCGplayer-only cards this install (or build) can vouch for today:
+// those of every group of the language's catalogue that has a product list in the
+// TCGCSV cache. A published `tcgplayer-*` row from any other set is kept as it
+// was (scripts/scan-catalogs/build.mjs), however it looks in this run.
+async function knownSetIds(lang) {
+  const meta = langMeta(lang);
+  if (!meta) return new Set();
+  const groups = await tcgcsv.getGroups(meta.categoryId);
+  const codes = tcgcsvGames.setCodes(groups);
+  const out = new Set();
+  for (const g of groups) {
+    if (await productsToday(meta, g.groupId)) out.add(setIdFor(meta.code, codes.get(g.groupId)));
+  }
+  return out;
 }
 
 // --- on an install ---------------------------------------------------------------
@@ -187,19 +233,21 @@ async function referencingTables() {
   return out;
 }
 async function dropFallbackSet(setId) {
-  const rows = await db.all(`SELECT id FROM card_cache WHERE set_id = ? AND id LIKE 'tcgplayer-%'`, [setId]);
-  if (!rows.length) return { removed: 0, kept: 0 };
-  const owned = new Set();
-  for (const table of await referencingTables()) {
-    const refs = await db.all(
-      `SELECT DISTINCT card_id FROM ${quoteName(table)}
-        WHERE card_id IN (SELECT id FROM card_cache WHERE set_id = ? AND id LIKE 'tcgplayer-%')`,
-      [setId]
-    );
-    for (const r of refs) owned.add(r.card_id);
-  }
-  const doomed = rows.map(r => r.id).filter(id => !owned.has(id));
-  await db.withTransaction(async () => {
+  const tables = await referencingTables();
+  // Read and delete in one transaction: a card added to a collection between the
+  // two is never deleted from under it.
+  return db.withTransaction(async () => {
+    const rows = await db.all(`SELECT id FROM card_cache WHERE set_id = ? AND id LIKE 'tcgplayer-%'`, [setId]);
+    const owned = new Set();
+    for (const table of rows.length ? tables : []) {
+      const refs = await db.all(
+        `SELECT DISTINCT card_id FROM ${quoteName(table)}
+          WHERE card_id IN (SELECT id FROM card_cache WHERE set_id = ? AND id LIKE 'tcgplayer-%')`,
+        [setId]
+      );
+      for (const r of refs) owned.add(r.card_id);
+    }
+    const doomed = rows.map(r => r.id).filter(id => !owned.has(id));
     for (let i = 0; i < doomed.length; i += 400) {
       const chunk = doomed.slice(i, i + 400);
       const marks = chunk.map(() => '?').join(',');
@@ -212,8 +260,8 @@ async function dropFallbackSet(setId) {
     // again from card_cache the next time the set is opened.
     await db.run(`DELETE FROM set_listings WHERE game = 'pokemon' AND LOWER(set_id) = LOWER(?)`, [setId]);
     if (!owned.size) await db.run(`DELETE FROM sets WHERE id = ? AND game = 'pokemon'`, [setId]);
+    return { removed: doomed.length, kept: owned.size };
   });
-  return { removed: doomed.length, kept: owned.size };
 }
 
 // Write the fallback cards and the borrowed art for one language from the TCGCSV
@@ -241,9 +289,13 @@ async function materialize(lang, coverage, { force = false } = {}) {
   // set id must not move when another group joins or leaves the coverage.
   const codes = tcgcsvGames.setCodes(groups);
   const parse = (s) => { try { return JSON.parse(s || '{}'); } catch { return {}; } };
-  // Every group written before, forced rewrite or not: what may need taking out.
+  // Every group written before, forced rewrite or not: what may need taking out,
+  // and the set each went in as (product_hashes, which this state row has no other
+  // use for), so a group TCGplayer later deletes outright can still be found.
   const previous = state ? parse(state.price_hashes) : {};
+  const previousSets = state ? parse(state.product_hashes) : {};
   const hashes = force || !state ? {} : parse(state.price_hashes);
+  const setIds = { ...previousSets };
   let cards = 0;
 
   for (const g of fallback) {
@@ -256,6 +308,14 @@ async function materialize(lang, coverage, { force = false } = {}) {
       throw e;
     }
     const setId = setIdFor(meta.code, codes.get(g.groupId));
+    setIds[g.groupId] = setId;
+    // No cards in today's data: a day TCGCSV had nothing for the group (the mirror
+    // keeps `[]` for a 404), which says nothing about its cards. What was written
+    // stays, and the next day with data rewrites it.
+    if (!products.length) {
+      if (previous[g.groupId] !== undefined && hashes[g.groupId] === undefined) hashes[g.groupId] = previous[g.groupId];
+      continue;
+    }
     const hash = tcgcsvGames.hashOf([products, prices, g.name, setId]);
     if (hashes[g.groupId] === hash) continue;
     const quotes = quotesByProduct(prices);
@@ -292,17 +352,23 @@ async function materialize(lang, coverage, { force = false } = {}) {
   // price sweeps. A card someone holds, lists, decks or keeps in a recipe stays,
   // as it was; the rest go, with what only described them.
   let removed = 0, kept = 0;
+  // A set id a listed group writes under today is never taken out, whichever
+  // group held it before.
+  const live = new Set(fallback.map(g => setIds[g.groupId]));
   for (const gid of Object.keys(previous).map(Number).filter(g => !wanted.has(g))) {
-    const setId = codes.has(gid) ? setIdFor(meta.code, codes.get(gid)) : null;
-    if (setId) {
+    // The set it went in as; worked out again from today's groups for a state
+    // written before that was recorded.
+    const setId = previousSets[gid] || (codes.has(gid) ? setIdFor(meta.code, codes.get(gid)) : null);
+    if (setId && !live.has(setId)) {
       const r = await dropFallbackSet(setId);
       removed += r.removed;
       kept += r.kept;
     }
     delete hashes[gid];
   }
+  for (const gid of Object.keys(setIds)) if (hashes[gid] === undefined) delete setIds[gid];
   if (removed || kept) {
-    console.log(`Pokémon (${meta.name}): ${removed} TCGplayer-only card(s) removed now that TCGdex serves their set`
+    console.log(`Pokémon (${meta.name}): ${removed} TCGplayer-only card(s) removed — TCGdex serves their set now, or TCGplayer dropped it`
       + (kept ? `; ${kept} kept because a collection, deck, list, recipe or trade refers to them` : '') + '.');
   }
 
@@ -318,9 +384,10 @@ async function materialize(lang, coverage, { force = false } = {}) {
   }
 
   await db.run(
-    `INSERT INTO tcgcsv_catalogues (game, catalogue_version, price_hashes) VALUES (?, ?, ?)
-     ON CONFLICT(game) DO UPDATE SET catalogue_version = excluded.catalogue_version, price_hashes = excluded.price_hashes`,
-    [stateKey(meta.code), stamp, JSON.stringify(hashes)]
+    `INSERT INTO tcgcsv_catalogues (game, catalogue_version, price_hashes, product_hashes) VALUES (?, ?, ?, ?)
+     ON CONFLICT(game) DO UPDATE SET catalogue_version = excluded.catalogue_version,
+       price_hashes = excluded.price_hashes, product_hashes = excluded.product_hashes`,
+    [stateKey(meta.code), stamp, JSON.stringify(hashes), JSON.stringify(setIds)]
   );
   if (cards || art) console.log(`Pokémon (${meta.name}): ${cards} TCGplayer-only cards written, ${art} TCGdex cards given TCGplayer art.`);
   return { cards, art };
@@ -406,5 +473,5 @@ async function fallbackSets(lang) {
 
 module.exports = {
   isFallbackId, idFor, productIdOf, setIdFor, coverageAsset, finishOf, quotesByProduct,
-  computeCoverage, loadCoverage, materialize, ensure, refresh, getCardById, fallbackSets, activeLanguages, LANGS,
+  computeCoverage, knownSetIds, loadCoverage, materialize, ensure, refresh, getCardById, fallbackSets, activeLanguages, LANGS,
 };
