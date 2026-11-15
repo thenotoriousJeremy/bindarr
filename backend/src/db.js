@@ -288,12 +288,12 @@ async function withSavepoint(parent, fn) {
   }
 }
 
-const PBKDF2_ITERATIONS = 210000;
-
+// Passwords are hashed in utils/authHelpers. This is its synchronous form, kept
+// for initDb's DEFAULT_ADMIN_PASSWORD seed, the reset-password script and tests;
+// request paths use authHelpers.hashPassword, which leaves the event loop free.
+// Required on use, not at the top: authHelpers requires this module.
 function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, 64, 'sha512').toString('hex');
-  return `${PBKDF2_ITERATIONS}:${salt}:${hash}`;
+  return require('./utils/authHelpers').hashPasswordSync(password);
 }
 
 // Initialize tables

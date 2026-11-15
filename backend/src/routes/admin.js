@@ -9,7 +9,7 @@ const languages = require('../utils/languages');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const metrics = require('../utils/metrics');
 const getCollectionMetrics = require('../utils/collectionMetrics');
-const { revokeSessions } = require('../utils/authHelpers');
+const { revokeSessions, hashPassword } = require('../utils/authHelpers');
 const { BACKUP_DIR, listBackups, createBackup, resolveBackupFile } = require('../backup');
 const binderArtStore = require('../utils/binderArtStore');
 
@@ -226,7 +226,7 @@ router.post('/users', async (req, res) => {
       return res.status(400).json({ error: 'Username is already taken' });
     }
 
-    const passwordHash = db.hashPassword(password);
+    const passwordHash = await hashPassword(password);
     const shareToken = crypto.randomBytes(16).toString('hex');
 
     await db.run(`

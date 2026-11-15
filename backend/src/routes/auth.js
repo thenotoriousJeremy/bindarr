@@ -1,8 +1,8 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
-const { authenticateToken, authLimiter } = require('../middleware/auth');
-const { verifyPassword, generateSession, revokeSessions } = require('../utils/authHelpers');
+const { authenticateToken, authLimiter, loginLimiter, passwordLimiter } = require('../middleware/auth');
+const { hashPassword, checkPassword, generateSession, revokeSessions, hashApiKey } = require('../utils/authHelpers');
 const oidc = require('../utils/oidc');
 const { parseNavTabs, readNavTabs } = require('../utils/navTabs');
 
@@ -317,7 +317,12 @@ router.post('/bootstrap', authLimiter, async (req, res) => {
       return res.status(409).json({ error: 'This instance is already set up. Log in instead.' });
     }
 
-    const passwordHash = db.hashPassword(password);
+    const passwordHash = await hashPassword(password);
+    // Checked again after the hash: two requests racing past the count above
+    // would otherwise both create an owner.
+    if ((await db.get(`SELECT COUNT(*) as count FROM users`)).count > 0) {
+      return res.status(409).json({ error: 'This instance is already set up. Log in instead.' });
+    }
     const shareToken = crypto.randomBytes(16).toString('hex');
     const result = await db.run(`
       INSERT INTO users (username, password_hash, role, share_token, share_enabled)
@@ -371,7 +376,7 @@ router.post('/register', authLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Username is already taken', code: 'username_taken' });
     }
 
-    const passwordHash = db.hashPassword(password);
+    const passwordHash = await hashPassword(password);
     const shareToken = crypto.randomBytes(16).toString('hex');
 
     const result = await db.run(`
@@ -393,7 +398,7 @@ router.post('/register', authLimiter, async (req, res) => {
 });
 
 // Login user
-router.post('/login', authLimiter, async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   const { username, password } = req.body;
   if (!isCredential(username) || !isCredential(password)) {
     return res.status(400).json({ error: 'Username and password are required' });
@@ -402,7 +407,11 @@ router.post('/login', authLimiter, async (req, res) => {
   try {
     const cleanUsername = username.trim().toLowerCase();
     const user = await db.get(`SELECT * FROM users WHERE username = ?`, [cleanUsername]);
-    if (!user || !verifyPassword(password, user.password_hash)) {
+    // Checked whether or not the user exists: checkPassword does the same work
+    // for no account (or an SSO-only one) as for a real password, so how long
+    // this takes does not say which usernames are taken.
+    const valid = await checkPassword(password, user ? user.password_hash : null);
+    if (!user || !valid) {
       return res.status(401).json({ error: 'Invalid username or password', code: 'invalid_credentials' });
     }
 
@@ -487,8 +496,9 @@ const PROVIDER_KEY_UPDATES = {
   graded_price_api_key: `UPDATE users SET graded_price_api_key = ? WHERE id = ?`
 };
 
-// Update settings (password, sharing)
-router.put('/settings', authenticateToken, async (req, res) => {
+// Update settings (password, sharing). passwordLimiter counts the wrong current
+// passwords a password change is sent with, per account.
+router.put('/settings', authenticateToken, passwordLimiter, async (req, res) => {
   const { current_password, password, share_enabled, share_locations, regenerate_share_token } = req.body;
 
   let navTabs;
@@ -526,10 +536,12 @@ router.put('/settings', authenticateToken, async (req, res) => {
       const currentUser = await db.get(`SELECT password_hash FROM users WHERE id = ?`, [req.user.id]);
       // 400, never 401: a 401 here read as "your session has expired", and the app
       // signed the user out for mistyping their current password.
-      if (typeof current_password !== 'string' || !current_password || !verifyPassword(current_password, currentUser.password_hash)) {
+      if (typeof current_password !== 'string' || !current_password
+        || !(await checkPassword(current_password, currentUser.password_hash))) {
+        res.locals.wrongPassword = true;   // what passwordLimiter counts
         return res.status(400).json({ error: 'Current password is incorrect', code: 'wrong_password' });
       }
-      const newHash = db.hashPassword(password);
+      const newHash = await hashPassword(password);
       await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, req.user.id]);
       // A password change is often because the old one got out, and whoever had it
       // may hold a session made with it. Sign out every other device; this one

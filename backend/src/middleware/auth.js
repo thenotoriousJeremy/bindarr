@@ -131,6 +131,34 @@ const authLimiter = rateLimit({
   message: { error: 'Too many attempts. Please try again later.' }
 });
 
+// Password sign-in: the same ceiling, spent only by FAILED attempts. Guessing
+// still gets 20 tries a window, and a household sharing one address no longer
+// locks itself out by signing in.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Please try again later.' }
+});
+
+// Changing a password checks the current one, which is a password guess like any
+// sign-in, made with a session someone may have stolen. Per account, and only a
+// wrong current password counts (the route marks it in res.locals): a typo in the
+// new one, or a save that changes no password, costs nothing.
+const passwordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  keyGenerator: perUserKey,
+  skip: (req) => !req.body || req.body.password === undefined,
+  skipSuccessfulRequests: true,
+  requestWasSuccessful: (req, res) => !(res.locals && res.locals.wrongPassword),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many password attempts. Please try again later.' }
+});
+
 // The card search proxies to the external Pokémon TCG API. Bulk scanning fires
 // one search per card, so the ceiling is generous — it exists to stop a logged-
 // in client from hammering the upstream API, not to throttle normal use.
@@ -155,6 +183,6 @@ const importLimiter = rateLimit({
 });
 
 module.exports = {
-  authenticateToken, requireAdmin, authLimiter, searchLimiter, importLimiter,
+  authenticateToken, requireAdmin, authLimiter, loginLimiter, passwordLimiter, searchLimiter, importLimiter,
   trustProxySetting
 };
