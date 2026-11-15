@@ -1785,6 +1785,7 @@
   "scan.noConfidentMatch": "No confident match. Try again or search manually.",
   "scan.notInCatalog": "This card is not in the scan catalog. The closest matches are below — pick one or search manually.",
   "scan.catalogNotBuilt": "No scan catalog for this game and language yet. An admin can add one in Admin → Scan catalogs.",
+  "scan.deviceScanFailed": "This phone could not run the scan model, so the card was not identified. Search for it by name instead.",
   "scan.localCatalogSpeedHint": "Scans are being answered by a ready-made catalog, which names each card by a provider id — so every card it has not seen before costs a call to that provider first (around 1-2 seconds for Pokémon). A catalog built on this install is keyed by your own cards, which makes the same lookup instant. An admin can build one for the sets you own in Admin → Scan catalogs; a few sets takes minutes.",
   "scan.langNoCatalogTag": "no catalog",
   "scan.langNoCatalogPokemon": "No {lang} catalog. Cards are identified from the English one, which does not hold {lang}-only sets and will usually file the English printing. An admin can build a {lang} catalog in Admin → Scan catalogs.",

@@ -13,7 +13,7 @@ import { langName, langCode, getLanguagesForGame, isLanguageSupported } from '..
 import { getPerspectiveTransform, warpPerspective } from '../../../shared/imgproc.mjs';
 import { nextCamera } from '../utils/cameraPick';
 import { defaultGame, gameOptions, showGamePicker, isGameEnabled } from '../utils/games';
-import { isNative } from '../apiBase';
+import { isNative, isDeviceMode } from '../apiBase';
 import { useT } from '../utils/i18n';
 import SetTree from './SetTree';
 import LangFallbackNote from './scanner/LangFallbackNote';
@@ -237,6 +237,20 @@ function CameraScanner({ onAddSuccess, showToast }) {
     if (ctx.state !== 'running') ctx.resume().catch(() => {});
     return ctx;
   };
+
+  // Closing the scanner closes its AudioContext: browsers allow only a handful
+  // alive at once, and every open used to leave one behind (MOB-05). In device
+  // mode the on-device scan engine's model sessions are released too (MOB-08).
+  useEffect(() => {
+    // The context made last, read at cleanup time on purpose.
+    const holder = beepCtxRef;
+    return () => {
+      const ctx = holder.current;
+      holder.current = null;
+      if (ctx && ctx.state !== 'closed') ctx.close().catch(() => {});
+      if (isDeviceMode()) import('../device/runtime.js').then(m => m.releaseScanEngine()).catch(() => {});
+    };
+  }, []);
 
   const signal = (type) => {
     setScanFlash(type);
@@ -896,9 +910,17 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 signal('error');
                 return;
               }
+              // Device mode: the scan data is there but the model would not run
+              // on this phone. Downloading it again would not help (MOB-04).
+              if (j?.scanFailed) {
+                console.warn('On-device scan failed:', j.error);
+                setScanStatus(t('scan.deviceScanFailed'));
+                signal('error');
+                return;
+              }
             }
             if (resp.ok) {
-              const { game: matchGame, verified, candidates, crop, scoped, notInCatalog, unresolvedPublished } = await resp.json();
+              const { game: matchGame, verified, candidates, crop, scoped, notInCatalog, unresolvedPublished, ambiguousPrinting: serverAmbiguous } = await resp.json();
               console.log('Scan candidates:', matchGame, scanLang, scoped ? `(set-scoped ${scanSetParam})` : '(GLOBAL)', verified ? 'ORB' : 'CLIP', candidates);
               if (crop) setDebugHashImg(crop); // show the server's auto-cropped card
               setDebugScoped(scoped ? scanSetParam : false);
@@ -911,9 +933,12 @@ function CameraScanner({ onAddSuccess, showToast }) {
               // can't tell the printings apart — so DON'T auto-add the top pick's
               // set; fall through to the picker and let the user choose the set.
               const second = candidates && candidates[1];
-              const ambiguousPrinting = top && second && top.name === second.name
+              // The server can say so itself (PROV-10: reprints sharing one
+              // illustration); without that flag, an older server, the local
+              // near-tie check below still decides.
+              const ambiguousPrinting = serverAmbiguous === true || (top && second && top.name === second.name
                 && (top.set !== second.set || top.number !== second.number)
-                && (verified ? second.inliers >= top.inliers * 0.7 : second.score >= top.score - 0.02);
+                && (verified ? second.inliers >= top.inliers * 0.7 : second.score >= top.score - 0.02));
               // Embedding matches fail differently from ORB ones: a wrong answer
               // can carry a HIGH cosine (0.88 on the eval sample) while sitting a
               // hair above the runner-up, because the two cards genuinely look
