@@ -31,9 +31,10 @@ RUN npm run build
 # python3, make and g++ are needed only to recompile sqlite3, so they live in this
 # stage and only node_modules is carried into the image (about 97 MB the server
 # never used). Same base image as the production stage below, so the recompiled
-# sqlite3 is linked against the glibc it will run on.
+# sqlite3 is linked against the glibc it will run on. ca-certificates as the
+# single-stage build had them, for the downloads the install makes.
 FROM node:24-slim AS backend-deps
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/backend
 COPY backend/package*.json ./
