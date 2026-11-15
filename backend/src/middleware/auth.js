@@ -174,7 +174,8 @@ const searchLimiter = rateLimit({
 });
 
 // Import is heavy (up to 5000 rows, many serial writes each) and rare in normal
-// use, so it gets a tight ceiling.
+// use, so it gets a tight ceiling. A backup restore shares it, and is counted
+// before its body is read (server.js).
 const importLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   limit: 20,

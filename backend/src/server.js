@@ -271,6 +271,10 @@ const BACKUP_BODY_PATH = '/api/backup';
 const isBigBodyPath = (p) => [...BIG_BODY_PATHS, BACKUP_BODY_PATH].some(b => p === b || p.startsWith(`${b}/`));
 const smallJson = express.json({ limit: '1mb' });
 app.use((req, res, next) => (isBigBodyPath(req.path) ? next() : smallJson(req, res, next)));
+// The restore's parsers and limiter, mounted below the gate.
+const adminBackupJson = express.json({ limit: '200mb' });
+const memberBackupJson = express.json({ limit: '100mb' });
+const { importLimiter } = require('./middleware/auth');
 // Express 5's parsers leave req.body undefined when a request has no JSON body;
 // Express 4 left {}. Routes destructure req.body, so keep the 4 default: a missing
 // body then fails validation with a 400 instead of a TypeError's 500. The big-body
@@ -600,7 +604,12 @@ app.use('/api/fx', fxRoutes);
 // SELECT — four times per request.
 app.use('/api', authenticateToken);
 app.use(BIG_BODY_PATHS, express.json({ limit: '15mb' }));
-app.use(BACKUP_BODY_PATH, express.json({ limit: '200mb' }));
+// A restore is counted against the import budget BEFORE its body is read, so the
+// limiter, not the parser, is what turns away the twenty-first upload of the hour.
+app.post('/api/backup/restore', importLimiter);
+// An admin's restore can bring card data for everyone (routes/backup.js); a
+// member's restores only their own rows and gets a smaller ceiling.
+app.use(BACKUP_BODY_PATH, (req, res, next) => (req.user && req.user.role === 'admin' ? adminBackupJson : memberBackupJson)(req, res, next));
 
 // --- AUTHENTICATED API ROUTES ---
 app.use('/api/collection/trash', trashRoutes);
