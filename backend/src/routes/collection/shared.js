@@ -6,17 +6,25 @@ const cardApi = require('../../utils/cardApi');
 const tcgdexApi = require('../../tcgdexApi');
 const { getOwnedUnit } = require('../../utils/sealedOwnership');
 
+// In chunks of ids: a selection can be the whole collection, past SQLite's limit
+// on bound variables for one IN (...).
 async function conflictingSealedLinks(ids, userId, unitId) {
   if (!unitId) return [];
-  return db.all(
-    `SELECT DISTINCT p.product_name
-       FROM collection c
-       JOIN sealed_units u ON u.id = c.sealed_unit_id
-       JOIN sealed_purchases p ON p.id = u.purchase_id
-      WHERE c.id IN (${ids.map(() => '?').join(',')})
-        AND c.user_id = ? AND c.sealed_unit_id IS NOT NULL AND c.sealed_unit_id != ?`,
-    [...ids, userId, unitId]
-  );
+  const names = new Set();
+  for (let i = 0; i < ids.length; i += 500) {
+    const part = ids.slice(i, i + 500);
+    const rows = await db.all(
+      `SELECT DISTINCT p.product_name
+         FROM collection c
+         JOIN sealed_units u ON u.id = c.sealed_unit_id
+         JOIN sealed_purchases p ON p.id = u.purchase_id
+        WHERE c.id IN (${part.map(() => '?').join(',')})
+          AND c.user_id = ? AND c.sealed_unit_id IS NOT NULL AND c.sealed_unit_id != ?`,
+      [...part, userId, unitId]
+    );
+    rows.forEach(r => names.add(r.product_name));
+  }
+  return [...names].map(product_name => ({ product_name }));
 }
 
 // Stamp each result with how many copies the user already owns, so browsing a
@@ -52,6 +60,19 @@ const GRADERS = ['Raw', 'PSA', 'BGS', 'CGC', 'SGC', 'TAG'];
 // a value outside them fails at the INSERT/UPDATE, which surfaced as a 500.
 const CONDITIONS = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged'];
 const PRINTINGS = ['Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition', 'Promo'];
+// The two lists a copy can be on. Both are still accepted until the collection
+// wishlist and the Lists feature's default wishlist are merged.
+const LIST_TYPES = ['collection', 'wishlist'];
+
+// What was paid for a copy: a finite amount of 0 or more, or null when the field
+// is blank. Anything else is refused rather than stored as text in a REAL column,
+// where it reads as 0 in one sum and breaks the next.
+function readPurchasePrice(value) {
+  if (value === undefined || value === null || value === '') return { value: null };
+  const n = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
+  if (!Number.isFinite(n) || n < 0) return { error: 'purchase_price must be a number of 0 or more' };
+  return { value: n };
+}
 
 // A sealed unit id is only ever linked to a card when the unit belongs to the
 // same user. Shared by every write path (single add, bulk add, edit), so none of
@@ -78,6 +99,8 @@ module.exports = {
   GRADERS,
   CONDITIONS,
   PRINTINGS,
+  LIST_TYPES,
+  readPurchasePrice,
   ownsSealedUnit,
   cardIdForLanguage,
 };

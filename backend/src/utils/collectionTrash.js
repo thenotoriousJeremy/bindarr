@@ -17,7 +17,7 @@
 // AUTOINCREMENT never reissues an id, so the id is still free.
 const crypto = require('crypto');
 const db = require('../db');
-const { isBinderType, stackKey, STACK_KEY_SQL, rebalanceCompartmentByScheme } = require('./compartmentSort');
+const { isBinderType, stackKey, STACK_KEY_SQL, occupancySql, rebalanceCompartmentByScheme } = require('./compartmentSort');
 
 const TRASH_DAYS = 30;
 const BATCH_ID = /^[0-9a-f-]{36}$/;
@@ -33,8 +33,19 @@ function chunks(list) {
 }
 
 // Every (table, column) whose foreign key points at collection.id. Read from the
-// schema rather than listed, so a table added by a later migration is covered.
+// schema rather than listed, so a table added by a later migration is covered —
+// and remembered against PRAGMA schema_version, which any schema change bumps:
+// walking every table's foreign keys took some 40 statements for each delete.
+let dependentTablesMemo = null;
 async function dependentTables() {
+  const { schema_version: version } = await db.get(`PRAGMA schema_version`);
+  if (dependentTablesMemo && dependentTablesMemo.version === version) return dependentTablesMemo.deps;
+  const deps = await readDependentTables();
+  dependentTablesMemo = { version, deps };
+  return deps;
+}
+
+async function readDependentTables() {
   const tables = await db.all(
     `SELECT name FROM sqlite_master
       WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('collection', 'collection_trash')`
@@ -123,7 +134,7 @@ async function placementFor(row, userId) {
   ));
   if (!stacks) {
     const used = await db.get(
-      `SELECT ${comp.allow_stacking ? `COUNT(DISTINCT ${STACK_KEY_SQL})` : 'COUNT(*)'} AS n
+      `SELECT ${occupancySql(!!comp.allow_stacking)} AS n
          FROM collection WHERE compartment_id = ? AND user_id = ?`,
       [comp.id, userId]
     );

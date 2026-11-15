@@ -4,13 +4,20 @@ const db = require('../../db');
 const tcgdexApi = require('../../tcgdexApi');
 const gradedPrices = require('../../gradedPrices');
 const cardApi = require('../../utils/cardApi');
+const games = require('../../utils/games');
 const { searchLimiter } = require('../../middleware/auth');
 const { resolveCardPrice, parseCardRow, recordPrice } = require('../../utils/priceHelpers');
 const { compartmentLabel, rebalanceCompartmentByScheme } = require('../../utils/compartmentSort');
-const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, setStackQuantity, setTileQuantity, tileMembers, ownedLocation, ownedCompartment } = require('../../utils/collectionHelpers');
+const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, reconcileIdenticalRows, setTileQuantity, tileMembers, ownedLocation, ownedCompartment } = require('../../utils/collectionHelpers');
 const { readQuantity } = require('../../utils/requestBounds');
 const { trashEntries } = require('../../utils/collectionTrash');
-const { conflictingSealedLinks, GRADERS, CONDITIONS, PRINTINGS, ownsSealedUnit, cardIdForLanguage } = require('./shared');
+const { conflictingSealedLinks, GRADERS, CONDITIONS, PRINTINGS, LIST_TYPES, readPurchasePrice, ownsSealedUnit, cardIdForLanguage } = require('./shared');
+
+// A refusal decided inside updateEntry's transaction: thrown so the transaction
+// rolls back, answered with its own status and body.
+class Refusal extends Error {
+  constructor(status, body) { super(body.error); this.status = status; this.body = body; }
+}
 
 // 2. Get User's Collection
 //
@@ -172,12 +179,16 @@ const GRID_PRICE_INPUTS = ['market_value', 'price_normal', 'price_holofoil', 'pr
 
 // Owner-scoped: every write checks that a link names the user's own unit, but
 // the read does not rely on that. A row pointing at another user's unit gets no
-// sealed details at all, not that user's.
+// sealed details at all, not that user's. "Own" is the rule the writes apply
+// (utils/sealedOwnership OWNED_UNIT_WHERE): the unit's claimant, else the buyer.
+// Requiring the buyer here gave a card from a unit this user had claimed no
+// sealed link at all, so the link picker offered it as unlinked.
 const COLLECTION_SEALED_JOINS = `
       LEFT JOIN sealed_units su ON su.id = c.sealed_unit_id
         AND EXISTS (SELECT 1 FROM sealed_purchases owner
-                     WHERE owner.id = su.purchase_id AND owner.user_id = c.user_id)
-      LEFT JOIN sealed_purchases sp ON sp.id = su.purchase_id AND sp.user_id = c.user_id`;
+                     WHERE owner.id = su.purchase_id
+                       AND COALESCE(su.claimed_by_user_id, owner.user_id) = c.user_id)
+      LEFT JOIN sealed_purchases sp ON sp.id = su.purchase_id`;
 
 const COLLECTION_PAGE_MAX = 5000;
 
@@ -317,85 +328,62 @@ async function updateEntry(req, res) {
     const entry = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!entry) return res.status(404).json({ error: 'Collection entry not found', code: 'entry_not_found' });
 
-    let isMoving = location_id !== undefined && location_id !== entry.location_id;
-    let finalCompartmentId = entry.compartment_id;
-    let finalLocationId = entry.location_id;
-    let finalPosition = entry.position;
-    let resolvedFull = false;
-    let resolvedRejected = false;
-
-    if (isMoving) {
-      if (location_id === null || location_id === '') {
-        finalLocationId = null;
-        finalCompartmentId = null;
-        finalPosition = 0;
-      } else {
-        if (!(await ownedLocation(location_id, req.user.id))) return res.status(404).json({ error: 'Location not found' });
-        const resolved = await resolveCompartmentAndPosition({
-          locationId: location_id,
-          userId: req.user.id,
-          cardId: entry.card_id,
-          printing: printing !== undefined ? printing : entry.printing,
-          language: language !== undefined ? language : entry.language
-        });
-        if (resolved.full) {
-          // No room there. The copy stays where it is rather than being pulled
-          // out of its slot into Unsorted; container_full says why it did not move.
-          resolvedFull = true;
-          isMoving = false;
-        } else {
-          finalCompartmentId = resolved.compartment_id;
-          finalLocationId = resolved.compartment_id ? (resolved.location_id ?? location_id) : null;
-          finalPosition = resolved.position;
-          resolvedRejected = !!resolved.rejected;
-        }
-      }
-    } else if (compartment_id !== undefined) {
-      // Goes straight into the row, so it has to be one of the user's own
-      // compartments — and the copy takes that compartment's container with it,
-      // so location_id can never name a different one.
-      const comp = compartment_id === null ? null : await ownedCompartment(compartment_id, req.user.id);
-      if (compartment_id !== null && !comp) return res.status(404).json({ error: 'Compartment not found' });
-      finalCompartmentId = comp ? comp.id : null;
-      if (comp) finalLocationId = comp.location_id;
-    }
-
-    const updates = [];
-    const params = [];
-
-    // Absolute, not additive: see the reconcile below. Deliberately NOT part of
-    // the UPDATE — the reconcile owns the quantity column so the two can
-    // never disagree about how many copies the row stands for. Checked before
-    // anything below writes: a bad number is refused, not rounded into range.
+    // Everything that can be refused without reading anything, before anything is
+    // fetched or written. A bad number is refused, not rounded into range.
+    //
+    // Quantity is absolute, not additive: see the reconcile below. Deliberately
+    // NOT part of the UPDATE — the reconcile owns the quantity column so the two
+    // can never disagree about how many copies the row stands for.
     const qty = readQuantity(quantity, { fallback: null });
     if (qty.error) return res.status(400).json({ error: qty.error });
     const requestedQty = qty.value;
-    // The copies that number covers when it is a stacked tile's (see
-    // tileMembers), taken from the row as it is now, before the edit changes it.
-    const tile = requestedQty === null ? null : await tileMembers(db, req.user.id, entry, req.body.stack_entry_ids);
-    if (tile && tile.error) return res.status(400).json({ error: tile.error });
     if (condition !== undefined && !CONDITIONS.includes(condition)) return res.status(400).json({ error: 'Invalid condition' });
     if (printing !== undefined && !PRINTINGS.includes(printing)) return res.status(400).json({ error: 'Invalid printing' });
-    if (condition !== undefined) { updates.push('condition = ?'); params.push(condition); }
-    if (printing !== undefined) { updates.push('printing = ?'); params.push(printing); }
-    if (language !== undefined) {
-      updates.push('language = ?');
-      params.push(language);
-      if (language !== entry.language) {
-        const cardId = await cardIdForLanguage(entry.card_id, language);
-        if (cardId !== entry.card_id) {
-          updates.push('card_id = ?');
-          params.push(cardId);
-        }
+    // Stored as given, these used to put a copy on a list nothing reads, or under a
+    // game nothing groups it with.
+    if (list_type !== undefined && !LIST_TYPES.includes(list_type)) {
+      return res.status(400).json({ error: `Invalid list_type. One of: ${LIST_TYPES.join(', ')}` });
+    }
+    if (game !== undefined && !games.isGame(game)) return res.status(400).json({ error: 'Invalid game' });
+    const price = purchase_price === undefined ? null : readPurchasePrice(purchase_price);
+    if (price && price.error) return res.status(400).json({ error: price.error });
+    // Grading. The three columns move together on purpose: sending grader:'Raw'
+    // must clear the grade and cert in the same statement, or the row keeps a grade
+    // it no longer claims to have. Cracking a slab is a real thing people do.
+    let grading = null;
+    if (grader !== undefined) {
+      if (!GRADERS.includes(grader)) return res.status(400).json({ error: `Invalid grader. One of: ${GRADERS.join(', ')}` });
+      const raw = grader === 'Raw';
+      const g = raw || grade == null || grade === '' ? null : Number(grade);
+      if (g != null && !(g > 0 && g <= 10)) return res.status(400).json({ error: 'grade must be between 0 and 10' });
+      grading = { grader, grade: g, cert: raw || !cert_number ? null : String(cert_number).trim() };
+    }
+    // What this copy is worth, typed by the owner. Empty string and null both mean
+    // "drop it and go back to the provider price" — the field is a text input, and
+    // clearing it has to be possible or a mistyped 10000 is permanent.
+    let marketValue;
+    if (market_value !== undefined && market_value !== null && market_value !== '') {
+      marketValue = Number(market_value);
+      if (!Number.isFinite(marketValue) || marketValue < 0) {
+        return res.status(400).json({ error: 'market_value must be a number of 0 or more', code: 'invalid_market_value' });
       }
     }
+    const unitId = sealed_unit_id === undefined || sealed_unit_id == null || sealed_unit_id === '' ? null : Number(sealed_unit_id);
+    if (unitId != null && (!Number.isInteger(unitId) || unitId < 1)) return res.status(404).json({ error: 'Sealed unit not found' });
+
+    // The card provider, before the write transaction: a request to one must not
+    // hold the one connection.
+    //
+    // A language change moves the copy to that language's printing when one exists.
+    const languageCardId = language !== undefined && language !== entry.language
+      ? await cardIdForLanguage(entry.card_id, language)
+      : entry.card_id;
     // Re-file this copy under another printing of the SAME card: a scan or search
     // that found the right card in the wrong set. Same game and same name is the
     // whole invariant — anything else is a different card, which is a delete and
     // an add, not an edit. No merge with copies already on that printing: rows are
     // per copy, and identical rows are summed into one stack by every view, the
-    // same way a language switch or a second add lands. Pushed after the language
-    // block so an explicit printing wins over the implicit one (rightmost SET wins).
+    // same way a language switch or a second add lands.
     let swappedCard = null;
     if (card_id !== undefined && card_id !== entry.card_id) {
       const target = String(card_id || '');
@@ -413,124 +401,189 @@ async function updateEntry(req, res) {
       if (current && !names(next).some(n => names(current).includes(n))) {
         return res.status(400).json({ error: `${next.name} is a different card. Pick a printing of ${current.name}.` });
       }
-      updates.push('card_id = ?');
-      params.push(next.id);
       swappedCard = next;
     }
-    if (purchase_price !== undefined) { updates.push('purchase_price = ?'); params.push(purchase_price); }
-    if (sealed_unit_id !== undefined) {
-      const unitId = sealed_unit_id == null || sealed_unit_id === '' ? null : Number(sealed_unit_id);
-      if (unitId != null
-          && (!Number.isInteger(unitId) || unitId < 1 || !(await ownsSealedUnit(unitId, req.user.id)))) {
-        return res.status(404).json({ error: 'Sealed unit not found' });
+
+    // Every read and write of the edit in one transaction: where the copy goes,
+    // the checks on what it links to, the update, the rebalances and the quantity
+    // reconcile land together or not at all, and no other request can file into
+    // the slot this one chose before it is written.
+    const result = await db.withTransaction(async () => {
+      const row = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+      if (!row) throw new Refusal(404, { error: 'Collection entry not found', code: 'entry_not_found' });
+
+      let isMoving = location_id !== undefined && location_id !== row.location_id;
+      let finalCompartmentId = row.compartment_id;
+      let finalLocationId = row.location_id;
+      let finalPosition = row.position;
+      let resolvedFull = false;
+      let resolvedRejected = false;
+
+      if (isMoving) {
+        if (location_id === null || location_id === '') {
+          finalLocationId = null;
+          finalCompartmentId = null;
+          finalPosition = 0;
+        } else {
+          if (!(await ownedLocation(location_id, req.user.id))) throw new Refusal(404, { error: 'Location not found' });
+          const resolved = await resolveCompartmentAndPosition({
+            locationId: location_id,
+            userId: req.user.id,
+            cardId: row.card_id,
+            printing: printing !== undefined ? printing : row.printing,
+            language: language !== undefined ? language : row.language
+          });
+          if (resolved.full) {
+            // No room there. The copy stays where it is rather than being pulled
+            // out of its slot into Unsorted; container_full says why it did not move.
+            resolvedFull = true;
+            isMoving = false;
+          } else {
+            finalCompartmentId = resolved.compartment_id;
+            finalLocationId = resolved.compartment_id ? (resolved.location_id ?? location_id) : null;
+            finalPosition = resolved.position;
+            resolvedRejected = !!resolved.rejected;
+          }
+        }
+      } else if (compartment_id !== undefined) {
+        // Goes straight into the row, so it has to be one of the user's own
+        // compartments — and the copy takes that compartment's container with it,
+        // so location_id can never name a different one.
+        const comp = compartment_id === null ? null : await ownedCompartment(compartment_id, req.user.id);
+        if (compartment_id !== null && !comp) throw new Refusal(404, { error: 'Compartment not found' });
+        finalCompartmentId = comp ? comp.id : null;
+        if (comp) finalLocationId = comp.location_id;
       }
-      if (unitId != null && unitId !== Number(entry.sealed_unit_id)) {
-        const conflicts = await conflictingSealedLinks([id], req.user.id, unitId);
-        if (conflicts.length) {
-          const products = [...new Set(conflicts.map(row => row.product_name))].join(', ');
-          return res.status(409).json({ error: `This card is already linked to another sealed product${products ? ` (${products})` : ''}. Unlink it first before linking to this one.` });
+
+      // The copies the quantity covers when it is a stacked tile's (see
+      // tileMembers), taken from the row as it is now, before the edit changes it.
+      const tile = requestedQty === null ? null : await tileMembers(db, req.user.id, row, req.body.stack_entry_ids);
+      if (tile && tile.error) throw new Refusal(400, { error: tile.error });
+
+      const updates = [];
+      const params = [];
+      if (condition !== undefined) { updates.push('condition = ?'); params.push(condition); }
+      if (printing !== undefined) { updates.push('printing = ?'); params.push(printing); }
+      if (language !== undefined) {
+        updates.push('language = ?');
+        params.push(language);
+        if (language !== row.language && languageCardId !== row.card_id) {
+          updates.push('card_id = ?');
+          params.push(languageCardId);
         }
       }
-      updates.push('sealed_unit_id = ?');
-      params.push(unitId);
-    }
-    if (isMoving || compartment_id !== undefined) {
-      updates.push('location_id = ?', 'compartment_id = ?', 'position = ?');
-      params.push(finalLocationId, finalCompartmentId, finalPosition);
-    }
-    if (list_type !== undefined) { updates.push('list_type = ?'); params.push(list_type); }
-    if (is_trade !== undefined) { updates.push('is_trade = ?'); params.push(is_trade ? 1 : 0); }
-    if (favorite !== undefined) { updates.push('favorite = ?'); params.push(favorite ? 1 : 0); }
-    if (game !== undefined) { updates.push('game = ?'); params.push(game); }
-    if (notes !== undefined) { updates.push('notes = ?'); params.push(notes); }
-    // Grading. The three columns move together on purpose: sending grader:'Raw'
-    // must clear the grade and cert in the same statement, or the row keeps a grade
-    // it no longer claims to have. Cracking a slab is a real thing people do.
-    if (grader !== undefined) {
-      if (!GRADERS.includes(grader)) return res.status(400).json({ error: `Invalid grader. One of: ${GRADERS.join(', ')}` });
-      const raw = grader === 'Raw';
-      const g = raw || grade == null || grade === '' ? null : Number(grade);
-      if (g != null && !(g > 0 && g <= 10)) return res.status(400).json({ error: 'grade must be between 0 and 10' });
-      const cert = raw || !cert_number ? null : String(cert_number).trim();
-      if (cert) {
-        const dup = await db.get(
-          `SELECT id FROM collection WHERE user_id = ? AND grader = ? AND cert_number = ? AND id != ?`,
-          [req.user.id, grader, cert, id]
-        );
-        if (dup) return res.status(409).json({ error: `${grader} cert ${cert} is already in your collection.`, code: 'cert_in_use', params: { grader, cert } });
-      }
-      updates.push('grader = ?', 'grade = ?', 'cert_number = ?');
-      params.push(grader, g, cert);
-    }
-    // What this copy is worth, typed by the owner. Empty string and null both mean
-    // "drop it and go back to the provider price" — the field is a text input, and
-    // clearing it has to be possible or a mistyped 10000 is permanent.
-    if (market_value !== undefined) {
-      if (market_value === null || market_value === '') {
-        updates.push('market_value = ?', 'market_value_source = ?', 'market_value_at = ?');
-        params.push(null, null, null);
-      } else {
-        const value = Number(market_value);
-        if (!Number.isFinite(value) || value < 0) {
-          return res.status(400).json({ error: 'market_value must be a number of 0 or more', code: 'invalid_market_value' });
+      // Pushed after the language block so an explicit printing wins over the
+      // implicit one (rightmost SET wins).
+      if (swappedCard) { updates.push('card_id = ?'); params.push(swappedCard.id); }
+      if (purchase_price !== undefined) { updates.push('purchase_price = ?'); params.push(price.value); }
+      if (sealed_unit_id !== undefined) {
+        // Ownership before the link: the unit must be this user's, or the link
+        // would expose another user's purchase through GET /collection.
+        if (unitId != null && !(await ownsSealedUnit(unitId, req.user.id))) {
+          throw new Refusal(404, { error: 'Sealed unit not found' });
         }
-        updates.push('market_value = ?', 'market_value_source = ?', "market_value_at = CURRENT_TIMESTAMP");
-        params.push(value, 'manual');
+        if (unitId != null && unitId !== Number(row.sealed_unit_id)) {
+          const conflicts = await conflictingSealedLinks([id], req.user.id, unitId);
+          if (conflicts.length) {
+            const products = [...new Set(conflicts.map(c => c.product_name))].join(', ');
+            throw new Refusal(409, { error: `This card is already linked to another sealed product${products ? ` (${products})` : ''}. Unlink it first before linking to this one.` });
+          }
+        }
+        updates.push('sealed_unit_id = ?');
+        params.push(unitId);
       }
-    }
-
-    if (updates.length > 0) {
-      params.push(id, req.user.id);
-      await db.run(`UPDATE collection SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`, params);
-    }
-
-    if (isMoving && finalCompartmentId && finalLocationId) {
-      const loc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [finalLocationId, req.user.id]);
-      if (loc) await rebalanceCompartmentByScheme(db, finalCompartmentId, loc.sort_order, loc.foil_sorting);
-    }
-    if (isMoving && entry.compartment_id && entry.compartment_id !== finalCompartmentId) {
-      const oldLoc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [entry.location_id, req.user.id]);
-      if (oldLoc) await rebalanceCompartmentByScheme(db, entry.compartment_id, oldLoc.sort_order, oldLoc.foil_sorting);
-    }
-    // Same slot, new set and number: a binder sorted by set has to re-sort around it.
-    if (swappedCard) {
-      await recordPrice(swappedCard.id, swappedCard.price_trend);
-      if (!isMoving && entry.compartment_id && entry.location_id) {
-        const loc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [entry.location_id, req.user.id]);
-        if (loc) await rebalanceCompartmentByScheme(db, entry.compartment_id, loc.sort_order, loc.foil_sorting);
+      if (isMoving || compartment_id !== undefined) {
+        updates.push('location_id = ?', 'compartment_id = ?', 'position = ?');
+        params.push(finalLocationId, finalCompartmentId, finalPosition);
       }
-    }
+      if (list_type !== undefined) { updates.push('list_type = ?'); params.push(list_type); }
+      if (is_trade !== undefined) { updates.push('is_trade = ?'); params.push(is_trade ? 1 : 0); }
+      if (favorite !== undefined) { updates.push('favorite = ?'); params.push(favorite ? 1 : 0); }
+      if (game !== undefined) { updates.push('game = ?'); params.push(game); }
+      if (notes !== undefined) { updates.push('notes = ?'); params.push(notes); }
+      if (grading) {
+        if (grading.cert) {
+          const dup = await db.get(
+            `SELECT id FROM collection WHERE user_id = ? AND grader = ? AND cert_number = ? AND id != ?`,
+            [req.user.id, grading.grader, grading.cert, id]
+          );
+          if (dup) {
+            throw new Refusal(409, { error: `${grading.grader} cert ${grading.cert} is already in your collection.`, code: 'cert_in_use', params: { grader: grading.grader, cert: grading.cert } });
+          }
+        }
+        updates.push('grader = ?', 'grade = ?', 'cert_number = ?');
+        params.push(grading.grader, grading.grade, grading.cert);
+      }
+      if (market_value !== undefined) {
+        if (marketValue === undefined) {
+          updates.push('market_value = ?', 'market_value_source = ?', 'market_value_at = ?');
+          params.push(null, null, null);
+        } else {
+          updates.push('market_value = ?', 'market_value_source = ?', "market_value_at = CURRENT_TIMESTAMP");
+          params.push(marketValue, 'manual');
+        }
+      }
 
-    // Quantity is absolute — it is how many copies the user says they own, and
-    // in the stacked collection view the number in the form is the total across
-    // the rows of the tile, not this row alone. So reconcile the whole stack to
-    // it, up or down: the tile's rows when the popup named them, else the
-    // identical rows. It used to only ever insert (quantity - 1) extra rows,
-    // which made lowering the number a no-op and made every save duplicate the
-    // entry instead of editing it.
-    //
-    // One transaction, so two saves of the same stack at once cannot both count
-    // the copies before either has trimmed, and trim twice.
-    let tileIds;
-    if (requestedQty !== null) {
-      const changed = await db.withTransaction(async () => {
-        if (!tile) return setStackQuantity(db, req.user.id, id, requestedQty);
-        const result = await setTileQuantity(db, req.user.id, id, requestedQty, tile.ids);
-        tileIds = result.ids;
-        return result.change;
-      });
-      if (changed !== 0) {
-        const row = await db.get(`SELECT compartment_id, location_id FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
-        if (row && row.compartment_id && row.location_id) {
+      if (updates.length > 0) {
+        params.push(id, req.user.id);
+        await db.run(`UPDATE collection SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`, params);
+      }
+
+      if (isMoving && finalCompartmentId && finalLocationId) {
+        const loc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [finalLocationId, req.user.id]);
+        if (loc) await rebalanceCompartmentByScheme(db, finalCompartmentId, loc.sort_order, loc.foil_sorting);
+      }
+      if (isMoving && row.compartment_id && row.compartment_id !== finalCompartmentId) {
+        const oldLoc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [row.location_id, req.user.id]);
+        if (oldLoc) await rebalanceCompartmentByScheme(db, row.compartment_id, oldLoc.sort_order, oldLoc.foil_sorting);
+      }
+      // Same slot, new set and number: a binder sorted by set has to re-sort around it.
+      if (swappedCard) {
+        await recordPrice(swappedCard.id, swappedCard.price_trend);
+        if (!isMoving && row.compartment_id && row.location_id) {
           const loc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [row.location_id, req.user.id]);
           if (loc) await rebalanceCompartmentByScheme(db, row.compartment_id, loc.sort_order, loc.foil_sorting);
         }
       }
-    }
 
-    const finalPlacement = isMoving && finalCompartmentId ? await describePlacement(db, id, req.user.id) : null;
-    res.json({ message: 'Collection entry updated successfully', placement: finalPlacement, container_full: resolvedFull, rule_rejected: resolvedRejected, stack_entry_ids: tileIds });
+      // Quantity is absolute — it is how many copies the user says they own, and
+      // in the stacked collection view the number in the form is the total across
+      // the rows of the tile, not this row alone. So reconcile the whole stack to
+      // it, up or down: the tile's rows when the popup named them, else the
+      // identical rows. It used to only ever insert (quantity - 1) extra rows,
+      // which made lowering the number a no-op and made every save duplicate the
+      // entry instead of editing it. Copies past the room their compartment has
+      // go to Unsorted, and unplaced_copies says how many.
+      let tileIds;
+      let unplacedCopies = 0;
+      if (requestedQty !== null) {
+        const reconciled = tile
+          ? await setTileQuantity(db, req.user.id, id, requestedQty, tile.ids)
+          : await reconcileIdenticalRows(db, req.user.id, id, requestedQty);
+        if (tile) tileIds = reconciled.ids;
+        unplacedCopies = reconciled.unplaced || 0;
+        if (reconciled.change !== 0) {
+          const after = await db.get(`SELECT compartment_id, location_id FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+          if (after && after.compartment_id && after.location_id) {
+            const loc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [after.location_id, req.user.id]);
+            if (loc) await rebalanceCompartmentByScheme(db, after.compartment_id, loc.sort_order, loc.foil_sorting);
+          }
+        }
+      }
+
+      const finalPlacement = isMoving && finalCompartmentId ? await describePlacement(db, id, req.user.id) : null;
+      return {
+        message: 'Collection entry updated successfully',
+        placement: finalPlacement,
+        container_full: resolvedFull,
+        rule_rejected: resolvedRejected,
+        stack_entry_ids: tileIds,
+        unplaced_copies: unplacedCopies,
+      };
+    });
+    res.json(result);
   } catch (error) {
+    if (error instanceof Refusal) return res.status(error.status).json(error.body);
     console.error(error);
     res.status(500).json({ error: 'Failed to update entry', code: 'update_failed' });
   }
@@ -572,9 +625,15 @@ async function fetchMarketValue(req, res) {
     );
     res.json({ market_value: result.price, source: result.source, basis: result.basis });
   } catch (error) {
-    const status = error.status || 500;
-    if (status >= 500) console.error('graded price fetch failed:', error.message);
-    res.status(status).json({ error: error.message || 'Failed to fetch graded price' });
+    // A refusal from the graded-price module carries its own status and a message
+    // written for the user. Anything else is ours, and its text (a SQLite message,
+    // say) is logged, not sent.
+    if (error.status) {
+      if (error.status >= 500) console.error('graded price fetch failed:', error.message);
+      return res.status(error.status).json({ error: error.message || 'Failed to fetch graded price' });
+    }
+    console.error('graded price fetch failed:', error);
+    res.status(500).json({ error: 'Failed to fetch graded price' });
   }
 }
 

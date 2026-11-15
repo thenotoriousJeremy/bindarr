@@ -3,6 +3,10 @@ const db = require('../db');
 const { resolveCardPrice, isVintageSet, parseSqliteUtc } = require('../utils/priceHelpers');
 const { convert, pickUnit, roundMoney, parseCurrencyParam } = require('../utils/fx');
 const fxRates = require('../fxRates');
+const { OWNED_SQL, COPY_PRICE_SQL, typeBuckets } = require('../utils/collectionMetrics');
+const { ownedByNumber } = require('../utils/setCompletion');
+const setListing = require('../setListing');
+const languages = require('../utils/languages');
 
 const games = require('../utils/games');
 
@@ -43,6 +47,100 @@ const roundByCurrency = (byCurrency) => Object.fromEntries(
   Object.entries(byCurrency).sort(([a], [b]) => a.localeCompare(b)).map(([c, v]) => [c, roundMoney(v, c)])
 );
 
+// Set progress for the dashboard, counted by the set page's rules
+// (utils/setCompletion.js) so a set reads the same on both: a card of the set is
+// owned when any copy has its collector number, in any language ("#7" and "#007"
+// are one card), and a Pokémon set also gathers copies filed under the other
+// provider's id for it. `rows` are the copies the user owns (no wishlist), with
+// game, set_id, set_name, number, language and quantity.
+//
+// The size is the set's listing when the set page has listed it, the number that
+// page counts against; else the `sets` table's printed_total (what a player counts
+// to), else its total. A set with neither has no completion to report and is
+// skipped: "3 / 150" for a set of 64 cards is a wrong answer presented as a
+// measurement, which a flat-150 fallback once was. Magic's card_cache codes are
+// bare ("mh3") and its `sets` ids prefixed ("mtg-mh3"), so the id is mapped.
+async function setCompletionProgress(rows) {
+  const { normId, unpadId, normName } = require('../utils/setCatalogueMatch');
+  const groups = new Map();
+  const buckets = new Map();
+  const bucket = (game, kind, key, row) => {
+    if (!key) return;
+    const k = `${game}|${kind}|${key}`;
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(row);
+  };
+  for (const row of rows) {
+    if (!row.set_id) continue;
+    const game = row.game || 'pokemon';
+    const key = `${game}|${row.set_id}`;
+    if (!groups.has(key)) groups.set(key, { game, setId: row.set_id, name: row.set_name, rows: [] });
+    groups.get(key).rows.push(row);
+    bucket(game, 'id', normId(row.set_id), row);
+    bucket(game, 'unpad', unpadId(row.set_id), row);
+    if (game === 'pokemon') bucket(game, 'name', normName(row.set_name), row);
+  }
+  if (!groups.size) return [];
+
+  const setRowId = (g) => (g.game === 'mtg' ? `mtg-${String(g.setId).toLowerCase()}` : g.setId);
+  const sizes = new Map();
+  const ids = [...new Set([...groups.values()].map(setRowId))];
+  for (let i = 0; i < ids.length; i += 500) {
+    const part = ids.slice(i, i + 500);
+    for (const s of await db.all(
+      `SELECT id, COALESCE(NULLIF(printed_total, 0), NULLIF(total, 0)) AS size FROM sets WHERE id IN (${part.map(() => '?').join(',')})`, part
+    )) sizes.set(s.id, s.size);
+  }
+
+  // The listing key the set page would read: the language most of the copies are
+  // in, for Pokémon, whose sets differ by language.
+  const listingKeys = new Map();
+  for (const [key, g] of groups) {
+    let lang = 'en';
+    if (g.game === 'pokemon') {
+      const counts = new Map();
+      for (const r of g.rows) counts.set(r.language, (counts.get(r.language) || 0) + 1);
+      lang = languages.toCode([...counts].sort((a, b) => b[1] - a[1])[0][0] || 'English');
+    }
+    if (setListing.supports(g.game)) listingKeys.set(key, { game: g.game, ...setListing.listingKey(g.game, g.setId, lang) });
+  }
+  const listed = new Map();
+  const wanted = [...new Set([...listingKeys.values()].map(k => k.setId))];
+  for (let i = 0; i < wanted.length; i += 500) {
+    const part = wanted.slice(i, i + 500);
+    for (const l of await db.all(
+      `SELECT game, language, set_id, card_ids FROM set_listings WHERE set_id IN (${part.map(() => '?').join(',')})`, part
+    )) {
+      let count = 0;
+      try { count = (JSON.parse(l.card_ids) || []).length; } catch { count = 0; }
+      listed.set(`${l.game}|${l.language}|${l.set_id}`, count);
+    }
+  }
+
+  const progress = [];
+  for (const [key, g] of groups) {
+    const lk = listingKeys.get(key);
+    const total = (lk && listed.get(`${lk.game}|${lk.lang}|${lk.setId}`)) || sizes.get(setRowId(g));
+    if (!total) continue;
+    const set = { id: g.setId, name: g.name };
+    const candidates = new Set([
+      ...(buckets.get(`${g.game}|id|${normId(set.id)}`) || []),
+      ...(buckets.get(`${g.game}|unpad|${unpadId(set.id)}`) || []),
+      ...(g.game === 'pokemon' ? (buckets.get(`${g.game}|name|${normName(set.name)}`) || []) : []),
+    ]);
+    const owned = [...ownedByNumber([...candidates], set, g.game).values()].filter(e => e.quantity > 0).length;
+    progress.push({
+      setId: g.setId,
+      setName: g.name || 'Other',
+      ownedUnique: owned,
+      totalCards: total,
+      // Rounded as the set page rounds it.
+      percent: Math.min(100, Math.round((owned / total) * 1000) / 10),
+    });
+  }
+  return progress;
+}
+
 // 7. Get Collection Statistics & Analytics
 router.get('/stats', async (req, res) => {
   try {
@@ -52,17 +150,17 @@ router.get('/stats', async (req, res) => {
     const gameFilter = game ? ` AND cc.game = ?` : '';
     const statsParams = game ? [req.user.id, game] : [req.user.id];
 
-    // Retrieve all collection items to compute statistics
+    // Every copy the user owns: the collection list, never the wishlist.
     const query = `
       SELECT
-        c.quantity, c.purchase_price, c.added_at, c.printing, c.condition, c.card_id, c.market_value,
-        cc.types, cc.subtypes, cc.supertype, cc.game, cc.rarity, cc.set_name, cc.set_id, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition,
+        c.quantity, c.purchase_price, c.added_at, c.printing, c.condition, c.card_id, c.market_value, c.language,
+        cc.types, cc.subtypes, cc.supertype, cc.game, cc.rarity, cc.set_name, cc.set_id, cc.number, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition,
         cc.price_avg1, cc.price_avg7, cc.price_avg30, cc.price_currency, cc.price_source,
         l.name as location_name
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       LEFT JOIN locations l ON c.location_id = l.id
-      WHERE c.user_id = ?${gameFilter}
+      WHERE c.user_id = ? AND ${OWNED_SQL}${gameFilter}
     `;
     const rows = await db.all(query, statsParams);
     const money = await reportingUnit(rows, req.query.currency);
@@ -141,30 +239,8 @@ router.get('/stats', async (req, res) => {
         valueNowFor30d += nowAvg;
       }
 
-      // Parse types
-      const types = JSON.parse(row.types || '[]');
-      const subtypes = JSON.parse(row.subtypes || '[]');
-      const isMtg = row.game === 'mtg' || row.supertype === 'MTG';
-
-      if (isMtg) {
-        const isLand = subtypes.includes('Land') || row.supertype === 'Land' || (types.length === 0 && subtypes.some(s => ['Plains','Island','Swamp','Mountain','Forest','Land'].includes(s)));
-        if (isLand) {
-          typeCounts['Land'] = (typeCounts['Land'] || 0) + qty;
-        } else if (types.length === 0) {
-          typeCounts['Colorless'] = (typeCounts['Colorless'] || 0) + qty;
-        } else {
-          types.forEach(t => {
-            typeCounts[t] = (typeCounts[t] || 0) + qty;
-          });
-        }
-      } else {
-        types.forEach(t => {
-          typeCounts[t] = (typeCounts[t] || 0) + qty;
-        });
-        if (types.length === 0) {
-          typeCounts['Colorless'] = (typeCounts['Colorless'] || 0) + qty;
-        }
-      }
+      // Type breakdown, bucketed the way the Prometheus metrics bucket it.
+      for (const t of typeBuckets(row)) typeCounts[t] = (typeCounts[t] || 0) + qty;
 
       // Rarity
       const rarity = row.rarity || 'Unknown';
@@ -204,18 +280,11 @@ router.get('/stats', async (req, res) => {
         cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition, cc.price_currency
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
-      WHERE c.user_id = ?${gameFilter}
-      ORDER BY CASE
-        -- Mirrors resolveCardPrice, market_value first. A PSA 10 valued at 40x its
-        -- raw price has to be able to reach this list, and ranking it by the raw
-        -- price is exactly how it never would.
-        WHEN c.market_value IS NOT NULL AND c.market_value > 0 THEN c.market_value
-        WHEN c.printing = 'Holofoil' AND cc.price_holofoil IS NOT NULL AND cc.price_holofoil > 0 THEN cc.price_holofoil
-        WHEN c.printing = 'Reverse Holofoil' AND cc.price_reverse_holofoil IS NOT NULL AND cc.price_reverse_holofoil > 0 THEN cc.price_reverse_holofoil
-        WHEN c.printing = 'Normal' AND cc.price_normal IS NOT NULL AND cc.price_normal > 0 THEN cc.price_normal
-        WHEN c.printing = '1st Edition' AND cc.price_1st_edition IS NOT NULL AND cc.price_1st_edition > 0 THEN cc.price_1st_edition
-        ELSE cc.price_trend
-      END * ${rankFactor.sql} DESC
+      WHERE c.user_id = ? AND ${OWNED_SQL}${gameFilter}
+      -- Mirrors resolveCardPrice, market_value first. A PSA 10 valued at 40x its
+      -- raw price has to be able to reach this list, and ranking it by the raw
+      -- price is exactly how it never would.
+      ORDER BY ${COPY_PRICE_SQL} * ${rankFactor.sql} DESC
       LIMIT 6
     `;
     const topValuableRows = await db.all(topValuableQuery, [...statsParams, ...rankFactor.params]);
@@ -224,62 +293,7 @@ router.get('/stats', async (req, res) => {
       price_trend: resolveCardPrice(row)
     }));
 
-    // Set completion.
-    //
-    // Sizes come from the `sets` table, which every provider sync fills in — not
-    // from a hand-kept map. That map listed thirteen Pokémon ids and fell back to a
-    // flat 150 for everything else, so every Magic set and every Pokémon set
-    // released after 151 was measured against a number nobody chose. printed_total
-    // is the right column (the number printed on the card, which is what a player
-    // counts to); `total` includes secret rares and is the fallback when a provider
-    // gives no printed count.
-    //
-    // One query for the whole thing, rather than one per set inside a loop: this
-    // ran a COUNT(DISTINCT) per set the user owns cards from, which on a broad
-    // collection is dozens of round trips to answer a single panel.
-    //
-    // Magic is the one game whose two tables spell a set differently: card_cache
-    // holds Scryfall's bare code ("mh3", scryfallApi.normalizeCard) and `sets` the
-    // prefixed id ("mtg-mh3", fetchAndCacheSets), so this lookup never matched and
-    // no Magic set ever appeared here. Every other reader of both forms (the sets
-    // route, catalog's new-set count, compartmentSort.fixedSetKey, the scanner and
-    // search set pickers) already converts, so the id is mapped here rather than
-    // re-keying either table.
-    //
-    // Owned counts collector numbers, not card ids: each language of a Magic
-    // printing is its own card_cache row, and #12 in English and in Japanese is
-    // still one card of the set.
-    const setIds = Object.keys(setCounts);
-    const setProgress = [];
-    if (setIds.length) {
-      const holes = setIds.map(() => '?').join(',');
-      const rows = await db.all(`
-        SELECT cc.game, cc.set_id,
-               COUNT(DISTINCT COALESCE(NULLIF(cc.number, ''), cc.id)) AS owned,
-               (SELECT COALESCE(NULLIF(s.printed_total, 0), NULLIF(s.total, 0))
-                  FROM sets s
-                 WHERE s.id = CASE WHEN cc.game = 'mtg' THEN 'mtg-' || LOWER(cc.set_id) ELSE cc.set_id END) AS size
-        FROM collection c
-        JOIN card_cache cc ON c.card_id = cc.id
-        WHERE c.user_id = ?${gameFilter} AND cc.set_id IN (${holes})
-        GROUP BY cc.game, cc.set_id
-      `, [...statsParams, ...setIds]);
-
-      for (const row of rows) {
-        // A set the sync has not reached yet has no size, so it has no completion
-        // to report. Skipped rather than given a placeholder denominator: "3 / 150"
-        // for a set that actually holds 64 cards is a wrong answer presented as a
-        // measurement, which is what the old flat-150 fallback did.
-        if (!row.size) continue;
-        setProgress.push({
-          setId: row.set_id,
-          setName: setCounts[row.set_id].name,
-          ownedUnique: row.owned,
-          totalCards: row.size,
-          percent: Math.min(Math.round((row.owned / row.size) * 100), 100)
-        });
-      }
-    }
+    const setProgress = await setCompletionProgress(rows);
 
     // Sort set progress by completion percentage descending
     setProgress.sort((a, b) => b.percent - a.percent);
@@ -298,7 +312,7 @@ router.get('/stats', async (req, res) => {
              cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition, cc.price_currency
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
-      WHERE c.user_id = ?${gameFilter}
+      WHERE c.user_id = ? AND ${OWNED_SQL}${gameFilter}
       ORDER BY c.added_at DESC
       LIMIT 6
     `, statsParams);
@@ -377,13 +391,13 @@ router.get('/stats/history', async (req, res) => {
     const gameFilter = game ? ` AND cc.game = ?` : '';
     const params = game ? [req.user.id, game] : [req.user.id];
 
-    // Retrieve all collection items to compute history
+    // Every copy the user owns (not the wishlist), as /stats counts them.
     const query = `
       SELECT c.quantity, c.added_at, c.printing, c.market_value, cc.id as card_id, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition,
              cc.price_currency
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
-      WHERE c.user_id = ?${gameFilter}
+      WHERE c.user_id = ? AND ${OWNED_SQL}${gameFilter}
     `;
     const items = await db.all(query, params);
     // Same unit as /stats reports for the same rows, so the chart and the total
@@ -410,7 +424,7 @@ router.get('/stats/history', async (req, res) => {
     const historyRows = await db.all(
       `SELECT ph.card_id, ph.price, ph.recorded_at FROM price_history ph
          JOIN card_cache cc ON cc.id = ph.card_id
-        WHERE ph.card_id IN (SELECT card_id FROM collection WHERE user_id = ?)${gameFilter}
+        WHERE ph.card_id IN (SELECT card_id FROM collection c WHERE c.user_id = ? AND ${OWNED_SQL})${gameFilter}
           AND (ph.currency IS NULL OR ph.currency = COALESCE(cc.price_currency, 'USD'))
         ORDER BY ph.recorded_at ASC`,
       params
@@ -517,7 +531,7 @@ router.get('/stats/networth', async (req, res) => {
              cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.price_1st_edition
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
-      WHERE c.user_id = ? AND c.list_type = 'collection'${gameFilter}
+      WHERE c.user_id = ? AND ${OWNED_SQL}${gameFilter}
     `, params);
 
     const money = await reportingUnit(rows, req.query.currency);
