@@ -15,8 +15,14 @@ export default function DeckListActions({ deck, showToast, onCollectionChanged }
 
 
   useEffect(() => {
-    if (!collectOpen) return;
-    fetch('/api/locations').then(r => (r.ok ? r.json() : [])).then(setLocations).catch(() => {});
+    if (!collectOpen) return undefined;
+    // Closed and reopened quickly: only the open dialog's answer lands.
+    let cancelled = false;
+    fetch('/api/locations')
+      .then(r => (r.ok ? r.json() : []))
+      .then(list => { if (!cancelled && Array.isArray(list)) setLocations(list); })
+      .catch(() => {});
+    return () => { cancelled = true; };
   }, [collectOpen]);
 
   const buildMissing = async () => {
@@ -70,7 +76,6 @@ export default function DeckListActions({ deck, showToast, onCollectionChanged }
 
       {collectOpen && (
         <Modal onClose={() => setCollectOpen(false)} label={t('lists.collectTitle', { name: deck.name })}
-          overlayStyle={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(0,0,0,0.7)' }}
           className="glass-panel" style={{ width: '420px', maxWidth: '100%', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 style={{ margin: 0 }}>{t('lists.collectTitle', { name: deck.name })}</h3>
