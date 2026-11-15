@@ -11,6 +11,8 @@
 // sealed product. A merge
 // would have to decide which of two binders called "Main Binder" a copy belongs in,
 // and every way of guessing files cards somewhere their owner did not put them.
+// Sealed recipes are the exception: shared, one per product (#168), so the file's
+// are matched to the server's rather than replacing them (see the restore).
 // Card data (card_cache, price history, product ids) is shared across accounts, so
 // it is only ever added to, never overwritten: whatever the install already holds
 // is at least as fresh as the backup's copy. And only an admin's restore adds it
@@ -97,10 +99,18 @@ router.get('/backup', async (req, res) => {
     const decks = await db.all(`SELECT * FROM decks WHERE user_id = ?`, [uid]);
     const deckCards = await rowsWhereIn('deck_cards', 'deck_id', decks.map(d => d.id));
     const notes = await db.all(`SELECT * FROM notes WHERE user_id = ?`, [uid]);
-    const sealedTemplates = await db.all(`SELECT * FROM sealed_templates WHERE user_id = ?`, [uid]);
-    const sealedComponents = await rowsWhereIn('sealed_template_components', 'template_id', sealedTemplates.map(t => t.id));
     const sealedPurchases = await db.all(`SELECT * FROM sealed_purchases WHERE user_id = ?`, [uid]);
     const sealedUnits = await rowsWhereIn('sealed_units', 'purchase_id', sealedPurchases.map(p => p.id));
+    // The recipes this account made, and the ones its purchases follow, whoever made
+    // them: recipes are shared, one per product (#168), and a restore maps each onto
+    // the server's own recipe for that product, or creates it where there is none.
+    const sealedTemplates = await db.all(
+      `SELECT * FROM sealed_templates
+        WHERE user_id = ? OR id IN (SELECT template_id FROM sealed_purchases WHERE user_id = ?)
+        ORDER BY id`,
+      [uid, uid]
+    );
+    const sealedComponents = await rowsWhereIn('sealed_template_components', 'template_id', sealedTemplates.map(t => t.id));
     const lists = await db.all(`SELECT * FROM card_lists WHERE user_id = ?`, [uid]);
     const listItems = await rowsWhereIn('card_list_items', 'list_id', lists.map(l => l.id));
     // In the order they were made: a restore renumbers rows in file order, and the
@@ -286,12 +296,11 @@ router.post('/backup/restore', async (req, res) => {
 
       // Then out with this account's own rows. Compartments and their filing rules
       // go with their locations (ON DELETE CASCADE); deck cards with their decks;
-      // units with their purchases, components with their templates, list items
-      // with their lists, deal items with their deals.
+      // units with their purchases, list items with their lists, deal items with
+      // their deals. Not the recipes it made: those are shared (below).
       await db.run(`DELETE FROM card_lists WHERE user_id = ?`, [uid]);
       await db.run(`DELETE FROM collection WHERE user_id = ?`, [uid]);
       await db.run(`DELETE FROM sealed_purchases WHERE user_id = ?`, [uid]);
-      await db.run(`DELETE FROM sealed_templates WHERE user_id = ?`, [uid]);
       await db.run(`DELETE FROM decks WHERE user_id = ?`, [uid]);
       await db.run(`DELETE FROM notes WHERE user_id = ?`, [uid]);
       await db.run(`DELETE FROM locations WHERE user_id = ?`, [uid]);
@@ -319,15 +328,34 @@ router.post('/backup/restore', async (req, res) => {
       // Sealed product before the collection, whose copies can name the unit they
       // were opened from. A purchase that was itself opened out of another unit
       // points at that unit, which only exists once every purchase's units do.
+      //
+      // Recipes first, which the purchases follow. A recipe is shared, one per
+      // product and game (#168), and other accounts' purchases follow it too, so a
+      // restore never deletes or changes one, whoever made it. Each recipe in the
+      // file is the server's own recipe for that product, by the identity its
+      // unique indexes give it, where there is one; only a product with none gets
+      // the file's recipe, components and all, as the restorer's.
       const templateMap = new Map();
+      const createdTemplates = new Set();
       for (const row of list('sealed_templates')) {
-        templateMap.set(row.id, await insert(shape.sealed_templates, row, { user_id: uid }));
+        const game = row.game || 'pokemon';
+        const same = row.product_id != null
+          ? await db.get(`SELECT id FROM sealed_templates WHERE game = ? AND product_id = ?`, [game, row.product_id])
+          : await db.get(
+            `SELECT id FROM sealed_templates WHERE game = ? AND product_id IS NULL AND product_name = ? COLLATE NOCASE`,
+            [game, row.product_name]
+          );
+        if (same) {
+          templateMap.set(row.id, same.id);
+          continue;
+        }
+        templateMap.set(row.id, await insert(shape.sealed_templates, row, { user_id: uid, game }));
+        createdTemplates.add(row.id);
       }
       for (const row of list('sealed_template_components')) {
-        const templateId = templateMap.get(row.template_id);
-        if (templateId == null) continue;
+        if (!createdTemplates.has(row.template_id)) continue;   // an existing recipe keeps its own
         if (row.card_id && !(await cardKnown(row.card_id))) continue;
-        await insert(shape.sealed_template_components, row, { template_id: templateId });
+        await insert(shape.sealed_template_components, row, { template_id: templateMap.get(row.template_id) });
       }
       const purchaseMap = new Map();
       for (const row of list('sealed_purchases')) {

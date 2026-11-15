@@ -146,8 +146,11 @@ async function testBackupRoundTrip() {
   const deckId = (await db.get(`SELECT id FROM decks WHERE name = 'Elves'`)).id;
   await db.run(`INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, 'mtg-embedded-1', 4)`, [deckId]);
   await call('POST', '/api/notes', { body: { title: 'Keep', body: 'this note' } });
-  // A sealed box, one unit opened, the copy filed as coming out of it.
-  const purchase = await db.run(`INSERT INTO sealed_purchases (user_id, product_name, quantity) VALUES (1, 'Booster Box', 1)`);
+  // A sealed box, one unit opened, the copy filed as coming out of it. The box
+  // follows a recipe: one guaranteed copy of the card.
+  const recipe = await db.run(`INSERT INTO sealed_templates (user_id, product_name) VALUES (1, 'Booster Box')`);
+  await db.run(`INSERT INTO sealed_template_components (template_id, component_type, quantity, card_id) VALUES (?, 'card', 1, 'mtg-embedded-1')`, [recipe.lastID]);
+  const purchase = await db.run(`INSERT INTO sealed_purchases (user_id, product_name, quantity, template_id) VALUES (1, 'Booster Box', 1, ?)`, [recipe.lastID]);
   const unit = await db.run(`INSERT INTO sealed_units (purchase_id, opened_at) VALUES (?, CURRENT_TIMESTAMP)`, [purchase.lastID]);
   await db.run(`UPDATE collection SET sealed_unit_id = ? WHERE card_id = 'mtg-embedded-1'`, [unit.lastID]);
   // The deck's missing-cards list, with one wanted card.
@@ -167,6 +170,7 @@ async function testBackupRoundTrip() {
   await db.run(`DELETE FROM decks`);
   await db.run(`DELETE FROM collection`);
   await db.run(`DELETE FROM sealed_purchases`);
+  await db.run(`DELETE FROM sealed_templates`);
   await db.run(`DELETE FROM card_lists`);
   await db.run(`DELETE FROM price_history`);
   await db.run(`DELETE FROM card_cache WHERE id = 'mtg-embedded-1'`);
@@ -193,6 +197,13 @@ async function testBackupRoundTrip() {
        JOIN sealed_purchases p ON p.id = u.purchase_id WHERE c.card_id = 'mtg-embedded-1'`
   );
   assert.strictEqual(opened && opened.product_name, 'Booster Box', 'sealed product and the copy opened from it come back linked');
+  const followed = await db.get(
+    `SELECT t.product_name, t.user_id, c.card_id, c.quantity FROM sealed_purchases p
+       JOIN sealed_templates t ON t.id = p.template_id JOIN sealed_template_components c ON c.template_id = t.id
+      WHERE p.product_name = 'Booster Box'`
+  );
+  assert.deepStrictEqual(followed, { product_name: 'Booster Box', user_id: 1, card_id: 'mtg-embedded-1', quantity: 1 },
+    'a recipe the phone no longer has comes back, components and all, with the purchase following it');
   const wanted = await db.get(
     `SELECT l.name, d.name AS deck, i.quantity_wanted FROM card_list_items i JOIN card_lists l ON l.id = i.list_id
        JOIN decks d ON d.id = l.deck_id WHERE i.card_id = 'mtg-embedded-1'`
