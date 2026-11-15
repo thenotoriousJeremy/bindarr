@@ -470,7 +470,6 @@ async function initDb() {
   // "Already has data" is read off the Pokémon set catalogue and card cache, not
   // off `users`: this migration runs before the startup set sync, so a brand new
   // database genuinely has neither, while any install that has ever run has both.
-  // Same shape as the setup_complete migration below.
   if ((await addColumns('app_settings', { pokemon_provider: `TEXT DEFAULT 'tcgdex'` })).length) {
     await run(`
       UPDATE app_settings SET pokemon_provider = 'pokemontcg'
@@ -534,14 +533,6 @@ async function initDb() {
     // pokemontcg.io both hand us a real product/search URL per card, so store it.
     tcgplayer_url: 'TEXT',
     cardmarket_url: 'TEXT',
-    // TCGplayer's own product id, which is what turns a link into the actual card.
-    // The stored `tcgplayer_url` above is NOT reliably a product page: Scryfall
-    // hands back a name search whenever it has no product for a printing (6,109 of
-    // 106,163 cached MTG rows), and TCGdex supplies no TCGplayer link at all. An id
-    // is unambiguous — /product/<id> either resolves or the card is not listed.
-    //
-    // Provider-agnostic on purpose: Scryfall publishes it as `tcgplayer_id`, and
-    // the Pokémon rows get theirs from the TCGCSV catalogue mapping.
     // collection.printing has allowed '1st Edition' since v1.0, and resolveCardPrice
     // had no column to read for it — so a 1st Edition Base Set card was valued at the
     // Unlimited price, which for a Charizard is a difference of thousands. TCGplayer
@@ -605,6 +596,14 @@ async function initDb() {
        WHERE currency IS NULL
     `);
   }
+  // TCGplayer's own product id, which is what turns a link into the actual card.
+  // The stored `tcgplayer_url` above is NOT reliably a product page: Scryfall
+  // hands back a name search whenever it has no product for a printing (6,109 of
+  // 106,163 cached MTG rows), and TCGdex supplies no TCGplayer link at all. An id
+  // is unambiguous — /product/<id> either resolves or the card is not listed.
+  //
+  // Provider-agnostic on purpose: Scryfall publishes it as `tcgplayer_id`, and
+  // the Pokémon rows get theirs from the TCGCSV catalogue mapping.
   if ((await addColumns('card_cache', { tcgplayer_product_id: 'INTEGER' })).length) {
     // Backfill from the URLs already cached, rather than re-fetching 100k+ rows
     // from Scryfall to learn something we are already holding: a product-page URL

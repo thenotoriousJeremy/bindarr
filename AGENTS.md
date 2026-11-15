@@ -10,7 +10,7 @@ Bindarr is a self-hosted, multi-user collection manager for Pokémon, Magic: The
 - UI components call relative `/api` endpoints. In Capacitor, `frontend/src/apiBase.js` rewrites those calls to the configured server; Vite proxies `/api`, `/models`, and `/ort` to port 3001 in development.
 - `backend/src/server.js` is the composition root: middleware, route mounting, startup initialization/jobs, API/static serving, and optional TLS listener. Route order is security-sensitive: public auth/shared/card-art paths precede the authenticated `/api` gate.
 - `backend/src/routes/*.js` own HTTP/domain operations. Routes use `req.user.id` to scope records. Central decisions belong in existing utilities, especially `utils/pokemonProvider.js` for Pokémon source selection and `utils/cardApi.js` for card-ID provider dispatch.
-- `backend/src/db.js` owns the shared SQLite connection, schema initialization/migrations, Promise SQL helpers (`run`, `get`, `all`), and `withTransaction`. SQLite uses WAL; preserve its startup migration and transaction model.
+- `backend/src/db.js` is the database facade every module requires: `db/connection.js` holds the shared SQLite connection, its lock and the Promise SQL helpers (`run`, `get`, `all`, `withTransaction`); `db/schema.js` the CREATE TABLE/INDEX statements; `db/migrations.js` `initDb`, whose statements run in a fixed order (`addColumns` adds a table's missing columns). SQLite uses WAL; preserve its startup migration and transaction model.
 - Provider clients normalize external cards into the cached card shape before collection operations. Scan requests flow through `routes/collection.js` to `cvScan.js`, which matches images against catalog assets built by `catalog.js`.
 - Production builds `frontend/dist`; Express serves it after API routes. `/app/database` persists SQLite, backups, TLS material, models, and scan catalogs.
 
@@ -69,7 +69,7 @@ Use `npm ci` in each package scope for reproducible CI/container installs. Backe
 - `package.json` — root command orchestration.
 - `backend/src/server.js` — backend entry, route composition, lifecycle scheduling, static SPA serving.
 - `backend/src/routes/mounts.js` — the one table of `/api` routers, for the server and for device mode.
-- `backend/src/db.js` — schema/migrations, SQLite access, transactions.
+- `backend/src/db.js` (facade) and `backend/src/db/` — SQLite access and transactions (`connection.js`), schema (`schema.js`), migrations (`migrations.js`).
 - `backend/src/routes/collection.js` — search, scan matching, collection and price operations.
 - `backend/src/routes/storage.js` — physical storage/location rules.
 - `backend/src/middleware/auth.js` — bearer/API-key auth, roles, rate limits.

@@ -29,7 +29,8 @@ to ship.
 backend/
   src/
     server.js              Express app: middleware, route mounts, static SPA, health, job list, startup/shutdown
-    db.js                  SQLite connection (promisified run/get/all), schema init, password hashing
+    db.js                  Facade over db/: connection.js (connection, lock, run/get/all, withTransaction),
+                           schema.js (CREATE statements), migrations.js (initDb, addColumns)
     scheduler.js           Background jobs on clocks kept in job_runs, checked every 15 minutes
     middleware/auth.js     authenticateToken (session lookup), requireAdmin, rate limiters
     routes/
