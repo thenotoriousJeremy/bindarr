@@ -30,6 +30,20 @@ function session(name) {
   return sessions[name];
 }
 
+// The scanner closed (runtime.js releaseScanEngine): free both models' sessions
+// instead of holding them for the rest of the app's life. The next scan loads
+// them again, from the files already on the phone. wasm memory itself never
+// shrinks, but released sessions are what the next ones reuse.
+export async function releaseSessions() {
+  const open = Object.values(sessions);
+  for (const name of Object.keys(sessions)) delete sessions[name];
+  for (const pending of open) {
+    try {
+      await (await pending).release();
+    } catch { /* never finished loading: nothing to free */ }
+  }
+}
+
 async function decode(dataUrl) {
   return createImageBitmap(await (await fetch(dataUrl)).blob());
 }

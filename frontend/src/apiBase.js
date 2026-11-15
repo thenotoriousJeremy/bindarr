@@ -20,8 +20,12 @@ export const isNative = Capacitor.isNativePlatform();
 export const canRunOnDevice = isNative || !!import.meta.env.VITE_DEVICE_WEB;
 export const isDeviceMode = () => canRunOnDevice && localStorage.getItem(MODE_KEY) === 'device';
 export const setDeviceMode = (on) => {
+  const wasDevice = isDeviceMode();
   if (on) localStorage.setItem(MODE_KEY, 'device');
   else localStorage.removeItem(MODE_KEY);
+  // Leaving device mode: the on-device backend's background jobs stop with it
+  // (device/runtime.js stopDevice). Only the app ever had them running.
+  if (wasDevice && !on) import('./device/runtime.js').then(m => m.stopDevice()).catch(() => {});
 };
 export const getServerUrl = () => localStorage.getItem(KEY) || '';
 export const setServerUrl = (url) =>

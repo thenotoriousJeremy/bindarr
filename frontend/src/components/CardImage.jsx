@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { cardBackFor } from '../utils/cardBack';
 import { artUrl, useCardArtIndex } from '../utils/cardArt';
+import { isNative, isDeviceMode } from '../apiBase';
 
 // Every card image in the app. A drop-in for the plain <img src={card.image_url}>
 // this replaced: className, style, loading, draggable and the rest pass straight
@@ -21,6 +22,27 @@ import { artUrl, useCardArtIndex } from '../utils/cardArt';
 //
 // Step 3 is why onError chaining is used rather than a plain src: a URL that 404s
 // or a CDN that is unreachable has to degrade the same way an absent one does.
+
+// In the app pointed at a server, an <img src="/api/card-art/..."> resolves
+// against the app's own origin, not the server's: only fetch() is sent to the
+// server (apiBase.js). So there the art is fetched and shown as a blob URL, as
+// useBinderArt.js does for binder artwork (MOB-03). One fetch per card per art
+// index: a grid scrolling back over a card reuses it, and an upload or removal
+// (which replaces the index) fetches afresh. Device mode has no contributed art.
+const blobArt = new WeakMap();   // art index Set -> Map(cardId -> Promise<string|null>)
+
+function fetchArtBlob(index, cardId) {
+  let byCard = blobArt.get(index);
+  if (!byCard) blobArt.set(index, (byCard = new Map()));
+  if (!byCard.has(cardId)) {
+    byCard.set(cardId, fetch(artUrl(cardId))
+      .then(res => (res.ok ? res.blob() : null))
+      .then(blob => (blob && blob.size ? URL.createObjectURL(blob) : null))
+      .catch(() => null));
+  }
+  return byCard.get(cardId);
+}
+
 export default function CardImage({ card, src, alt, game, ...imgProps }) {
   const index = useCardArtIndex();
 
@@ -32,8 +54,22 @@ export default function CardImage({ card, src, alt, game, ...imgProps }) {
   const provider = src !== undefined ? src : card?.image_url;
   const back = cardBackFor(game ?? card?.game);
 
+  const hasArt = !!cardId && index.has(cardId);
+  const viaBlob = hasArt && isNative && !isDeviceMode();
+  // The blob URL for this card, once fetched; the chain starts at provider art
+  // until then (and stays there if the fetch fails).
+  const [fetched, setFetched] = useState({ cardId: null, url: null });
+  useEffect(() => {
+    if (!viaBlob) return undefined;
+    let live = true;
+    fetchArtBlob(index, cardId).then((url) => { if (live) setFetched({ cardId, url }); });
+    return () => { live = false; };
+  }, [viaBlob, index, cardId]);
+  let contributed = null;
+  if (hasArt) contributed = viaBlob ? (fetched.cardId === cardId ? fetched.url : null) : artUrl(cardId);
+
   const chain = [
-    cardId && index.has(cardId) ? artUrl(cardId) : null,
+    contributed,
     provider || null,
     back,
   ].filter(Boolean);

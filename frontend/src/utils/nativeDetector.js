@@ -10,7 +10,7 @@
 // Only the app has the plugin. On the web, or in an app build that predates it,
 // nativeDetectorAvailable() is false and cardDetector keeps the wasm worker.
 import { Capacitor, registerPlugin } from '@capacitor/core';
-import { cornerResult } from './detectResult.js';
+import { cornerResult, SHARPNESS_GATE } from './detectResult.js';
 
 const NativeDetector = registerPlugin('NativeDetector');
 
@@ -90,13 +90,21 @@ export function loadNativeDetector(getModel) {
   return ready;
 }
 
-// One frame. The canvas is the scanner's 384x384 framed crop; its pixels are read
-// here too, for the focus score and card signature the result carries.
+// The pixels behind a detection, for the focus score and card signature. Only a
+// frame that passed the gate has those, so a frame with no card in view skips the
+// ~590 KB readback entirely (MOB-10). Read after the answer, not before: the
+// scanner draws its next frame into this canvas only once this one has been
+// answered (cardDetector), so it still holds the frame that was sent.
+export function readPixelsIfDetected(out, canvas) {
+  if (!(out && (out.sharpness ?? 1) > SHARPNESS_GATE)) return null;
+  return canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+}
+
+// One frame. The canvas is the scanner's 384x384 framed crop.
 export async function detectNative(canvas, seq, engine) {
   const w = canvas.width, h = canvas.height;
-  const blob = jpegOf(canvas);
-  const rgba = canvas.getContext('2d').getImageData(0, 0, w, h).data;
-  const out = await NativeDetector.detect({ image: await base64Of(await blob) });
+  const out = await NativeDetector.detect({ image: await base64Of(await jpegOf(canvas)) });
+  const rgba = readPixelsIfDetected(out, canvas);
   return {
     ...cornerResult({ seq, engine, runMs: out.runMs, corners: out.corners, score: out.sharpness, rgba, w, h }),
     prepMs: out.prepMs,
