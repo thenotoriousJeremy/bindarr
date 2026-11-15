@@ -131,6 +131,9 @@ embedded.app.post('/api/__device-jobs-test/hold', async (req, res) => {
 async function testProductMapIsABackgroundUnit() {
   await seedTcgcsvCache();
   syncCalls.length = 0;
+  // A week-old clock: the build's own sync must start the week again, or the
+  // next launch would download every Pokémon group a second time.
+  await db.run(`UPDATE device_state SET value = ? WHERE key = 'tcgcsv_synced_at'`, [String(Date.now() - 8 * 24 * 3600 * 1000)]);
   const entered = gate();
   const release = gate();
   held.entered = entered.open;
@@ -155,6 +158,7 @@ async function testProductMapIsABackgroundUnit() {
   // The build's own sync call, inside its turn, met the switch and did not wait on
   // the network (the spy saw it with the switch on).
   assert.deepStrictEqual(syncCalls.slice(1).map(c => c.switch), ['1']);
+  assert.ok(Date.now() - Number(await state('tcgcsv_synced_at')) < 60 * 1000, 'the product map sync counts as this week\'s');
 }
 
 async function main() {

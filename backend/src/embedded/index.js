@@ -187,13 +187,19 @@ function syncTcgcsv(context, options) {
   }
 }
 
-// Weekly. The clock moves only once something was actually synced or checked: a
-// phone with no Pokémon card yet asks again next time (one indexed read), and a
-// failed sync is retried at the next launch or hourly check.
+// A sync the phone made, weekly or for the product map, starts the week again.
+// The clock moves only once something was actually synced or checked: a phone
+// with no Pokémon card yet asks again next time (one indexed read), and a failed
+// sync is retried at the next launch or hourly check.
+async function syncTcgcsvForTheWeek(context, options) {
+  const result = await syncTcgcsv(context, options);
+  if (result && !result.skipped && !result.disabled) await deviceState('tcgcsv_synced_at', Date.now());
+  return result;
+}
+
 async function weeklyTcgcsv() {
   if (!(await due('tcgcsv_synced_at', WEEK))) return;
-  const result = await syncTcgcsv('the device weekly sync');
-  if (result && !result.skipped && !result.disabled) await deviceState('tcgcsv_synced_at', Date.now());
+  await syncTcgcsvForTheWeek('the device weekly sync');
 }
 
 // Deleted cards past their 30 days in the trash (utils/collectionTrash.js), as
@@ -238,7 +244,7 @@ productMap.start = function startOnDevice(game = 'pokemon') {
   if (productMapQueued || productMap.state()) throw new Error('the product map is already building');
   productMapQueued = { game, phase: 'queued', done: 0, total: 0, rows: 0, message: '' };
   (async () => {
-    await syncTcgcsv('product map', { explicit: true });
+    await syncTcgcsvForTheWeek('product map', { explicit: true });
     if (game === 'pokemon') await require('../tcgdexApi').listSets('ja').catch(() => {});
     await background('product map', async () => {
       productMapQueued = null;
