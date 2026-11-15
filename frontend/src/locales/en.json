@@ -317,6 +317,8 @@
   "wizard.nothingToMove": "No cards to move.",
   "wizard.notEnoughCopies": "Not enough copies owned",
   "sets.colCards": "Cards",
+  "sets.unpublished.one": "TCGplayer lists {count} set that {provider} hasn't published yet, so its cards cannot be searched here until it does:",
+  "sets.unpublished.other": "TCGplayer lists {count} sets that {provider} hasn't published yet, so their cards cannot be searched here until it does:",
   "sort.title": "Sort Priority List",
   "sort.hint": "Top rule applies first, falling back to subsequent rules on ties. Check Divider to group items by this field.",
   "sort.addRule": "Add Sort Rule",

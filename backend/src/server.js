@@ -312,7 +312,7 @@ async function autoUpdateCatalogs() {
 }
 
 // Every game's set list (utils/syncJobs, shared with device mode's embedded/).
-const { syncSets } = require('./utils/syncJobs');
+const { syncSets, checkSets } = require('./utils/syncJobs');
 
 const HOUR = 60 * 60 * 1000;
 
@@ -333,6 +333,19 @@ const scheduler = createScheduler({
         await syncSets(true);
         await require('./utils/compartmentSort').loadSetsCache(db);
         await autoUpdateCatalogs();
+      },
+    },
+    {
+      // Daily: one set-list request per provider (utils/syncJobs.checkSets), so a
+      // new release appears within a day rather than a week (#170). Its first day
+      // is counted from the first boot that knows it: the boot fill above has just
+      // fetched the same lists.
+      name: 'sets-check',
+      every: () => 24 * HOUR,
+      since: () => null,
+      run: async () => {
+        await checkSets();
+        await require('./utils/compartmentSort').loadSetsCache(db);
       },
     },
     {

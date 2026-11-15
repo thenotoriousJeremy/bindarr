@@ -281,6 +281,39 @@ function stop() {
   return true;
 }
 
+// Pokémon sets TCGplayer already sells that the configured provider has not
+// published yet (#170): English groups in the local TCGCSV cache, published in
+// the last UNPUBLISHED_WINDOW_DAYS (or dated ahead, as pre-release listings are),
+// not supplemental, that match no set in the `sets` table by the same rules the
+// product map uses (groupToSet). TCGplayer lists a release days or weeks before
+// TCGdex does, and until then searches for its cards simply come back empty;
+// this is what lets the Browse view say why.
+//
+// Reads only the cache, so it costs no request; with no completed TCGCSV sync, or
+// a cached version from before groups carried their dates, it reports nothing
+// rather than every old promo group as "new".
+const UNPUBLISHED_WINDOW_DAYS = 120;
+async function unpublishedSets({ now = Date.now() } = {}) {
+  let groups;
+  try {
+    groups = await tcgcsv.getGroups(tcgcsv.CATEGORY.english);
+  } catch (e) {
+    if (tcgcsv.isCacheMissError(e)) return [];
+    throw e;
+  }
+  const since = now - UNPUBLISHED_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  const recent = groups.filter(g => {
+    const at = Date.parse(g.publishedOn || '');
+    return Number.isFinite(at) && at >= since && g.isSupplemental !== true;
+  });
+  if (!recent.length) return [];
+  const matched = await groupToSet({ [tcgcsv.CATEGORY.english]: groups }, 'pokemon');
+  return recent
+    .filter(g => !matched.has(g.groupId))
+    .map(g => ({ groupId: g.groupId, name: g.name, abbreviation: g.abbreviation || null, publishedOn: g.publishedOn }))
+    .sort((a, b) => String(b.publishedOn).localeCompare(String(a.publishedOn)));
+}
+
 // What card is this product? Null when the map has never been built, which the
 // caller reports as such rather than as "card not recognised".
 async function lookup(productId) {
@@ -294,4 +327,4 @@ async function lookup(productId) {
   }
 }
 
-module.exports = { start, stop, state, summary, lookup, displayNumber, SEALED_CATEGORIES, classifySealedType };
+module.exports = { start, stop, state, summary, lookup, displayNumber, SEALED_CATEGORIES, classifySealedType, unpublishedSets, UNPUBLISHED_WINDOW_DAYS };

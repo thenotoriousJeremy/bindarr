@@ -3,6 +3,28 @@ const db = require('../db');
 const languages = require('../utils/languages');
 const router = express.Router();
 
+// Display names for the provider the `sets` table follows, for the Browse view's
+// "TCGplayer lists N sets that TCGdex hasn't published yet".
+const PROVIDER_NAMES = { tcgdex: 'TCGdex', pokemontcg: 'pokemontcg.io', pokemontcgapi: 'pokemontcgapi.com' };
+
+// GET /api/sets/tcgplayer-unpublished?game=pokemon — Pokémon sets TCGplayer
+// already lists that the configured provider has not published yet
+// (tcgplayerCatalog.unpublishedSets). Read from the local TCGCSV cache, so it
+// costs no request. Other games: an empty list — their providers publish a
+// set ahead of its release, and TCGCSV is synced for their sealed product only.
+router.get('/tcgplayer-unpublished', async (req, res) => {
+  try {
+    const game = req.query.game || 'pokemon';
+    if (game !== 'pokemon') return res.json({ game, provider: null, count: 0, groups: [] });
+    const provider = await require('../utils/pokemonProvider').providerFor('en');
+    const groups = await require('../tcgplayerCatalog').unpublishedSets();
+    res.json({ game, provider: PROVIDER_NAMES[provider] || provider, count: groups.length, groups });
+  } catch (error) {
+    console.error('Error listing unpublished sets:', error.message);
+    res.status(500).json({ error: 'Failed to list unpublished sets' });
+  }
+});
+
 router.get('/', async (req, res) => {
   try {
     const { game, lang } = req.query;
