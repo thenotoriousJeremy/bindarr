@@ -12,8 +12,8 @@
 // normalisation and the corners-to-homography step. What stays the phone's own is
 // what it has no sharp for: decoding and resizing go through a canvas, and the
 // warp is the RGBA one the browser's capture crop uses (shared/imgproc.mjs has
-// how it differs from the server's). And as it always has, a quad whose corners
-// do not span a plane is warped anyway rather than swapped for the whole frame.
+// how it differs from the server's). A quad whose corners do not span a plane is
+// no card: like cvScan, the phone then matches the whole frame instead.
 import * as ort from 'onnxruntime-web/wasm';
 import { warpPerspective } from '../../../shared/imgproc.mjs';
 import {
@@ -73,7 +73,9 @@ async function detectAndDewarp(bmp) {
   const w = Math.round(bmp.width * s);
   const h = Math.round(bmp.height * s);
   // Sorted into TL, TR, BR, BL first, as cvScan does: cornelius emits BL, BR, TL, TR.
-  const { M } = dewarpTransform(out.corners.data, w, h);
+  const { M } = dewarpTransform(out.corners.data, w, h, { nullIfSingular: true });
+  // Corners that do not span a plane give no homography: the whole frame, as on a server.
+  if (!M) return { rgba: pixels(bmp, EMBED_SIZE, EMBED_SIZE), detected: false };
   return { rgba: warpPerspective(pixels(bmp, w, h), w, h, M, EMBED_SIZE, EMBED_SIZE), detected: true };
 }
 

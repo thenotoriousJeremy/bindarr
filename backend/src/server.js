@@ -76,7 +76,7 @@ app.use(metrics.middleware);
 // anyone reads these logs.
 function checkScanModels() {
   const fs = require('fs');
-  const dir = process.env.CV_MODEL_DIR || path.join(__dirname, '..', 'data', 'models');
+  const dir = require('./utils/modelAssets').MODEL_DIR;
   try {
     fs.mkdirSync(dir, { recursive: true });
     const probe = path.join(dir, `.write-probe-${process.pid}`);
