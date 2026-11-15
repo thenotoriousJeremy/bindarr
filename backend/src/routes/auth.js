@@ -711,8 +711,9 @@ router.put('/settings', authenticateToken, passwordLimiter, async (req, res) => 
       await db.run(`UPDATE users SET share_token = ? WHERE id = ?`, [newShareToken, req.user.id]);
     }
 
-    // Retrieve updated info
-    const updatedUser = await db.get(`SELECT username, role, share_token, share_enabled, share_locations, tcg_api_key, psa_api_token, graded_price_api_key, api_key, nav_tabs, trades_enabled FROM users WHERE id = ?`, [req.user.id]);
+    // Retrieve updated info: the whole session user, id and trades_enabled included,
+    // which is what the app saves in place of the one it had.
+    const updatedUser = await db.get(`SELECT id, username, role, share_token, share_enabled, share_locations, tcg_api_key, psa_api_token, graded_price_api_key, api_key, nav_tabs, trades_enabled FROM users WHERE id = ?`, [req.user.id]);
     res.json({
       message: 'Settings updated successfully',
       user: sessionUser(updatedUser)

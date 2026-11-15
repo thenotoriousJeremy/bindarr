@@ -328,6 +328,35 @@ async function testTradesGiftsAndHistory() {
   console.log('PASS: acceptance rechecks both sides and rolls back atomically');
 }
 
+// The shapes the app reads (frontend TransferManager), kept as they were.
+async function testResponseShapes() {
+  const wes = await addUser('shape-wes');
+  const xia = await addUser('shape-xia');
+  const wesCard = await addCard(wes, { name: 'Shape Card' });
+  const xiaCard = await addCard(xia, { name: 'Shape Answer' });
+  const proposed = expect(await call('POST', '/api/transfers', wes, {
+    recipient_id: xia, transfer_type: 'trade', offered_items: [card(wesCard.entry)], requested_items: [],
+  }), 201, 'proposing');
+  assert.deepStrictEqual(Object.keys(proposed), ['transfer']);
+  const countered = expect(await call('POST', `/api/transfers/${proposed.transfer.id}/counter`, xia, {
+    offered_items: [card(xiaCard.entry)], requested_items: [card(wesCard.entry)],
+  }), 201, 'countering');
+  assert.deepStrictEqual(Object.keys(countered), ['transfer']);
+  const accepted = expect(await call('PUT', `/api/transfers/${countered.transfer.id}/accept`, wes), 200, 'accepting');
+  assert.deepStrictEqual(Object.keys(accepted).sort(), ['deck_warnings', 'transfer']);
+  const recorded = expect(await call('POST', '/api/transfers/history', wes, {
+    recipient_id: xia, completed_at: '2024-06-01',
+    items: [{ direction: 'given', card_id: wesCard.cardId }, { direction: 'received', card_id: xiaCard.cardId }],
+  }), 201, 'recording');
+  assert.deepStrictEqual(Object.keys(recorded), ['trade']);
+  const confirmed = expect(await call('PUT', `/api/transfers/history/${recorded.trade.id}/confirm`, xia, {
+    items: recorded.trade.items.map(item => ({ id: item.id, collection_entry_id: null })),
+  }), 200, 'confirming');
+  assert.deepStrictEqual(Object.keys(confirmed), ['trade']);
+  assert.strictEqual(confirmed.trade.status, 'confirmed');
+  console.log('PASS: propose, counter, accept, record and confirm answer the shapes the app reads');
+}
+
 // --- Opt-in, API keys, who may do what --------------------------------------------------
 
 async function testOptInAndApiKeys() {
@@ -362,18 +391,35 @@ async function testOptInAndApiKeys() {
   console.log('PASS: trading is opt-in: a member who has not turned it on is invisible and cannot act');
 
   // Turning it off keeps what is open readable and settleable, and nothing more.
+  const benCard = await addCard(ben, { name: 'Ben Card' });
   const toBen = await propose(ann, gift(ben, [card(annCard.entry)]));
   const second = await propose(ann, gift(ben, [card(annCard.entry)]));
+  const pastItems = [{ direction: 'given', card_id: annCard.cardId }, { direction: 'received', card_id: benCard.cardId }];
+  const toConfirm = expect(await call('POST', '/api/transfers/history', ann, {
+    recipient_id: ben, completed_at: '2024-03-01', items: pastItems,
+  }), 201, 'a record for ben').trade;
+  const toWithdraw = expect(await call('POST', '/api/transfers/history', ann, {
+    recipient_id: ben, completed_at: '2024-03-02', items: pastItems,
+  }), 201, 'a record ann withdraws').trade;
   await db.run(`UPDATE users SET trades_enabled = 0 WHERE id = ?`, [ben]);
   assert.ok(expect(await get('/api/transfers', ben), 200, 'listing').transfers.some(t => t.id === toBen.id));
+  assert.ok(expect(await get('/api/transfers/history', ben), 200, 'records').trades.some(t => t.id === toConfirm.id));
   expect(await call('PUT', `/api/transfers/${toBen.id}/accept`, ben), 403, 'accepting after opting out', 'trades_disabled');
   expect(await call('POST', `/api/transfers/${toBen.id}/counter`, ben, {
     offered_items: [card(annCard.entry)], requested_items: [card(annCard.entry)],
   }), 403, 'countering after opting out', 'trades_disabled');
-  expect(await call('PUT', `/api/transfers/${toBen.id}/reject`, ben), 200, 'rejecting after opting out');
+  expect(await call('PUT', `/api/transfers/history/${toConfirm.id}/confirm`, ben, { items: [] }), 403,
+    'confirming a record after opting out', 'trades_disabled');
+  assert.deepStrictEqual(expect(await call('PUT', `/api/transfers/${toBen.id}/reject`, ben), 200, 'rejecting after opting out'),
+    { message: 'Transfer rejected' });
+  assert.deepStrictEqual(expect(await call('PUT', `/api/transfers/history/${toConfirm.id}/reject`, ben), 200,
+    'declining a record after opting out'), { message: 'Historical trade rejected' });
   await db.run(`UPDATE users SET trades_enabled = 0 WHERE id = ?`, [ann]);
-  expect(await call('PUT', `/api/transfers/${second.id}/cancel`, ann), 200, 'cancelling after opting out');
-  console.log('PASS: a member who turns trading off still sees, rejects and cancels what they have');
+  assert.deepStrictEqual(expect(await call('PUT', `/api/transfers/${second.id}/cancel`, ann), 200, 'cancelling after opting out'),
+    { message: 'Transfer cancelled' });
+  assert.deepStrictEqual(expect(await call('DELETE', `/api/transfers/history/${toWithdraw.id}`, ann), 200,
+    'withdrawing a record after opting out'), { message: 'Historical trade cancelled' });
+  console.log('PASS: a member who turns trading off still sees, rejects and cancels what they have, records included');
 
   const paths = ['/api/transfers', '/api/transfers/users', `/api/transfers/marked/${ann}`, '/api/transfers/history',
     '/api/transfers/external', '/api/transfers/external/contacts', `/api/transfers/${toBen.id}`];
@@ -762,6 +808,7 @@ async function main() {
   base = await startApp();
   try {
     await testTradesGiftsAndHistory();
+    await testResponseShapes();
     await testOptInAndApiKeys();
     await testWhoMayDoWhat();
     await testConcurrency();

@@ -159,6 +159,8 @@ async function main() {
     });
     assert.strictEqual(response.status, 201);
     const trade = await response.json();
+    assert.deepStrictEqual(Object.keys(trade).sort(), ['transaction', 'trash_batch', 'warnings'],
+      'the shape the app reads, plus the trash batch for an Undo');
     assert.strictEqual(trade.transaction.contact_name, 'Local League Friend');
     assert.strictEqual((await db.get(
       `SELECT COUNT(*) AS count FROM collection WHERE user_id = ? AND card_id = ?`,

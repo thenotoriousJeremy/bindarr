@@ -76,6 +76,8 @@ async function main() {
 
   const settings = ok(await req('PUT', '/api/auth/settings', { as: alice, body: { trades_enabled: true } }), 200, 'alice opts in');
   assert.strictEqual(settings.user.trades_enabled, true);
+  assert.strictEqual(settings.user.id, aliceId, 'the saved settings answer with the whole session user, id included');
+  assert.strictEqual(settings.user.username, 'alice');
   assert.strictEqual(ok(await req('GET', '/api/auth/me', { as: alice }), 200, 'me').user.trades_enabled, true);
   refused(await req('POST', '/api/transfers', {
     as: alice, body: { recipient_id: bobId, transfer_type: 'gift', offered_items: [{ type: 'card', id: giftEntry }] },
