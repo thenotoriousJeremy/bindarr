@@ -63,8 +63,12 @@ let srv;
 let admin;
 const ids = {};
 const results = [];
+// Logout ends the session it is sent with, so each of its cases gets its own,
+// made before the server starts like every other row this suite writes itself.
+const freshSessions = [];
 
-async function setup() {
+// Accounts, sessions and cards, straight into the file before the server opens it.
+async function seed() {
   admin = await harness.admin(db);
   ids.target = (await harness.member(db, 'mf-target')).id;
   for (const id of ['mf-card-1', 'mf-card-2']) {
@@ -74,6 +78,11 @@ async function setup() {
       [id, `Card ${id}`]
     );
   }
+  for (let i = 0; i < BODY_CASES.length; i++) freshSessions.push(await harness.sessionHeaders(db, admin.id));
+}
+
+// Everything else through the API, once the server is up.
+async function setup() {
   const call = async (method, url, body) => {
     const res = await srv.request(method, url, { as: admin, body });
     assert.ok(res.status >= 200 && res.status < 300, `setup ${method} ${url}: ${res.status} ${res.text.slice(0, 200)}`);
@@ -197,8 +206,13 @@ function withUniqueBase(route) {
   return base;
 }
 
+function freshSession() {
+  if (!freshSessions.length) throw new Error('out of fresh sessions: seed() makes one per case of a freshSession route');
+  return { headers: freshSessions.shift() };
+}
+
 async function send(route, label, body) {
-  const as = route.freshSession ? { headers: await harness.sessionHeaders(db, admin.id) } : admin;
+  const as = route.freshSession ? freshSession() : admin;
   const res = await srv.request(route.method, route.path, { as, body, timeoutMs: 10000 });
   const record = { route: `${route.method} ${route.label || route.path}`, label, status: res.status, error: res.error, text: res.text.slice(0, 160) };
   results.push(record);
@@ -236,6 +250,8 @@ async function sweep(route) {
 }
 
 async function runTests() {
+  await harness.prepare(db);
+  await seed();
   srv = await harness.startServer(tmp);
   await setup();
 

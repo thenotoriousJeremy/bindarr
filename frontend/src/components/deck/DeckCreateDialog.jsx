@@ -3,8 +3,9 @@ import Modal from '../Modal';
 import { defaultGame, gameOptions, showGamePicker } from '../../utils/games';
 import { formatNames, defaultTargetSize, supportsAnyPrinting } from '../../utils/deckRules';
 import { useT } from '../../utils/i18n';
+import { apiErrorText } from '../../utils/apiError';
 import AnyPrintingField from './AnyPrintingField';
-import { DECK_CATEGORIES, DECK_ACCENT_COLORS } from './deckHelpers';
+import { DECK_CATEGORIES, DECK_ACCENT_COLORS, deckCategoryLabel } from './deckHelpers';
 
 // How each game's button looks in the new-deck picker. Presentation only: which
 // games exist, and what a deck starts as, come from the registry. A game with no
@@ -72,7 +73,9 @@ export default function DeckCreateDialog({ form, showToast, fetchDecks }) {
         setShowCreateModal(false);
         fetchDecks();
       } else {
-        showToast(t('deck.errCreate'));
+        // A known code (no name, say) in the interface language.
+        const body = await response.json().catch(() => null);
+        showToast(apiErrorText(t, body, 'deck.errCreate'));
       }
     } catch (err) {
       console.error(err);
@@ -96,8 +99,7 @@ export default function DeckCreateDialog({ form, showToast, fetchDecks }) {
 
   return (
     <Modal onClose={() => setShowCreateModal(false)} label={t('deck.createTitle')} closeOnBackdrop={false}
-      overlayStyle={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}
-      className="glass-panel" style={{ maxWidth: '480px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '1.75rem', position: 'relative', border: '1px solid rgba(255,255,255,0.15)' }}>
+      className="glass-panel" style={{ maxWidth: '480px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '1.75rem', position: 'relative', border: '1px solid var(--border-glass-hover)' }}>
         <button className="btn btn-secondary btn-icon-only" onClick={() => setShowCreateModal(false)} aria-label={t('common.close')} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
           <X size={16} />
         </button>
@@ -168,7 +170,7 @@ export default function DeckCreateDialog({ form, showToast, fetchDecks }) {
                 style={{ fontSize: '0.85rem' }}
               >
                 {formatNames(newDeckGame).map(fmt => (
-                  <option key={fmt} value={fmt} style={{ background: '#1e293b', color: '#fff' }}>{fmt}</option>
+                  <option key={fmt} value={fmt} style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>{fmt}</option>
                 ))}
               </select>
             </div>
@@ -228,7 +230,7 @@ export default function DeckCreateDialog({ form, showToast, fetchDecks }) {
                       transition: 'all 0.15s'
                     }}
                   >
-                    {cat}
+                    {deckCategoryLabel(t, cat)}
                   </button>
                 );
               })}
@@ -246,8 +248,8 @@ export default function DeckCreateDialog({ form, showToast, fetchDecks }) {
                     type="button"
                     key={c.hex}
                     onClick={() => setNewDeckAccentColor(c.hex)}
-                    title={c.name}
-                    aria-label={c.name}
+                    title={t(`deck.accentName.${c.key}`)}
+                    aria-label={t(`deck.accentName.${c.key}`)}
                     aria-pressed={isSelected}
                     style={{
                       padding: 0,
@@ -256,7 +258,7 @@ export default function DeckCreateDialog({ form, showToast, fetchDecks }) {
                       borderRadius: '50%',
                       backgroundColor: c.hex,
                       cursor: 'pointer',
-                      border: isSelected ? '2px solid #ffffff' : '2px solid transparent',
+                      border: isSelected ? '2px solid var(--text-strong)' : '2px solid transparent',
                       boxShadow: isSelected ? `0 0 10px ${c.hex}` : 'none',
                       transform: isSelected ? 'scale(1.15)' : 'scale(1)',
                       transition: 'all 0.15s'

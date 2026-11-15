@@ -60,6 +60,14 @@ export async function runUndo(undo, fetchImpl = fetch) {
 export function undoResult(undo, { ok, data }) {
   if (!ok) return { key: 'undo.failed', values: {} };
   if (undo.kind === 'trash') {
+    // A row deleted from the collection's old wishlist is a wanted card: the
+    // server puts it back on the Wishlist, not in the collection.
+    const wished = Number(data.wishlisted) || 0;
+    if (wished > 0) {
+      return data.restored > 0
+        ? { key: 'undo.restoredSomeWishlisted', values: { count: data.restored, wishlisted: wished } }
+        : { key: 'undo.wishlisted', values: { count: wished } };
+    }
     if (data.unsorted > 0) return { key: 'undo.restoredSomeUnsorted', values: { count: data.restored, unsorted: data.unsorted } };
     return { key: 'undo.restored', values: { count: data.restored } };
   }

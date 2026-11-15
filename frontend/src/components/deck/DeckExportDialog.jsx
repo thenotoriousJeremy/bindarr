@@ -41,7 +41,6 @@ export default function DeckExportDialog({ activeDeck, exportFormat, setExportFo
 
   return (
     <Modal onClose={() => setShowExportModal(false)} label={t('deck.exportTitle')} closeOnBackdrop={false}
-      overlayStyle={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}
       className="glass-panel" style={{ maxWidth: '500px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '1.75rem', position: 'relative' }}>
         <button className="btn btn-secondary btn-icon-only" onClick={() => setShowExportModal(false)} aria-label={t('common.close')} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
           <X size={16} />

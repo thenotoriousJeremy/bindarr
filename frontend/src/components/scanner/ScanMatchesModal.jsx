@@ -18,17 +18,7 @@ function ScanMatchesModal({
 }) {
   const { t } = useT();
   return (
-    <Modal onClose={dismissMatches} label={t('scan.identifiedTitle')} closeOnBackdrop={false} overlayStyle={{
-      position: 'fixed',
-      top: 0, left: 0, right: 0, bottom: 0,
-      backgroundColor: 'rgba(0,0,0,0.85)',
-      backdropFilter: 'blur(5px)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 1000,
-      padding: '1rem'
-    }} className="glass-panel scan-suggestions-modal" style={{ maxWidth: '560px', width: '100%', display: 'flex', flexDirection: 'column', gap: '1.25rem', maxHeight: '90vh', overflowY: 'auto' }}>
+    <Modal onClose={dismissMatches} label={t('scan.identifiedTitle')} closeOnBackdrop={false} overlayClassName="modal-overlay modal-overlay--camera" className="glass-panel scan-suggestions-modal" style={{ maxWidth: '560px', width: '100%', display: 'flex', flexDirection: 'column', gap: '1.25rem', maxHeight: '90vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
           <h3 style={{ fontSize: '1.1rem', color: 'var(--text-strong)', margin: 0 }}>{t('scan.identifiedTitle')}</h3>
           <button 

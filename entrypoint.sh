@@ -1,9 +1,17 @@
 #!/bin/sh
-# Runs as root, fixes ownership of the persisted volume, then drops to the
-# unprivileged `node` user. A named volume created by an older root-running
-# image is root-owned; without this, the non-root process hits EACCES writing the
-# database or a scan catalog (see issue #17).
+# Runs as root (the image's default), fixes ownership of the persisted volume,
+# then drops to the unprivileged `node` user. A named volume created by an older
+# root-running image is root-owned; without this, the non-root process hits
+# EACCES writing the database or a scan catalog (see issue #17).
 set -e
+
+# Started as some other user already (`docker run --user`, `user:` in compose,
+# Kubernetes' runAsNonRoot), there is nothing to drop and no permission to chown
+# or switch users: run the server as that user. The volume must then be writable
+# by it, which is the operator's side of choosing a user.
+if [ "$(id -u)" != "0" ]; then
+  exec "$@"
+fi
 
 # Only the volume root. Subdirectories (models/, ssl/) are created by the server
 # at startup, as the node user, precisely so they cannot be born root-owned inside

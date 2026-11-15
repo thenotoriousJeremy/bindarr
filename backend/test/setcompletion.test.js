@@ -83,16 +83,18 @@ function testRules() {
       { id: 'b', number: '002', price_trend: 0 },
     ],
     owned: [
-      { set_id: 'sv1', set_name: 'Scarlet & Violet', number: '1', quantity: 1, printing: 'Holofoil', list_type: 'collection' },
-      { set_id: 'sv01', set_name: 'Scarlet & Violet', number: '002', quantity: 1, printing: 'Normal', list_type: 'wishlist' },
+      { set_id: 'sv1', set_name: 'Scarlet & Violet', number: '1', quantity: 1, printing: 'Holofoil' },
     ],
+    // On a wishlist, under the other provider's numbering of the set (sv1, '2').
+    wanted: [{ set_id: 'sv1', set_name: 'Scarlet & Violet', number: '2' }],
   });
   const a = r.cards.find(c => c.id === 'a');
   assert.deepStrictEqual(a.variants.map(v => [v.printing, v.owned]), [['Normal', 0], ['Reverse Holofoil', 0], ['Holofoil', 1]],
     'a Holofoil copy in hand is a finish that exists, even unpriced');
+  assert.strictEqual(a.wishlisted, false);
   const b = r.cards.find(c => c.id === 'b');
-  assert.strictEqual(b.owned, 0, 'a wishlist row is not an owned copy');
-  assert.strictEqual(b.wishlisted, true);
+  assert.strictEqual(b.owned, 0, 'a wanted card is not an owned copy');
+  assert.strictEqual(b.wishlisted, true, 'a wanted card is marked, matched by number like a copy');
   assert.strictEqual(b.price, null, 'a zero price is an unknown price');
   assert.deepStrictEqual(r.summary.cards, { total: 2, owned: 1, missing: 1, percent: 50, missing_value: {}, unpriced_missing: 1 });
   assert.deepStrictEqual(r.summary.variants, { total: 4, owned: 1, missing: 3, percent: 25, missing_value: { USD: 0.6 }, unpriced_missing: 1 });
@@ -148,8 +150,16 @@ async function testPokemon() {
   await add('sv1-1', 'Normal');
   await add('sv1-1', 'Reverse Holofoil');
   await add('tcgdex-en-sv01-002', 'Normal');
-  await add('tcgdex-en-sv01-004', 'Normal', 'wishlist');
   await add('tcgdex-en-sv01-003', 'Normal', 'collection', other); // somebody else's
+  // Wanted: on one of the user's wishlists (any list of kind wishlist, not only the
+  // default one the hearts fill). A buylist, or somebody else's wishlist, is not.
+  const list = async (user, kind, cardId) => {
+    const id = (await db.run(`INSERT INTO card_lists (user_id, name, kind) VALUES (?, ?, ?)`, [user, `${kind} ${cardId}`, kind])).lastID;
+    await db.run(`INSERT INTO card_list_items (list_id, card_id) VALUES (?, ?)`, [id, cardId]);
+  };
+  await list(1, 'wishlist', 'tcgdex-en-sv01-004');
+  await list(1, 'buylist', 'tcgdex-en-sv01-003');
+  await list(other, 'wishlist', 'tcgdex-en-sv01-002');
 
   // A bare dashboard link in the OTHER numbering: game and language inferred, set resolved.
   let res = await call(getCompletion, { set: 'sv1' });
@@ -168,7 +178,9 @@ async function testPokemon() {
   assert.strictEqual(byNum['002'].owned, 1);
   assert.strictEqual(byNum['003'].owned, 0, "another user's copy is not yours");
   assert.strictEqual(byNum['004'].owned, 0);
-  assert.strictEqual(byNum['004'].wishlisted, true);
+  assert.strictEqual(byNum['004'].wishlisted, true, 'a card on a wishlist is marked');
+  assert.strictEqual(byNum['003'].wishlisted, false, 'a buylist is not a wishlist');
+  assert.strictEqual(byNum['002'].wishlisted, false, "another user's wishlist is not yours");
   assert.strictEqual(byNum['004'].image_url, '', 'a card with no art is still in the set');
   assert.strictEqual(byNum['002'].tcgplayer_product_id, 490001);
   assert.deepStrictEqual(body.summary.cards,

@@ -1,178 +1,50 @@
-import { getRarityRank } from './cardRarity.js';
 import cardOrder from '../../../shared/cardOrder.json';
 import sortSchemes from '../../../shared/sortSchemes.json';
+import { cardSorter, colorCategory, isMtgCard, setRanker, typeCategory } from '../../../shared/cardSort.mjs';
 
-// Shared comparator logic for ordering collection cards. Previously copy-pasted
-// across autoSortContainerCards, findNextRecommendedSlot, the sorting assistant
-// queue, and the unsorted list view in LocationManager.jsx.
-// Category orderings come from shared/cardOrder.json so display order matches
-// the backend filing engine (compartmentSort.js) exactly.
+// Ordering collection cards for display: LocationManager, the collection list, the
+// sorting assistant queue, shared views. The comparator and the categories are
+// shared/cardSort.mjs, the one the backend files cards with
+// (backend/src/utils/compartmentSort.js), so a container shows its cards in the
+// order recommendSlot put them in. The order tables are shared/cardOrder.json and
+// shared/sortSchemes.json, handed to it here.
+const sorter = cardSorter(cardOrder, sortSchemes);
+
 export const POKEMON_TYPE_ORDER = cardOrder.pokemonType;
 
 export const MTG_CARD_TYPE_ORDER = cardOrder.mtgCardType;
 
-// Mirrors typeCategory in the backend: multi-color MTG cards bucket together.
-export function typeCategory(types) {
-  const t = Array.isArray(types) ? types : [];
-  if (t.length > 1) return 'Multicolor';
-  return t[0] || 'Colorless';
-}
+// Multi-type cards bucket together: Multicolor.
+export { typeCategory };
 
-function asList(value) {
-  if (Array.isArray(value)) return value;
-  if (typeof value === 'string' && value.startsWith('[')) {
-    try { const p = JSON.parse(value); return Array.isArray(p) ? p : []; } catch { return []; }
-  }
-  return [];
-}
+// `types` holds colours for an MTG card, so a "type" sort reads its type line.
+export { isMtgCard };
 
-// `types` holds colours for an MTG card (the deck colour charts read it that
-// way), so the card's type line — split into words in `subtypes` — is what a
-// "type" sort has to read instead. `supertype` is the fallback for rows that
-// were selected without the game column.
-export function isMtgCard(card) {
-  return !!card && (card.game === 'mtg' || card.supertype === 'MTG');
-}
-
-// One card-type category per MTG card; see shared/cardOrder.json for why the
-// pick order is what it is. Mirrors mtgTypeCategory in the backend.
-export function mtgTypeCategory(subtypes) {
-  const words = new Set(asList(subtypes).map(w => String(w).toLowerCase()));
-  return cardOrder.mtgCardTypePick.find(type => words.has(type.toLowerCase())) || 'Other';
-}
+// One card-type category per MTG card; see shared/cardOrder.json for the pick order.
+export const { mtgTypeCategory } = sorter;
 
 // The category a card sorts and groups under for the 'type' field: card type
-// for Magic, the type/ink list as before for Pokémon and Lorcana.
-export function cardTypeCategory(card) {
-  if (isMtgCard(card)) return mtgTypeCategory(card.subtypes);
-  return typeCategory(asList(card && card.types));
-}
+// for Magic, the type/ink list for Pokémon and Lorcana.
+export const { cardTypeCategory } = sorter;
 
-const COLOR_NAMES = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
-
-// Colour-identity bucket: one colour, Multicolor or Colorless. Mirrors
-// getColorCategory in the backend, so a colour sort shown here lines up with
-// how storage files by colour (WUBRG, then Multicolor, then Colorless).
-export function colorCategory(card) {
-  const raw = card && card.color_identity;
-  let ci = asList(raw);
-  if (ci.length === 0 && typeof raw === 'string' && raw && !raw.startsWith('[')) ci = [raw];
-  if (ci.length === 0) return 'Colorless';
-  if (ci.length > 1) return 'Multicolor';
-  return COLOR_NAMES[ci[0]] || ci[0] || 'Colorless';
-}
-
-function typeRank(card) {
-  const order = isMtgCard(card) ? MTG_CARD_TYPE_ORDER : POKEMON_TYPE_ORDER;
-  return order[cardTypeCategory(card)] || 50;
-}
+// Colour-identity bucket: one colour, Multicolor or Colorless (WUBRG, then
+// Multicolor, then Colorless), the way storage files by colour.
+export { colorCategory };
 
 export function getPrintingRank(printing, foilSorting) {
-  const order = foilSorting === 'foils_first' ? cardOrder.printingFoilsFirst : cardOrder.printingNormalsFirst;
-  return order[printing] || 10;
+  return sorter.printingRank(printing, foilSorting);
 }
 
 export const LANGUAGE_ORDER = cardOrder.language;
 
 // Sorts `cards` in place (and returns it) according to `sortOrder`. `foilSorting`
-// only affects the 'set-number-printing' order. Unrecognized/'custom' orders are
-// left untouched (stable no-op), matching each call site's original fallback.
-// `setsList` (from /api/sets, release-date order) makes the set-based schemes
-// sort chronologically, matching the backend's placement engine — without it
-// the display order would disagree with where recommendSlot files cards.
+// orders printings. Unrecognized/'custom' orders are left untouched (stable no-op),
+// matching each call site's original fallback. `setsList` (from /api/sets,
+// release-date order) makes the set-based schemes sort chronologically, matching
+// the backend's placement engine — without it sets sort by name.
 export function sortCardsByOrder(cards, sortOrder, foilSorting, setsList = []) {
-  const setRank = (name) => {
-    if (!setsList || setsList.length === 0) return 0;
-    const idx = setsList.findIndex(s => s.name === name);
-    return idx >= 0 ? idx : 999999;
-  };
-  let criteria = [];
-  if (typeof sortOrder === 'string') {
-    if (sortOrder.startsWith('[')) {
-      try { criteria = JSON.parse(sortOrder); } catch { /* ignore malformed sortOrder */ }
-    } else {
-      criteria = sortSchemes[sortOrder] || [];
-    }
-  } else if (Array.isArray(sortOrder)) {
-    criteria = sortOrder;
-  }
-
-  if (!criteria || criteria.length === 0) return cards;
-
-  cards.sort((a, b) => {
-    for (const c of criteria) {
-      const dirMult = c.dir === 'desc' ? -1 : 1;
-      let cmp = 0;
-      switch (c.by) {
-        case 'favorite':
-          cmp = (a.favorite ? 1 : 0) - (b.favorite ? 1 : 0);
-          break;
-        case 'added_at': {
-          const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
-          const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
-          cmp = timeA - timeB;
-          break;
-        }
-        case 'entry_id':
-          cmp = (a.entry_id || 0) - (b.entry_id || 0);
-          break;
-        case 'name':
-          cmp = (a.name || '').localeCompare(b.name || '');
-          break;
-        case 'price':
-          cmp = (a.price_trend || 0) - (b.price_trend || 0);
-          break;
-        case 'set': {
-          // Set identity only. Ties (same set) fall through to the next
-          // criterion so schemes like Set > Color > CMC aren't pre-empted by
-          // card number. Add a separate 'number' rule to order within a set.
-          const cmpChrono = setRank(a.set_name) - setRank(b.set_name);
-          if (cmpChrono !== 0) { cmp = cmpChrono; break; }
-          cmp = (a.set_name || '').localeCompare(b.set_name || '');
-          break;
-        }
-        case 'number': {
-          const numA = parseInt(a.number || '0', 10);
-          const numB = parseInt(b.number || '0', 10);
-          if (!isNaN(numA) && !isNaN(numB) && numA !== numB) { cmp = numA - numB; break; }
-          cmp = (a.number || '').localeCompare(b.number || '');
-          break;
-        }
-        case 'printing': {
-          const printA = getPrintingRank(a.printing, foilSorting);
-          const printB = getPrintingRank(b.printing, foilSorting);
-          cmp = printA - printB;
-          break;
-        }
-        case 'type':
-          cmp = typeRank(a) - typeRank(b);
-          break;
-        case 'language': {
-          const la = LANGUAGE_ORDER[a.language] || 99;
-          const lb = LANGUAGE_ORDER[b.language] || 99;
-          cmp = la - lb;
-          break;
-        }
-        case 'cmc':
-          cmp = (a.cmc || 0) - (b.cmc || 0);
-          break;
-        case 'color_identity':
-        case 'color': {
-          // Bucketed the way the backend files (a Boros card is Multicolor, not
-          // Red); this used to take the first colour of the identity.
-          const cA = colorCategory(a);
-          const cB = colorCategory(b);
-          cmp = (cardOrder.wubrg[cA] || 99) - (cardOrder.wubrg[cB] || 99);
-          if (cmp === 0) cmp = cA.localeCompare(cB);
-          break;
-        }
-        case 'rarity':
-          cmp = getRarityRank(a.rarity) - getRarityRank(b.rarity);
-          break;
-      }
-      if (cmp !== 0) return cmp * dirMult;
-    }
-    return 0;
-  });
+  const criteria = sorter.sortCriteria(sortOrder);
+  if (criteria.length === 0) return cards;
+  cards.sort(sorter.comparator(criteria, { foilSorting, setRank: setRanker(setsList) }));
   return cards;
 }

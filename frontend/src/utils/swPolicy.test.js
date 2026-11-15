@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  DATA_PREFIX, SHELL_PREFIX, MAX_API, MAX_IMAGES, classifyRequest, dataCacheName, isCacheableApiPath,
-  isCacheableResponse, shellCacheName, staleCaches, trimPlan, userKeyFor,
+  DATA_PREFIX, SHELL_PREFIX, MAX_API, MAX_IMAGES, TRIM_EVERY, classifyRequest, dataCacheName, isCacheableApiPath,
+  isCacheableResponse, shellCacheName, shouldTrim, staleCaches, trimPlan, userKeyFor,
 } from './swPolicy.js';
 
 const origin = 'https://bindarr.local';
@@ -72,8 +72,19 @@ test('an old chunk answered with index.html is never cached as that chunk', () =
   assert.equal(isCacheableResponse('api', { status: 200, contentType: 'application/json' }), true);
   assert.equal(isCacheableResponse('api', { status: 500, contentType: 'application/json' }), false);
   assert.equal(isCacheableResponse('api', { status: 200, contentType: 'text/csv' }), false);
-  assert.equal(isCacheableResponse('image', { status: 0, type: 'opaque' }), true);
+  assert.equal(isCacheableResponse('image', { status: 200, type: 'cors' }), true);
   assert.equal(isCacheableResponse('image', { status: 404, type: 'cors' }), false);
+});
+
+test('an opaque image is shown but not kept: Chrome charges each ~7 MB of quota', () => {
+  assert.equal(isCacheableResponse('image', { status: 0, type: 'opaque' }), false);
+});
+
+test('a cache is trimmed on its first write, then every TRIM_EVERY writes', () => {
+  assert.equal(shouldTrim(null), true, 'first write since the worker started');
+  assert.equal(shouldTrim(0), false);
+  assert.equal(shouldTrim(TRIM_EVERY - 1), false);
+  assert.equal(shouldTrim(TRIM_EVERY), true);
 });
 
 test('stale caches: other builds on activate, other sessions on write', () => {

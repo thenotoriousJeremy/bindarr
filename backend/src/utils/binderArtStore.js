@@ -13,8 +13,10 @@ const ROOT = path.join(path.dirname(db.dbPath), 'binder-art');
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 const MAX_EDGE = 6000;
 // Decoding is bounded too, so a tiny file that claims to be 100k x 100k is
-// refused by sharp before it allocates the pixels.
-const MAX_INPUT_PIXELS = 16000 * 16000;
+// refused by sharp before it allocates the pixels. 64 megapixels is more than a
+// 12 MB photo or scan holds; the 256 it used to be was a gigabyte of RGBA for one
+// decode, which a small file could ask for.
+const MAX_INPUT_PIXELS = 8000 * 8000;
 const FORMATS = { jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
 
 function badImage(message) {
@@ -42,12 +44,17 @@ async function prepare(buffer) {
   const sharp = require('sharp');
   let meta;
   try {
-    meta = await sharp(buffer, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
+    // The header only, so no pixel limit is needed to read it: the size is
+    // checked just below, where it can be refused for what it is.
+    meta = await sharp(buffer, { limitInputPixels: false }).metadata();
   } catch {
     throw badImage('That file is not a readable image.');
   }
   const mime = FORMATS[meta.format];
   if (!mime || !meta.width || !meta.height) throw badImage('Upload a JPEG, PNG or WebP image.');
+  // Said here, from the header, rather than left to the decoder's refusal below,
+  // which would read as "not a readable image".
+  if (meta.width * meta.height > MAX_INPUT_PIXELS) throw badImage('That image has too many pixels. Use one of at most 64 megapixels.');
 
   let pipeline = sharp(buffer, { limitInputPixels: MAX_INPUT_PIXELS })
     .rotate()
@@ -134,5 +141,5 @@ async function dropIfUnused(userId, artworkId) {
 
 module.exports = {
   prepare, write, resolve, remove, removeUser, presentLayer, layersForLocation, dropIfUnused,
-  ROOT, MAX_UPLOAD_BYTES,
+  ROOT, MAX_UPLOAD_BYTES, MAX_INPUT_PIXELS,
 };

@@ -43,6 +43,24 @@ test('add shows at once, sends every id once, and takes the server set', async (
   assert.equal(store.size(), 2);
 });
 
+test('a selection bigger than one request is sent in parts, and a refused part is undone alone', async () => {
+  // The Collection bulk bar can select every copy; the server takes 500 cards a request.
+  const ids = Array.from({ length: 1201 }, (_, i) => `c${i}`);
+  const fetch = fakeFetch((url, opts) => {
+    const part = JSON.parse(opts.body).card_ids;
+    if (part.includes('c600')) return reply(400, { error: 'At most 500 cards at a time' });
+    return reply(201, { added: part.length, already: 0, failed: [], card_ids: ids.filter(id => !id.match(/^c(5\d\d|[6-9]\d\d)$/)) });
+  });
+  const store = createWishlistStore(fetch);
+  const result = await store.add(ids);
+  assert.deepEqual(fetch.calls.map(c => c.body.card_ids.length), [500, 500, 201]);
+  assert.equal(result.added, 701);
+  assert.equal(result.failed.length, 500);
+  assert.equal(result.error, 'At most 500 cards at a time');
+  assert.ok(store.has('c0') && store.has('c1200'));
+  assert.ok(!store.has('c600'), 'the refused part is undone');
+});
+
 test('a refused add is undone, leaving cards already there alone', async () => {
   const fetch = fakeFetch((url, opts) => (opts.method === 'POST'
     ? reply(400, { error: 'nope' })

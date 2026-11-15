@@ -48,6 +48,12 @@ const clip = (s, n) => String(s == null ? '' : s).slice(0, n);
 // 302s to a private one would otherwise walk straight past the guard), and reads
 // at most MAX_RESPONSE_BYTES of whatever comes back. Resolves { status, headers,
 // text }; rejects on network failure, timeout or a blocked address.
+//
+// `timeoutMs` bounds the WHOLE exchange, not just a quiet socket. Socket timeouts
+// alone let a receiver that drips a byte every few seconds hold a send open
+// indefinitely, and deliveries go one at a time, so that one channel held back
+// every other user's notifications and the admins' failure alerts with them.
+// Past the byte cap the response is cut off rather than read to its end, too.
 async function post(rawUrl, body, headers = {}, timeoutMs = SEND_TIMEOUT_MS) {
   // IP-literal hosts never reach a DNS lookup, so guardedLookup alone would wave
   // them through. checkUrl without resolving judges the literal (and "localhost").
@@ -55,6 +61,14 @@ async function post(rawUrl, body, headers = {}, timeoutMs = SEND_TIMEOUT_MS) {
   const data = Buffer.from(JSON.stringify(body));
   const lib = url.protocol === 'https:' ? https : http;
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let deadline = null;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      fn(value);
+    };
     const req = lib.request(url, {
       method: 'POST',
       headers: { ...headers, 'Content-Length': data.length },
@@ -63,19 +77,31 @@ async function post(rawUrl, body, headers = {}, timeoutMs = SEND_TIMEOUT_MS) {
     }, (res) => {
       const chunks = [];
       let size = 0;
-      res.on('data', (c) => {
-        if (size < MAX_RESPONSE_BYTES) chunks.push(c);
-        size += c.length;
-      });
-      res.on('end', () => resolve({
+      const done = () => finish(resolve, {
         status: res.statusCode,
         headers: res.headers,
         text: Buffer.concat(chunks).toString('utf8').slice(0, MAX_RESPONSE_BYTES),
-      }));
-      res.on('error', reject);
+      });
+      res.on('data', (c) => {
+        chunks.push(c);
+        size += c.length;
+        // Enough to read a status line and a rate-limit body; the rest is not
+        // worth waiting for.
+        if (size >= MAX_RESPONSE_BYTES) {
+          done();
+          res.destroy();
+        }
+      });
+      res.on('end', done);
+      res.on('error', (err) => finish(reject, err));
     });
+    deadline = setTimeout(() => {
+      const err = new Error('timed out');
+      finish(reject, err);
+      req.destroy(err);
+    }, timeoutMs);
     req.on('timeout', () => req.destroy(new Error('timed out')));
-    req.on('error', reject);
+    req.on('error', (err) => finish(reject, err));
     req.end(data);
   });
 }
@@ -215,26 +241,17 @@ async function prefsFor(userId) {
   return { ...DEFAULT_PREFS, ...(row || {}) };
 }
 
-// Is the card-lists feature's wishlist table here? It lands on its own branch, so
-// this code works with or without it.
-async function hasCardLists() {
-  const row = await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'card_list_items'`);
-  return !!row;
-}
-
 // Every card this user owns or (optionally) wants, with its latest recorded price
-// and the price they were last told about.
+// and the price they were last told about. Wanted means on any of their lists of
+// kind 'wishlist' (routes/lists.js), the default Wishlist the hearts fill among
+// them; the collection holds owned copies only (utils/wishlistMigration.js).
 async function watchedCards(userId, includeWishlist) {
   const sources = [`SELECT card_id, 'owned' AS source FROM collection WHERE user_id = ? AND COALESCE(list_type, 'collection') = 'collection'`];
   const params = [userId];
   if (includeWishlist) {
-    sources.push(`SELECT card_id, 'wishlist' FROM collection WHERE user_id = ? AND list_type = 'wishlist'`);
+    sources.push(`SELECT i.card_id, 'wishlist' FROM card_list_items i JOIN card_lists l ON l.id = i.list_id
+                   WHERE l.user_id = ? AND l.kind = 'wishlist'`);
     params.push(userId);
-    if (await hasCardLists()) {
-      sources.push(`SELECT i.card_id, 'wishlist' FROM card_list_items i JOIN card_lists l ON l.id = i.list_id
-                     WHERE l.user_id = ? AND l.kind = 'wishlist'`);
-      params.push(userId);
-    }
   }
   // MIN(source) picks 'owned' over 'wishlist' for a card that is both.
   return db.all(`

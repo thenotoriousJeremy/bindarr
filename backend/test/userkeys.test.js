@@ -4,8 +4,8 @@
 // handed the account's pokemontcg.io key, PSA token, graded-price key and the
 // read-only API key in plain text -- by login, the SSO exchange, GET /me and every
 // settings save. Now each of those says only whether a key is set (has_*), the
-// provider keys are write-only, and the API key is read on demand from its own
-// endpoint, which is not part of that object.
+// provider keys are write-only, and the API key is stored hashed and shown once,
+// by the request that creates it.
 //
 // The real auth router and middleware in this process, over a throwaway database.
 const path = require('path');
@@ -20,6 +20,7 @@ process.env.DB_PATH = tmpDb;
 
 const express = require('express');
 const db = require('../src/db');
+const { hashApiKey } = require('../src/utils/authHelpers');
 
 let server;
 let base;
@@ -68,7 +69,7 @@ async function main() {
     `INSERT INTO users (username, password_hash, role, share_token, tcg_api_key, psa_api_token, graded_price_api_key, api_key)
      VALUES (?, ?, 'member', ?, ?, ?, ?, ?)`,
     ['keeper', db.hashPassword('keeper-password-1'), crypto.randomBytes(16).toString('hex'),
-      SECRETS.tcg_api_key, SECRETS.psa_api_token, SECRETS.graded_price_api_key, SECRETS.api_key]
+      SECRETS.tcg_api_key, SECRETS.psa_api_token, SECRETS.graded_price_api_key, hashApiKey(SECRETS.api_key)]
   )).lastID;
 
   const app = express();
@@ -102,14 +103,22 @@ async function main() {
   assertNoSecrets(meByKey, 'GET /me with the API key');
   console.log('PASS: sign-in and /me report keys as has_* flags only');
 
-  // --- The API key is shown on request, to a login session ---------------------
-  const shown = await api('GET', '/api/auth/api-key', { token });
-  assert.strictEqual(shown.status, 200);
-  assert.strictEqual(shown.body.api_key, SECRETS.api_key);
-  assert.strictEqual(shown.headers.get('cache-control'), 'no-store', 'a secret must not be cached');
-  assert.strictEqual((await api('GET', '/api/auth/api-key', { token: SECRETS.api_key })).status, 403,
-    'the API key cannot be used to read itself back');
-  console.log('PASS: the API key is readable on demand, from a login session only');
+  // --- The API key is shown once, when it is made -------------------------------
+  // Stored hashed, so there is nothing to show again: the old read endpoint says
+  // so, and leaks nothing.
+  const gone = await api('GET', '/api/auth/api-key', { token });
+  assert.strictEqual(gone.status, 410);
+  assert.strictEqual(gone.body.code, 'api_key_shown_once');
+  assert.ok(!gone.text.includes(SECRETS.api_key) && !gone.text.includes('sha256:'), 'neither the key nor its hash comes back');
+  const made = await api('POST', '/api/auth/api-key', { token });
+  assert.strictEqual(made.status, 200);
+  assert.match(made.body.api_key, /^bnd_[0-9a-f]{48}$/);
+  assert.strictEqual(made.headers.get('cache-control'), 'no-store', 'a secret must not be cached');
+  const stored = (await db.get(`SELECT api_key FROM users WHERE id = ?`, [userId])).api_key;
+  assert.strictEqual(stored, hashApiKey(made.body.api_key), 'only the hash is kept');
+  assert.strictEqual((await api('GET', '/api/auth/me', { token: made.body.api_key })).status, 200, 'the new key reads');
+  assert.strictEqual((await api('GET', '/api/auth/me', { token: SECRETS.api_key })).status, 401, 'the replaced key does not');
+  console.log('PASS: the API key is stored hashed and shown once, when made');
 
   // --- Provider keys are write-only ---------------------------------------------
   // A save that does not mention a key leaves it alone...

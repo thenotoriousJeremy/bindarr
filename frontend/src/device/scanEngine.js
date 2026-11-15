@@ -7,15 +7,19 @@
 // a whole frame first goes through cornelius for its corners and is dewarped
 // here. Main thread and single-threaded wasm, like the detect worker: one milo
 // pass on a phone is a few hundred milliseconds, once per scan.
+//
+// Same pieces as cvScan too (shared/scanModel.mjs): the sizes, the gate, the
+// normalisation and the corners-to-homography step. What stays the phone's own is
+// what it has no sharp for: decoding and resizing go through a canvas, and the
+// warp is the RGBA one the browser's capture crop uses (shared/imgproc.mjs has
+// how it differs from the server's). A quad whose corners do not span a plane is
+// no card: like cvScan, the phone then matches the whole frame instead.
 import * as ort from 'onnxruntime-web/wasm';
-import { getPerspectiveTransform, warpPerspective, orderQuad } from '../../../shared/imgproc.mjs';
-import { rgbaToChw } from '../utils/scanTensor';
+import { warpPerspective } from '../../../shared/imgproc.mjs';
+import {
+  CORN_SIZE, EMBED_SIZE, DEWARP_SOURCE_WIDTH, SHARPNESS_GATE, imagenetChw, dewarpTransform,
+} from '../../../shared/scanModel.mjs';
 import { readBytes } from './scanAssets';
-
-const EMBED = 448;
-const CORN = 384;
-const SHARPNESS_GATE = 0.02;   // cvScan's: below it cornelius is not looking at a card
-const SOURCE_MAX = 1200;       // cvScan's decode width for the dewarp source
 
 ort.env.wasm.wasmPaths = '/ort/';
 ort.env.wasm.numThreads = 1;
@@ -28,6 +32,20 @@ function session(name) {
       .catch((err) => { delete sessions[name]; throw err; });
   }
   return sessions[name];
+}
+
+// The scanner closed (runtime.js releaseScanEngine): free both models' sessions
+// instead of holding them for the rest of the app's life. The next scan loads
+// them again, from the files already on the phone. wasm memory itself never
+// shrinks, but released sessions are what the next ones reuse.
+export async function releaseSessions() {
+  const open = Object.values(sessions);
+  for (const name of Object.keys(sessions)) delete sessions[name];
+  for (const pending of open) {
+    try {
+      await (await pending).release();
+    } catch { /* never finished loading: nothing to free */ }
+  }
 }
 
 async function decode(dataUrl) {
@@ -43,31 +61,29 @@ function pixels(source, w, h) {
   return ctx.getImageData(0, 0, w, h).data;
 }
 
-const tensor = (rgba, size) => new ort.Tensor('float32', rgbaToChw(rgba, size), [1, 3, size, size]);
+const tensor = (rgba, size) => new ort.Tensor('float32', imagenetChw(rgba, size, 4), [1, 3, size, size]);
 
 // A whole frame: cornelius for the corners, then dewarp to a 448 square.
 async function detectAndDewarp(bmp) {
   const corn = await session('cornelius.onnx');
-  const out = await corn.run({ image: tensor(pixels(bmp, CORN, CORN), CORN) });
+  const out = await corn.run({ image: tensor(pixels(bmp, CORN_SIZE, CORN_SIZE), CORN_SIZE) });
   const sharpness = out.sharpness ? out.sharpness.data[0] : 1;
-  if (!(sharpness > SHARPNESS_GATE)) return { rgba: pixels(bmp, EMBED, EMBED), detected: false };
-  const s = Math.min(1, SOURCE_MAX / bmp.width);
+  if (!(sharpness > SHARPNESS_GATE)) return { rgba: pixels(bmp, EMBED_SIZE, EMBED_SIZE), detected: false };
+  const s = Math.min(1, DEWARP_SOURCE_WIDTH / bmp.width);
   const w = Math.round(bmp.width * s);
   const h = Math.round(bmp.height * s);
-  const c = out.corners.data;
-  // orderQuad, not the model's own order: cornelius emits BL, BR, TL, TR, which is
-  // not the order its model card documents. cvScan sorts the same way.
-  const src = orderQuad([0, 1, 2, 3].map(k => ({ x: c[k * 2] * w, y: c[k * 2 + 1] * h })));
-  const dst = [{ x: 0, y: 0 }, { x: EMBED - 1, y: 0 }, { x: EMBED - 1, y: EMBED - 1 }, { x: 0, y: EMBED - 1 }];
-  const M = getPerspectiveTransform(src, dst);
-  return { rgba: warpPerspective(pixels(bmp, w, h), w, h, M, EMBED, EMBED), detected: true };
+  // Sorted into TL, TR, BR, BL first, as cvScan does: cornelius emits BL, BR, TL, TR.
+  const { M } = dewarpTransform(out.corners.data, w, h, { nullIfSingular: true });
+  // Corners that do not span a plane give no homography: the whole frame, as on a server.
+  if (!M) return { rgba: pixels(bmp, EMBED_SIZE, EMBED_SIZE), detected: false };
+  return { rgba: warpPerspective(pixels(bmp, w, h), w, h, M, EMBED_SIZE, EMBED_SIZE), detected: true };
 }
 
 function thumbnail(rgba) {
   const canvas = document.createElement('canvas');
-  canvas.width = EMBED;
-  canvas.height = EMBED;
-  canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(rgba), EMBED, EMBED), 0, 0);
+  canvas.width = EMBED_SIZE;
+  canvas.height = EMBED_SIZE;
+  canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(rgba), EMBED_SIZE, EMBED_SIZE), 0, 0);
   const small = document.createElement('canvas');
   small.width = 220;
   small.height = 220;
@@ -79,9 +95,9 @@ function thumbnail(rgba) {
 // already the dewarped card. Resolves { embedding, thumb, detected }.
 export async function embedScan(image, cropped) {
   const bmp = await decode(image);
-  const { rgba, detected } = cropped ? { rgba: pixels(bmp, EMBED, EMBED), detected: true } : await detectAndDewarp(bmp);
+  const { rgba, detected } = cropped ? { rgba: pixels(bmp, EMBED_SIZE, EMBED_SIZE), detected: true } : await detectAndDewarp(bmp);
   bmp.close();
   const milo = await session('milo.onnx');
-  const out = await milo.run({ image: tensor(rgba, EMBED) });
+  const out = await milo.run({ image: tensor(rgba, EMBED_SIZE) });
   return { embedding: Array.from(out.embedding.data), thumb: thumbnail(rgba), detected };
 }

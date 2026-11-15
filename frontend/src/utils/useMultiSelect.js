@@ -3,6 +3,7 @@ import { useLongPress } from './useLongPress';
 import { useT } from './i18n';
 import { undoFor, undoToast } from './undo';
 import { apiErrorText } from './apiError';
+import { bulkResultText } from './bulkResult';
 
 // Long-press-to-arm multi-select + bulk actions over collection entries. Shared
 // by CollectionList and the scanner's recent-scans strip so both get the same
@@ -73,7 +74,7 @@ export function useMultiSelect({ showToast, onChanged, guard } = {}) {
     const blocked = guard && guard();
     if (blocked) { showToast(blocked); return; }
     const ids = Array.from(selectedIds);
-    if (ids.length === 0) { showToast('No cards selected.'); return; }
+    if (ids.length === 0) { showToast(t('bulk.noneSelected')); return; }
     if (confirmMsg && !window.confirm(confirmMsg)) return;
     try {
       const res = await fetch('/api/collection/bulk', {
@@ -84,7 +85,9 @@ export function useMultiSelect({ showToast, onChanged, guard } = {}) {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         const undo = undoFor(action, value, data);
-        showToast(data.message || t('bulk.done'), undoToast(undo, {
+        // Phrased here from the answer's counts (utils/bulkResult); the server's
+        // English message only when it says more than a count.
+        showToast(bulkResultText(t, action, value, data), undoToast(undo, {
           showToast, t, onDone: () => onChanged && onChanged({ ids, action: 'undo', value: null })
         }));
         clearSelection();

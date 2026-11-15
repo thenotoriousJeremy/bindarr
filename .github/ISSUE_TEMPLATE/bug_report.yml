@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in Bindarr does not work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Collection
+        2. ...
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Settings shows it.
+      placeholder: "1.9.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you run Bindarr
+      multiple: true
+      options:
+        - Docker
+        - Prebuilt server binary
+        - From source
+        - Android app, with a server
+        - Android app, on the phone alone (device mode)
+        - iOS app, with a server
+        - iOS app, on the phone alone (device mode)
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser or device
+      placeholder: "Firefox 140 on Windows, Pixel 8, ..."
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server log
+      description: The lines around the problem, from `docker logs bindarr` or the server's console. Remove anything private.
+      render: shell
+    validations:
+      required: false

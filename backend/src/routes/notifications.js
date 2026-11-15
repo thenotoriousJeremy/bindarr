@@ -1,13 +1,31 @@
 const express = require('express');
 const db = require('../db');
 const notify = require('../notify');
-const { checkUrl, allowPrivate } = require('../utils/notifyGuard');
+const { checkUrl, allowPrivate, needsLookup } = require('../utils/notifyGuard');
 const { CHANNEL_TYPES } = require('../utils/notifyPayloads');
 
 const router = express.Router();
 
 const MAX_CHANNELS = 10;
 const DISCORD_HOSTS = ['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com'];
+
+// A few calls a minute per user, for the two things a member can make the server
+// do on demand: look a hostname up (saving a channel) and open a connection (the
+// test button). Either, unthrottled, is a way to probe the network the server
+// sits on.
+const PROBE_WINDOW_MS = 60 * 1000;
+const PROBE_LIMIT = 5;
+function underLimit(calls, userId) {
+  const now = Date.now();
+  const recent = (calls.get(userId) || []).filter(t => now - t < PROBE_WINDOW_MS);
+  if (recent.length >= PROBE_LIMIT) return false;
+  recent.push(now);
+  calls.set(userId, recent);
+  return true;
+}
+const lookupCalls = new Map();   // user id -> recent destination lookups
+const testCalls = new Map();     // user id -> recent test sends
+const TOO_MANY_LOOKUPS = 'Too many channel addresses checked. Try again in a minute.';
 
 // What the client is told about a channel. The URL and the token are write-only:
 // a Discord webhook URL is the credential to post into that server, and the ntfy
@@ -109,6 +127,9 @@ router.post('/channels', async (req, res) => {
   try {
     const { n } = await db.get(`SELECT COUNT(*) AS n FROM notification_channels WHERE user_id = ?`, [req.user.id]);
     if (n >= MAX_CHANNELS) return res.status(400).json({ error: `At most ${MAX_CHANNELS} channels.` });
+    if (needsLookup(b.url) && !underLimit(lookupCalls, req.user.id)) {
+      return res.status(429).json({ error: TOO_MANY_LOOKUPS });
+    }
     let url;
     try {
       url = await checkDestination(type, b.url);
@@ -146,6 +167,9 @@ router.put('/channels/:id', async (req, res) => {
     const vals = [];
     if (b.name !== undefined) { sets.push('name = ?'); vals.push(cleanText(b.name, 80) || null); }
     if (b.url) {
+      if (needsLookup(b.url) && !underLimit(lookupCalls, req.user.id)) {
+        return res.status(429).json({ error: TOO_MANY_LOOKUPS });
+      }
       try {
         sets.push('url = ?'); vals.push(await checkDestination(ch.type, b.url));
       } catch (err) {
@@ -187,18 +211,11 @@ router.delete('/channels/:id', async (req, res) => {
   }
 });
 
-// A few test sends a minute per user. The button is the one way a member can make
-// the server open a connection on demand, so it should not be a port scanner.
-const TEST_WINDOW_MS = 60 * 1000;
-const TEST_LIMIT = 5;
-const testCalls = new Map();   // user id -> recent timestamps
-
+// A few test sends a minute per user (underLimit, above). The button is the one
+// way a member can make the server open a connection on demand, so it should not
+// be a port scanner.
 router.post('/channels/:id/test', async (req, res) => {
-  const now = Date.now();
-  const recent = (testCalls.get(req.user.id) || []).filter(t => now - t < TEST_WINDOW_MS);
-  if (recent.length >= TEST_LIMIT) return res.status(429).json({ error: 'Too many test sends. Try again in a minute.' });
-  recent.push(now);
-  testCalls.set(req.user.id, recent);
+  if (!underLimit(testCalls, req.user.id)) return res.status(429).json({ error: 'Too many test sends. Try again in a minute.' });
   try {
     const ch = await ownChannel(req);
     if (!ch) return res.status(404).json({ error: 'Channel not found' });

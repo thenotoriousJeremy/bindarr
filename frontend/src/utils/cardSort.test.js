@@ -92,4 +92,27 @@ assert.deepStrictEqual(
   'colour sort: W, U, B, R, G, then Multicolor, then Colorless'
 );
 
+// --- One comparator with the backend (shared/cardSort.mjs) -------------------
+// Rarity ranks cover Lorcana: Super Rare is above Rare, and the top rarities no
+// longer sort below Common.
+const lorcana = ['Common', 'Legendary', 'Super Rare', 'Enchanted'].map(r => ({ name: r, rarity: r }));
+assert.deepStrictEqual(
+  sortCardsByOrder(lorcana, [{ by: 'rarity', dir: 'desc' }]).map(c => c.name),
+  ['Enchanted', 'Legendary', 'Super Rare', 'Common'],
+  'Lorcana rarities sort rarest first'
+);
+// Newest first, as a container sorted that way now files them too.
+const scans = [
+  { name: 'Old', added_at: '2026-01-01 10:00:00', entry_id: 1 },
+  { name: 'New', added_at: '2026-03-01 10:00:00', entry_id: 2 },
+  { name: 'Mid', added_at: '2026-02-01 10:00:00', entry_id: 3 },
+];
+assert.deepStrictEqual(sortCardsByOrder(scans, 'scanned-desc').map(c => c.name), ['New', 'Mid', 'Old']);
+// Sets in release order from the list, unlisted sets after them.
+const bySet = [{ name: 'B', set_name: 'Jungle' }, { name: 'A', set_name: 'Base' }, { name: 'C', set_name: 'Homebrew' }];
+assert.deepStrictEqual(
+  sortCardsByOrder(bySet, 'set-number', 'normals_first', [{ name: 'Base' }, { name: 'Jungle' }]).map(c => c.name),
+  ['A', 'B', 'C']
+);
+
 console.log('PASS: cardSort type, colour sort and grouping');

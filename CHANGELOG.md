@@ -6,6 +6,42 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+### Security
+- **A new server can only be claimed with its setup code.** While no account exists, the server prints a one-time code to its log (`docker logs bindarr 2>&1 | grep SETUP`), and creating the owner account asks for it, in the browser and on a first SSO sign-in. A browser connecting straight to the server on the same machine doesn't need it; through Docker's port mapping or a reverse proxy it is always asked for. `SETUP_CODE` sets your own.
+- **API keys are stored hashed and shown once.** Existing keys are converted at the first start and keep working. Settings shows that a key is set, with Replace and Revoke; a lost key is replaced rather than read back.
+- **`TRUST_PROXY=true` now means one proxy hop.** It made Bindarr believe whatever address a client put in `X-Forwarded-For`, so anyone could get around the login rate limit. Give the number of proxies in front of Bindarr instead; the log warns when `true` is set.
+- **Sign-in is harder to attack.** Password checks no longer hold up other requests, an unknown username takes as long to refuse as a wrong password, a password change allows ten wrong current passwords per 15 minutes, and limits on signed-in requests count per account, so a household behind one router no longer shares one budget.
+- **Sealed sharing stays inside each account.** Another member's recipe no longer adds cards to your box when you open it unless your purchase was recorded with it, and a member's backup restore can no longer put sealed units into other accounts or delete purchases that others have claimed units from. A member's restore is limited in size and counted against the hourly limit before the file is read.
+- **Smaller hardening.** Public share links are rate-limited; CSV exports neutralise cells a spreadsheet would run as formulas; one slow notification webhook can no longer hold up everyone's notifications, and the private-address guard no longer reveals internal DNS answers; SSO keeps its PKCE verifier out of the login state and checks the user-info subject; binder-art uploads check the quota before decoding; scan models download from one pinned release and must match its SHA-256, on a server and on a phone; the content security policy no longer allows Google Fonts, which have been self-hosted since 1.9.0.
+
+### Fixed
+- **Logging out no longer leaves a blank page**, and neither does an expired session or a failed SSO sign-in.
+- **Catalog builds no longer wipe Pokémon card data.** Building or updating a scan catalog reset rarity, types, prices and TCGplayer links on cards you own until each was looked up again, and a search or add could replace a TCGplayer price with TCGdex's.
+- **Stopping a catalog rebuild no longer shrinks the catalog.** A rebuild stopped part way, including by `docker stop`, kept only the cards it had reached, so the rest could no longer be scanned.
+- **The weekly catalog update settles.** It rebuilt the first game's catalog every week, never reached the other games, and turned a catalog built from a few sets into a whole-game build. The games now take turns and each catalog keeps its scope. Locally built Magic catalogs include card backs.
+- **Filing cards is fast and puts them where they belong.** Re-sorting a container is about 150 times faster (1,000 cards: 27 s to 0.2 s) and no longer holds up the server. "File all" files overflow under the right container and never puts two cards in one pocket; stacking containers keep stacks together and no longer report themselves full with pockets free; Custom-order binders keep their gaps; adding several copies or raising a quantity respects capacity and says how many copies went to Unsorted; a bulk move into a container whose rules refuse some cards leaves those where they were and says so.
+- **One wishlist.** The hearts added cards to the Lists feature's Wishlist, while Collection → Wishlist, the public wishlist link, the set view's marker and price alerts read an older wishlist kept among your collection's cards, so a hearted card showed up in none of them. They all use the Wishlist now, and the cards on the old one move onto it at the first start. Cards on a wishlist are priced again by every price update, so their alerts keep working. An app older than this release that moves cards to the wishlist puts them on it and sends the copies to the trash, where they can be restored for 30 days.
+- **The dashboard counts only what you own.** Wishlist cards were counted in the collection's value and could top "most valuable". Admin → Users, the metrics panel and Prometheus no longer add dollars and euros together.
+- **Prices.** TCGdex cards take every price from one source, so a card no longer mixes dollars and euros; the price chart no longer draws euro averages beside a dollar trend; a fetched graded value is stored in the card's currency; a price update in which every request failed now sends the failure notification and retries within the hour; a TCGdex hiccup no longer blanks set release dates; splitting a purchase price never gives a card a negative cost.
+- **New Pokémon sets appear within a day**, and Browse names the sets TCGplayer lists before TCGdex has published them (#170).
+- **Scanning prefers the printing you own** when reprints share the same artwork, and asks you to choose when it can't tell.
+- **Bindarr on a phone without a server.** Several of these date from 1.9.0: Undo and Trash work and old trash is cleared; the launch upkeep runs again, so sets and prices refresh (it stopped at its first step); a background job can no longer undo or duplicate a save; scan data downloads are checked and kept out of phone backups, which they had filled; full-backup exports are written in pieces; contributed card art shows in the app; the camera is released when the app goes to the background; corners that make no card are matched as the whole frame, as on a server; a phone that can't run the scanner says so instead of offering downloads.
+- **Open tabs stay current.** Imports, restores, precon imports and deck changes refresh the other tabs, hidden tabs no longer reload on every add, and notes save while you type.
+- **Storage opens faster on big collections.** It reads Unsorted and the open container instead of the whole collection: on 20,000 copies, about 2–4 MB instead of 45 MB.
+- **Smaller fixes.** A deck's missing-cards list matches the deck page; adding many cards to a list is one request; the Decks page is readable in the light theme; dialogs sit above the phone's tab bar; creating a deck from a decklist is all or nothing; the sealed-recipe upgrade can no longer stop a server from starting; card-art uploads up to 8 MB work; admin backup downloads work when the database sits under a hidden folder; a settings save is checked in full before anything is written; every new account gets the starter binder and box; Riftbound sealed products can be recorded.
+
+### Changed
+- **Navigation.** Tabs you unpin move to a **More** menu instead of disappearing, and Settings and Admin are in the header.
+- **On a phone without a server,** requests take turns with background jobs, so a slow card search can briefly delay another screen, and Pokémon TCGplayer prices update at most weekly.
+- **While a server starts,** API requests get a 503 with `Retry-After` until its database is ready.
+- **Docker.** The image is about 350 MB smaller, can run as a non-root user (`--user`), and its healthcheck follows `PORT`.
+- **Sorting.** Super Rare ranks above Rare, and Lorcana's and Riftbound's top rarities rank correctly; "newest first" containers file new cards first.
+- **Translations.** The deck, storage and bulk-action screens are translatable; 70 unused keys were removed.
+- **Development.** The end-to-end tests never contact the network; releases wait for the tests; third-party CI actions are pinned to exact commits; the database module is split into connection, schema and migrations, and the scan preprocessing has one copy for the server, the browser and the phone.
+
+### Documentation
+- PRIVACY.md lists every service Bindarr contacts and what each receives. README and `.env.example` explain the setup code and document the variables that were missing. SECURITY.md, a contributing guide and pull request and issue templates were added.
+
 ## [1.9.0] - 2026-11-09
 
 ### Added

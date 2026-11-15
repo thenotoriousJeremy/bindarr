@@ -3,39 +3,20 @@
 process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
 process.env.BINDARR_DISABLE_FX_SYNC = '1';
 
-const path = require('path');
-const os = require('os');
-const fs = require('fs');
 const assert = require('assert');
-const { spawn } = require('child_process');
-const { freePort } = require('../freePort');
+const harness = require('./harness');
 
-// Boots the real Express app against a throwaway DB and exercises it over HTTP.
-// This is the only test that starts server.js end to end, so it catches route
-// wiring / middleware / startup breakage the in-process unit tests can't.
-const tmpDb = path.join(os.tmpdir(), `bindarr-server-test-${process.pid}.db`);
-const projectRoot = path.join(__dirname, '../../../');
-
-async function waitForServer(url) {
-  for (let i = 0; i < 150; i++) {
-    try { const res = await fetch(url); if (res.ok) return; } catch { /* not up yet */ }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error('Server did not start in time');
-}
+// Boots the real Express app against a throwaway DB and exercises it over HTTP,
+// as a stranger and then as the admin the server seeds itself. Route wiring,
+// middleware and startup breakage that the in-process unit tests can't see.
+const tmp = harness.tempDatabase('server-test');
 
 async function runTests() {
-  const port = String(await freePort());
-  const base = `http://localhost:${port}`;
-  const server = spawn('node', [path.join(projectRoot, 'backend/src/server.js')], {
-    // HTTPS_PORT blanked for the same reason as in scryfall-mock.js, which this
-    // one server is not preloaded with: a fixed TLS port cannot be shared.
-    env: { ...process.env, PORT: port, DB_PATH: tmpDb, HTTPS_PORT: '', ALLOW_REGISTRATION: 'true' }
-  });
+  const srv = await harness.startServer(tmp, { env: { ALLOW_REGISTRATION: 'true' } });
+  const server = srv.child;
+  const base = srv.base;
 
   try {
-    await waitForServer(`${base}/api/health`);
-
     // F1-TC1: health endpoint is up and identifies the app
     const res = await fetch(`${base}/api/health`);
     assert.strictEqual(res.status, 200, 'health check should return 200');
@@ -107,14 +88,11 @@ async function runTests() {
     assert.ok(!/text\/html/.test(staleChunk.headers.get('content-type') || ''), 'a missing asset is never answered with a page');
     console.log('PASS: F1-TC6');
   } finally {
-    // SIGKILL immediately to avoid sqlite3 teardown crashes on Windows
-    server.kill('SIGKILL');
-    for (const suffix of ['', '-wal', '-shm']) {
-      try { fs.unlinkSync(tmpDb + suffix); } catch { /* already gone */ }
-    }
+    await srv.stop();
+    await harness.cleanup(null, tmp);
   }
 }
 
 runTests()
-  .then(() => setTimeout(() => process.exit(0), 500))
-  .catch(err => { console.error('FAIL: server.test.js -', err.message); setTimeout(() => process.exit(1), 500); });
+  .then(() => process.exit(0))
+  .catch(err => { console.error('FAIL: server.test.js -', err.message); process.exit(1); });

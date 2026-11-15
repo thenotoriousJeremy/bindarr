@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and newer (android:dataExtractionRules); backup_rules.xml has the
+     same rule for older versions. The cloud backup leaves out the scan data
+     device mode downloads (files/scan/), which would otherwise use up the 25 MB
+     quota the collection database needs. A phone-to-phone transfer has no such
+     quota and still carries everything, scan data included. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="scan" />
+    </cloud-backup>
+</data-extraction-rules>

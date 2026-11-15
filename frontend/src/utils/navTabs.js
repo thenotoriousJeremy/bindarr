@@ -1,7 +1,9 @@
-// Which tabs the nav bar shows. Dashboard, Collection and Settings always do
-// (and Admin, for an admin); the rest are the user's choice, stored on the
-// server as users.nav_tabs (null: the defaults below). Pure functions, so they
-// run under node:test; App.jsx and Settings use them.
+// Which tabs the nav bar shows. Dashboard and Collection always do; the rest
+// are the user's choice, stored on the server as users.nav_tabs (null: the
+// defaults below). An optional tab left off the bar is still one tap away under
+// More (moreTabs), so unpinning a tab never hides the feature. Settings and
+// Admin are not on the bar at all: the header has a button for each (App.jsx).
+// Pure functions, so they run under node:test; App.jsx and Settings use them.
 //
 // Browse (the 'sets' tab), Lists and Sealed live inside Collection as its
 // sub-views (CollectionViews.jsx), so by default they are not tabs of their own.
@@ -9,12 +11,13 @@
 // Their routes are unchanged (/sets/..., /lists/:id, /sealed), so every old link
 // still opens the same view, now shown under Collection.
 
-export const ALWAYS_NAV_TABS = ['dashboard', 'collection', 'settings'];
+export const ALWAYS_NAV_TABS = ['dashboard', 'collection'];
+export const HEADER_TABS = ['settings', 'admin'];
 export const OPTIONAL_NAV_TABS = ['add-cards', 'sets', 'storage', 'deckbuilder', 'lists', 'notes', 'sealed'];
 export const DEFAULT_NAV_TABS = ['add-cards', 'storage', 'deckbuilder', 'notes'];
 export const COLLECTION_VIEWS = ['collection', 'sets', 'lists', 'sealed'];
 
-const BAR_ORDER = ['dashboard', 'add-cards', 'collection', 'sets', 'storage', 'deckbuilder', 'lists', 'notes', 'sealed', 'settings', 'admin'];
+const BAR_ORDER = ['dashboard', 'add-cards', 'collection', 'sets', 'storage', 'deckbuilder', 'lists', 'notes', 'sealed'];
 
 export const isCollectionView = (tab) => COLLECTION_VIEWS.includes(tab);
 
@@ -24,20 +27,26 @@ export function pinnedTabs(navTabs) {
   return OPTIONAL_NAV_TABS.filter(tab => navTabs.includes(tab));
 }
 
-// The tabs the bar shows, in order. A hidden tab that is open anyway (a link,
-// Back) shows while it is open, so the bar never loses track of where you are --
-// unless it is a Collection sub-view, which Collection stands for.
-export function navBarTabs(navTabs, { showAdmin = false, activeTab = null } = {}) {
+// The tabs the bar shows, in order. A hidden tab that is open anyway (More, a
+// link, Back) shows while it is open, so the bar never loses track of where you
+// are -- unless it is a Collection sub-view, which Collection stands for.
+export function navBarTabs(navTabs, { activeTab = null } = {}) {
   const pinned = pinnedTabs(navTabs);
   return BAR_ORDER.filter(tab => {
-    if (tab === 'admin') return showAdmin;
     if (ALWAYS_NAV_TABS.includes(tab) || pinned.includes(tab)) return true;
     return tab === activeTab && !isCollectionView(tab);
   });
 }
 
+// The tabs under More: every optional tab the bar is not showing, in bar order.
+// Collection's sub-views are left out; Collection already leads to them.
+export function moreTabs(barTabs) {
+  return OPTIONAL_NAV_TABS.filter(tab => !barTabs.includes(tab) && !isCollectionView(tab));
+}
+
 // The bar tab drawn as active: the open tab when it is on the bar, otherwise
-// Collection for one of its sub-views.
+// Collection for one of its sub-views. Settings and Admin light their header
+// buttons instead.
 export function litNavTab(activeTab, barTabs) {
   if (barTabs.includes(activeTab)) return activeTab;
   return isCollectionView(activeTab) ? 'collection' : activeTab;

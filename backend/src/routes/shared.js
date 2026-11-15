@@ -4,8 +4,38 @@ const { resolveCardPrice, parseCardRow } = require('../utils/priceHelpers');
 const { compartmentLabel } = require('../utils/compartmentSort');
 const binderArt = require('../utils/binderArtStore');
 const { sendFileAt } = require('../utils/sendFileAt');
+const { shareLimiter } = require('../middleware/auth');
+const { defaultList } = require('../utils/defaultWishlist');
 
 const router = express.Router();
+
+// Public, so per address (middleware/auth.js). Each view below reads a whole
+// collection on the one database connection everybody shares.
+router.use(shareLimiter);
+
+// The collection view, built, for a few seconds: a link posted somewhere busy is
+// opened by many people at once, and each of them used to rebuild the same
+// collection and its stats. Keyed by the owner and what the view depends on; the
+// owner's row is still read on every request, so turning sharing off takes effect
+// at once. A copy is at most SHARE_CACHE_MS behind the owner's edits.
+const SHARE_CACHE_MS = 15 * 1000;
+const SHARE_CACHE_MAX = 100;
+const shareCache = new Map();   // key -> { at, body }
+
+function cachedShare(key) {
+  const hit = shareCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > SHARE_CACHE_MS) {
+    shareCache.delete(key);
+    return null;
+  }
+  return hit.body;
+}
+
+function rememberShare(key, body) {
+  if (shareCache.size >= SHARE_CACHE_MAX) shareCache.delete(shareCache.keys().next().value);
+  shareCache.set(key, { at: Date.now(), body });
+}
 
 // One container, laid out the way its owner sees it: its pages or rows, and the
 // slot each card sits in — so a shared binder reads as a binder and a shared box
@@ -103,6 +133,96 @@ router.get('/:share_token/containers/:id/art/:artworkId', async (req, res) => {
   }
 });
 
+// The owner's copies, every one or (`tradeOnly`) those listed for trade, without
+// private fields (purchase price, ROI; locations only when the owner shares them).
+async function collectionRows(ownerId, tradeOnly, shareLocations) {
+  const rows = await db.all(`
+    SELECT
+      c.id as entry_id,
+      c.card_id,
+      c.quantity,
+      c.condition,
+      c.printing,
+      c.language,
+      c.added_at,
+      c.is_trade,
+      c.favorite,
+      c.list_type,
+      -- The owner's own valuation for this copy (a graded slab, usually), which
+      -- resolveCardPrice prefers. Without it a shared collection prices every
+      -- slab as if it were raw, and its total disagrees with the owner's.
+      c.market_value,
+      cc.name,
+      -- The name as printed on a non-English card, so a shared Japanese
+      -- collection reads the way the cards actually look.
+      cc.printed_name,
+      cc.supertype,
+      cc.subtypes,
+      cc.types,
+      -- For the colour sort, which buckets by colour identity.
+      cc.color_identity,
+      cc.rarity,
+      cc.set_id,
+      cc.set_name,
+      cc.number,
+      cc.image_url, cc.orientation,
+      cc.price_trend,
+      cc.price_normal,
+      cc.price_holofoil,
+      cc.price_reverse_holofoil,
+      cc.price_1st_edition,
+      l.name AS location_name
+    FROM collection c
+    JOIN card_cache cc ON c.card_id = cc.id
+    LEFT JOIN locations l ON c.location_id = l.id
+    WHERE c.user_id = ? AND c.list_type = 'collection'${tradeOnly ? ' AND c.is_trade = 1' : ''}
+    ORDER BY c.added_at DESC
+  `, [ownerId]);
+  return rows.map(row => {
+    const card = {
+      ...parseCardRow(row),
+      price_trend: resolveCardPrice(row),
+    };
+    // Card locations are private by default; only expose when the owner has
+    // opted in, and strip the raw column otherwise.
+    delete card.location_name;
+    if (shareLocations) card.location = row.location_name || 'Unsorted';
+    return card;
+  });
+}
+
+// The owner's Wishlist (?list=wishlist): their default list on the Lists feature
+// (utils/defaultWishlist.js), which the hearts on cards fill and the collection's
+// old wishlist was moved onto. One row per wanted card, shaped like a collection
+// row so the page draws it the same way: `quantity` is the number of copies
+// wanted, the condition is the lowest the owner would take (Near Mint when they
+// named none), and nothing about storage applies to a card nobody holds yet.
+async function wishlistRows(ownerId) {
+  const list = await defaultList(ownerId);
+  if (!list) return [];
+  const rows = await db.all(`
+    SELECT i.id AS entry_id, i.card_id, i.quantity_wanted AS quantity, i.condition_min, i.language AS wanted_language,
+           i.added_at,
+           cc.name, cc.printed_name, cc.supertype, cc.subtypes, cc.types, cc.color_identity, cc.rarity,
+           cc.set_id, cc.set_name, cc.number, cc.image_url, cc.orientation, cc.game, cc.language,
+           cc.price_trend, cc.price_currency
+      FROM card_list_items i
+      JOIN card_cache cc ON cc.id = i.card_id
+     WHERE i.list_id = ?
+     ORDER BY i.added_at DESC, i.id DESC`, [list.id]);
+  return rows.map(({ condition_min, wanted_language, ...row }) => ({
+    ...parseCardRow(row),
+    condition: condition_min || 'Near Mint',
+    printing: 'Normal',
+    language: wanted_language || row.language || 'English',
+    is_trade: 0,
+    favorite: 0,
+    list_type: 'wishlist',
+    // A wanted card's price is its market price, as the Lists view counts it.
+    price_trend: row.price_trend > 0 ? row.price_trend : 0,
+  }));
+}
+
 // Retrieve a shared collection by share token
 router.get('/:share_token', async (req, res) => {
   const { share_token } = req.params;
@@ -114,74 +234,14 @@ router.get('/:share_token', async (req, res) => {
       return res.status(404).json({ error: 'This card collection is private or does not exist.', code: 'share_not_found' });
     }
 
-    let filterSql = `WHERE c.user_id = ?`;
-    let filterParams = [owner.id];
-
-    if (listType === 'wishlist') {
-      filterSql += ` AND c.list_type = 'wishlist'`;
-    } else if (listType === 'trade') {
-      filterSql += ` AND c.is_trade = 1 AND c.list_type = 'collection'`;
-    } else {
-      filterSql += ` AND c.list_type = 'collection'`;
-    }
-
-    // Retrieve their collection without private fields (locations, purchase price, ROI)
-    const query = `
-      SELECT
-        c.id as entry_id,
-        c.card_id,
-        c.quantity,
-        c.condition,
-        c.printing,
-        c.language,
-        c.added_at,
-        c.is_trade,
-        c.favorite,
-        c.list_type,
-        -- The owner's own valuation for this copy (a graded slab, usually), which
-        -- resolveCardPrice prefers. Without it a shared collection prices every
-        -- slab as if it were raw, and its total disagrees with the owner's.
-        c.market_value,
-        cc.name,
-        -- The name as printed on a non-English card, so a shared Japanese
-        -- collection reads the way the cards actually look.
-        cc.printed_name,
-        cc.supertype,
-        cc.subtypes,
-        cc.types,
-        -- For the colour sort, which buckets by colour identity.
-        cc.color_identity,
-        cc.rarity,
-        cc.set_id,
-        cc.set_name,
-        cc.number,
-        cc.image_url, cc.orientation,
-        cc.price_trend,
-        cc.price_normal,
-        cc.price_holofoil,
-        cc.price_reverse_holofoil,
-        cc.price_1st_edition,
-        l.name AS location_name
-      FROM collection c
-      JOIN card_cache cc ON c.card_id = cc.id
-      LEFT JOIN locations l ON c.location_id = l.id
-      ${filterSql}
-      ORDER BY c.added_at DESC
-    `;
-    const rows = await db.all(query, filterParams);
+    const cacheKey = JSON.stringify([owner.id, share_token, owner.share_locations, String(listType)]);
+    const cached = cachedShare(cacheKey);
+    if (cached) return res.json(cached);
 
     const shareLocations = owner.share_locations === 1;
-    const formatted = rows.map(row => {
-      const card = {
-        ...parseCardRow(row),
-        price_trend: resolveCardPrice(row),
-      };
-      // Card locations are private by default; only expose when the owner has
-      // opted in, and strip the raw column otherwise.
-      delete card.location_name;
-      if (shareLocations) card.location = row.location_name || 'Unsorted';
-      return card;
-    });
+    const formatted = listType === 'wishlist'
+      ? await wishlistRows(owner.id)
+      : await collectionRows(owner.id, listType === 'trade', shareLocations);
 
     // Calculate public stats
     let totalCards = 0;
@@ -216,7 +276,7 @@ router.get('/:share_token', async (req, res) => {
       setCounts[row.set_id].value += qty * price;
     });
 
-    res.json({
+    const body = {
       owner: owner.username,
       shareLocations,
       collection: formatted,
@@ -235,7 +295,9 @@ router.get('/:share_token', async (req, res) => {
           value: parseFloat(setCounts[id].value.toFixed(2))
         })).sort((a, b) => b.value - a.value).slice(0, 8)
       }
-    });
+    };
+    rememberShare(cacheKey, body);
+    res.json(body);
 
   } catch (error) {
     console.error(error);

@@ -37,6 +37,7 @@ import { sharpness } from './sharpness.js';
 import { quadSignature } from './cardSignature.js';
 import { cornerResult, quadArea } from './detectResult.js';
 import { createDetector } from '../../../shared/cardDetectPure.mjs';
+import { CORN_SIZE, MEAN, STD, imagenetChw } from '../../../shared/scanModel.mjs';
 
 // The wasm binaries ship with the frontend bundle (scripts/copy-ort.mjs), so
 // /ort/ resolves on the web AND inside the native app's bundled assets.
@@ -52,9 +53,6 @@ import { createDetector } from '../../../shared/cardDetectPure.mjs';
 ort.env.wasm.wasmPaths = '/ort/';
 ort.env.wasm.numThreads = 1;
 
-const CORN_SIZE = 384;
-const MEAN = [0.485, 0.456, 0.406];
-const STD = [0.229, 0.224, 0.225];
 // Cornelius is preferred, but it is a 4 MB fetch from a route the server has to
 // actually expose. When that fails — an older backend, a proxy that swallows
 // /models, a browser with no working wasm — the answer must NOT be "no detector".
@@ -116,26 +114,14 @@ function detectWithFallback(rgba, w, h, seq, why) {
 // here too — letterboxing would move the corners the model predicts.
 //
 // Resize and normalise straight into the tensor. When the caller passes a 384x384
-// canvas (scaled in GPU hardware), this is a direct 1:1 vectorised normalisation pass.
+// canvas (scaled in GPU hardware), this is a direct 1:1 normalisation pass: the
+// server's own (shared/scanModel.mjs), by byte lookup table.
 const PLANE = CORN_SIZE * CORN_SIZE;
 const tensorData = new Float32Array(3 * PLANE);   // reused every frame
-const invStd0 = 1 / (255 * STD[0]), invStd1 = 1 / (255 * STD[1]), invStd2 = 1 / (255 * STD[2]);
-const offset0 = -MEAN[0] / STD[0], offset1 = -MEAN[1] / STD[1], offset2 = -MEAN[2] / STD[2];
-const lut0 = new Float32Array(256), lut1 = new Float32Array(256), lut2 = new Float32Array(256);
-for (let v = 0; v < 256; v++) {
-  lut0[v] = v * invStd0 + offset0;
-  lut1[v] = v * invStd1 + offset1;
-  lut2[v] = v * invStd2 + offset2;
-}
 
 function toTensor(rgba, w, h) {
   if (w === CORN_SIZE && h === CORN_SIZE) {
-    const p0 = 0, p1 = PLANE, p2 = 2 * PLANE;
-    for (let i = 0, j = 0; i < PLANE; i++, j += 4) {
-      tensorData[p0 + i] = lut0[rgba[j]];
-      tensorData[p1 + i] = lut1[rgba[j + 1]];
-      tensorData[p2 + i] = lut2[rgba[j + 2]];
-    }
+    imagenetChw(rgba, CORN_SIZE, 4, tensorData);
     return new ort.Tensor('float32', tensorData, [1, 3, CORN_SIZE, CORN_SIZE]);
   }
   const xs = w / CORN_SIZE, ys = h / CORN_SIZE;

@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { parseThirdPartyCSV, parseManaboxText } = require('../utils/csvMappers');
+const { parseThirdPartyCSV, parseManaboxText, isWishlistRow } = require('../utils/csvMappers');
+const { wantCards } = require('../utils/defaultWishlist');
 const scryfallApi = require('../scryfallApi');
 const { generateExportCSV } = require('../utils/csvExporters');
 const { resolveCardPrice } = require('../utils/priceHelpers');
@@ -130,7 +131,7 @@ async function sendExport(req, res, entryIds = null) {
       JOIN card_cache cc ON c.card_id = cc.id
       LEFT JOIN locations l ON c.location_id = l.id
       LEFT JOIN compartments cp ON c.compartment_id = cp.id
-      WHERE c.user_id = ?
+      WHERE c.user_id = ? AND c.list_type = 'collection'
       ${entryIds ? 'ORDER BY sel.key' : ''}
     `;
     const raw = await db.all(query, entryIds ? [JSON.stringify(entryIds), req.user.id] : [req.user.id]);
@@ -167,7 +168,9 @@ async function sendExport(req, res, entryIds = null) {
     res.setHeader('Content-Disposition', `attachment; filename=pokedexrr_collection_${targetFormat}.csv`);
     res.send(csvContent);
   } catch (error) {
-    res.status(500).json({ error: 'Export failed', message: error.message });
+    // The detail is SQLite's, and stays in the log.
+    console.error('Export failed:', error);
+    res.status(500).json({ error: 'Export failed' });
   }
 }
 router.get('/export', (req, res) => sendExport(req, res));
@@ -386,9 +389,22 @@ router.post('/import', importLimiter, async (req, res) => {
 
     let importedCount = 0;
     let clampedRows = 0;
+    let wishlisted = 0;
+    // A wishlist row (an older Bindarr file's wanted card) goes on the default
+    // Wishlist, its quantity the copies wanted, rather than becoming copies.
+    const wanted = toImport.filter(({ item }) => isWishlistRow(item));
+    const owned = toImport.filter(({ item }) => !isWishlistRow(item));
 
     await db.withTransaction(async () => {
-      for (const { item, cardId } of toImport) {
+      if (wanted.length) {
+        const result = await wantCards(req.user.id, wanted.map(({ item, cardId }) => ({
+          card_id: cardId,
+          quantity: clampImportQuantity(item.quantity).copies,
+          notes: typeof item.notes === 'string' ? item.notes : '',
+        })));
+        wishlisted = result.added + result.merged;
+      }
+      for (const { item, cardId } of owned) {
         // A copy is a row, never a quantity on one row: a stacked row cannot be
         // filed into separate slots or lent to a deck one copy at a time (#64).
         // Backups and third-party CSVs still carry a quantity column, so expand
@@ -428,9 +444,13 @@ router.post('/import', importLimiter, async (req, res) => {
     const skipped = unresolved.length
       ? ` ${unresolved.length} row${unresolved.length === 1 ? '' : 's'} could not be matched to a card and ${unresolved.length === 1 ? 'was' : 'were'} skipped (${examples}${unresolved.length > 5 ? ', …' : ''}). Check their set and card number, then import them again.`
       : '';
-    return res.json({ success: true, count: importedCount, clamped: clampedRows, unresolved, message: `Successfully imported ${importedCount} items.${unmatched}${empty}${adjusted}${skipped}` });
+    const onWishlist = wishlisted
+      ? ` ${wishlisted} wishlist card${wishlisted === 1 ? '' : 's'} went on your Wishlist.`
+      : '';
+    return res.json({ success: true, count: importedCount, wishlisted, clamped: clampedRows, unresolved, message: `Successfully imported ${importedCount} items.${onWishlist}${unmatched}${empty}${adjusted}${skipped}` });
   } catch (error) {
-    return res.status(500).json({ error: 'Import failed', code: 'import_failed', message: error.message });
+    console.error('Import failed:', error);
+    return res.status(500).json({ error: 'Import failed', code: 'import_failed' });
   }
 });
 

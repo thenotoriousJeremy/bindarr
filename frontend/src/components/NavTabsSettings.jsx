@@ -1,20 +1,12 @@
 import { useState } from 'react';
 import { OPTIONAL_NAV_TABS, pinnedTabs, toggleNavTab, isCollectionView } from '../utils/navTabs';
+import { NAV_TAB_META } from '../utils/navTabMeta';
 import { useT } from '../utils/i18n';
 
-const LABELS = {
-  'add-cards': 'nav.addCards',
-  sets: 'nav.browse',
-  storage: 'nav.storage',
-  deckbuilder: 'nav.deckBuilder',
-  lists: 'nav.lists',
-  notes: 'nav.notes',
-  sealed: 'nav.sealed',
-};
-
 // Which tabs the nav bar shows (utils/navTabs.js). Saved on the account, so the
-// bar is the same on every device; Dashboard, Collection and Settings always
-// show. Browse, Lists and Sealed stay reachable inside Collection either way.
+// bar is the same on every device; Dashboard and Collection always show, and an
+// unpinned tab moves under More. Browse, Lists and Sealed stay reachable inside
+// Collection either way.
 export default function NavTabsSettings({ user, onUpdateUser, showToast }) {
   const { t } = useT();
   const [saving, setSaving] = useState(false);
@@ -63,7 +55,7 @@ export default function NavTabsSettings({ user, onUpdateUser, showToast }) {
               style={{ width: '16px', height: '16px', accentColor: 'var(--accent-red)' }}
             />
             <span style={{ display: 'flex', flexDirection: 'column' }}>
-              <span style={{ color: 'var(--text-primary)', fontSize: '0.85rem' }}>{t(LABELS[tab])}</span>
+              <span style={{ color: 'var(--text-primary)', fontSize: '0.85rem' }}>{t(NAV_TAB_META[tab][0])}</span>
               {isCollectionView(tab) && (
                 <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'none', fontWeight: 400, letterSpacing: 'normal' }}>{t('navTabs.alsoInCollection')}</span>
               )}

@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { useT } from '../utils/i18n';
+import { LatestRequest, fetchJson, isAbortError } from '../utils/request';
 import SealedCatalogPicker from './SealedCatalogPicker';
 
 // A product's "recipe": specific guaranteed cards (an alt-art promo, an
@@ -37,10 +38,14 @@ export default function SealedTemplateEditor({ productId, productName, game, sho
     setComponents([]);
     const params = new URLSearchParams({ product_name: productName, game: game || 'pokemon' });
     if (productId) params.set('product_id', productId);
-    fetch(`/api/sealed/templates/match?${params}`)
-      .then(r => r.json())
-      .then(d => {
-        if (d.template) {
+    // Only the product still picked: an answer for the one picked before is
+    // dropped, and a failed lookup leaves the cleared form rather than being
+    // read as a recipe.
+    let cancelled = false;
+    fetchJson(`/api/sealed/templates/match?${params}`)
+      .then(({ data: d }) => {
+        if (cancelled) return;
+        if (d && d.template) {
           setExistingId(d.template.id);
           setExpectedCards(d.template.expected_cards ?? '');
           setExpectedCardsEdited(false);
@@ -56,22 +61,22 @@ export default function SealedTemplateEditor({ productId, productName, game, sho
         }
       })
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [productId, productName, game]);
 
   const loadKnownCounts = () => {
-    fetch('/api/sealed/templates')
-      .then(r => r.json())
-      .then(d => {
+    fetchJson('/api/sealed/templates')
+      .then(({ data: d }) => {
         const byId = {}; const byName = {};
-        for (const tpl of d.templates || []) {
+        for (const tpl of d?.templates || []) {
           for (const c of tpl.components || []) {
             if (c.component_type !== 'product' || c.expected_cards == null || c.expected_cards === '') continue;
             if (c.product_id) byId[c.product_id] = c.expected_cards;
             if (c.product_name) byName[c.product_name.toLowerCase()] = c.expected_cards;
           }
         }
-        for (const tpl of d.templates || []) {
+        for (const tpl of d?.templates || []) {
           if (tpl.expected_cards == null) continue;
           if (tpl.product_id) byId[tpl.product_id] = tpl.expected_cards;
           if (tpl.product_name) byName[tpl.product_name.toLowerCase()] = tpl.expected_cards;
@@ -90,21 +95,30 @@ export default function SealedTemplateEditor({ productId, productName, game, sho
     if (suggested != null && suggested !== '') setExpectedCards(suggested);
   }, [loading, existingId, expectedCardsEdited, expectedCards, knownCounts, productId, productName]);
 
+  // Enter can start a search while one is running: only the newest answers.
+  const cardSearchReq = useRef(null);
+  if (!cardSearchReq.current) cardSearchReq.current = new LatestRequest();
+  useEffect(() => () => cardSearchReq.current.cancel(), []);
+
   const searchCards = async (page = 1) => {
-    if (!cardQuery.trim() && !cardSet.trim()) { setCardResults([]); return; }
+    if (!cardQuery.trim() && !cardSet.trim()) { cardSearchReq.current.cancel(); setCardResults([]); return; }
+    const req = cardSearchReq.current.begin();
     setCardSearchBusy(true);
     try {
       const params = new URLSearchParams({ game: game || 'pokemon', scope: 'database', limit: '60', page: String(page) });
       if (cardQuery.trim()) params.set('name', cardQuery.trim());
       if (cardSet.trim()) params.set('set', cardSet.trim());
-      const res = await fetch(`/api/search?${params}`);
-      const data = await res.json().catch(() => []);
+      const { data } = await fetchJson(`/api/search?${params}`, { signal: req.signal });
+      if (!req.isLatest()) return;
       const results = Array.isArray(data) ? data : [];
       setCardResults(current => page === 1 ? results : [...current, ...results]);
       setCardPage(page);
       setCardHasMore(results.length === 60);
+    } catch (err) {
+      if (isAbortError(err) || !req.isLatest()) return;
+      showToast?.(t('sealed.errCardSearch'));
     } finally {
-      setCardSearchBusy(false);
+      if (req.isLatest()) setCardSearchBusy(false);
     }
   };
 
@@ -196,7 +210,8 @@ export default function SealedTemplateEditor({ productId, productName, game, sho
                   </span>
                 )}
               </span>
-              <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => removeComponent(i)} style={{ color: 'var(--accent-red)', padding: '0.2rem' }}>
+              <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => removeComponent(i)} style={{ color: 'var(--accent-red)', padding: '0.2rem' }}
+                title={t('common.delete')} aria-label={t('common.delete')}>
                 <Trash2 size={12} />
               </button>
             </div>
@@ -222,7 +237,7 @@ export default function SealedTemplateEditor({ productId, productName, game, sho
             <input className="input-control" value={cardSet} onChange={(e) => setCardSet(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); searchCards(1); } }}
               placeholder={t('sealed.cardSetPlaceholder')} style={{ maxWidth: '8rem' }} />
-            <button type="button" className="btn btn-secondary" disabled={cardSearchBusy} onClick={() => searchCards(1)}>{t('common.search') || 'Search'}</button>
+            <button type="button" className="btn btn-secondary" disabled={cardSearchBusy} onClick={() => searchCards(1)}>{t('common.search')}</button>
           </div>
           {(cardResults.length > 0 || cardHasMore) && (
             <div style={{ maxHeight: 'min(40vh, 320px)', overflowY: 'auto', overscrollBehavior: 'contain', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)' }}>

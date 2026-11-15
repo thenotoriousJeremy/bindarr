@@ -6,10 +6,11 @@ const tcgdexApi = require('../../tcgdexApi');
 const cardApi = require('../../utils/cardApi');
 const games = require('../../utils/games');
 const { recordPrice } = require('../../utils/priceHelpers');
-const { rebalanceCompartmentByScheme } = require('../../utils/compartmentSort');
-const { resolveCompartmentAndPosition, describePlacement } = require('../../utils/collectionHelpers');
+const { rebalanceCompartments } = require('../../utils/compartmentSort');
+const { placeCopies, describePlacement } = require('../../utils/collectionHelpers');
 const { readQuantity } = require('../../utils/requestBounds');
-const { AddCardError, GRADERS, CONDITIONS, PRINTINGS, ownsSealedUnit } = require('./shared');
+const { wantCards } = require('../../utils/defaultWishlist');
+const { AddCardError, GRADERS, CONDITIONS, PRINTINGS, LIST_TYPES, readPurchasePrice, ownsSealedUnit } = require('./shared');
 
 // The provider-facing half of an add: hydrate a thin cached row, fetch an
 // uncached card, swap to the printing in `language`, learn its English name.
@@ -51,25 +52,20 @@ async function resolveCardForAdd(user, { card_id, game = 'pokemon', language = '
   return { card, cardId };
 }
 
-async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
+// Everything an add can be refused for without reading anything: the bulk add
+// checks each card with it before fetching any of them.
+function checkAddBody(body) {
   const {
     card_id,
     quantity = 1,
     condition = 'Near Mint',
     printing = 'Normal',
-    language = 'English',
-    purchase_price = 0,
-    location_id = null,
     list_type = 'collection',
-    is_trade = 0,
-    game = 'pokemon',
-    stackable = false,
+    purchase_price = 0,
     grader = 'Raw',
     grade = null,
     cert_number = null,
-    sealed_unit_id = null
   } = body;
-  const req = { user, body };
 
   if (!card_id) {
     throw new AddCardError(400, 'card_id is required');
@@ -83,6 +79,11 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
   if (!PRINTINGS.includes(printing)) {
     throw new AddCardError(400, `Invalid printing. One of: ${PRINTINGS.join(', ')}`);
   }
+  if (!LIST_TYPES.includes(list_type)) {
+    throw new AddCardError(400, `Invalid list_type. One of: ${LIST_TYPES.join(', ')}`);
+  }
+  const price = readPurchasePrice(purchase_price);
+  if (price.error) throw new AddCardError(400, price.error);
   const qty = readQuantity(quantity);
   if (qty.error) throw new AddCardError(400, qty.error);
 
@@ -100,8 +101,32 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
   // would leave a row that reads as raw in one column and graded in another, and
   // every downstream check would then depend on which column it happened to read.
   const isGraded = grader !== 'Raw';
-  const certValue = isGraded ? cert : null;
-  const gradeValue = isGraded ? gradeNum : null;
+  return {
+    qty: qty.value,
+    purchasePrice: price.value ?? 0,
+    certValue: isGraded ? cert : null,
+    gradeValue: isGraded ? gradeNum : null,
+  };
+}
+
+// A copy is always on the collection: an add that says list_type 'wishlist' wants
+// the card rather than holds it, and the routes below send it to the default
+// Wishlist instead (wantInstead), never here.
+async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
+  const {
+    card_id,
+    condition = 'Near Mint',
+    printing = 'Normal',
+    language = 'English',
+    location_id = null,
+    is_trade = 0,
+    game = 'pokemon',
+    grader = 'Raw',
+    sealed_unit_id = null
+  } = body;
+  const req = { user, body };
+
+  const { qty, purchasePrice, certValue, gradeValue } = checkAddBody(body);
 
   // Checked before the insert purely for the message: the unique index in db.js is
   // what actually enforces this, and still catches a race between two requests.
@@ -126,17 +151,20 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
     throw new AddCardError(404, 'Sealed unit not found');
   }
 
-  {
-    const { card, cardId } = resolvedCard || await resolveCardForAdd(user, { card_id, game, language });
+  const { card, cardId } = resolvedCard || await resolveCardForAdd(user, { card_id, game, language });
 
-    // The card's own game, not the request's: the request used to win whenever it
-    // named anything but Pokémon, so a client could file a Pokémon card as Magic.
-    // It is only a fallback for a row that carries no game, and only for a game
-    // the id does not contradict.
-    const effectiveGame = (games.isGame(card.game) ? card.game : null)
-      || cardApi.gameOf(cardId, req.body.game)
-      || games.LEGACY_GAME;
+  // The card's own game, not the request's: the request used to win whenever it
+  // named anything but Pokémon, so a client could file a Pokémon card as Magic.
+  // It is only a fallback for a row that carries no game, and only for a game
+  // the id does not contradict.
+  const effectiveGame = (games.isGame(card.game) ? card.game : null)
+    || cardApi.gameOf(cardId, req.body.game)
+    || games.LEGACY_GAME;
 
+  // Every write below is one transaction, so the copies land together or not at
+  // all and each commit is not paid per copy. Inside a bigger write (opening a
+  // sealed unit) it is a savepoint in that one.
+  return db.withTransaction(async () => {
     if (location_id) {
       const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [location_id, req.user.id]);
       if (!loc) {
@@ -144,88 +172,78 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
       }
     }
 
-    const resolved = await resolveCompartmentAndPosition({
-      locationId: location_id,
-      userId: req.user.id,
-      cardId,
-      printing,
-      language
-    });
-
-    const targetLocationId = resolved.compartment_id ? (resolved.location_id ?? location_id) : null;
-
-    let lastInsertedId = null;
-    const insertedIds = [];
     // A cert number names ONE physical slab, so a quantity above 1 is not a
     // request for more of them — it is a mistake that the per-user unique index on
     // (grader, cert_number) would reject on the second insert anyway, after the
     // first had already been written. Collapse it here so the request succeeds with
     // the row the user actually meant.
-    const count = certValue ? 1 : qty.value;
-    // Stacking is quantity-on-one-row, which is meaningful only for interchangeable
-    // copies. Two slabs are never interchangeable: they have different certs, and
-    // usually different grades.
-    const stack = stackable && !isGraded;
+    const count = certValue ? 1 : qty;
+    // Each copy is filed on its own, against the ones before it: copies that do not
+    // fit are added to Unsorted rather than all piled into the one slot found for
+    // the first.
+    const { placements, plan } = await placeCopies({
+      locationId: location_id,
+      userId: req.user.id,
+      copies: Array.from({ length: count }, () => ({ card_id: cardId, printing, language })),
+    });
 
-    if (stack) {
+    let lastInsertedId = null;
+    let lastPlacedId = null;
+    const insertedIds = [];
+    for (const place of placements) {
       const result = await db.run(`
         INSERT INTO collection (
           card_id, user_id, quantity, condition, printing, language, purchase_price,
           location_id, compartment_id, position, is_trade, list_type, game,
           grader, grade, cert_number, sealed_unit_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 'collection', ?, ?, ?, ?, ?)
       `, [
-        cardId, req.user.id, count, condition, printing, language, purchase_price || 0,
-        targetLocationId, resolved.compartment_id, resolved.position, is_trade ? 1 : 0, list_type, effectiveGame,
+        cardId, req.user.id, condition, printing, language, purchasePrice,
+        place.compartment_id ? (place.location_id ?? location_id) : null, place.compartment_id, place.compartment_id ? place.position : 0,
+        is_trade ? 1 : 0, effectiveGame,
         grader, gradeValue, certValue, sealedUnitId
       ]);
       lastInsertedId = result.lastID;
+      if (place.compartment_id) lastPlacedId = lastInsertedId;
       insertedIds.push(lastInsertedId);
-    } else {
-      for (let i = 0; i < count; i++) {
-        const result = await db.run(`
-          INSERT INTO collection (
-            card_id, user_id, quantity, condition, printing, language, purchase_price,
-            location_id, compartment_id, position, is_trade, list_type, game,
-            grader, grade, cert_number, sealed_unit_id
-          ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [
-          cardId, req.user.id, condition, printing, language, purchase_price || 0,
-          targetLocationId, resolved.compartment_id, resolved.position + (i * 0.001), is_trade ? 1 : 0, list_type, effectiveGame,
-          grader, gradeValue, certValue, sealedUnitId
-        ]);
-        lastInsertedId = result.lastID;
-        insertedIds.push(lastInsertedId);
-      }
     }
 
-    if (resolved.compartment_id && targetLocationId) {
-      const loc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [targetLocationId, req.user.id]);
-      if (loc) {
-        await rebalanceCompartmentByScheme(db, resolved.compartment_id, loc.sort_order, loc.foil_sorting);
-      }
-    }
+    if (plan) await rebalanceCompartments(db, plan.touched());
 
     await recordPrice(cardId, card.price_trend);
 
+    const noRoom = placements.filter(p => p.full).length;
     return {
       message: 'Card added to collection',
       id: lastInsertedId,
       // All rows created by this request, so a caller that added N copies can
       // undo/manage each one individually rather than only the last insert.
       ids: insertedIds,
-      placement: resolved.compartment_id
-        ? await describePlacement(db, lastInsertedId, req.user.id)
-        : null,
-      container_full: !!resolved.full,
-      rule_rejected: !!resolved.rejected
+      placement: lastPlacedId ? await describePlacement(db, lastPlacedId, req.user.id) : null,
+      container_full: noRoom > 0,
+      rule_rejected: placements.some(p => p.rejected),
+      // Copies left in Unsorted because the container had no room for them.
+      unplaced: noRoom,
     };
-  }
+  });
+}
+
+// An add asking for list_type 'wishlist' (the API took it before wanted cards
+// moved to the Lists feature): the card goes on the default Wishlist, with the
+// quantity asked for as the copies wanted, and no collection row is made. The
+// answer keeps an add's shape, with no ids since nothing was added.
+async function wantInstead(user, body) {
+  const { qty } = checkAddBody(body);
+  const { cardId } = await resolveCardForAdd(user, body);
+  const { missing } = await wantCards(user.id, [{ card_id: cardId, quantity: qty }]);
+  if (missing.length) throw new AddCardError(404, `Card ID ${cardId} not found.`, 'card_not_found');
+  return { message: 'Card added to your wishlist', wishlisted: true, id: null, ids: [], placement: null, container_full: false, rule_rejected: false, unplaced: 0 };
 }
 
 // 3. Add Card to Collection
 async function addCard(req, res) {
   try {
+    if (req.body && req.body.list_type === 'wishlist') return res.status(200).json(await wantInstead(req.user, req.body));
     res.status(200).json(await addCardToCollection(req.user, req.body));
   } catch (error) {
     if (error instanceof AddCardError) {
@@ -264,18 +282,60 @@ async function bulkAdd(req, res) {
   if (card_ids.length * qty.value > BULK_ADD_MAX_COPIES) {
     return res.status(400).json({ error: `That is ${card_ids.length * qty.value} copies. Add at most ${BULK_ADD_MAX_COPIES} at once.` });
   }
-  // Sequential on purpose: placement resolves against the rows already inserted,
-  // so adds must not race each other for the same compartment slot.
   const added = [];
   const failed = [];
+  const failure = (card_id, error) => {
+    if (!(error instanceof AddCardError)) console.error(error);
+    failed.push({ card_id, error: error instanceof AddCardError ? error.message : 'Failed to add card', status: error instanceof AddCardError ? error.status : 500 });
+  };
+  // Every card is checked and looked up first, outside any transaction: a provider
+  // fetch must not hold the one connection. A card refused here is never fetched.
+  const ready = [];
   for (const card_id of card_ids) {
     try {
-      const result = await addCardToCollection(req.user, { ...shared, card_id });
-      added.push({ card_id, id: result.id });
+      checkAddBody({ ...shared, card_id });
+      ready.push({ card_id, resolvedCard: await resolveCardForAdd(req.user, { card_id, game: shared.game, language: shared.language }) });
     } catch (error) {
-      if (!(error instanceof AddCardError)) console.error(error);
-      failed.push({ card_id, error: error instanceof AddCardError ? error.message : 'Failed to add card', status: error instanceof AddCardError ? error.status : 500 });
+      failure(card_id, error);
     }
+  }
+  // A bulk add to the wishlist (see wantInstead): the cards go on the default
+  // Wishlist, and no copies are made.
+  if (shared.list_type === 'wishlist') {
+    try {
+      const { missing } = await db.withTransaction(() => wantCards(req.user.id,
+        ready.map(({ resolvedCard }) => ({ card_id: resolvedCard.cardId, quantity: qty.value }))));
+      for (const { card_id, resolvedCard } of ready) {
+        if (missing.includes(resolvedCard.cardId)) failure(card_id, new AddCardError(404, `Card ID ${card_id} not found.`, 'card_not_found'));
+        else added.push({ card_id, id: null });
+      }
+    } catch (error) {
+      console.error('Bulk add to the wishlist failed:', error);
+      return res.status(500).json({ error: 'Failed to add cards', code: 'add_failed' });
+    }
+    return res.status(added.length || !failed.length ? 200 : failed[0].status).json({
+      message: `Added ${added.length} card${added.length === 1 ? '' : 's'} to your wishlist.${failed.length ? ` ${failed.length} failed.` : ''}`,
+      added: added.length,
+      failed,
+    });
+  }
+  // Then every add in one transaction, sequentially — placement resolves against
+  // the rows already inserted — and each in its own savepoint, so a card that fails
+  // does not take the others with it.
+  try {
+    await db.withTransaction(async () => {
+      for (const { card_id, resolvedCard } of ready) {
+        try {
+          const result = await addCardToCollection(req.user, { ...shared, card_id }, { resolvedCard });
+          added.push({ card_id, id: result.id });
+        } catch (error) {
+          failure(card_id, error);
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Bulk add failed:', error);
+    return res.status(500).json({ error: 'Failed to add cards', code: 'add_failed' });
   }
   // Nothing added: answer with the failures' own status when they all agree it
   // was the request (a 400 for a bad condition), not a blanket 500.

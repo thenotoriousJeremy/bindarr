@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db');
 const store = require('../utils/binderArtStore');
 const { sendFileAt } = require('../utils/sendFileAt');
+const { artUploadLimiter } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -96,11 +97,16 @@ function ownedCompartment(compartmentId, userId) {
   );
 }
 
-router.post('/binder-art', parseImage, async (req, res) => {
+const TOO_MANY_ARTWORKS = 'You have too many artwork images stored. Remove some from your binders first.';
+const artworkCount = async (userId) =>
+  (await db.get(`SELECT COUNT(*) AS n FROM binder_artwork WHERE user_id = ?`, [userId])).n;
+
+// The quota, checked before the upload is even read: decoding and re-encoding it
+// is the expensive part, and it used to be done in full for an upload the quota
+// then refused. Stale unreferenced uploads are swept first, so they do not count.
+async function withinQuota(req, res, next) {
   const userId = req.user.id;
   try {
-    const prepared = await store.prepare(req.body);
-
     const stale = await db.all(
       `SELECT a.id FROM binder_artwork a
         WHERE a.user_id = ? AND a.created_at < datetime('now', ?)
@@ -108,11 +114,21 @@ router.post('/binder-art', parseImage, async (req, res) => {
       [userId, ORPHAN_AGE]
     );
     for (const row of stale) await store.dropIfUnused(userId, row.id);
+    if (await artworkCount(userId) >= MAX_ARTWORKS_PER_USER) return res.status(409).json({ error: TOO_MANY_ARTWORKS });
+    next();
+  } catch (error) {
+    console.error('Binder artwork upload failed:', error.message);
+    res.status(500).json({ error: 'Could not store that image.' });
+  }
+}
 
-    const { n } = await db.get(`SELECT COUNT(*) AS n FROM binder_artwork WHERE user_id = ?`, [userId]);
-    if (n >= MAX_ARTWORKS_PER_USER) {
-      return res.status(409).json({ error: 'You have too many artwork images stored. Remove some from your binders first.' });
-    }
+router.post('/binder-art', artUploadLimiter, withinQuota, parseImage, async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const prepared = await store.prepare(req.body);
+
+    // Again: another upload may have been stored while this one was decoded.
+    if (await artworkCount(userId) >= MAX_ARTWORKS_PER_USER) return res.status(409).json({ error: TOO_MANY_ARTWORKS });
 
     const inserted = await db.run(
       `INSERT INTO binder_artwork (user_id, mime, width, height, bytes) VALUES (?, ?, ?, ?, ?)`,

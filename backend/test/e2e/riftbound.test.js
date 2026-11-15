@@ -11,16 +11,10 @@
 // Never let a test server sync TCGCSV (it has flagged this project for overuse).
 process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
 const assert = require('assert');
-const fs = require('fs');
 const http = require('http');
-const os = require('os');
-const path = require('path');
-const { spawn } = require('child_process');
+const harness = require('./harness');
 
-const tmpDb = path.join(os.tmpdir(), `bindarr-riftbound-e2e-${process.pid}.db`);
-process.env.DB_PATH = tmpDb;
-const { freePort } = require('../freePort');
-let port;
+const tmp = harness.tempDatabase('riftbound-e2e');
 let base;
 const db = require('../../src/db');
 
@@ -66,35 +60,27 @@ async function tc(name, fn) {
 }
 
 async function main() {
-  port = String(await freePort());
-  base = `http://localhost:${port}`;
+  // The admin and its session go into the file before the server opens it.
+  await harness.prepare(db);
+  const admin = await waitFor(() => db.get(`SELECT id FROM users WHERE username = 'admin'`), 'admin user');
+  const token = 'riftbound-e2e-token';
+  await db.run(`INSERT OR REPLACE INTO sessions (token, user_id, expires_at) VALUES (?, ?, datetime('now', '+1 day'))`,
+    [require('../../src/utils/authHelpers').hashSessionToken(token), admin.id]);
+
   const { server: riftcodex, hits } = await startRiftcodex();
-  const modelDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bindarr-riftbound-models-'));
-  const proc = spawn('node', [path.join(__dirname, '../../src/server.js')], {
-    env: {
-      ...process.env,
-      PORT: port,
-      DB_PATH: tmpDb,
-      HTTPS_PORT: '',
-      CV_MODEL_DIR: modelDir,
-      RIFTCODEX_BASE_URL: `http://127.0.0.1:${riftcodex.address().port}`,
-      RIFTCODEX_GAP_MS: '0',
-      // Never sync TCGCSV from a test server, whoever runs this file.
-      BINDARR_DISABLE_TCGCSV_SYNC: '1',
-    },
-  });
-  let serverLog = '';
+  let proc;
   let ok = false;
-  proc.stdout.on('data', d => { serverLog += d; });
-  proc.stderr.on('data', d => { serverLog += d; });
 
   try {
-    await waitFor(async () => (await fetch(`${base}/api/health`)).ok, 'server');
+    // The harness's empty model directory, and TCGCSV off, as for every suite.
+    proc = await harness.startServer(tmp, {
+      env: {
+        RIFTCODEX_BASE_URL: `http://127.0.0.1:${riftcodex.address().port}`,
+        RIFTCODEX_GAP_MS: '0',
+      },
+    });
+    base = proc.base;
     ok = true;
-    const admin = await waitFor(() => db.get(`SELECT id FROM users WHERE username = 'admin'`), 'admin user');
-    const token = 'riftbound-e2e-token';
-    await db.run(`INSERT OR REPLACE INTO sessions (token, user_id, expires_at) VALUES (?, ?, datetime('now', '+1 day'))`,
-      [require('../../src/utils/authHelpers').hashSessionToken(token), admin.id]);
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
     const api = async (method, url, body) => {
       const res = await fetch(`${base}${url}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -225,7 +211,8 @@ async function main() {
 
     await tc('F9-TC13 a public share shows the cards', async () => {
       const share = await db.get(`SELECT share_token FROM users WHERE id = ?`, [admin.id]);
-      await db.run(`UPDATE users SET share_enabled = 1 WHERE id = ?`, [admin.id]);
+      const enabled = await api('PUT', '/api/auth/settings', { share_enabled: true });
+      assert.strictEqual(enabled.status, 200, enabled.text);
       const res = await fetch(`${base}/api/shared/${share.share_token}`);
       assert.strictEqual(res.status, 200);
       const body = await res.json();
@@ -233,12 +220,13 @@ async function main() {
       assert.ok(JSON.stringify(cards).includes(SIG), 'the signature printing is in the share');
     });
   } finally {
-    proc.kill('SIGKILL');
+    // A server that never came up is in startServer's error, log and all.
+    if (proc) {
+      await proc.stop();
+      if (failures || !ok) console.error(proc.tail(40));
+    }
     riftcodex.close();
-    await new Promise(r => setTimeout(r, 300));
-    if (failures || !ok) console.error(serverLog.split('\n').slice(-40).join('\n'));
-    for (const suffix of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmpDb + suffix); } catch { /* gone */ } }
-    try { fs.rmSync(modelDir, { recursive: true, force: true }); } catch { /* gone */ }
+    await harness.cleanup(db, tmp);
   }
   if (failures) {
     console.error(`${failures} Riftbound e2e case(s) failed.`);

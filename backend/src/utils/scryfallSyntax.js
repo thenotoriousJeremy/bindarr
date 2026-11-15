@@ -1,10 +1,10 @@
 // The backend's door to shared/scryfallQuery.mjs, the Scryfall-syntax parser the
 // frontend uses too.
 //
-// That file is ESM so the browser can load it untranslated, and CommonJS cannot
-// require() ESM on the Node versions this server supports (18+). import() works
-// everywhere, so the module is loaded once, lazily, and everything that needs it
-// here is async — which every caller (a route handler) already is.
+// That file is ESM so the browser can load it untranslated. It is loaded once,
+// lazily, through import(), so everything that needs it here is async — which
+// every caller (a route handler) already is. (Node 22.12+, the supported floor,
+// can also require() an ES module; compartmentSort.js does so for cardSort.mjs.)
 const db = require('../db');
 const LANGUAGES = require('../../../shared/languages.json');
 const { parseCardRow, resolveCardPrice } = require('./priceHelpers');

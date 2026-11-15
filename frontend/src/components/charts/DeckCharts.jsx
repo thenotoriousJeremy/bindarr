@@ -4,7 +4,8 @@ import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, 
 // deck's stats are first drawn instead of with the deck list. Each one fills the
 // sized box its caller wraps it in.
 
-const TOOLTIP_STYLE = { background: 'rgba(0,0,0,0.8)', border: '1px solid var(--border-glass)', borderRadius: '4px', fontSize: '0.8rem', color: 'var(--text-strong)' };
+// Themed: a fixed dark box under --text-strong was unreadable in the light theme.
+const TOOLTIP_STYLE = { background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)', borderRadius: '4px', fontSize: '0.8rem', color: 'var(--text-strong)' };
 
 export function CostCurveBars({ data }) {
   return (
@@ -43,12 +44,8 @@ export function SupertypeDonut({ data, colors }) {
   );
 }
 
-const TYPE_COLORS = {
-  'White': '#fef08a', 'Blue': '#3b82f6', 'Black': '#475569', 'Red': '#ef4444', 'Green': '#10b981', 'Colorless': '#cbd5e1',
-  'Land (Plains)': '#fef08a', 'Land (Island)': '#60a5fa', 'Land (Swamp)': '#475569', 'Land (Mountain)': '#f87171', 'Land (Forest)': '#4ade80', 'Land (Nonbasic)': '#d97706',
-  'Grass': '#4ade80', 'Fire': '#f87171', 'Water': '#60a5fa', 'Lightning': '#facc15', 'Psychic': '#c084fc', 'Fighting': '#f97316', 'Darkness': '#475569', 'Metal': '#94a3b8', 'Dragon': '#a855f7', 'Fairy': '#f472b6'
-};
-
+// Each datum brings its own `color` (deck/DeckStats, from utils/cardColors), so
+// its label can be translated without losing it.
 export function TypeBars({ data }) {
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -58,7 +55,7 @@ export function TypeBars({ data }) {
         <Tooltip contentStyle={TOOLTIP_STYLE} />
         <Bar dataKey="value" fill="var(--accent-yellow)" radius={[4, 4, 0, 0]}>
           {data.map((entry, idx) => (
-            <Cell key={`cell-${idx}`} fill={TYPE_COLORS[entry.name] || 'var(--accent-yellow)'} />
+            <Cell key={`cell-${idx}`} fill={entry.color || 'var(--accent-yellow)'} />
           ))}
         </Bar>
       </BarChart>

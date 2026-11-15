@@ -66,18 +66,20 @@ export default function DeckImportDialog({
 
     if (itemsToImport.length === 0 && !importText.trim()) return;
 
+    // Counts only the adds the server took: a card the deck's rules refuse (a
+    // copy limit, another game) answers 400, and is not "imported".
     let addedCount = 0;
-    
+
     if (importComparison) {
       for (const item of itemsToImport) {
         try {
           const addQty = Math.min(item.requestedQty, item.ownedQty);
-          await fetch(`/api/decks/${activeDeck.id}/cards`, {
+          const added = await fetch(`/api/decks/${activeDeck.id}/cards`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ card_id: item.card.id, quantity: addQty })
           });
-          addedCount++;
+          if (added.ok) addedCount++;
         } catch (err) {
           console.error(err);
         }
@@ -94,12 +96,12 @@ export default function DeckImportDialog({
           if (res.ok) {
             const cards = await res.json();
             if (cards.length > 0) {
-              await fetch(`/api/decks/${activeDeck.id}/cards`, {
+              const added = await fetch(`/api/decks/${activeDeck.id}/cards`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ card_id: pickDeckLineCard(cards, parsed).id, quantity: qty })
               });
-              addedCount++;
+              if (added.ok) addedCount++;
             }
           }
         } catch (err) {
@@ -121,7 +123,6 @@ export default function DeckImportDialog({
 
   return (
     <Modal onClose={() => { setShowImportModal(false); setImportComparison(null); }} label={t('deck.importTitle')} dirty={!!importText.trim()} closeOnBackdrop={false}
-      overlayStyle={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}
       className="glass-panel" style={{ maxWidth: '600px', width: '100%', padding: '1.75rem', position: 'relative', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
         <button className="btn btn-secondary btn-icon-only" onClick={() => { setShowImportModal(false); setImportComparison(null); }} aria-label={t('common.close')} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
           <X size={16} />
@@ -132,7 +133,7 @@ export default function DeckImportDialog({
         <textarea
           className="input-control"
           style={{ width: '100%', minHeight: '120px', maxHeight: '180px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical' }}
-          placeholder={`4 Pikachu\n2 Ultra Ball\n1 Boss's Orders`}
+          placeholder={t('deck.importPlaceholder')}
           value={importText}
           onChange={e => { setImportText(e.target.value); setImportComparison(null); }}
         />
@@ -166,7 +167,11 @@ export default function DeckImportDialog({
                       color: item.status === 'full' ? 'var(--type-grass)' : item.status === 'partial' ? 'var(--accent-yellow)' : 'var(--accent-red)',
                       border: item.status === 'full' ? '1px solid rgba(74, 222, 128, 0.3)' : item.status === 'partial' ? '1px solid rgba(234, 179, 8, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)'
                     }}>
-                      {item.status === 'full' ? `Owned (${item.ownedQty})` : item.status === 'partial' ? `Partial (${item.ownedQty}/${item.requestedQty})` : `Missing (0)`}
+                      {item.status === 'full'
+                        ? t('deck.importOwned', { count: item.ownedQty })
+                        : item.status === 'partial'
+                          ? t('deck.importPartial', { owned: item.ownedQty, requested: item.requestedQty })
+                          : t('deck.importMissing')}
                     </span>
                   </div>
                 </div>

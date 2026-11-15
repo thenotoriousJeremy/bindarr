@@ -289,21 +289,32 @@ async function main() {
   await card('mtg-a', 'Black Lotus');
   await card('mtg-b', 'Llanowar Elves');
   await card('mtg-w', 'Wished Card');
+  await card('mtg-old-wish', 'Old Wishlist Row');
   await card('mtg-bob', 'Bob Card');
   await own(alice, 'mtg-a');
   await own(alice, 'mtg-b');
-  await own(alice, 'mtg-w', 'wishlist');
+  // Wanted is the Lists Wishlist the hearts fill (WEB-03). A collection row left on
+  // the retired collection wishlist is no longer a source: it is neither owned nor
+  // on a list, and initDb moves every such row onto the Wishlist at boot.
+  const hearts = (await db.run(
+    `INSERT INTO card_lists (user_id, name, kind, is_default) VALUES (?, 'Wishlist', 'wishlist', 1)`, [alice]
+  )).lastID;
+  await db.run(`INSERT INTO card_list_items (list_id, card_id) VALUES (?, 'mtg-w')`, [hearts]);
+  await own(alice, 'mtg-old-wish', 'wishlist');
   await own(bob, 'mtg-bob');
   await price('mtg-a', 100);
   await price('mtg-b', 2);
   await price('mtg-w', 20);
+  await price('mtg-old-wish', 20);
   await price('mtg-bob', 10);
 
   received.length = 0;
   await notify.checkPriceMoves();
   await notify.flush();
   assert.strictEqual(received.length, 0, 'the first look only sets baselines');
-  assert.strictEqual((await db.get(`SELECT COUNT(*) n FROM notification_price_state WHERE user_id = ?`, [alice])).n, 3);
+  assert.deepStrictEqual(
+    (await db.all(`SELECT card_id FROM notification_price_state WHERE user_id = ? ORDER BY card_id`, [alice])).map(r => r.card_id),
+    ['mtg-a', 'mtg-b', 'mtg-w'], 'owned cards and the Wishlist are watched; an old collection wishlist row is not');
 
   await price('mtg-a', 130);   // +30%
   await price('mtg-b', 2.1);   // +5%, 10¢: neither
@@ -455,9 +466,12 @@ async function main() {
   await db.run(`UPDATE notification_channels SET events_admin = 1 WHERE id = ?`, [discordId]);
   await db.run(`UPDATE notification_channels SET events_admin = 0 WHERE id = ?`, [aliceHook]);
   let calls = 0;
+  // Reset-After is 30 s, far longer than this test takes, so the pause it causes
+  // is still visible at the check below however slow the machine is. At 0.3 s
+  // the check had a 150 ms margin, and a busy CI runner's SQLite I/O ate it.
   responder = () => (++calls === 1
     ? { status: 429, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ retry_after: 0.2, global: false }) }
-    : { status: 204, headers: { 'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset-After': '0.3' } });
+    : { status: 204, headers: { 'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset-After': '30' } });
   await notify.notifyAdmins({ type: 'catalog_build_failed', game: 'pokemon', lang: 'German', error: 'boom' });
   await notify.flush();
   row = (await logFor(alice))[0];
@@ -468,7 +482,8 @@ async function main() {
   await notify.flush();
   row = (await logFor(alice))[0];
   assert.strictEqual(row.status, 'sent');
-  assert.ok(notify._blockedUntil.get(discordId) > Date.now(), 'Remaining: 0 pauses the channel pre-emptively');
+  assert.ok(notify._blockedUntil.get(discordId) - Date.now() > 20000,
+    'Remaining: 0 pauses the channel pre-emptively, for Reset-After');
 
   // A message for a deleted channel is dropped, not retried forever.
   await db.run(`INSERT INTO notification_log (user_id, channel_id, event_type, payload, next_attempt_at) VALUES (?, NULL, 'x', '{}', 0)`, [alice]);

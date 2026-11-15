@@ -1,7 +1,9 @@
-// Magic's Mythic and Lorcana's Legendary, Enchanted, Epic and Iconic contain
-// none of Pokémon's rarity words, so they used to fall through to common: a
-// mythic got a grey "COM" badge and no glow.
-const TOP_OUTSIDE_POKEMON = /mythic|legendary|enchanted|epic|iconic/;
+import { rarityRank } from '../../../shared/cardSort.mjs';
+
+// Magic's Mythic, Lorcana's Legendary, Enchanted, Epic and Iconic, and Riftbound's
+// Epic and Showcase contain none of Pokémon's rarity words, so they used to fall
+// through to common: a mythic got a grey "COM" badge and no glow.
+const TOP_OUTSIDE_POKEMON = /mythic|legendary|enchanted|epic|iconic|showcase/;
 
 // Single source of truth for the rarity tiers used across LocationManager's
 // visualizers (card border glow, badge color, badge label).
@@ -15,37 +17,10 @@ export function getRarityTier(rarity) {
   return 'common';
 }
 
-// Scarcity rank for sorting: higher = rarer. Checked rarest-keyword first so
-// "Rare Secret" scores as secret, not plain rare, and "Uncommon" before
-// "Common" (it contains the substring). Unknown rarities score 0 (before
-// Common on ascending). Must stay aligned with RARITY_RANK in
-// backend/src/utils/compartmentSort.js so display order matches placement.
-const RARITY_RANK = [
-  { kw: 'classic collection', rank: 16 },
-  { kw: 'hyper', rank: 15 },
-  { kw: 'special illustration', rank: 14 },
-  { kw: 'illustration', rank: 13 },
-  { kw: 'secret', rank: 12 },
-  { kw: 'ultra', rank: 11 },
-  { kw: 'radiant', rank: 10 },
-  { kw: 'amazing', rank: 9 },
-  { kw: 'shiny', rank: 8 },
-  { kw: 'double rare', rank: 7 },
-  { kw: 'mythic', rank: 6 },
-  { kw: 'rare holo', rank: 5 },
-  { kw: 'holo rare', rank: 5 },
-  { kw: 'promo', rank: 4 },
-  { kw: 'rare', rank: 3 },
-  { kw: 'uncommon', rank: 2 },
-  { kw: 'common', rank: 1 },
-];
-
+// Scarcity rank for sorting: higher = rarer. The table is shared/cardSort.mjs, the
+// one the backend files by, so display order matches placement.
 export function getRarityRank(rarity) {
-  const r = (rarity || '').toLowerCase();
-  for (const { kw, rank } of RARITY_RANK) {
-    if (r.includes(kw)) return rank;
-  }
-  return 0;
+  return rarityRank(rarity);
 }
 
 export function getCardRarityBorder(rarity) {
@@ -91,6 +66,7 @@ export function getRarityBadgeLabel(rarity) {
   if (r.includes('enchanted')) return 'ENCH';
   if (r.includes('epic')) return 'EPIC';
   if (r.includes('iconic')) return 'ICONIC';
+  if (r.includes('showcase')) return 'SHOW';
   if (r.includes('double rare')) return 'DR';
   if (r.includes('shiny rare')) return 'SR';
   if (r.includes('rare')) return 'RARE';

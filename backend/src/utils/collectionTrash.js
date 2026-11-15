@@ -17,7 +17,8 @@
 // AUTOINCREMENT never reissues an id, so the id is still free.
 const crypto = require('crypto');
 const db = require('../db');
-const { isBinderType, stackKey, STACK_KEY_SQL, rebalanceCompartmentByScheme } = require('./compartmentSort');
+const { isBinderType, stackKey, STACK_KEY_SQL, occupancySql, rebalanceCompartmentByScheme } = require('./compartmentSort');
+const { wantCards } = require('./defaultWishlist');
 
 const TRASH_DAYS = 30;
 const BATCH_ID = /^[0-9a-f-]{36}$/;
@@ -33,8 +34,19 @@ function chunks(list) {
 }
 
 // Every (table, column) whose foreign key points at collection.id. Read from the
-// schema rather than listed, so a table added by a later migration is covered.
+// schema rather than listed, so a table added by a later migration is covered —
+// and remembered against PRAGMA schema_version, which any schema change bumps:
+// walking every table's foreign keys took some 40 statements for each delete.
+let dependentTablesMemo = null;
 async function dependentTables() {
+  const { schema_version: version } = await db.get(`PRAGMA schema_version`);
+  if (dependentTablesMemo && dependentTablesMemo.version === version) return dependentTablesMemo.deps;
+  const deps = await readDependentTables();
+  dependentTablesMemo = { version, deps };
+  return deps;
+}
+
+async function readDependentTables() {
   const tables = await db.all(
     `SELECT name FROM sqlite_master
       WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('collection', 'collection_trash')`
@@ -123,7 +135,7 @@ async function placementFor(row, userId) {
   ));
   if (!stacks) {
     const used = await db.get(
-      `SELECT ${comp.allow_stacking ? `COUNT(DISTINCT ${STACK_KEY_SQL})` : 'COUNT(*)'} AS n
+      `SELECT ${occupancySql(!!comp.allow_stacking)} AS n
          FROM collection WHERE compartment_id = ? AND user_id = ?`,
       [comp.id, userId]
     );
@@ -189,24 +201,34 @@ async function restoreLinks(links, userId) {
 
 // Put a batch back. Only ever the requesting user's rows: another user's batch id
 // finds nothing and restores nothing.
+//
+// A row deleted while the collection still kept wanted cards (list_type
+// 'wishlist') is a want, not a copy: its card goes back on the default Wishlist
+// (utils/defaultWishlist.js) and no collection row is made. `wishlisted` counts
+// those cards.
 async function restoreBatch(batchId, userId) {
-  if (!BATCH_ID.test(String(batchId || ''))) return { found: false, restored: 0, skipped: 0, unsorted: 0 };
+  if (!BATCH_ID.test(String(batchId || ''))) return { found: false, restored: 0, skipped: 0, unsorted: 0, wishlisted: 0 };
 
   return db.withTransaction(async () => {
     const trashed = await db.all(
       `SELECT * FROM collection_trash WHERE batch_id = ? AND user_id = ? ORDER BY entry_id`,
       [batchId, userId]
     );
-    if (trashed.length === 0) return { found: false, restored: 0, skipped: 0, unsorted: 0 };
+    if (trashed.length === 0) return { found: false, restored: 0, skipped: 0, unsorted: 0, wishlisted: 0 };
 
     const columns = new Set((await db.all(`PRAGMA table_info(collection)`)).map(c => c.name));
     const touched = new Map();
     let restored = 0;
     let skipped = 0;
     let unsorted = 0;
+    const wanted = [];
 
     for (const t of trashed) {
       const row = JSON.parse(t.row_json);
+      if (row.list_type === 'wishlist') {
+        wanted.push({ card_id: row.card_id, quantity: row.quantity, notes: row.notes, added_at: row.added_at });
+        continue;
+      }
       const place = await placementFor(row, userId);
       if (row.compartment_id && !place.compartment_id) unsorted++;
       const values = { ...row, id: t.entry_id, user_id: userId, location_id: place.location_id, compartment_id: place.compartment_id, position: place.position };
@@ -235,10 +257,16 @@ async function restoreBatch(batchId, userId) {
     for (const [compId, scheme] of touched) {
       await rebalanceCompartmentByScheme(db, compId, scheme.sort_order, scheme.foil_sorting);
     }
+    let wishlisted = 0;
+    if (wanted.length) {
+      const { added, merged, missing } = await wantCards(userId, wanted);
+      wishlisted = added + merged;
+      skipped += wanted.filter(w => missing.includes(w.card_id)).length;
+    }
     // Skipped rows leave too: a copy whose slab is back in the collection under a
     // new entry is not something a second restore could fix.
     await db.run(`DELETE FROM collection_trash WHERE batch_id = ? AND user_id = ?`, [batchId, userId]);
-    return { found: true, restored, skipped, unsorted };
+    return { found: true, restored, skipped, unsorted, wishlisted };
   });
 }
 
