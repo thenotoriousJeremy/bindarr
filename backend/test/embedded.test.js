@@ -324,6 +324,83 @@ async function testTrashOnDevice() {
   assert.strictEqual((await call('GET', '/api/collection/trash')).json.batches.length, 0);
 }
 
+// Trades and gifts between accounts need the other account's server, so the phone
+// answers 501 for them; deals recorded with people outside Bindarr are the
+// account's own record and work on the phone, backup included (routes/mounts.js).
+async function testTransfersOnDevice() {
+  const serverOnly = [
+    ['GET', '/api/transfers'], ['POST', '/api/transfers'],
+    ['GET', '/api/transfers/users'], ['POST', '/api/transfers/users'],
+    ['GET', '/api/transfers/history'], ['POST', '/api/transfers/history'],
+    ['PUT', '/api/transfers/1/accept'], ['GET', '/api/transfers/marked/1'],
+  ];
+  for (const [method, url] of serverOnly) {
+    const res = await call(method, url, method === 'GET' ? {} : { body: {} });
+    assert.strictEqual(res.status, 501, `${method} ${url} needs a server`);
+    assert.strictEqual(res.json.deviceMode, true);
+  }
+  const none = await call('GET', '/api/transfers/external');
+  assert.strictEqual(none.status, 200, JSON.stringify(none.json));
+  assert.deepStrictEqual(none.json.transactions, []);
+
+  // A trade with someone outside Bindarr, recorded end to end: one copy out, one in.
+  await db.run(
+    `INSERT INTO card_cache (id, name, set_id, set_name, number, game, language) VALUES
+       ('mtg-deal-given', 'Giant Growth', 'mtg-m19', 'Core Set 2019', '1', 'mtg', 'English'),
+       ('mtg-deal-received', 'Shock', 'mtg-m19', 'Core Set 2019', '2', 'mtg', 'English')`
+  );
+  const given = await call('POST', '/api/collection', { body: { card_id: 'mtg-deal-given', game: 'mtg' } });
+  assert.strictEqual(given.status, 200, JSON.stringify(given.json));
+  const contact = await call('POST', '/api/transfers/external/contacts', { body: { name: 'Sam' } });
+  assert.strictEqual(contact.status, 201, JSON.stringify(contact.json));
+  const deal = await call('POST', '/api/transfers/external', {
+    body: {
+      contact_id: contact.json.contact.id,
+      transaction_type: 'trade',
+      given_items: [{ type: 'card', id: given.json.id }],
+      received_items: [{ type: 'card', card_id: 'mtg-deal-received', game: 'mtg' }],
+    },
+  });
+  assert.strictEqual(deal.status, 201, JSON.stringify(deal.json));
+  const recorded = await call('GET', '/api/transfers/external');
+  assert.deepStrictEqual(recorded.json.transactions.map(t => [t.contact_name, t.transaction_type, t.items.map(i => i.direction).sort()]),
+    [['Sam', 'trade', ['given', 'received']]]);
+  assert.strictEqual(await db.get(`SELECT 1 FROM collection WHERE id = ?`, [given.json.id]), undefined, 'the copy given away left the collection');
+  const received = await db.get(`SELECT id FROM collection WHERE card_id = 'mtg-deal-received'`);
+  assert.ok(received, 'the copy received is in it');
+  const item = await db.get(`SELECT id FROM external_transaction_items WHERE direction = 'received' AND source_collection_id = ?`, [received.id]);
+  // The copy names the deal item that brought it in.
+  await db.run(`UPDATE collection SET acquired_via_external_item_id = ? WHERE id = ?`, [item.id, received.id]);
+
+  // The phone's full backup carries the deal and restores it renumbered, linked to
+  // the restored copy. The same file as made on a server, where that copy came in
+  // a trade between accounts: the phone has no record of the trade, and the copy
+  // comes back without the link instead of failing the restore on it.
+  const backup = await call('GET', '/api/backup');
+  assert.strictEqual(backup.status, 200);
+  assert.deepStrictEqual(backup.json.data.external_contacts.map(c => c.name), ['Sam']);
+  assert.strictEqual(backup.json.data.external_transaction_items.length, 2);
+  const file = JSON.parse(JSON.stringify(backup.json));
+  Object.assign(file.data.collection.find(c => c.card_id === 'mtg-deal-received'),
+    { acquired_via_transfer_item_id: 4242, acquired_via_historical_trade_item_id: 4343 });
+  const restored = await call('POST', '/api/backup/restore', { body: { backup: file } });
+  assert.strictEqual(restored.status, 200, JSON.stringify(restored.json));
+  assert.strictEqual(restored.json.external_deals, 1);
+  const copy = await db.get(`SELECT * FROM collection WHERE card_id = 'mtg-deal-received'`);
+  assert.deepStrictEqual([copy.acquired_via_transfer_item_id, copy.acquired_via_historical_trade_item_id], [null, null]);
+  const back = await db.get(
+    `SELECT i.id, i.source_collection_id, t.contact_name_snapshot, c.name FROM external_transaction_items i
+       JOIN external_transactions t ON t.id = i.transaction_id LEFT JOIN external_contacts c ON c.id = t.contact_id
+      WHERE i.direction = 'received'`
+  );
+  assert.notStrictEqual(back.id, item.id, 'renumbered');
+  assert.strictEqual(copy.acquired_via_external_item_id, back.id, 'the copy names the restored deal item');
+  assert.strictEqual(back.source_collection_id, copy.id, 'and the item names the restored copy');
+  assert.deepStrictEqual([back.contact_name_snapshot, back.name], ['Sam', 'Sam']);
+  const after = await call('GET', '/api/transfers/external');
+  assert.deepStrictEqual(after.json.transactions.map(t => [t.contact_name, t.items.length]), [['Sam', 2]]);
+}
+
 // The trash names each batch with a UUID, and WebCrypto's randomUUID only arrived
 // in iOS 15.4; the app supports 15.0 (MOB-16).
 function testRandomUuidWithoutWebCrypto() {
@@ -376,6 +453,7 @@ async function main() {
     await testServerOnlyRoutes();
     await testDeviceScan();
     await testTrashOnDevice();
+    await testTransfersOnDevice();
     testRandomUuidWithoutWebCrypto();
     await testGlobalsForAWebView();
   } finally {
