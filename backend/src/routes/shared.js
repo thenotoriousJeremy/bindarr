@@ -4,8 +4,37 @@ const { resolveCardPrice, parseCardRow } = require('../utils/priceHelpers');
 const { compartmentLabel } = require('../utils/compartmentSort');
 const binderArt = require('../utils/binderArtStore');
 const { sendFileAt } = require('../utils/sendFileAt');
+const { shareLimiter } = require('../middleware/auth');
 
 const router = express.Router();
+
+// Public, so per address (middleware/auth.js). Each view below reads a whole
+// collection on the one database connection everybody shares.
+router.use(shareLimiter);
+
+// The collection view, built, for a few seconds: a link posted somewhere busy is
+// opened by many people at once, and each of them used to rebuild the same
+// collection and its stats. Keyed by the owner and what the view depends on; the
+// owner's row is still read on every request, so turning sharing off takes effect
+// at once. A copy is at most SHARE_CACHE_MS behind the owner's edits.
+const SHARE_CACHE_MS = 15 * 1000;
+const SHARE_CACHE_MAX = 100;
+const shareCache = new Map();   // key -> { at, body }
+
+function cachedShare(key) {
+  const hit = shareCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > SHARE_CACHE_MS) {
+    shareCache.delete(key);
+    return null;
+  }
+  return hit.body;
+}
+
+function rememberShare(key, body) {
+  if (shareCache.size >= SHARE_CACHE_MAX) shareCache.delete(shareCache.keys().next().value);
+  shareCache.set(key, { at: Date.now(), body });
+}
 
 // One container, laid out the way its owner sees it: its pages or rows, and the
 // slot each card sits in — so a shared binder reads as a binder and a shared box
@@ -114,6 +143,10 @@ router.get('/:share_token', async (req, res) => {
       return res.status(404).json({ error: 'This card collection is private or does not exist.', code: 'share_not_found' });
     }
 
+    const cacheKey = JSON.stringify([owner.id, share_token, owner.share_locations, String(listType)]);
+    const cached = cachedShare(cacheKey);
+    if (cached) return res.json(cached);
+
     let filterSql = `WHERE c.user_id = ?`;
     let filterParams = [owner.id];
 
@@ -216,7 +249,7 @@ router.get('/:share_token', async (req, res) => {
       setCounts[row.set_id].value += qty * price;
     });
 
-    res.json({
+    const body = {
       owner: owner.username,
       shareLocations,
       collection: formatted,
@@ -235,7 +268,9 @@ router.get('/:share_token', async (req, res) => {
           value: parseFloat(setCounts[id].value.toFixed(2))
         })).sort((a, b) => b.value - a.value).slice(0, 8)
       }
-    });
+    };
+    rememberShare(cacheKey, body);
+    res.json(body);
 
   } catch (error) {
     console.error(error);

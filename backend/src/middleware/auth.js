@@ -185,7 +185,21 @@ const importLimiter = rateLimit({
   message: { error: 'Too many imports. Please wait before importing again.' }
 });
 
+// Public share links (routes/shared.js). No account, so per address. Each view
+// builds a whole collection and its stats; this is far above what reading one
+// takes and well below what scraping one in a loop would.
+const shareLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  // Binder artwork images are a row lookup and a file each, and a shared binder
+  // can show dozens of them on one page.
+  skip: (req) => /\/art\/[^/]+$/.test(req.path),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please try again in a minute.' }
+});
+
 module.exports = {
   authenticateToken, requireAdmin, authLimiter, loginLimiter, passwordLimiter, searchLimiter, importLimiter,
-  trustProxySetting
+  shareLimiter, trustProxySetting
 };
