@@ -305,6 +305,12 @@ by reimplementing them:
   `cvScan.setSource()` supplies the published catalogs the phone downloaded
   (`device/scanAssets.js`), so `cvScan.match` skips only the decode and the
   forward pass. Lorcana has no published catalog and answers `503 notBuilt`.
+  The model sizes, the sharpness gate, the ImageNet normalisation and the
+  corners-to-homography step live once, in `shared/scanModel.mjs`, for the
+  server, the browser and the phone: a catalog embedded with one preprocessing
+  must be queried with the same, so `backend/test/scanshared.test.js` pins them
+  byte for byte. Corners that make no card fall back to the whole frame on the
+  phone as on the server.
 
 `backend/test/embedded.test.js` loads the real routes through the same alias table
 and drives them through `handle()`, against node-sqlite3 as the driver; it also
