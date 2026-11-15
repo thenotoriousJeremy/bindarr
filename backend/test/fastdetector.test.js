@@ -1,3 +1,6 @@
+// The corner model's contract: its input and output names, eight corner floats
+// in [0, 1], on a synthetic card. Needs the model (scripts/fetch-models.mjs);
+// without it this exits 77, which test/run.js reports as SKIP rather than PASS.
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -12,7 +15,7 @@ async function main() {
   const modelFile = path.join(MODEL_DIR, 'cornelius.onnx');
   if (!fs.existsSync(modelFile)) {
     console.log('fastdetector.test.js: no model present — skipped');
-    return;
+    process.exit(77);
   }
 
   const session = await ort.InferenceSession.create(modelFile, { intraOpNumThreads: 1, interOpNumThreads: 1 });
