@@ -45,21 +45,29 @@ const cardId = (lang, id) => `tcgdex-${lang}-${id}`;
 const imageUrl = (image) => (image ? `${image}/low.png` : '');
 
 // Cardmarket quotes in EUR while TCGplayer quotes USD, and TCGdex hands back
-// whichever it has (non-English cards are Cardmarket-only). Both land in the same
-// price columns the app already mixes them in — tcgApi has always fallen back to
-// Cardmarket's trendPrice the same way — and the UI renders one currency symbol.
-// ponytail: prices are stored unit-less as before; a per-row currency column and
-// a formatPrice unit are the upgrade path if mixed currencies start to matter.
+// whichever it has (non-English cards are Cardmarket-only). ONE of the two prices
+// the whole row: TCGplayer when it quotes any finish, else Cardmarket, the same
+// rule the Scryfall and pokemontcgapi clients follow. Falling back per finish put
+// a €0.50 normal and a €1.20 reverse next to a $4.97 holo, all labelled USD,
+// because price_currency can only name one currency for the row.
 function extractPrices(pricing) {
   const cm = (pricing && pricing.cardmarket) || {};
   const tp = (pricing && pricing.tcgplayer) || {};
   const market = (v) => (v && (v.marketPrice ?? v.midPrice)) || null;
 
-  const normal = market(tp.normal) ?? cm.avg ?? cm.trend ?? null;
-  const holofoil = market(tp.holofoil) ?? cm['avg-holo'] ?? cm['trend-holo'] ?? null;
-  // Cardmarket does not split reverse-holo on the cards TCGdex exposes; read the
-  // keys anyway so the day it does, they land in the right column.
-  const reverse = market(tp.reverseHolofoil) ?? cm['avg-reverse'] ?? cm['trend-reverse'] ?? null;
+  const tcgplayer = {
+    normal: market(tp.normal),
+    holofoil: market(tp.holofoil),
+    reverse: market(tp.reverseHolofoil),
+  };
+  const useTcgplayer = tcgplayer.normal != null || tcgplayer.holofoil != null || tcgplayer.reverse != null;
+  const { normal, holofoil, reverse } = useTcgplayer ? tcgplayer : {
+    normal: cm.avg ?? cm.trend ?? null,
+    holofoil: cm['avg-holo'] ?? cm['trend-holo'] ?? null,
+    // Cardmarket does not split reverse-holo on the cards TCGdex exposes; read the
+    // keys anyway so the day it does, they land in the right column.
+    reverse: cm['avg-reverse'] ?? cm['trend-reverse'] ?? null,
+  };
 
   return {
     price_trend: normal ?? holofoil ?? reverse ?? 0,
@@ -68,6 +76,8 @@ function extractPrices(pricing) {
     price_reverse_holofoil: reverse,
     // Cardmarket's rolling averages are real computed sales data — the same
     // series tcgApi stores for English cards, so the price charts keep working.
+    // Always Cardmarket's, so always EUR (routes/stats.js avgCurrency), whichever
+    // marketplace priced the finishes above.
     price_avg1: cm.avg1 > 0 ? cm.avg1 : null,
     price_avg7: cm.avg7 > 0 ? cm.avg7 : null,
     price_avg30: cm.avg30 > 0 ? cm.avg30 : null,
@@ -76,7 +86,7 @@ function extractPrices(pricing) {
     // and the two are different currencies — that mixing is what price_currency
     // exists to record. tcgcsvApi overwrites both for any card it can place.
     price_source: 'tcgdex',
-    price_currency: market(tp.normal) != null || market(tp.holofoil) != null ? 'USD' : 'EUR',
+    price_currency: useTcgplayer ? 'USD' : 'EUR',
   };
 }
 
