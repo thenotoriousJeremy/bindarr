@@ -53,7 +53,7 @@ export default function ContainerList({
         {selectedLoc && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
           {!filingMode && !moveMode && (
-            <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+            <div style={{ display: 'flex', background: 'var(--surface-2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
               <button
                 type="button"
                 className={`btn btn-icon-only ${containerViewMode === 'layout' ? 'btn-primary' : 'btn-secondary'}`}
@@ -79,7 +79,7 @@ export default function ContainerList({
             </div>
           )}
           {viewMode === 'overview' && (
-            <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+            <div style={{ display: 'flex', background: 'var(--surface-2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
               <button
                 type="button"
                 className="btn btn-icon-only btn-secondary"

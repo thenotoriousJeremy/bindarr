@@ -298,8 +298,8 @@ export default function DeckEditor({
                   // flex minimum, which pushed Browse past a phone's edge.
                   style={{ flex: 1, minWidth: 0 }}
                 />
-                <button type="submit" className="btn btn-primary" style={{ padding: '0.5rem 1rem' }} title={t('shared.search')}>
-                  <Search size={16} />
+                <button type="submit" className="btn btn-primary" style={{ padding: '0.5rem 1rem' }} title={t('shared.search')} aria-label={t('shared.search')}>
+                  <Search size={16} aria-hidden="true" />
                 </button>
                 <button type="button" className="btn btn-secondary" onClick={(e) => handleSearchCards(e, true)} style={{ padding: '0.5rem 0.9rem', fontSize: '0.75rem', whiteSpace: 'nowrap' }} title={t('deck.browseHint')}>
                   {t('deck.browseCollection')}
@@ -442,7 +442,7 @@ export default function DeckEditor({
                                     <Crown size={12} />
                                   </button>
                                 )}
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-glass)', flexShrink: 0 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'var(--surface-2)', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-glass)', flexShrink: 0 }}>
                                   <button
                                     className={`btn ${card.quantity === 1 ? 'btn-danger' : 'btn-secondary'} btn-icon-only`}
                                     style={{ width: '22px', height: '22px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
