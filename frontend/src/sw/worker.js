@@ -1,4 +1,4 @@
-/* global SW_VERSION, PRECACHE, SHELL_FILES, OFFLINE_HEADER, shellCacheName, dataCacheName, userKeyFor, classifyRequest, isCacheableResponse, staleCaches, trimPlan */
+/* global SW_VERSION, PRECACHE, SHELL_FILES, OFFLINE_HEADER, shellCacheName, dataCacheName, userKeyFor, classifyRequest, isCacheableResponse, staleCaches, trimPlan, shouldTrim */
 // Service worker body. Not bundled with the app: scripts/swPlugin.mjs prepends
 // SW_VERSION, PRECACHE and the rules from utils/swPolicy.js and emits the result
 // as /sw.js on a production web build. Registered by utils/registerSw.js, never
@@ -170,13 +170,31 @@ async function image(req) {
   return res;
 }
 
+// Writes per data cache since this worker last trimmed it (swPolicy shouldTrim).
+const writesSinceTrim = new Map();
+
 async function store(name, key, res) {
+  // A read that was in flight when its session logged out must not recreate the
+  // cache the logout just deleted. Checked again after each await, because the
+  // logout can land between them, and caches.open() alone creates the cache.
+  if (loggedOut.has(name)) return;
   const cache = await caches.open(name);
-  await cache.put(key, res);
+  if (!loggedOut.has(name)) await cache.put(key, res);
+  if (loggedOut.has(name)) {
+    await caches.delete(name);
+    return;
+  }
+  const writes = writesSinceTrim.has(name) ? writesSinceTrim.get(name) : null;
+  if (!shouldTrim(writes)) {
+    writesSinceTrim.set(name, writes + 1);
+    return;
+  }
+  writesSinceTrim.set(name, 0);
   const keys = await cache.keys();
   const drop = trimPlan(keys.map(k => k.url), { origin: self.location.origin });
   await Promise.all(drop.map(url => cache.delete(url)));
-  // One session's data on the device at a time.
+  // One session's data on the device at a time. A new session's first write
+  // always trims, so another account's cache goes the moment this one starts.
   const others = staleCaches(await caches.keys(), { keepDataName: name });
   await Promise.all(others.map(n => caches.delete(n)));
 }
