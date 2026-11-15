@@ -29,6 +29,7 @@ const { recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/pri
 const { normId, normName, numberKey } = require('./utils/setCatalogueMatch');
 const metrics = require('./utils/metrics');
 const { slimResults, SEALED_ONLY_CATEGORY } = require('./utils/tcgcsvSlim');
+const { createProviderClient } = require('./utils/providerClient');
 
 // The project's daily mirror of TCGCSV (.github/workflows/tcgcsv-mirror.yml), not
 // tcgcsv.com itself. TCGCSV is one person's free service; every install syncing
@@ -163,9 +164,7 @@ const client = axios.create({
 metrics.instrumentAxiosClient(client, 'tcgcsv');
 
 let loggedCooldownUntil;
-let lastRequestAt = 0;
 let requestsSent = 0;   // every request that left the process; runSync logs its share
-let requestQueue = Promise.resolve();
 let syncPromise = null;
 
 class TcgcsvCooldownError extends Error {
@@ -272,17 +271,24 @@ function logRequestFailure(path, error) {
   );
 }
 
-function pacedGet(path, config = {}) {
-  const request = requestQueue.then(async () => {
-    const delay = TCGCSV_MIN_REQUEST_INTERVAL_MS - (Date.now() - lastRequestAt);
-    if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
-    await check403Cooldown();
-    lastRequestAt = Date.now();
-    requestsSent++;
-    try {
-      return await client.get(path, config);
-    } catch (error) {
-      logRequestFailure(path, error);
+// One request at a time, TCGCSV_MIN_REQUEST_INTERVAL_MS apart: utils/providerClient's
+// queue, around this module's own client, whose headers stay exactly as they are.
+// TCGCSV's stop signal is its own: a 403 starts the persisted 24-hour cooldown
+// (checked before every request, so a refusal sends nothing), and no in-memory
+// pause is armed on top of it.
+const tcgcsvQueue = createProviderClient({
+  name: 'tcgcsv',
+  label: 'TCGCSV',
+  client,
+  minGapMs: TCGCSV_MIN_REQUEST_INTERVAL_MS,
+  cooldownStatuses: [],
+  hooks: {
+    before: async () => {
+      await check403Cooldown();
+      requestsSent++;
+    },
+    error: async (error, { url }) => {
+      logRequestFailure(url, error);
       if (error && error.response && error.response.status === 403) {
         try {
           await start403Cooldown();
@@ -290,12 +296,11 @@ function pacedGet(path, config = {}) {
           console.error('Could not save TCGCSV 403 cooldown:', cooldownError.message);
         }
       }
-      throw error;
-    }
-  });
-  requestQueue = request.then(() => undefined, () => undefined);
-  return request;
-}
+    },
+  },
+});
+
+const pacedGet = (path, config = {}) => tcgcsvQueue.get(path, config);
 
 function parseResults(path, data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
