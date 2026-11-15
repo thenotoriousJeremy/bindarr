@@ -27,11 +27,10 @@ const cvScan = require('./cvScan');
 const pokemonProvider = require('./utils/pokemonProvider');
 const metrics = require('./utils/metrics');
 const games = require('./utils/games');
+// milo's input square (require() of an ES module: Node 22.12+).
+const { EMBED_SIZE } = require('../../shared/scanModel.mjs');
 
 const MODEL_DIR = process.env.CV_MODEL_DIR || path.join(__dirname, '..', 'data', 'models');
-const SIZE = 448;
-const MEAN = [0.485, 0.456, 0.406];
-const STD = [0.229, 0.224, 0.225];
 // Every game the registry marks scannable (shared/games.json).
 const GAMES = games.withFeature('scan');
 
@@ -344,17 +343,6 @@ async function setCounts(game, lang = 'English') {
   };
 }
 
-function toTensor(rgb) {
-  const plane = SIZE * SIZE;
-  const x = new Float32Array(3 * plane);
-  for (let p = 0; p < plane; p++) {
-    x[p] = (rgb[p * 3] / 255 - MEAN[0]) / STD[0];
-    x[plane + p] = (rgb[p * 3 + 1] / 255 - MEAN[1]) / STD[1];
-    x[2 * plane + p] = (rgb[p * 3 + 2] / 255 - MEAN[2]) / STD[2];
-  }
-  return new ort.Tensor('float32', x, [1, 3, SIZE, SIZE]);
-}
-
 // --- phase 1 -----------------------------------------------------------------
 async function cachePhase(job) {
   // A scoped build walks only the sets asked for. Everything else about the job is
@@ -488,9 +476,11 @@ async function defaultEmbedder() {
       }
     },
     async embed(buf) {
-      const { data } = await sharp(buf).resize(SIZE, SIZE, { fit: 'fill' })
+      const { data } = await sharp(buf).resize(EMBED_SIZE, EMBED_SIZE, { fit: 'fill' })
         .removeAlpha().raw().toBuffer({ resolveWithObject: true });
-      const out = await session.run({ image: toTensor(data) });
+      // The scan's own tensor (cvScan.toTensor): a catalog row and the photo matched
+      // against it must be normalised alike, or every cosine drifts.
+      const out = await session.run({ image: cvScan.toTensor(data, EMBED_SIZE) });
       return out.embedding.data;
     },
   };

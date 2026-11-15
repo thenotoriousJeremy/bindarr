@@ -481,7 +481,19 @@ export function minAreaRect(pts) {
 
 // Perspective transform from 4 source points to 4 destination points, returned
 // as the 8 coefficients of the 3x3 homography (h22 fixed at 1).
-export function getPerspectiveTransform(src, dst) {
+//
+// A zero pivot means the source points do not span a plane: three in a line, or
+// two on one spot. What happens then is the caller's choice, and the two callers
+// have always chosen differently, so it is an option rather than a fix:
+//
+//   default              the pivot becomes 1e-12 and a (meaningless) transform
+//                        comes back: never throws, never null. The contour
+//                        detector, the browser's capture crop and device mode.
+//   nullIfSingular       null, so the caller can fall back. The server's dewarp
+//                        (cvScan), which then matches the whole frame.
+//
+// On any other input the two agree exactly.
+export function getPerspectiveTransform(src, dst, { nullIfSingular = false } = {}) {
   // Solve A x = b for the 8 unknowns, by Gaussian elimination.
   const A = [], b = [];
   for (let i = 0; i < 4; i++) {
@@ -495,7 +507,11 @@ export function getPerspectiveTransform(src, dst) {
     for (let r = col + 1; r < 8; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
     [A[col], A[piv]] = [A[piv], A[col]];
     [b[col], b[piv]] = [b[piv], b[col]];
-    const d = A[col][col] || 1e-12;
+    let d = A[col][col];
+    if (!d) {
+      if (nullIfSingular) return null;
+      d = 1e-12;
+    }
     for (let r = 0; r < 8; r++) {
       if (r === col) continue;
       const f = A[r][col] / d;
@@ -503,20 +519,43 @@ export function getPerspectiveTransform(src, dst) {
       b[r] -= f * b[col];
     }
   }
+  // Each diagonal entry is its column's pivot, untouched since: never zero on the
+  // nullIfSingular path, so the 1e-12 there is only ever the default path's.
   return A.map((row, i) => b[i] / (row[i] || 1e-12));
 }
+
+// Invert the 3x3 [a b c; d e f; g i 1] to map a destination pixel back into the
+// source. Shared by both warps below.
+function invertHomography(coeffs) {
+  const [a, b, c, d, e, f, g, i] = coeffs;
+  const det = a * (e - f * i) - b * (d - f * g) + c * (d * i - e * g);
+  return [
+    (e - f * i) / det, (c * i - b) / det, (b * f - c * e) / det,
+    (f * g - d) / det, (a - c * g) / det, (c * d - a * f) / det,
+    (d * i - e * g) / det, (b * g - a * i) / det, (a * e - b * d) / det,
+  ];
+}
+
+// Two bilinear warps over the same inverse mapping. They are NOT interchangeable,
+// and that is deliberate: each produces the pixels its callers have always
+// embedded, and making them agree would move one side's crops by up to a level
+// per channel, which shifts its embeddings by an amount nobody has measured.
+//
+//   warpPerspective     RGBA in and out. The four weighted neighbours summed in
+//                       one expression, then ROUNDED. Outside the source: black,
+//                       opaque. The browser's capture crop (components/scanner/
+//                       scanFrame.js), device mode's dewarp and the contour
+//                       detector.
+//   warpPerspectiveRgb  RGB in and out. Interpolated along x, then y, and
+//                       TRUNCATED by the Uint8Array store. Outside the source:
+//                       black. The server's dewarp (backend/src/cvScan.js), on
+//                       sharp's raw RGB so no image codec sits between decode and
+//                       embed (a PNG round trip there cost ~100 ms per scan).
 
 // Warp RGBA pixels through a homography into a dstW x dstH RGBA buffer, with
 // bilinear sampling. Inverse-mapped, so every destination pixel is filled.
 export function warpPerspective(rgba, w, h, coeffs, dstW, dstH) {
-  const [a, bb, c, d, e, f, g, i] = coeffs;
-  // Invert the 3x3 [a b c; d e f; g i 1] to map destination back to source.
-  const det = a * (e - f * i) - bb * (d - f * g) + c * (d * i - e * g);
-  const inv = [
-    (e - f * i) / det, (c * i - bb) / det, (bb * f - c * e) / det,
-    (f * g - d) / det, (a - c * g) / det, (c * d - a * f) / det,
-    (d * i - e * g) / det, (bb * g - a * i) / det, (a * e - bb * d) / det,
-  ];
+  const inv = invertHomography(coeffs);
   const out = new Uint8ClampedArray(dstW * dstH * 4);
   for (let y = 0; y < dstH; y++) {
     for (let x = 0; x < dstW; x++) {
@@ -540,9 +579,37 @@ export function warpPerspective(rgba, w, h, coeffs, dstW, dstH) {
   return out;
 }
 
+// Warp raw RGB pixels through a homography into a dstW x dstH RGB buffer: the
+// server's sampler (see above for how it differs from warpPerspective).
+export function warpPerspectiveRgb(rgb, w, h, coeffs, dstW, dstH) {
+  const inv = invertHomography(coeffs);
+  const out = new Uint8Array(dstW * dstH * 3);
+  for (let y = 0; y < dstH; y++) {
+    for (let x = 0; x < dstW; x++) {
+      const den = inv[6] * x + inv[7] * y + inv[8];
+      const sx = (inv[0] * x + inv[1] * y + inv[2]) / den;
+      const sy = (inv[3] * x + inv[4] * y + inv[5]) / den;
+      const o = (y * dstW + x) * 3;
+      if (sx < 0 || sy < 0 || sx > w - 1 || sy > h - 1) continue;
+      const x0 = sx | 0, y0 = sy | 0;
+      const x1 = Math.min(x0 + 1, w - 1), y1 = Math.min(y0 + 1, h - 1);
+      const fx = sx - x0, fy = sy - y0;
+      for (let ch = 0; ch < 3; ch++) {
+        const p00 = rgb[(y0 * w + x0) * 3 + ch], p01 = rgb[(y0 * w + x1) * 3 + ch];
+        const p10 = rgb[(y1 * w + x0) * 3 + ch], p11 = rgb[(y1 * w + x1) * 3 + ch];
+        out[o + ch] = (p00 * (1 - fx) + p01 * fx) * (1 - fy) + (p10 * (1 - fx) + p11 * fx) * fy;
+      }
+    }
+  }
+  return out;
+}
+
 // Order 4 points into [TL, TR, BR, BL] in perimeter clockwise order.
 // Sorts by polar angle around the centroid so the resulting polygon is convex
 // and mathematically guaranteed to never cross itself (eliminates hourglass/bowtie).
+// The one copy: the server's and device mode's dewarp (scanModel.dewarpTransform),
+// the scanner's live outline (frontend/src/utils/detectResult.js) and the
+// contour detector all sort corners with it.
 export function orderQuad(pts) {
   if (!pts || pts.length !== 4) return pts;
   const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
