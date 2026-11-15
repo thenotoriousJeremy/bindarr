@@ -3,38 +3,18 @@
 process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
 process.env.BINDARR_DISABLE_FX_SYNC = '1';
 
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
 const crypto = require('crypto');
 const assert = require('assert');
-const { spawn } = require('child_process');
+const harness = require('./harness');
 
 // Deck formats, any-printing decks and checkout allocation over real HTTP, against
 // a real server and a throwaway database. The race at the top is the point: two
 // checkouts fired at once for the same copies must not both get them.
-const tmpDb = path.join(os.tmpdir(), `bindarr-decks-test-${process.pid}.db`);
-process.env.DB_PATH = tmpDb;
-const { freePort } = require('../freePort');
-let port;
+const tmp = harness.tempDatabase('decks-test');
 let base;
 
-const projectRoot = path.join(__dirname, '../../../');
 const db = require('../../src/db');
 const { hashSessionToken } = require('../../src/utils/authHelpers');
-
-async function waitForServer() {
-  for (let i = 0; i < 150; i++) {
-    try {
-      const res = await fetch(`${base}/api/health`);
-      if (res.ok) return;
-    } catch (e) {
-      // retry
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error(`Server on port ${port} did not start in time`);
-}
 
 async function waitForAdmin() {
   for (let i = 0; i < 150; i++) {
@@ -60,36 +40,57 @@ async function runCase(id, fn) {
 }
 
 async function runTests() {
-  port = String(await freePort());
-  base = `http://localhost:${port}`;
-  // The mock keeps any Scryfall call this server makes (a startup price sweep)
-  // off the network.
-  const server = spawn('node', ['-r', path.join(__dirname, 'scryfall-mock.js'), path.join(projectRoot, 'backend/src/server.js')], {
-    env: { ...process.env, PORT: port, DB_PATH: tmpDb }
-  });
+  await harness.prepare(db);
+  const adminId = await waitForAdmin();
+  const token = crypto.randomBytes(24).toString('hex');
+  await db.run(`INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`,
+    [hashSessionToken(token), adminId, new Date(Date.now() + 86400000).toISOString()]);
+  const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
+
+  const cache = (id, name, game, extra = {}) => db.run(
+    `INSERT INTO card_cache (id, name, game, supertype, subtypes, color_identity, oracle_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [id, name, game, extra.supertype || 'MTG', JSON.stringify(extra.subtypes || []), JSON.stringify(extra.identity || []), extra.oracle || null]
+  );
+  const own = async (cardId, game, copies) => {
+    const ids = [];
+    for (let i = 0; i < copies; i++) {
+      ids.push((await db.run(`INSERT INTO collection (card_id, quantity, game, user_id) VALUES (?, 1, ?, ?)`, [cardId, game, adminId])).lastID);
+    }
+    return ids;
+  };
+
+  // Every card and copy the cases below use, written before the server opens the
+  // file. Each case still owns them before it builds a deck from them, as it
+  // always has; they are just all there from the start.
+  await cache('mtg-counterspell', 'Counterspell', 'mtg', { subtypes: ['Instant'], identity: ['Blue'], oracle: 'o-counterspell' });
+  const counterspells = await own('mtg-counterspell', 'mtg', 2);
+  // F9-TC3
+  await cache('mtg-ring-cmr', 'Sol Ring', 'mtg', { subtypes: ['Artifact'], oracle: 'o-ring' });
+  await cache('mtg-ring-c21', 'Sol Ring', 'mtg', { subtypes: ['Artifact'], oracle: 'o-ring' });
+  await cache('mtg-forest', 'Forest', 'mtg', { subtypes: ['Basic', 'Land', 'Forest'], identity: ['Green'] });
+  await cache('mtg-pool', 'Breeding Pool', 'mtg', { subtypes: ['Land', 'Forest', 'Island'], identity: ['Green', 'Blue'] });
+  await own('mtg-ring-cmr', 'mtg', 4);
+  await own('mtg-ring-c21', 'mtg', 1);
+  await own('mtg-forest', 'mtg', 30);
+  await own('mtg-pool', 'mtg', 2);
+  // F9-TC4: the C21 copy is the only one; the deck lists the CMR printing.
+  await cache('mtg-ponder-a', 'Ponder', 'mtg', { subtypes: ['Sorcery'], oracle: 'o-ponder' });
+  await cache('mtg-ponder-b', 'Ponder', 'mtg', { subtypes: ['Sorcery'], oracle: 'o-ponder' });
+  const [ponder] = await own('mtg-ponder-b', 'mtg', 1);
+  // F9-TC5
+  await cache('mtg-krenko', 'Krenko, Mob Boss', 'mtg', { subtypes: ['Legendary', 'Creature', 'Goblin', 'Warrior'], identity: ['Red'], oracle: 'o-krenko' });
+  await own('mtg-krenko', 'mtg', 1);
+  // F9-TC6
+  await cache('mtg-brainstorm', 'Brainstorm', 'mtg', { subtypes: ['Instant'], oracle: 'o-brainstorm' });
+  const storms = await own('mtg-brainstorm', 'mtg', 3);
+
+  const server = await harness.startServer(tmp);
+  base = server.base;
 
   try {
-    await waitForServer();
-    const adminId = await waitForAdmin();
-    const token = crypto.randomBytes(24).toString('hex');
-    await db.run(`INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`,
-      [hashSessionToken(token), adminId, new Date(Date.now() + 86400000).toISOString()]);
-    const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
     const api = async (method, url, body) => {
       const res = await fetch(`${base}/api${url}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
       return { status: res.status, body: await res.json().catch(() => null) };
-    };
-
-    const cache = (id, name, game, extra = {}) => db.run(
-      `INSERT INTO card_cache (id, name, game, supertype, subtypes, color_identity, oracle_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [id, name, game, extra.supertype || 'MTG', JSON.stringify(extra.subtypes || []), JSON.stringify(extra.identity || []), extra.oracle || null]
-    );
-    const own = async (cardId, game, copies) => {
-      const ids = [];
-      for (let i = 0; i < copies; i++) {
-        ids.push((await db.run(`INSERT INTO collection (card_id, quantity, game, user_id) VALUES (?, 1, ?, ?)`, [cardId, game, adminId])).lastID);
-      }
-      return ids;
     };
     const newDeck = async (name, game, format, cards, extra = {}) => {
       const created = await api('POST', '/decks', { name, game, format, ...extra });
@@ -101,9 +102,6 @@ async function runTests() {
       return created.body.id;
     };
     const holdings = (deckId) => db.all(`SELECT entry_id FROM deck_allocations WHERE deck_id = ? ORDER BY entry_id`, [deckId]);
-
-    await cache('mtg-counterspell', 'Counterspell', 'mtg', { subtypes: ['Instant'], identity: ['Blue'], oracle: 'o-counterspell' });
-    const counterspells = await own('mtg-counterspell', 'mtg', 2);
 
     // F9-TC1: two checkouts fired at once for the same two copies. Exactly one deck
     // gets them; the other is refused cleanly, holds nothing and stays in storage.
@@ -150,15 +148,6 @@ async function runTests() {
     // F9-TC3: the copy limit follows the format. Commander is singleton by name across
     // printings; Modern allows four; basic lands are free in both.
     await runCase('F9-TC3', async () => {
-      await cache('mtg-ring-cmr', 'Sol Ring', 'mtg', { subtypes: ['Artifact'], oracle: 'o-ring' });
-      await cache('mtg-ring-c21', 'Sol Ring', 'mtg', { subtypes: ['Artifact'], oracle: 'o-ring' });
-      await cache('mtg-forest', 'Forest', 'mtg', { subtypes: ['Basic', 'Land', 'Forest'], identity: ['Green'] });
-      await cache('mtg-pool', 'Breeding Pool', 'mtg', { subtypes: ['Land', 'Forest', 'Island'], identity: ['Green', 'Blue'] });
-      await own('mtg-ring-cmr', 'mtg', 4);
-      await own('mtg-ring-c21', 'mtg', 1);
-      await own('mtg-forest', 'mtg', 30);
-      await own('mtg-pool', 'mtg', 2);
-
       const edh = await newDeck('Singleton', 'mtg', 'Commander / EDH', [['mtg-ring-cmr', 1], ['mtg-forest', 30]]);
       const again = await api('POST', `/decks/${edh}/cards`, { card_id: 'mtg-ring-c21', quantity: 1 });
       assert.strictEqual(again.status, 400);
@@ -175,10 +164,6 @@ async function runTests() {
     // F9-TC4: any printing. Magic decks accept it by default and count the other
     // printing as owned; Pokémon decks never do, even when asked.
     await runCase('F9-TC4', async () => {
-      // The C21 copy is the only one; the deck lists the CMR printing.
-      await cache('mtg-ponder-a', 'Ponder', 'mtg', { subtypes: ['Sorcery'], oracle: 'o-ponder' });
-      await cache('mtg-ponder-b', 'Ponder', 'mtg', { subtypes: ['Sorcery'], oracle: 'o-ponder' });
-      const [ponder] = await own('mtg-ponder-b', 'mtg', 1);
       // Not a copy of the listed printing in sight, yet the add passes the owned-copy
       // check: this deck counts the other one.
       const anyDeck = await newDeck('Any', 'mtg', 'Modern', [['mtg-ponder-a', 1]]);
@@ -203,8 +188,6 @@ async function runTests() {
     // F9-TC5: commanders are marked per card and come back with the card text the
     // deck builder's rules read.
     await runCase('F9-TC5', async () => {
-      await cache('mtg-krenko', 'Krenko, Mob Boss', 'mtg', { subtypes: ['Legendary', 'Creature', 'Goblin', 'Warrior'], identity: ['Red'], oracle: 'o-krenko' });
-      await own('mtg-krenko', 'mtg', 1);
       const edh = await newDeck('Goblins', 'mtg', 'Commander / EDH', [['mtg-krenko', 1]]);
       const marked = await api('PUT', `/decks/${edh}/cards/mtg-krenko/commander`, { commander: true });
       assert.strictEqual(marked.status, 200);
@@ -219,8 +202,6 @@ async function runTests() {
     // F9-TC6: a checked-out deck's pull list is exactly what it holds, and storage
     // greys out exactly those copies. A card added while it is out takes a free copy.
     await runCase('F9-TC6', async () => {
-      await cache('mtg-brainstorm', 'Brainstorm', 'mtg', { subtypes: ['Instant'], oracle: 'o-brainstorm' });
-      const storms = await own('mtg-brainstorm', 'mtg', 3);
       const deckId = await newDeck('Storm', 'mtg', 'Modern', [['mtg-brainstorm', 2]]);
       assert.strictEqual((await api('PUT', `/decks/${deckId}/checkout`)).status, 200);
       const heldIds = (await holdings(deckId)).map(h => h.entry_id);
@@ -261,15 +242,11 @@ async function runTests() {
       assert.deepStrictEqual(await rows(), [{ quantity: 2 }]);
     });
   } finally {
-    // SIGKILL immediately to avoid sqlite3 teardown crashes on Windows
-    server.kill('SIGKILL');
-    try { db.dbConnection.close(); } catch { /* already closed */ }
-    for (const suffix of ['', '-wal', '-shm']) {
-      try { fs.unlinkSync(tmpDb + suffix); } catch { /* already gone */ }
-    }
+    await server.stop();
+    await harness.cleanup(db, tmp);
   }
 }
 
 runTests()
-  .then(() => setTimeout(() => process.exit(0), 500))
-  .catch(err => { console.error('FAIL: decks.test.js -', err.message); setTimeout(() => process.exit(1), 500); });
+  .then(() => process.exit(0))
+  .catch(err => { console.error('FAIL: decks.test.js -', err.message); process.exit(1); });

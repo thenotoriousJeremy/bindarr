@@ -1,18 +1,14 @@
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
 const assert = require('assert');
+const harness = require('./harness');
 
-// Point the db module at a throwaway file BEFORE requiring it.
+// Point the db module at a throwaway database BEFORE requiring it. No server
+// here: this suite drives initDb and the sorting helpers in its own process.
 //
-// The name is keyed by PID and the file was never cleaned up, so once the OS
-// recycled a PID this opened a database from an OLD run — one that already held
-// this test's fixture rows — and the inserts below failed on a UNIQUE
-// constraint. Rare, entirely dependent on which PID the OS handed out, and it
-// looked like a real regression when it finally fired. Start from empty.
-const tmpDb = path.join(os.tmpdir(), `bindarr-schema-test-${process.pid}.db`);
-try { fs.rmSync(tmpDb, { force: true }); } catch { /* nothing to remove */ }
-process.env.DB_PATH = tmpDb;
+// It used to be a bare file named by PID that was never cleaned up, so once the
+// OS recycled a PID this opened a database from an OLD run — one that already
+// held this test's fixture rows — and the inserts below failed on a UNIQUE
+// constraint. A fresh directory per run starts from empty.
+const tmp = harness.tempDatabase('schema-test');
 
 const db = require('../../src/db');
 const compartmentSort = require('../../src/utils/compartmentSort');
@@ -21,12 +17,7 @@ const compartmentSort = require('../../src/utils/compartmentSort');
 const tcgApi = require('../../src/tcgApi');
 tcgApi.fetchAndCacheSets = async () => {};
 
-function cleanup() {
-  try { db.dbConnection.close(); } catch {}
-  for (const suffix of ['', '-wal', '-shm']) {
-    try { fs.unlinkSync(tmpDb + suffix); } catch {}
-  }
-}
+const cleanup = () => harness.cleanup(db, tmp);
 
 async function runTests() {
   await db.initDb();
@@ -241,11 +232,12 @@ async function runTests() {
 }
 
 runTests()
-  .then(() => {
-    cleanup();
+  .then(async () => {
+    await cleanup();
     process.exit(0);
   })
-  .catch(err => {
-    cleanup();
+  .catch(async err => {
+    console.error(err);
+    await cleanup();
     process.exit(1);
   });

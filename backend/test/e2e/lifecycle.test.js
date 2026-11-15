@@ -1,10 +1,8 @@
 const path = require('path');
-const os = require('os');
 const fs = require('fs');
 const assert = require('assert');
-const { spawn } = require('child_process');
-const { freePort } = require('../freePort');
 const sqlite3 = require('sqlite3');
+const harness = require('./harness');
 
 // Server lifecycle against the real server.js: a database that cannot be
 // initialised ends the process instead of leaving it listening; the backup
@@ -13,40 +11,16 @@ const sqlite3 = require('sqlite3');
 //
 // Shutdown on SIGTERM is tested directly in test/shutdown.test.js: Windows cannot
 // signal a child process in any way that exercises a handler.
-const projectRoot = path.join(__dirname, '../../../');
-const serverScript = path.join(projectRoot, 'backend/src/server.js');
-const mockScript = path.join(__dirname, 'scryfall-mock.js');
-const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'bindarr-lifecycle-test-'));
-const ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || 'test-admin-password';
+const tmp = harness.tempDatabase('lifecycle-test');
+const scratch = tmp.dir;
+const ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD;
 
-const baseEnv = {
-  ...process.env,
-  HTTPS_PORT: '',
-  BINDARR_DISABLE_TCGCSV_SYNC: '1',
-  BINDARR_DISABLE_FX_SYNC: '1',
-  DEFAULT_ADMIN_PASSWORD: ADMIN_PASSWORD,
-};
-
-function collect(child) {
-  const out = { stdout: '', stderr: '' };
-  child.stdout.on('data', d => { out.stdout += d; });
-  child.stderr.on('data', d => { out.stderr += d; });
-  return out;
-}
-
-function exitOf(child, ms) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`still running after ${ms / 1000}s`)), ms);
-    child.on('exit', (code, signal) => { clearTimeout(timer); resolve({ code, signal }); });
+function exitOf(srv, ms) {
+  let timer;
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`still running after ${ms / 1000}s`)), ms);
   });
-}
-
-async function waitForServer(url) {
-  for (let i = 0; i < 300; i++) {
-    try { const res = await fetch(url); if (res.ok) return; } catch { /* not up yet */ }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error('Server did not start in time');
+  return Promise.race([srv.exited, timeout]).finally(() => clearTimeout(timer));
 }
 
 function readJobRuns(dbFile) {
@@ -63,33 +37,27 @@ function readJobRuns(dbFile) {
 async function initFailureExits() {
   const notADirectory = path.join(scratch, 'not-a-directory');
   fs.writeFileSync(notADirectory, 'a file, so nothing can be created under it');
-  const child = spawn('node', [serverScript], {
-    env: { ...baseEnv, PORT: '0', DB_PATH: path.join(notADirectory, 'bindarr.db') },
-  });
-  const out = collect(child);
+  const child = await harness.startServer({ dir: scratch, file: path.join(notADirectory, 'bindarr.db') }, { wait: false });
   let result;
   try {
     result = await exitOf(child, 30000);
   } catch (err) {
-    child.kill('SIGKILL');
+    await child.stop();
     throw new Error(`server with an unusable database ${err.message} instead of exiting`);
   }
-  assert.strictEqual(result.code, 1, `exit code should be 1, got ${result.code} (${result.signal || 'no signal'})\n${out.stderr}`);
-  assert.ok(out.stderr.includes('Failed to initialize database'), `the reason is logged:\n${out.stderr}`);
+  assert.strictEqual(result.code, 1, `exit code should be 1, got ${result.code} (${result.signal || 'no signal'})\n${child.stderr()}`);
+  assert.ok(child.stderr().includes('Failed to initialize database'), `the reason is logged:\n${child.stderr()}`);
   console.log('PASS: F9-TC1');
 }
 
 async function backupsAndSchedules() {
-  const port = String(await freePort());
-  const base = `http://localhost:${port}`;
-  const dbFile = path.join(scratch, 'bindarr.db');
+  const dbFile = tmp.file;
   const backupDir = path.join(scratch, 'elsewhere', 'backups');
-  const server = spawn('node', ['-r', mockScript, serverScript], {
-    env: { ...baseEnv, PORT: port, DB_PATH: dbFile, BACKUP_DIR: backupDir },
-  });
-  const out = collect(server);
+  // BACKUP_INTERVAL_HOURS back to its default (the harness switches backups off):
+  // F9-TC4 is about the backup clock.
+  const server = await harness.startServer(tmp, { env: { BACKUP_DIR: backupDir, BACKUP_INTERVAL_HOURS: undefined } });
+  const base = server.base;
   try {
-    await waitForServer(`${base}/api/health`);
     const login = await fetch(`${base}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -120,9 +88,9 @@ async function backupsAndSchedules() {
     console.log('PASS: F9-TC3');
 
     // F9-TC4: the boot recorded the schedules — and did not back up a database it
-    // had just created. The first check runs once the boot's set sync is done,
-    // which on a fresh database is a real fetch of every game's set list, so this
-    // waits as long as a slow provider can take rather than a fixed few seconds.
+    // had just created. The first check runs once the boot's set sync is done. On
+    // a fresh database that asks every game's provider for its set list, which
+    // offline.js refuses at once, but the wait stays long enough for a slow runner.
     let runs = [];
     for (let i = 0; i < 1200 && !runs.some(r => r.name === 'backup'); i++) {
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -138,12 +106,11 @@ async function backupsAndSchedules() {
     assert.deepStrictEqual(fs.readdirSync(backupDir), [meta.file], 'no automatic backup at boot');
     console.log('PASS: F9-TC4');
   } catch (err) {
-    console.error(out.stdout.slice(-4000));
-    console.error(out.stderr.slice(-4000));
+    console.error(server.stdout().slice(-4000));
+    console.error(server.stderr().slice(-4000));
     throw err;
   } finally {
-    // SIGKILL immediately to avoid sqlite3 teardown crashes on Windows
-    server.kill('SIGKILL');
+    await server.stop();
   }
 }
 
@@ -152,11 +119,11 @@ async function runTests() {
     await initFailureExits();
     await backupsAndSchedules();
   } finally {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    try { fs.rmSync(scratch, { recursive: true, force: true }); } catch { /* a file still held open */ }
+    // This process never opened the database, so there is no connection to close.
+    await harness.cleanup(null, tmp);
   }
 }
 
 runTests()
-  .then(() => setTimeout(() => process.exit(0), 500))
-  .catch(err => { console.error('FAIL: lifecycle.test.js -', err.message); setTimeout(() => process.exit(1), 500); });
+  .then(() => process.exit(0))
+  .catch(err => { console.error('FAIL: lifecycle.test.js -', err.message); process.exit(1); });

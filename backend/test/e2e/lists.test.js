@@ -5,42 +5,15 @@
 // A fresh database would otherwise run a full TCGCSV sync at boot.
 process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
 process.env.BINDARR_DISABLE_FX_SYNC = '1';
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
 const crypto = require('crypto');
 const assert = require('assert');
-const { spawn } = require('child_process');
+const harness = require('./harness');
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `bindarr-lists-test-${process.pid}-`));
-const tmpDb = path.join(tmpDir, 'bindarr.db');
-process.env.DB_PATH = tmpDb;
-const { freePort } = require('../freePort');
-let port;
+const tmp = harness.tempDatabase('lists-test');
 let base;
 
-const projectRoot = path.join(__dirname, '../../../');
 const db = require('../../src/db');
 const { hashSessionToken } = require('../../src/utils/authHelpers');
-
-async function waitForServer() {
-  for (let i = 0; i < 150; i++) {
-    try { if ((await fetch(`${base}/api/health`)).ok) return; } catch { /* retry */ }
-    await new Promise(r => setTimeout(r, 100));
-  }
-  throw new Error(`Server on port ${port} did not start in time`);
-}
-
-async function waitForAdmin() {
-  for (let i = 0; i < 150; i++) {
-    try {
-      const admin = await db.get(`SELECT id FROM users WHERE username = ?`, ['admin']);
-      if (admin) return admin.id;
-    } catch { /* retry */ }
-    await new Promise(r => setTimeout(r, 100));
-  }
-  throw new Error('Database did not initialize in time');
-}
 
 async function createMember(username) {
   const { lastID } = await db.run(
@@ -76,19 +49,42 @@ function check(name, fn) {
 }
 
 async function runTests() {
-  port = String(await freePort());
-  base = `http://localhost:${port}`;
-  const server = spawn('node', [path.join(projectRoot, 'backend/src/server.js')], {
-    env: { ...process.env, PORT: port, DB_PATH: tmpDb, HTTPS_PORT: '' }
-  });
+  // Accounts, cards, copies, decks and containers go into the file before the
+  // server opens it; what changes while it runs changes through the API.
+  await harness.prepare(db);
+  const aliceId = await createMember('alice');
+  const bobId = await createMember('bob');
+  const A = await sessionHeaders(aliceId);
+  const B = await sessionHeaders(bobId);
+
+  await card('mtg-bolt-a', 'Lightning Bolt', 'mtg', 2.5, 'USD', { set_id: 'mtg-m10', number: '146' });
+  await card('mtg-bolt-b', 'Lightning Bolt', 'mtg', 1, 'USD', { set_id: 'mtg-2ed', number: '161' });
+  await card('mtg-counter', 'Counterspell', 'mtg', 3, 'USD');
+  await card('mtg-unpriced', 'Mystery Card', 'mtg', null, 'USD');
+  await card('tcgdex-de-glurak', 'Charizard', 'pokemon', 10, 'EUR', { language: 'German', printed_name: 'Glurak' });
+
+  // Alice owns one M10 bolt and one Revised-era bolt (another printing).
+  const boltEntry = await own(aliceId, 'mtg-bolt-a', 'mtg');
+  const otherBoltEntry = await own(aliceId, 'mtg-bolt-b', 'mtg', { condition: 'Heavily Played' });
+  const bobEntry = await own(bobId, 'mtg-counter', 'mtg');
+
+  // F9-TC4: a precon decklist: 4 bolts (Alice owns 1 of that printing), 2 counterspells (owns 0).
+  const deckId = (await db.run(`INSERT INTO decks (user_id, name, game) VALUES (?, 'Izzet Precon', 'mtg')`, [aliceId])).lastID;
+  await db.run(`INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, 'mtg-bolt-a', 4), (?, 'mtg-counter', 2)`, [deckId, deckId]);
+  // F9-TC5: Alice's container for the precon, and one of Bob's she must not reach.
+  const loc = (await db.run(`INSERT INTO locations (name, type, user_id) VALUES ('Precon Box', 'Box', ?)`, [aliceId])).lastID;
+  await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, 1, 100)`, [loc]);
+  const bobLoc = (await db.run(`INSERT INTO locations (name, type, user_id) VALUES ('Bob Box', 'Box', ?)`, [bobId])).lastID;
+  // F9-TC6: Bob's deck with the same printing, and Alice's with the other one.
+  const bobBurn = (await db.run(`INSERT INTO decks (user_id, name, game) VALUES (?, 'Bob Burn', 'mtg')`, [bobId])).lastID;
+  await db.run(`INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, 'mtg-bolt-a', 4)`, [bobBurn]);
+  const oldBurn = (await db.run(`INSERT INTO decks (user_id, name, game) VALUES (?, 'Old Burn', 'mtg')`, [aliceId])).lastID;
+  await db.run(`INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, 'mtg-bolt-b', 3)`, [oldBurn]);
+
+  const server = await harness.startServer(tmp);
+  base = server.base;
 
   try {
-    await waitForServer();
-    await waitForAdmin();
-    const aliceId = await createMember('alice');
-    const bobId = await createMember('bob');
-    const A = await sessionHeaders(aliceId);
-    const B = await sessionHeaders(bobId);
     const api = (headers) => async (method, url, body) => {
       const res = await fetch(`${base}${url}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
       const text = await res.text();
@@ -98,17 +94,6 @@ async function runTests() {
     };
     const alice = api(A);
     const bob = api(B);
-
-    await card('mtg-bolt-a', 'Lightning Bolt', 'mtg', 2.5, 'USD', { set_id: 'mtg-m10', number: '146' });
-    await card('mtg-bolt-b', 'Lightning Bolt', 'mtg', 1, 'USD', { set_id: 'mtg-2ed', number: '161' });
-    await card('mtg-counter', 'Counterspell', 'mtg', 3, 'USD');
-    await card('mtg-unpriced', 'Mystery Card', 'mtg', null, 'USD');
-    await card('tcgdex-de-glurak', 'Charizard', 'pokemon', 10, 'EUR', { language: 'German', printed_name: 'Glurak' });
-
-    // Alice owns one M10 bolt and one Revised-era bolt (another printing).
-    const boltEntry = await own(aliceId, 'mtg-bolt-a', 'mtg');
-    const otherBoltEntry = await own(aliceId, 'mtg-bolt-b', 'mtg', { condition: 'Heavily Played' });
-    const bobEntry = await own(bobId, 'mtg-counter', 'mtg');
 
     let list;
     await check('F9-TC1', async () => {
@@ -185,10 +170,6 @@ async function runTests() {
       assert.strictEqual((await fetch(`${base}/api/lists`)).status, 401);
     });
 
-    // A precon decklist: 4 bolts (Alice owns 1 of that printing), 2 counterspells (owns 0).
-    const deckId = (await db.run(`INSERT INTO decks (user_id, name, game) VALUES (?, 'Izzet Precon', 'mtg')`, [aliceId])).lastID;
-    await db.run(`INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, 'mtg-bolt-a', 4), (?, 'mtg-counter', 2)`, [deckId, deckId]);
-
     let missingListId;
     await check('F9-TC4', async () => {
       // Deck -> missing list, then rebuilt in place after buying.
@@ -202,8 +183,9 @@ async function runTests() {
       const meta = await db.get(`SELECT kind, deck_id, game FROM card_lists WHERE id = ?`, [missingListId]);
       assert.deepStrictEqual(meta, { kind: 'missing', deck_id: deckId, game: 'mtg' });
 
-      await own(aliceId, 'mtg-counter', 'mtg');
-      await own(aliceId, 'mtg-counter', 'mtg');
+      // Alice buys the two counterspells.
+      const bought = await alice('POST', '/api/collection', { card_id: 'mtg-counter', quantity: 2, game: 'mtg' });
+      assert.strictEqual(bought.status, 200, bought.text);
       const again = await alice('POST', `/api/decks/${deckId}/missing-list`);
       assert.strictEqual(again.status, 200);
       assert.strictEqual(again.json.list_id, missingListId, 'the same list is updated');
@@ -213,10 +195,6 @@ async function runTests() {
 
     await check('F9-TC5', async () => {
       // Add the whole deck to the collection, into a chosen container, in one go.
-      const loc = (await db.run(`INSERT INTO locations (name, type, user_id) VALUES ('Precon Box', 'Box', ?)`, [aliceId])).lastID;
-      await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, 1, 100)`, [loc]);
-      const bobLoc = (await db.run(`INSERT INTO locations (name, type, user_id) VALUES ('Bob Box', 'Box', ?)`, [bobId])).lastID;
-
       const before = (await db.get(`SELECT COUNT(*) AS n FROM collection WHERE user_id = ?`, [aliceId])).n;
       assert.strictEqual((await bob('POST', `/api/decks/${deckId}/add-to-collection`, {})).status, 404);
       assert.strictEqual((await alice('POST', `/api/decks/${deckId}/add-to-collection`, { location_id: bobLoc })).status, 400);
@@ -238,11 +216,6 @@ async function runTests() {
 
     await check('F9-TC6', async () => {
       // Used in decks: exact printing and other printings of the same name, the user's decks only.
-      const bobDeck = (await db.run(`INSERT INTO decks (user_id, name, game) VALUES (?, 'Bob Burn', 'mtg')`, [bobId])).lastID;
-      await db.run(`INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, 'mtg-bolt-a', 4)`, [bobDeck]);
-      const second = (await db.run(`INSERT INTO decks (user_id, name, game) VALUES (?, 'Old Burn', 'mtg')`, [aliceId])).lastID;
-      await db.run(`INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, 'mtg-bolt-b', 3)`, [second]);
-
       const used = (await alice('GET', '/api/cards/mtg-bolt-a/decks')).json;
       assert.deepStrictEqual(used.map(d => [d.name, d.exact_qty, d.other_printings_qty]), [
         ['Izzet Precon', 4, 0],
@@ -267,7 +240,7 @@ async function runTests() {
 
     await check('F9-TC8', async () => {
       // Deleting a list cascades its items; deleting a deck keeps its missing list.
-      await db.run(`DELETE FROM decks WHERE id = ?`, [deckId]);
+      assert.strictEqual((await alice('DELETE', `/api/decks/${deckId}`)).status, 200);
       assert.strictEqual((await db.get(`SELECT deck_id FROM card_lists WHERE id = ?`, [missingListId])).deck_id, null);
       assert.strictEqual((await alice('DELETE', `/api/lists/${list.id}`)).status, 200);
       assert.strictEqual((await db.get(`SELECT COUNT(*) AS n FROM card_list_items WHERE list_id = ?`, [list.id])).n, 0);
@@ -347,9 +320,8 @@ async function runTests() {
       assert.strictEqual((await alice('PUT', '/api/auth/settings', { nav_tabs: null })).json.user.nav_tabs, null);
     });
   } finally {
-    try { server.kill('SIGKILL'); } catch { /* gone */ }
-    try { await new Promise(resolve => db.dbConnection.close(() => resolve())); } catch { /* closed */ }
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* locked */ }
+    await server.stop();
+    await harness.cleanup(db, tmp);
   }
 }
 
