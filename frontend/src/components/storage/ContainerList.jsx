@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import { Plus, Minus, Trash2, MoreVertical, Settings, RefreshCw, Lock, LayoutGrid, Upload, BookOpen, GalleryHorizontal } from 'lucide-react';
 import { useT } from '../../utils/i18n';
+import { containerTypeKey } from '../../utils/cardOptions';
 
 // The Storage header: which container is open (and creating/importing one),
 // the view switches, Select / Arrange, and the container's kebab menu. Below it,
@@ -16,6 +17,11 @@ export default function ContainerList({
   const { t } = useT();
   const containerImportInput = useRef(null);
   const [showKebabMenu, setShowKebabMenu] = useState(false);
+  // The stored type is English; a type with no key (an older install's) shows as stored.
+  const typeName = (type) => {
+    const key = containerTypeKey(type);
+    return key ? t(`container.type.${key}`) : type;
+  };
 
   return (
     <>
@@ -28,18 +34,18 @@ export default function ContainerList({
             style={{ fontSize: '1rem', fontWeight: 'bold', padding: '0.3rem', width: 'auto', minWidth: '150px' }}
           >
             <option value="" disabled>{t('loc.selectContainer')}</option>
-            {locations.map(loc => <option key={loc.id} value={loc.id}>{loc.locked ? '🔒 ' : ''}{loc.name} ({loc.type})</option>)}
+            {locations.map(loc => <option key={loc.id} value={loc.id}>{loc.locked ? '🔒 ' : ''}{loc.name} ({typeName(loc.type)})</option>)}
           </select>
-          <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setShowCreate(s => !s)} style={{ width: '28px', height: '28px', padding: 0 }} title={t('loc.createContainer')}>
+          <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setShowCreate(s => !s)} style={{ width: '28px', height: '28px', padding: 0 }} title={t('loc.createContainer')} aria-label={t('loc.createContainer')}>
             <Plus size={14} />
           </button>
-          <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => containerImportInput.current?.click()} style={{ width: '28px', height: '28px', padding: 0 }} title={t('loc.importContainer')}>
+          <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => containerImportInput.current?.click()} style={{ width: '28px', height: '28px', padding: 0 }} title={t('loc.importContainer')} aria-label={t('loc.importContainer')}>
             <Upload size={14} />
           </button>
           <input ref={containerImportInput} type="file" accept=".txt,text/plain" onChange={handleContainerImportFile} style={{ display: 'none' }} />
           {selectedLoc && !!selectedLoc.locked && (
             <button type="button" onClick={handleToggleContainerLock} title={t('loc.lockedBadgeHint')} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.62rem', fontWeight: 800, padding: '0.15rem 0.45rem', borderRadius: '999px', cursor: 'pointer', background: 'rgba(255,193,7,0.15)', border: '1px solid var(--accent-yellow)', color: 'var(--accent-yellow)' }}>
-              <Lock size={11} /> Locked
+              <Lock size={11} /> {t('compartment.locked')}
             </button>
           )}
         </div>
@@ -123,7 +129,14 @@ export default function ContainerList({
             </button>
           )}
           <div className="kebab-menu">
-            <button className="kebab-menu-button" onClick={() => setShowKebabMenu(s => !s)}>
+            <button
+              type="button"
+              className="kebab-menu-button"
+              onClick={() => setShowKebabMenu(s => !s)}
+              aria-label={t('loc.containerActions')}
+              title={t('loc.containerActions')}
+              aria-expanded={showKebabMenu}
+            >
               <MoreVertical size={16} color="var(--text-secondary)" />
             </button>
             {showKebabMenu && (
@@ -139,7 +152,7 @@ export default function ContainerList({
                   <Trash2 size={14} /> {t(isBinderType ? 'loc.removeLastPage' : 'loc.removeLastCompartment')}
                 </button>
                 <button className="kebab-item" onClick={() => { setShowKebabMenu(false); startResort(); }} disabled={!!selectedLoc.locked || (selectedLoc.total_cards || 0) === 0}>
-                  <RefreshCw size={14} /> Re-sort Container
+                  <RefreshCw size={14} /> {t('loc.resortContainer')}
                 </button>
                 <button className="kebab-item" onClick={() => { setShowKebabMenu(false); handleToggleContainerLock(); }} title={t('loc.lockKebabHint')}>
                   <Lock size={14} /> {t(selectedLoc.locked ? 'loc.unlockContainer' : 'loc.lockContainer')}
@@ -148,10 +161,10 @@ export default function ContainerList({
                   setShowKebabMenu(false);
                   openContainerSettings();
                 }}>
-                  <Settings size={14} /> Container Settings
+                  <Settings size={14} /> {t('loc.containerSettings')}
                 </button>
                 <button className="kebab-item" disabled={!!selectedLoc.locked} onClick={() => { setShowKebabMenu(false); handleDeleteLocation(selectedLoc.id, selectedLoc.name); }} style={{ color: 'var(--accent-red)' }}>
-                  <Trash2 size={14} /> Delete Container
+                  <Trash2 size={14} /> {t('loc.deleteContainer')}
                 </button>
               </div>
             )}
@@ -162,8 +175,8 @@ export default function ContainerList({
 
       {storage.selectMode && (
         <div className="glass-panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', background: 'rgba(255,71,71,0.08)' }}>
-          <span style={{ fontWeight: 800, color: 'var(--text-strong)', fontSize: '0.8rem' }}>{storage.selectedIds.size} selected</span>
-          <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem' }} onClick={() => storage.setSelectedIds(new Set(cardsInActiveLocation.map(c => c.entry_id)))}>Select all ({cardsInActiveLocation.length})</button>
+          <span style={{ fontWeight: 800, color: 'var(--text-strong)', fontSize: '0.8rem' }}>{t('bulk.selected', { count: storage.selectedIds.size })}</span>
+          <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem' }} onClick={() => storage.setSelectedIds(new Set(cardsInActiveLocation.map(c => c.entry_id)))}>{t('bulk.selectAll', { count: cardsInActiveLocation.length })}</button>
           <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem' }} onClick={() => storage.setSelectedIds(new Set())}>{t('bulk.clear')}</button>
           <div style={{ width: '1px', height: '20px', background: 'var(--border-glass)' }} />
           <button
