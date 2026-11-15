@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Search } from 'lucide-react';
 import { useT } from '../utils/i18n';
 import { GAMES } from '../utils/games';
+import { LatestRequest, fetchJson, isAbortError } from '../utils/request';
 
 // Search the TCGplayer/TCGCSV sealed-product catalog (GET /api/sealed/catalog/search)
 // for the "pick from catalog" step of adding a purchase. Falls back to a free-text
@@ -15,16 +16,27 @@ export default function SealedCatalogPicker({ game, onGameChange, onPick, confir
   const [manual, setManual] = useState(false);
   const [manualName, setManualName] = useState('');
 
+  // Enter can start a search while one is running (the button is disabled, the
+  // field is not): only the newest answers, and a failed search shows nothing
+  // rather than the last query's products.
+  const searchReq = useRef(null);
+  if (!searchReq.current) searchReq.current = new LatestRequest();
+  useEffect(() => () => searchReq.current.cancel(), []);
+
   const search = async () => {
-    if (!query.trim()) { setResults([]); return; }
+    if (!query.trim()) { searchReq.current.cancel(); setResults([]); setLoading(false); return; }
+    const req = searchReq.current.begin();
     setLoading(true);
     try {
       const params = new URLSearchParams({ q: query.trim(), game });
-      const res = await fetch(`/api/sealed/catalog/search?${params}`);
-      const data = await res.json().catch(() => ({ products: [] }));
-      setResults(Array.isArray(data.products) ? data.products : []);
+      const { data } = await fetchJson(`/api/sealed/catalog/search?${params}`, { signal: req.signal });
+      if (!req.isLatest()) return;
+      setResults(Array.isArray(data?.products) ? data.products : []);
+    } catch (err) {
+      if (isAbortError(err) || !req.isLatest()) return;
+      setResults([]);
     } finally {
-      setLoading(false);
+      if (req.isLatest()) setLoading(false);
     }
   };
 
@@ -41,7 +53,7 @@ export default function SealedCatalogPicker({ game, onGameChange, onPick, confir
         {confirmManual && (
           <button type="button" className="btn btn-primary btn-sm" style={{ marginTop: '0.4rem', marginRight: '0.4rem' }}
             disabled={!manualName.trim()} onClick={() => onPick({ product_id: null, name: manualName.trim() })}>
-            {t('common.add') || 'Add'}
+            {t('common.add')}
           </button>
         )}
         <button type="button" className="btn btn-secondary btn-sm" style={{ marginTop: '0.4rem' }}
@@ -65,7 +77,8 @@ export default function SealedCatalogPicker({ game, onGameChange, onPick, confir
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); search(); } }}
           placeholder={t('sealed.searchPlaceholder')}
         />
-        <button type="button" className="btn btn-secondary" onClick={search} disabled={loading}>
+        <button type="button" className="btn btn-secondary" onClick={search} disabled={loading}
+          title={t('common.search')} aria-label={t('common.search')}>
           <Search size={14} />
         </button>
       </div>

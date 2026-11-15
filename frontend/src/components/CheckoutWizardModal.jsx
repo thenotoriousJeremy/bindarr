@@ -5,6 +5,8 @@ import { sortCardsByOrder } from '../utils/cardSort';
 import Modal from './Modal';
 import { onActivateKey } from '../utils/a11y';
 import { useT } from '../utils/i18n';
+import { useApi } from '../utils/useApi';
+import { fetchJson } from '../utils/request';
 
 // Slot number a stored position encodes (positions are slot * 1000).
 const slotOf = (position) => (position ? Math.floor(position / 1000) : null);
@@ -26,7 +28,10 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose, onCanc
   const cancel = onCancel || onClose; // X / overlay / back = cancel (revert the toggle)
   const [done, setDone] = useState(new Set());
   const [expanded, setExpanded] = useState({}); // container.key -> user forced open after auto-collapse
-  const [setsList, setSetsList] = useState([]);
+  // Set order for sorting the pages: the answer the collection grid already has
+  // cached (useApi), and an error body is never taken for the list.
+  const { data: setsData } = useApi('/api/sets');
+  const setsList = useMemo(() => (Array.isArray(setsData) ? setsData : []), [setsData]);
   const [grids, setGrids] = useState({}); // page.key -> { compartment, cards, locationType, sortOrder, pageColumns }
 
 
@@ -88,12 +93,10 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose, onCanc
     return { containers, pagesFlat, missing, totalPulls: pulls.length, allEntryIds: pulls.map(p => p.entry_id) };
   }, [locationsData, t]);
 
-  useEffect(() => {
-    fetch('/api/sets').then(r => r.json()).then(setSetsList).catch(() => {});
-  }, []);
-
   // Load each located page's compartment layout so pulled cards can be
-  // highlighted in their physical grid (by entry_id, order-independent).
+  // highlighted in their physical grid (by entry_id, order-independent). A
+  // page whose reads fail (an { error } body included) is skipped: its rows
+  // still show, only the grid is left out.
   useEffect(() => {
     let active = true;
     if (pagesFlat.length === 0) { setGrids({}); return; }
@@ -102,9 +105,9 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose, onCanc
     const fetchLocation = async (locationId) => {
       if (!locCache.has(locationId)) {
         locCache.set(locationId, Promise.all([
-          fetch(`/api/locations/${locationId}`).then(r => r.json()),
-          fetch(`/api/locations/${locationId}/compartments`).then(r => r.json())
-        ]).then(([loc, comps]) => ({ loc, comps })));
+          fetchJson(`/api/locations/${locationId}`),
+          fetchJson(`/api/locations/${locationId}/compartments`)
+        ]).then(([{ data: loc }, { data: comps }]) => ({ loc, comps: Array.isArray(comps) ? comps : [] })));
       }
       return locCache.get(locationId);
     };
@@ -116,7 +119,8 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose, onCanc
           const { loc, comps } = await fetchLocation(pg.location_id);
           const comp = comps.find(c => c.id === pg.compartment_id);
           if (!comp) continue;
-          const cards = await fetch(`/api/collection?compartment_id=${pg.compartment_id}`).then(r => r.json());
+          const { data: rows } = await fetchJson(`/api/collection?compartment_id=${pg.compartment_id}`);
+          const cards = Array.isArray(rows) ? rows : [];
           const sortOrder = loc.sort_order || 'custom';
           if (sortOrder === 'custom') cards.sort((a, b) => (a.position || 0) - (b.position || 0));
           else sortCardsByOrder(cards, sortOrder, loc.foil_sorting, setsList);
@@ -236,7 +240,6 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose, onCanc
       onClose={cancel}
       label={t(`wizard.${kind}.title`)}
       dirty={done.size > 0}
-      overlayStyle={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
       className="glass-panel"
       style={{ maxWidth: '640px', width: '100%', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
     >

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { memo, useState, useEffect, useRef } from 'react';
 import { Plus, Trash2, ChevronLeft, Search, ListChecks, Copy, Pencil, X, Heart, Library } from 'lucide-react';
 import CardImage from './CardImage';
 import { useTabParam, setTabParam, goToTab } from '../utils/router';
@@ -10,6 +10,7 @@ import { priceText } from '../utils/formatPrice';
 import { useFx } from '../utils/useFx';
 import { filterItems, listAsText, currencyTotals, progressPercent } from '../utils/listText';
 import { useT } from '../utils/i18n';
+import { LatestRequest, isAbortError } from '../utils/request';
 
 const KINDS = ['wishlist', 'buylist', 'missing', 'custom'];
 
@@ -93,12 +94,26 @@ function Lists({ showToast, active = true, statsTrigger }) {
     }
   };
 
+  // Only the newest read of a list, or search, may land: Back/Forward between
+  // two lists, or a second search typed before the first answered, must not
+  // show the older answer under the newer list or query.
+  const detailReq = useRef(null);
+  if (!detailReq.current) detailReq.current = new LatestRequest();
+  const searchReq = useRef(null);
+  if (!searchReq.current) searchReq.current = new LatestRequest();
+  useEffect(() => () => { detailReq.current.cancel(); searchReq.current.cancel(); }, []);
+
   const loadDetail = async (id) => {
+    const req = detailReq.current.begin();
     try {
-      const res = await fetch(`/api/lists/${id}`);
-      if (res.ok) setDetail(await res.json());
-      else { setOpenId(null, { replace: true }); showToast(t('lists.errLoad')); }
+      const res = await fetch(`/api/lists/${id}`, { signal: req.signal });
+      if (!req.isLatest()) return;
+      if (res.ok) {
+        const data = await res.json();
+        if (req.isLatest()) setDetail(data);
+      } else { setOpenId(null, { replace: true }); showToast(t('lists.errLoad')); }
     } catch (err) {
+      if (isAbortError(err) || !req.isLatest()) return;
       console.error(err);
       showToast(t('lists.errLoad'));
     }
@@ -215,6 +230,7 @@ function Lists({ showToast, active = true, statsTrigger }) {
     const name = query.trim();
     if (!name) return;
     const game = detail?.game || searchGame;
+    const req = searchReq.current.begin();
     setSearching(true);
     try {
       // Same request the Add Cards search makes, across every printing the
@@ -223,14 +239,18 @@ function Lists({ showToast, active = true, statsTrigger }) {
         name: game === 'pokemon' ? (translateJapaneseName(name) || name) : name,
         game, scope: 'internet', lang: langCode('English'), limit: '30',
       });
-      const res = await fetch(`/api/search?${params.toString()}`);
-      if (res.ok) setResults(await res.json());
-      else showToast(t(res.status === 429 ? 'deck.errRateLimit' : 'deck.errSearch'));
+      const res = await fetch(`/api/search?${params.toString()}`, { signal: req.signal });
+      if (!req.isLatest()) return;
+      if (res.ok) {
+        const data = await res.json();
+        if (req.isLatest()) setResults(Array.isArray(data) ? data : []);
+      } else showToast(t(res.status === 429 ? 'deck.errRateLimit' : 'deck.errSearch'));
     } catch (err) {
+      if (isAbortError(err) || !req.isLatest()) return;
       console.error(err);
       showToast(t('deck.errSearch'));
     } finally {
-      setSearching(false);
+      if (req.isLatest()) setSearching(false);
     }
   };
 
@@ -472,4 +492,5 @@ function Lists({ showToast, active = true, statsTrigger }) {
   );
 }
 
-export default Lists;
+// Memoized: App re-renders on every toast, and its props here are stable.
+export default memo(Lists);
