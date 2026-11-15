@@ -1,0 +1,67 @@
+name: Android build
+
+# A debug build of the Android app on every pull request that touches the native
+# project, the app's own Capacitor plugin, the frontend's packages or the
+# Capacitor config. Native code used to compile only when a release was tagged
+# (mobile-release.yml), so a Capacitor bump could merge after nothing but the web
+# build. The setup follows mobile-release.yml's android job; no signing, no store.
+#
+# iOS has no counterpart: it needs a macOS runner and Xcode, and the native
+# detector's Swift package (native-detector/Package.swift) resolves onnxruntime
+# without a committed Package.resolved, which only Xcode can generate.
+on:
+  pull_request:
+    paths:
+      - 'frontend/android/**'
+      - 'frontend/native-detector/**'
+      - 'frontend/package.json'
+      - 'frontend/package-lock.json'
+      - 'frontend/capacitor.config.json'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Nothing in the frontend uses onnxruntime-node, but every npm ci in the
+  # workflows sets this: its install script otherwise downloads ~245 MB of CUDA
+  # libraries on Linux.
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+
+jobs:
+  assemble:
+    name: Android debug build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Build web + sync Capacitor
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          npx cap sync android
+
+      - name: Assemble debug APK
+        working-directory: frontend/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug

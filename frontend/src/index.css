@@ -71,6 +71,14 @@
   --radius-sm: 8px;
   --radius-md: 16px;
   --radius-lg: 24px;
+
+  /* Dialogs (.modal-overlay): above the pinned phone tab bar (1000) and the
+     sticky header (900), below the toast (2000). A dialog opened from another
+     stacks over it by document order, so one value serves every dialog. */
+  --z-modal: 1050;
+  --overlay-backdrop: rgba(0, 0, 0, 0.7);
+
+  --overlay-backdrop-camera: rgba(0, 0, 0, 0.85);
 }
 
 /* ------------------------------------------------------------------ THEMES */
@@ -251,23 +259,20 @@
   border-color: #facc15;
 }
 
-:root[data-theme="pokemon"] .kebab-dropdown,
-:root[data-theme="pokemon"] .dropdown-menu {
+:root[data-theme="pokemon"] .kebab-dropdown {
   background-color: #160a10;
   border: 1.5px solid var(--accent-red);
   border-radius: var(--radius-sm);
   box-shadow: 0 0 16px rgba(239, 68, 68, 0.35);
 }
 
-:root[data-theme="pokemon"] .kebab-item,
-:root[data-theme="pokemon"] .dropdown-item {
+:root[data-theme="pokemon"] .kebab-item {
   font-family: var(--font-main);
   font-weight: 600;
   color: var(--text-primary);
 }
 
-:root[data-theme="pokemon"] .kebab-item:hover,
-:root[data-theme="pokemon"] .dropdown-item:hover {
+:root[data-theme="pokemon"] .kebab-item:hover {
   background: rgba(239, 68, 68, 0.2);
   color: #ffffff;
 }
@@ -442,23 +447,20 @@
   border-color: #fef3c7;
 }
 
-:root[data-theme="mtg"] .kebab-dropdown,
-:root[data-theme="mtg"] .dropdown-menu {
+:root[data-theme="mtg"] .kebab-dropdown {
   background-color: #121520;
   border: 1.5px solid #d97706;
   border-radius: var(--radius-sm);
   box-shadow: 0 0 18px rgba(217, 119, 6, 0.35);
 }
 
-:root[data-theme="mtg"] .kebab-item,
-:root[data-theme="mtg"] .dropdown-item {
+:root[data-theme="mtg"] .kebab-item {
   font-family: var(--font-main);
   font-weight: 600;
   color: var(--text-primary);
 }
 
-:root[data-theme="mtg"] .kebab-item:hover,
-:root[data-theme="mtg"] .dropdown-item:hover {
+:root[data-theme="mtg"] .kebab-item:hover {
   background: rgba(217, 119, 6, 0.2);
   color: #fef3c7;
 }
@@ -633,23 +635,20 @@
   border-color: #fbbf24;
 }
 
-:root[data-theme="lorcana"] .kebab-dropdown,
-:root[data-theme="lorcana"] .dropdown-menu {
+:root[data-theme="lorcana"] .kebab-dropdown {
   background-color: #110d24;
   border: 1.5px solid #a855f7;
   border-radius: var(--radius-md);
   box-shadow: 0 0 20px rgba(168, 85, 247, 0.35), 0 0 10px rgba(251, 191, 36, 0.2);
 }
 
-:root[data-theme="lorcana"] .kebab-item,
-:root[data-theme="lorcana"] .dropdown-item {
+:root[data-theme="lorcana"] .kebab-item {
   font-family: var(--font-main);
   font-weight: 600;
   color: var(--text-primary);
 }
 
-:root[data-theme="lorcana"] .kebab-item:hover,
-:root[data-theme="lorcana"] .dropdown-item:hover {
+:root[data-theme="lorcana"] .kebab-item:hover {
   background: rgba(168, 85, 247, 0.2);
   color: #faf5ff;
 }
@@ -791,16 +790,14 @@
   padding: 0.5rem;
 }
 
-:root[data-theme="lcars"] .kebab-dropdown,
-:root[data-theme="lcars"] .dropdown-menu {
+:root[data-theme="lcars"] .kebab-dropdown {
   background-color: #0d0d0d;
   border: 1.5px solid var(--border-glass-hover);
   border-radius: var(--radius-md);
   box-shadow: 0 0 16px rgba(255, 153, 0, 0.35);
 }
 
-:root[data-theme="lcars"] .kebab-item,
-:root[data-theme="lcars"] .dropdown-item {
+:root[data-theme="lcars"] .kebab-item {
   font-family: var(--font-main);
   font-weight: 600;
   text-transform: uppercase;
@@ -808,8 +805,7 @@
   color: var(--text-primary);
 }
 
-:root[data-theme="lcars"] .kebab-item:hover,
-:root[data-theme="lcars"] .dropdown-item:hover {
+:root[data-theme="lcars"] .kebab-item:hover {
   background: rgba(255, 153, 0, 0.2);
   color: var(--text-strong);
 }
@@ -883,18 +879,34 @@ button, input, select, textarea {
   }
 }
 
-/* Shared full-screen modal backdrop. Safe-area padding keeps the centered
-   dialog clear of the notch/status bar and home indicator inside the Capacitor
-   webview (full-bleed, unlike a mobile browser). Each modal keeps its own
-   inline background/blur/z-index; this only supplies the padding + box-sizing.
-   On desktop the env() insets are 0, so it collapses to a flat 1rem. */
+/* Shared full-screen modal backdrop (Modal.jsx's default overlayClassName):
+   position, dim, centring and the one dialog z-index, so a dialog needs no
+   overlayStyle. Safe-area padding keeps the centered dialog clear of the
+   notch/status bar and home indicator inside the Capacitor webview
+   (full-bleed, unlike a mobile browser). On desktop the env() insets are 0,
+   so it collapses to a flat 1rem. */
 .modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-backdrop);
   box-sizing: border-box;
   padding:
     max(1rem, max(env(safe-area-inset-top, 0px), var(--sat, 0px)))
     max(1rem, max(env(safe-area-inset-right, 0px), var(--sar, 0px)))
     max(1rem, max(env(safe-area-inset-bottom, 0px), var(--sab, 0px)))
     max(1rem, max(env(safe-area-inset-left, 0px), var(--sal, 0px)));
+}
+
+/* A dialog over the live camera (the scanner's): darker and blurred, so the moving
+   feed does not compete with it. */
+.modal-overlay--camera {
+  background: var(--overlay-backdrop-camera);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
 }
 
 /* Glassmorphic Panel Component */
@@ -1292,6 +1304,64 @@ button, input, select, textarea {
 @media (max-width: 768px) {
   .nav-tabs.nav-compact .nav-tab.active {
     flex-grow: 2.2;
+  }
+}
+
+/* More (components/NavMoreMenu.jsx): the tabs the bar leaves out. The menu is
+   drawn in <body> at a fixed position by the button, above the bar on phones. */
+.nav-more-menu {
+  position: fixed;
+  z-index: var(--z-modal);
+  min-width: 12rem;
+  max-width: calc(100vw - 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.35rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-glass-hover);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-glow);
+}
+
+.nav-more-item {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-more-item:hover,
+.nav-more-item:focus-visible {
+  background: var(--surface-2);
+}
+
+.nav-more-item svg {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+/* Settings and Admin in the header: the one open shows it. */
+.header-tab-btn[aria-current="page"] {
+  border-color: var(--accent-red);
+  color: var(--text-primary);
+}
+
+/* A phone's header holds the logo and up to three buttons; the greeting is the
+   first thing to give up its room (the username is in Settings). Device mode's
+   "on this device" note has one button beside it and stays. */
+@media (max-width: 480px) {
+  .header-greeting.header-user {
+    display: none !important;
   }
 }
 
@@ -2096,12 +2166,6 @@ button, input, select, textarea {
   }
 }
 
-.collection-card-row-info {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
 .collection-row-thumbnail {
   width: 40px;
   aspect-ratio: 0.718;
@@ -2141,6 +2205,19 @@ button, input, select, textarea {
   color: var(--text-strong);
   font-size: 0.85rem;
   text-align: center;
+}
+
+/* The toast's live region (components/Toast.jsx). Always mounted and takes no
+   room; the toast inside is fixed to the viewport on its own. Fixed means a
+   stacking context of its own, so it carries the toast's z-index, which keeps
+   the toast above open dialogs. */
+.toast-region {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  z-index: 2000;
 }
 
 .toast {
@@ -2208,35 +2285,6 @@ button, input, select, textarea {
     15% { opacity: 1; bottom: 2rem; }
     85% { opacity: 1; bottom: 2rem; }
     100% { opacity: 0; bottom: 3rem; }
-  }
-}
-
-/* Responsive Split Layout for Storage Locations Page */
-.location-split-layout {
-  display: flex;
-  flex-direction: row;
-  gap: 1.5rem;
-  align-items: start;
-  width: 100%;
-}
-
-.location-sidebar {
-  width: 320px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-@media (max-width: 1024px) {
-  .location-split-layout {
-    flex-direction: column;
-  }
-  .location-sidebar {
-    width: 100%;
-    flex-direction: row;
-    overflow-x: auto;
-    padding-bottom: 0.5rem;
   }
 }
 
@@ -2577,25 +2625,6 @@ button, input, select, textarea {
   position: relative;
 }
 
-.page-flip-effect {
-  animation: pageFlip3D 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-
-@keyframes pageFlip3D {
-  0% {
-    transform: rotateY(0deg) scale(1);
-    filter: brightness(1);
-  }
-  45% {
-    transform: rotateY(-8deg) scale(0.98);
-    filter: brightness(0.75);
-  }
-  100% {
-    transform: rotateY(0deg) scale(1);
-    filter: brightness(1);
-  }
-}
-
 @media (max-width: 768px) {
   .binder-page-container {
     flex-direction: column;
@@ -2671,13 +2700,6 @@ button, input, select, textarea {
   transform: translate(-50%, -50%) rotate(90deg);
 }
 
-.binder-pocket-empty {
-  aspect-ratio: 0.718;
-  border-radius: 4px;
-  border: 1px dashed rgba(255, 255, 255, 0.15);
-  background: rgba(0, 0, 0, 0.15);
-}
-
 /* Ghost preview of the card being filed, sitting in its recommended pocket. */
 .binder-pocket.recommended-ghost {
   border: 2px dashed #ffc107;
@@ -2727,41 +2749,6 @@ button, input, select, textarea {
   pointer-events: none;
 }
 
-.binder-pocket-actions {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent);
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
-.binder-pocket:hover .binder-pocket-actions {
-  opacity: 1;
-}
-
-.binder-pocket-actions select {
-  flex: 1;
-  min-width: 0;
-  font-size: 0.55rem;
-  padding: 1px 2px;
-}
-
-.binder-pocket-actions button {
-  background: transparent;
-  border: none;
-  color: #fff;
-  cursor: pointer;
-  display: flex;
-  padding: 1px;
-  flex-shrink: 0;
-}
-
 /* Storage Coordinator Workspace Layout */
 .storage-workspace-grid {
   display: grid;
@@ -2786,31 +2773,6 @@ button, input, select, textarea {
     border: none !important;
     padding: 0.5rem 0 !important;
   }
-}
-
-.section-divider {
-  grid-column: 1 / -1;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  margin: 0.5rem 0;
-}
-
-.section-divider::before,
-.section-divider::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--border-glass);
-}
-
-.section-divider span {
-  padding: 0 0.75rem;
-  font-size: 0.85rem;
-  font-weight: bold;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 .kebab-menu {
@@ -2865,110 +2827,6 @@ button, input, select, textarea {
 
 .kebab-item:hover {
   background: rgba(255,255,255,0.1);
-}
-
-.draggable-box-card:hover {
-  transform: translateY(-2px) scale(1.05);
-  box-shadow: 0 4px 10px rgba(0,0,0,0.5);
-  filter: brightness(1.1);
-}
-
-.dropzone-box-row:hover {
-  border-color: var(--accent-red) !important;
-  background: rgba(255, 71, 71, 0.02) !important;
-}
-
-/* ==========================================
-   COVER FLOW / CONTAINER CAROUSEL STYLES
-   ========================================== */
-.coverflow-container {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  width: 100%;
-  height: 230px;
-  overflow: hidden;
-  perspective: 1200px;
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-glass);
-  padding: 1.5rem 0;
-  margin-bottom: 0.5rem;
-  touch-action: pan-y; /* allow vertical scroll while swiping horizontally */
-}
-
-.coverflow-track {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  width: 100%;
-  height: 100%;
-  transform-style: preserve-3d;
-}
-
-.coverflow-card {
-  position: absolute;
-  width: 140px;
-  height: 180px;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transform-style: preserve-3d;
-  transition: transform 0.4s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.4s ease, border-color 0.3s ease;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 0.85rem;
-  background: var(--bg-glass);
-  border: 1.5px solid var(--border-glass);
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
-  user-select: none;
-}
-
-.coverflow-card.active {
-  z-index: 10;
-  border-color: var(--accent-red);
-  box-shadow: 0 12px 30px rgba(255, 71, 71, 0.3), 0 0 10px rgba(255, 71, 71, 0.15);
-}
-
-.coverflow-nav-btn {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 15;
-  background: rgba(0, 0, 0, 0.6);
-  border: 1px solid var(--border-glass);
-  color: #fff;
-  border-radius: 50%;
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.coverflow-nav-btn:hover {
-  background: rgba(255, 71, 71, 0.8);
-  border-color: var(--accent-red);
-  transform: translateY(-50%) scale(1.1);
-}
-
-.coverflow-nav-btn.left-btn {
-  left: 10px;
-}
-
-.coverflow-nav-btn.right-btn {
-  right: 10px;
-}
-
-@media (max-width: 768px) {
-  .coverflow-nav-btn {
-    width: 44px;
-    height: 44px;
-  }
 }
 
 /* Custom Visual Styles for Container Types */
@@ -3034,101 +2892,6 @@ button, input, select, textarea {
 .slot-move-targetable:hover {
   border-color: var(--accent-red) !important;
   background: rgba(255, 71, 71, 0.12) !important;
-}
-
-.box-row-move-targetable {
-  border: 2.5px dashed var(--accent-yellow) !important;
-  background: rgba(234, 179, 8, 0.05) !important;
-  cursor: pointer !important;
-}
-
-.box-row-move-targetable:hover {
-  border-color: var(--accent-red) !important;
-  background: rgba(255, 71, 71, 0.08) !important;
-}
-
-.move-active-banner {
-  position: fixed;
-  bottom: 2rem;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(18, 18, 18, 0.95);
-  backdrop-filter: blur(10px);
-  border: 1.5px solid var(--accent-yellow);
-  padding: 0.65rem 1.25rem;
-  border-radius: 30px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
-  display: flex;
-  align-items: center;
-  gap: 0.85rem;
-  z-index: 9999;
-  animation: slide-up-banner 0.35s cubic-bezier(0.25, 0.8, 0.25, 1);
-}
-
-@keyframes slide-up-banner {
-  from { bottom: -5rem; transform: translate(-50%, 50px); }
-  to { bottom: 2rem; transform: translate(-50%, 0); }
-}
-
-/* ==========================================
-   ADVANCED CONFIGURATIONS ACCORDION
-   ========================================== */
-.advanced-config-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  cursor: pointer;
-  padding: 0.4rem 0.65rem;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--border-glass);
-  border-radius: var(--radius-sm);
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  font-weight: 700;
-  transition: all 0.2s ease;
-  user-select: none;
-}
-
-.advanced-config-header:hover {
-  background: var(--surface-3);
-  color: var(--text-strong);
-  border-color: var(--border-glass-hover);
-}
-
-.advanced-config-content {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  background: rgba(0, 0, 0, 0.2);
-  border: 1px solid var(--border-glass);
-  border-top: none;
-  border-bottom-left-radius: var(--radius-sm);
-  border-bottom-right-radius: var(--radius-sm);
-  margin-top: -1px;
-  animation: expand-accordion 0.2s ease-out;
-}
-
-@keyframes expand-accordion {
-  from { opacity: 0; transform: translateY(-5px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.advanced-config-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.advanced-config-row label {
-  font-size: 0.65rem;
-  color: var(--text-secondary);
-}
-
-.advanced-config-row input, .advanced-config-row select {
-  padding: 0.25rem 0.4rem;
-  font-size: 0.7rem;
 }
 
 /* Smooth view transition when switching top-level tabs */
@@ -3280,123 +3043,8 @@ button, input, select, textarea {
   opacity: 0.8 !important;
 }
 
-/* iPod coverflow-style focus: hovering a box row shrinks its other cards
-   slightly, and the hovered card pops forward and grows. */
-.box-row-strip:hover .tilt-card-wrapper {
-  transform: scale(0.88) !important;
-}
-
-.box-row-strip .tilt-card-wrapper:hover {
-  transform: scale(1.25) !important;
-  z-index: 20;
-}
-
 .tilt-card-wrapper:hover .reverse-holo-shine-overlay {
   opacity: 0.8 !important;
-}
-
-/* Stack Inspector Drawer Styles */
-.stack-inspector-backdrop {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.75);
-  backdrop-filter: blur(8px);
-  z-index: 999;
-  display: flex;
-  justify-content: center;
-  align-items: flex-end;
-  animation: fadeIn 0.25s ease-out;
-}
-
-.stack-inspector-drawer {
-  width: 100%;
-  max-width: 680px;
-  background: var(--bg-primary);
-  border-top: 3px solid var(--accent-red);
-  border-left: 1px solid var(--border-glass);
-  border-right: 1px solid var(--border-glass);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  padding: 1.5rem;
-  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.6);
-  transform: translateY(0);
-  animation: slideUp 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-}
-
-@keyframes slideUp {
-  from { transform: translateY(100%); }
-  to { transform: translateY(0); }
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-.stack-inspector-list {
-  overflow-y: auto;
-  margin-top: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  padding-right: 0.25rem;
-}
-
-.stack-inspector-item {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.75rem;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-glass);
-  border-radius: var(--radius-md);
-  transition: background-color 0.2s ease, border-color 0.2s ease;
-}
-
-.stack-inspector-item:hover {
-  background: rgba(255, 255, 255, 0.03);
-  border-color: var(--border-glass-hover);
-}
-
-/* Custom Row Selection and Coverflow Styles for Storage Box */
-.row-selection-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-}
-
-.row-tab-btn {
-  background: var(--bg-glass);
-  border: 1px solid var(--border-glass);
-  color: var(--text-secondary);
-  padding: 0.4rem 0.85rem;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 0.75rem;
-  font-weight: 600;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.row-tab-btn:hover {
-  background: var(--surface-2);
-  border-color: var(--border-glass-hover);
-  color: var(--text-strong);
-}
-
-.row-tab-btn.active {
-  background: rgba(255, 71, 71, 0.15);
-  border-color: var(--accent-red);
-  color: var(--text-strong);
-  box-shadow: 0 0 10px rgba(255, 71, 71, 0.2);
 }
 
 .box-coverflow-container {
@@ -3773,9 +3421,6 @@ button, input, select, textarea {
 
 /* Mobile styles for navigation and tabs */
 @media (max-width: 768px) {
-  .nav-tabs.mobile-hide-tabs {
-    display: none !important;
-  }
   .app-container {
     /* header owns the top inset now (it's sticky and covers the status bar) */
     padding-top: 0 !important;
@@ -3810,18 +3455,6 @@ button, input, select, textarea {
   }
   main {
     margin-top: 0.25rem !important;
-  }
-}
-
-.back-btn-mobile {
-  display: none;
-}
-
-@media (max-width: 768px) {
-  .back-btn-mobile {
-    display: inline-flex !important;
-    align-items: center;
-    gap: 0.25rem;
   }
 }
 
@@ -3925,22 +3558,6 @@ button, input, select, textarea {
 @keyframes recPulse { 0% { box-shadow: 0 0 0px var(--accent-yellow-glow); border-color: rgba(234, 179, 8, 0.4); } 50% { box-shadow: 0 0 15px var(--accent-yellow-glow); border-color: rgba(234, 179, 8, 1); } 100% { box-shadow: 0 0 0px var(--accent-yellow-glow); border-color: rgba(234, 179, 8, 0.4); } } .recommended-ghost { border: 2px dashed var(--accent-yellow) !important; animation: recPulse 1.5s infinite ease-in-out; } @keyframes recPulseOpacity { 0% { opacity: 0.3; } 50% { opacity: 0.7; } 100% { opacity: 0.3; } } .recommended-ghost img { animation: recPulseOpacity 1.5s infinite ease-in-out; }
 
 @keyframes row-flash { 0% { background-color: rgba(234, 179, 8, 0.4); } 100% { background-color: rgba(0,0,0,0.1); } } .row-flash { animation: row-flash 1.5s ease-out; }
-
-
-
-@media (max-width: 768px) {
-  .locations-wrapper {
-    flex-direction: column !important;
-  }
-  .locations-sidebar {
-    width: 100% !important;
-    max-height: 40vh;
-    border-right: none !important;
-    border-bottom: 1px solid var(--border-glass);
-    flex: 0 0 auto !important;
-    overflow-y: auto;
-  }
-}
 
 @keyframes pulseHighlight {
   0% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.8); }

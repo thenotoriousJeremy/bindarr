@@ -3,26 +3,46 @@ const { getVisibleUnit } = require('./sealedOwnership');
 
 const MAX_DEPTH = 6;
 
-async function findTemplate(productId, productName, game) {
-  if (productId) {
+// Answers to recipe questions for one request. Listing a purchase's or a user's
+// units asks every unit the same questions about the same few recipes (which
+// recipe, how many cards it yields), and with 300 units that was 900 queries.
+// Make one per request and pass it down; nothing is cached between requests.
+function recipeMemo() {
+  return { templates: new Map(), counts: new Map(), byId: new Map() };
+}
+
+async function memoized(memo, map, key, compute) {
+  if (!memo) return compute();
+  if (!memo[map].has(key)) memo[map].set(key, compute());
+  return memo[map].get(key);
+}
+
+async function findTemplate(productId, productName, game, memo = null) {
+  return memoized(memo, 'templates', JSON.stringify([productId || null, productName || null, game || null]), () => {
+    if (productId) {
+      return db.get(
+        `SELECT id, expected_cards FROM sealed_templates WHERE product_id = ? AND (? IS NULL OR game = ?) ORDER BY id LIMIT 1`,
+        [productId, game || null, game || null]
+      );
+    }
+    if (!productName) return null;
     return db.get(
-      `SELECT id, expected_cards FROM sealed_templates WHERE product_id = ? AND (? IS NULL OR game = ?) ORDER BY id LIMIT 1`,
-      [productId, game || null, game || null]
+      `SELECT id, expected_cards FROM sealed_templates
+        WHERE product_id IS NULL AND product_name = ? COLLATE NOCASE
+          AND (? IS NULL OR game = ?)
+        ORDER BY id LIMIT 1`,
+      [productName, game || null, game || null]
     );
-  }
-  if (!productName) return null;
-  return db.get(
-    `SELECT id, expected_cards FROM sealed_templates
-      WHERE product_id IS NULL AND product_name = ? COLLATE NOCASE
-        AND (? IS NULL OR game = ?)
-      ORDER BY id LIMIT 1`,
-    [productName, game || null, game || null]
-  );
+  });
 }
 
 // Total cards a recipe yields, recursing into product components that have
-// their own recipe (a bundle holding an ETB and a booster bundle).
-async function templateCardCount(userId, templateId, depth = 0, seen = new Set()) {
+// their own recipe (a bundle holding an ETB and a booster bundle). A top-level
+// count is memoized: below it the answer depends on the path taken.
+async function templateCardCount(userId, templateId, depth = 0, seen = new Set(), memo = null) {
+  if (memo && depth === 0 && seen.size === 0) {
+    return memoized(memo, 'counts', templateId, () => templateCardCount(userId, templateId, depth, seen));
+  }
   if (!templateId || depth > MAX_DEPTH || seen.has(templateId)) return 0;
   const nextSeen = new Set(seen).add(templateId);
   const template = await db.get(`SELECT game, expected_cards FROM sealed_templates WHERE id = ?`, [templateId]);
@@ -49,13 +69,13 @@ async function productCardCount(userId, productId, productName, expectedCards, d
   return fromRecipe || Math.max(1, Number(expectedCards) || 1);
 }
 
-async function unitCardProgress(userId, unitId) {
+async function unitCardProgress(userId, unitId, memo = null) {
   const unit = await getVisibleUnit(userId, unitId);
   if (!unit) return null;
   const template = unit.template_id
-    ? await db.get(`SELECT id, expected_cards FROM sealed_templates WHERE id = ?`, [unit.template_id])
-    : await findTemplate(unit.product_id, unit.product_name, unit.game);
-  const recipeCardCount = template ? await templateCardCount(userId, template.id) : 0;
+    ? await memoized(memo, 'byId', unit.template_id, () => db.get(`SELECT id, expected_cards FROM sealed_templates WHERE id = ?`, [unit.template_id]))
+    : await findTemplate(unit.product_id, unit.product_name, unit.game, memo);
+  const recipeCardCount = template ? await templateCardCount(userId, template.id, 0, new Set(), memo) : 0;
   const linkedCards = await db.get(
     `WITH RECURSIVE linked_units(id) AS (
        SELECT ?
@@ -85,4 +105,4 @@ async function unitCardProgress(userId, unitId) {
   };
 }
 
-module.exports = { templateCardCount, productCardCount, unitCardProgress };
+module.exports = { templateCardCount, productCardCount, unitCardProgress, recipeMemo };

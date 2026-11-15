@@ -10,35 +10,26 @@ on:
   # workflow against a v* ref to republish its image tags).
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# A pull request's older run is superseded by its newer one. Runs for main and
+# for tags wait their turn instead of being cancelled halfway, so two quick
+# pushes publish `edge` in push order.
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  verify:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-
-      - name: Install backend dependencies
-        run: npm ci
-        working-directory: backend
-
-      # Hard gate: backend tests must pass before an image is built/pushed.
-      - name: Backend tests
-        run: npm test
-        working-directory: backend
-
-      - name: Install frontend dependencies
-        run: npm ci
-        working-directory: frontend
-
-      # Enforcing: the frontend lints clean (0 problems). Keep it that way.
-      - name: Lint frontend
-        run: npm run lint
-        working-directory: frontend
+  # A release (a v* tag) is tested here first, because test.yml runs on pull
+  # requests and main, not on tags. A pull request or a push to main has just
+  # run the same suites in test.yml, so for those this job is skipped rather
+  # than repeating them (it used to re-run unit, e2e and lint on every one).
+  tests:
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
 
   # One leg per architecture, each on a runner of that architecture. QEMU
   # emulation was the alternative and it is far slower here: the image compiles
@@ -51,7 +42,10 @@ jobs:
   # themselves — two pushes to the same tag would leave whichever finished last,
   # not a manifest list covering both.
   build:
-    needs: verify
+    needs: tests
+    # Runs when the tests passed, or were skipped because this is not a release.
+    if: ${{ !cancelled() && (needs.tests.result == 'success' || needs.tests.result == 'skipped') }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -79,11 +73,11 @@ jobs:
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GitHub Container Registry (GHCR)
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -91,13 +85,13 @@ jobs:
 
       - name: Extract metadata (labels) for Docker
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.image.outputs.name }}
 
       - name: Build and push image by digest
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile
@@ -120,7 +114,7 @@ jobs:
       # so this is an export, not a second compile. Runs before `merge` applies any
       # tag, so an image that cannot start is never published as a release.
       - name: Load image for smoke test
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile
@@ -136,14 +130,26 @@ jobs:
             "require('sqlite3'); require('sharp'); require('onnxruntime-node'); console.log('native modules load on', process.version, process.arch)"
           # No TCGCSV or FX sync from a throwaway boot: a fresh database would run both.
           docker run -d --name smoke -p 3001:3001 -e BINDARR_DISABLE_TCGCSV_SYNC=1 -e BINDARR_DISABLE_FX_SYNC=1 bindarr:smoke
+          # The same image started already unprivileged, as `docker run --user` and
+          # Kubernetes' runAsNonRoot start it (the entrypoint then skips its chown and
+          # gosu), and on another PORT, which the HEALTHCHECK has to follow.
+          docker run -d --name smoke-user --user node -p 3005:3005 -e PORT=3005 \
+            -e BINDARR_DISABLE_TCGCSV_SYNC=1 -e BINDARR_DISABLE_FX_SYNC=1 bindarr:smoke
           ok=0
           for i in $(seq 1 45); do
-            if curl -fsS http://localhost:3001/api/health; then ok=1; break; fi
+            if curl -fsS http://localhost:3001/api/health && curl -fsS http://localhost:3005/api/health; then ok=1; break; fi
             sleep 2
           done
+          health=$(docker inspect --format '{{index .Config.Healthcheck.Test 1}}' bindarr:smoke)
+          if [ "$ok" = 1 ] && ! docker exec smoke-user sh -c "$health" > /dev/null; then
+            echo "::error::The HEALTHCHECK command ($health) fails on a container with PORT=3005."
+            ok=0
+          fi
           echo; echo '--- container log ---'
           docker logs smoke
-          docker rm -f smoke > /dev/null
+          echo; echo '--- container log (--user node, PORT=3005) ---'
+          docker logs smoke-user
+          docker rm -f smoke smoke-user > /dev/null
           [ "$ok" = 1 ] || { echo "::error::The image never answered /api/health."; exit 1; }
 
       # A file per digest, named after it, so `merge` can collect the set from
@@ -168,8 +174,11 @@ jobs:
   # built above. Skipped on pull_request, where nothing was pushed to tag.
   merge:
     needs: build
-    if: github.event_name != 'pull_request'
+    # Spelled out: on main `tests` is skipped, and the implicit success() check
+    # would skip this job too.
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
@@ -187,10 +196,10 @@ jobs:
           merge-multiple: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GitHub Container Registry (GHCR)
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -198,7 +207,7 @@ jobs:
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.image.outputs.name }}
           # `latest` follows the newest RELEASE, not main. The README tells

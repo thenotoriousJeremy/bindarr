@@ -9,19 +9,30 @@ on:
     branches: [ main ]
     paths: [ 'frontend/**' ]
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+# Nothing by default; each job asks for what it needs. The build runs npm ci and
+# the whole frontend toolchain, so it can only read (configure-pages reads the
+# site's settings); the deploy job, which runs nothing but deploy-pages, holds
+# the write permissions.
+permissions: {}
 
 # One live deploy at a time; don't cancel an in-progress one.
 concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  # Nothing in the frontend uses onnxruntime-node, but every npm ci in the
+  # workflows sets this: its install script otherwise downloads ~245 MB of CUDA
+  # libraries on Linux.
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -42,6 +53,10 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

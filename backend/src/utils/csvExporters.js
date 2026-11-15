@@ -51,10 +51,25 @@ const EXPORT_STRATEGIES = {
   })
 };
 
+// A spreadsheet reads a cell that starts with = + - @ (or a tab or carriage
+// return, which some strip first) as a formula, and a formula can fetch URLs or
+// run commands when the file is opened. Location names, card names and provider
+// text all reach these cells, so a text value that starts that way is written
+// with a leading apostrophe, which spreadsheets show as plain text. A plain number
+// ("-5") is left alone, and csvMappers removes the apostrophe again when the file
+// is imported back. OWASP's CSV-injection advice.
+const FORMULA_START = /^[=+\-@\t\r]/;
+const PLAIN_NUMBER = /^[+-]?\d+(\.\d+)?$/;
+
+function neutralizeCell(value) {
+  if (typeof value !== 'string' || !FORMULA_START.test(value) || PLAIN_NUMBER.test(value)) return value;
+  return `'${value}`;
+}
+
 function generateExportCSV(collectionItems, formatType = 'internal') {
   const formatKey = (formatType || 'internal').toLowerCase();
   const strategy = EXPORT_STRATEGIES[formatKey] || EXPORT_STRATEGIES.internal;
-  
+
   const mappedRows = collectionItems.map(strategy);
   if (mappedRows.length === 0) return '';
 
@@ -64,7 +79,7 @@ function generateExportCSV(collectionItems, formatType = 'internal') {
   for (const row of mappedRows) {
     const values = headers.map(header => {
       const val = row[header] !== undefined && row[header] !== null ? row[header] : '';
-      return `"${String(val).replace(/"/g, '""')}"`;
+      return `"${String(neutralizeCell(val)).replace(/"/g, '""')}"`;
     });
     csvRows.push(values.join(','));
   }
@@ -75,5 +90,6 @@ function generateExportCSV(collectionItems, formatType = 'internal') {
 module.exports = {
   REVERSE_CONDITION_MAP,
   EXPORT_STRATEGIES,
-  generateExportCSV
+  generateExportCSV,
+  neutralizeCell
 };

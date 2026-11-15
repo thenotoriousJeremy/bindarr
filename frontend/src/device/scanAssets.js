@@ -14,10 +14,21 @@ import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileTransfer } from '@capacitor/file-transfer';
 import { loadNpz } from '../utils/npz';
+import { wasmSimdSupported, NO_SIMD_MESSAGE } from './wasmSupport';
 
 const DIR = 'scan';
 const HF = 'https://huggingface.co';
-const at = (name) => ({ path: `${DIR}/${name}`, directory: Directory.Data });
+// Kept out of the phone's backups (MOB-12). Everything here can be downloaded
+// again, and it is big enough to crowd out what cannot: on iOS, Directory.Data is
+// Documents, which goes to iCloud (~77 MB of it), so the files live in
+// Library/NoCloud instead. Android maps both to the app's files directory, and
+// the app's backup rules leave scan/ out there (android/app/src/main/res/xml/
+// backup_rules.xml and data_extraction_rules.xml) so the 25 MB backup quota
+// keeps room for the collection database.
+const HOME = Directory.LibraryNoCloud;
+// Where Bindarr 1.9.0 downloaded them; moved out on the next launch.
+const OLD_HOME = Directory.Data;
+const at = (name, directory = HOME) => ({ path: `${DIR}/${name}`, directory });
 // The previous cornelius export, which modelAssets also accepts.
 const ALSO_OK = { 'cornelius.onnx': [4407545] };
 
@@ -26,6 +37,8 @@ let catalogs = [];
 let present = new Set();
 let busy = null;              // { name, fraction } while a download runs
 let error = null;
+// False where the scan models cannot run at all (no WebAssembly SIMD).
+let supported = true;
 let snapshot = null;
 const listeners = new Set();
 
@@ -36,6 +49,7 @@ function emit() {
     modelsReady: models.length > 0 && models.every(m => present.has(m.name)),
     busy,
     error,
+    supported,
   };
   listeners.forEach(fn => fn());
 }
@@ -68,16 +82,57 @@ export async function refresh() {
   emit();
 }
 
+// Scan data an earlier version downloaded into OLD_HOME: moved to HOME once. A
+// file that will not move is deleted instead (it can be downloaded again, and
+// left where it is it would stay in the backup); the scan tab then simply offers
+// the download again. Where the two directories are the same folder (Android),
+// there is nothing to do.
+async function moveFromOldHome(names) {
+  let from;
+  let to;
+  try {
+    from = (await Filesystem.getUri({ path: DIR, directory: OLD_HOME })).uri;
+    to = (await Filesystem.getUri({ path: DIR, directory: HOME })).uri;
+  } catch {
+    return;
+  }
+  if (from === to) return;
+  const old = await Filesystem.readdir({ path: DIR, directory: OLD_HOME }).catch(() => null);
+  if (!old || !old.files || !old.files.length) return;
+  await Filesystem.mkdir({ path: DIR, directory: HOME, recursive: true }).catch(() => {});
+  for (const entry of old.files) {
+    const name = typeof entry === 'string' ? entry : entry.name;
+    if (!names.includes(name)) continue;   // a .part left by an interrupted download
+    try {
+      await Filesystem.rename({ from: `${DIR}/${name}`, to: `${DIR}/${name}`, directory: OLD_HOME, toDirectory: HOME });
+    } catch (err) {
+      console.warn(`Scan data: could not move ${name} out of the backed-up folder; it will be downloaded again.`, err);
+    }
+  }
+  await Filesystem.rmdir({ path: DIR, directory: OLD_HOME, recursive: true }).catch(() => {});
+}
+
 export async function initScanAssets({ MODELS, CATALOGS }) {
   models = MODELS;
   catalogs = CATALOGS;
+  supported = wasmSimdSupported();
+  if (!supported) error = NO_SIMD_MESSAGE;
+  await moveFromOldHome([...MODELS, ...CATALOGS].map(a => a.name)).catch(err => console.warn('Scan data move failed:', err));
   await refresh();
 }
 
+// The descriptors come from modelAssets.js, which pins each file to one Hugging
+// Face commit and records its SHA-256. The phone fetches the same commit and
+// checks the same hash, so it never scans with a file the server would refuse.
+async function sha256Hex(bytes) {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function downloadOne(asset) {
-  const url = `${HF}/${asset.repo}/resolve/main/${asset.file}`;
+  const url = `${HF}/${asset.repo}/resolve/${asset.revision || 'main'}/${asset.file}`;
   const part = `${asset.name}.part`;
-  await Filesystem.mkdir({ path: DIR, directory: Directory.Data, recursive: true }).catch(() => {});
+  await Filesystem.mkdir({ path: DIR, directory: HOME, recursive: true }).catch(() => {});
   const { uri } = await Filesystem.getUri(at(part));
   const listener = await FileTransfer.addListener('progress', (p) => {
     if (p.url !== url) return;
@@ -94,14 +149,27 @@ async function downloadOne(asset) {
     await Filesystem.deleteFile(at(part)).catch(() => {});
     throw new Error(`${asset.name} downloaded ${size} bytes, expected ${asset.bytes}`);
   }
+  if (asset.sha256 && globalThis.crypto?.subtle) {
+    const digest = await sha256Hex(await readBytes(part));
+    if (digest !== asset.sha256) {
+      await Filesystem.deleteFile(at(part)).catch(() => {});
+      throw new Error(`${asset.name} has SHA-256 ${digest}, expected ${asset.sha256}`);
+    }
+  }
   // Rename into place, so an interrupted download can never pass for a finished one.
   await Filesystem.deleteFile(at(asset.name)).catch(() => {});
-  await Filesystem.rename({ from: `${DIR}/${part}`, to: `${DIR}/${asset.name}`, directory: Directory.Data, toDirectory: Directory.Data });
+  await Filesystem.rename({ from: `${DIR}/${part}`, to: `${DIR}/${asset.name}`, directory: HOME, toDirectory: HOME });
 }
 
 // The models (if missing) plus this game's catalog. One file at a time.
 export async function downloadForGame(game) {
   if (busy) return;
+  // Not ~70 MB for models this phone cannot run (MOB-04).
+  if (!supported) {
+    error = NO_SIMD_MESSAGE;
+    emit();
+    throw Object.assign(new Error(NO_SIMD_MESSAGE), { code: 'noWasmSimd' });
+  }
   error = null;
   const wanted = [...models, catalogFor(game)].filter(a => a && !present.has(a.name));
   try {

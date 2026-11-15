@@ -3,28 +3,14 @@
 process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
 process.env.BINDARR_DISABLE_FX_SYNC = '1';
 
-const path = require('path');
-const os = require('os');
-const fs = require('fs');
 const http = require('http');
 const assert = require('assert');
-const { spawn } = require('child_process');
-const { freePort } = require('../freePort');
+const harness = require('./harness');
 
-const tmpDb = path.join(os.tmpdir(), `bindarr-oidc-test-${process.pid}.db`);
-const linkDb = path.join(os.tmpdir(), `bindarr-oidc-link-${process.pid}.db`);
-const projectRoot = path.join(__dirname, '../../../');
-
-async function waitForServer(url) {
-  for (let i = 0; i < 150; i++) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return;
-    } catch { /* not ready */ }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error(`Server at ${url} did not start in time`);
-}
+// Two servers, each on its own throwaway database. This process never opens
+// either: the servers create the accounts themselves, as the OIDC flow does.
+const tmpDb = harness.tempDatabase('oidc-test');
+const linkDb = harness.tempDatabase('oidc-link');
 
 // The web sign-in as a browser performs it. /oidc/login sets the binding cookie;
 // the IdP sends the browser back to the callback, cookie and all; the callback
@@ -129,16 +115,9 @@ async function runTests() {
   const idpIssuer = `http://127.0.0.1:${idpPort}`;
 
   // 2. Start Bindarr backend server with OIDC configuration
-  const bindarrPort = String(await freePort());
-  const base = `http://localhost:${bindarrPort}`;
-
-  const server = spawn('node', [path.join(projectRoot, 'backend/src/server.js')], {
+  const server = await harness.startServer(tmpDb, {
     env: {
-      ...process.env,
       DEFAULT_ADMIN_PASSWORD: '',
-      PORT: bindarrPort,
-      DB_PATH: tmpDb,
-      HTTPS_PORT: '',
       OIDC_ENABLED: 'true',
       OIDC_PROVIDER_NAME: 'TestIdP',
       OIDC_ISSUER_URL: idpIssuer,
@@ -147,14 +126,13 @@ async function runTests() {
       OIDC_AUTO_PROVISION: 'true'
     }
   });
+  const base = server.base;
 
   const { startLogin, finishLogin, redeem, signIn } = webFlow(base, (authUrl) => {
     currentNonce = authUrl.searchParams.get('nonce');
   });
 
   try {
-    await waitForServer(`${base}/api/health`);
-
     // F7-TC1: Public config exposes OIDC status and provider name
     const configRes = await fetch(`${base}/api/auth/config`);
     assert.strictEqual(configRes.status, 200);
@@ -295,14 +273,12 @@ async function runTests() {
     console.log('PASS: F7-TC11');
 
   } finally {
-    server.kill('SIGKILL');
+    await server.stop();
     if (typeof idpServer.closeAllConnections === 'function') {
       idpServer.closeAllConnections();
     }
     await new Promise(resolve => idpServer.close(resolve));
-    for (const suffix of ['', '-wal', '-shm']) {
-      try { fs.unlinkSync(tmpDb + suffix); } catch { /* ignore */ }
-    }
+    await harness.cleanup(null, tmpDb);
   }
 }
 
@@ -363,16 +339,10 @@ async function runUsernameLinkTests() {
   await new Promise(resolve => idpServer.listen(0, '127.0.0.1', resolve));
   const idpIssuer = `http://127.0.0.1:${idpServer.address().port}`;
 
-  const port = String(await freePort());
-  const base = `http://localhost:${port}`;
-  const server = spawn('node', [path.join(projectRoot, 'backend/src/server.js')], {
+  const server = await harness.startServer(linkDb, {
     env: {
-      ...process.env,
       // A pre-existing local account, exactly like an install upgrading into SSO.
       DEFAULT_ADMIN_PASSWORD: 'test-admin-password',
-      PORT: port,
-      DB_PATH: linkDb,
-      HTTPS_PORT: '',
       OIDC_ENABLED: 'true',
       OIDC_PROVIDER_NAME: 'TestIdP',
       OIDC_ISSUER_URL: idpIssuer,
@@ -382,14 +352,13 @@ async function runUsernameLinkTests() {
       OIDC_ALLOW_USERNAME_LINK: 'true'
     }
   });
+  const base = server.base;
 
   const { signIn } = webFlow(base, (authUrl) => {
     currentNonce = authUrl.searchParams.get('nonce');
   });
 
   try {
-    await waitForServer(`${base}/api/health`);
-
     // F7-TC9: with the flag on, the IdP identity attaches to the existing local
     // account rather than creating a second, empty one beside it.
     const { token: linkToken } = await signIn('link-code-1');
@@ -428,21 +397,22 @@ async function runUsernameLinkTests() {
     console.log('PASS: F7-TC10');
 
   } finally {
-    server.kill('SIGKILL');
+    await server.stop();
     if (typeof idpServer.closeAllConnections === 'function') {
       idpServer.closeAllConnections();
     }
     await new Promise(resolve => idpServer.close(resolve));
-    for (const suffix of ['', '-wal', '-shm']) {
-      try { fs.unlinkSync(linkDb + suffix); } catch { /* ignore */ }
-    }
+    await harness.cleanup(null, linkDb);
   }
 }
 
 runTests()
   .then(runUsernameLinkTests)
-  .then(() => setTimeout(() => process.exit(0), 500))
-  .catch(err => {
+  .then(() => process.exit(0))
+  .catch(async err => {
     console.error('FAIL: oidc.test.js -', err.message);
-    setTimeout(() => process.exit(1), 500);
+    // A failure before a server started leaves its directory behind.
+    await harness.cleanup(null, tmpDb);
+    await harness.cleanup(null, linkDb);
+    process.exit(1);
   });

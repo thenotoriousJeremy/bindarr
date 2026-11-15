@@ -1,7 +1,7 @@
 // Shared card-image sources for the global index builds. Returns a flat list of
 // { name, set, number, img } where img is a reasonably high-res image URL
-// (better than the tiny hash images — CLIP resizes to 224 and benefits from a
-// sharp downsample rather than an upscaled thumbnail).
+// (better than the tiny thumbnails — the milo embedder takes a 448px crop and
+// benefits from a sharp downsample rather than an upscaled thumbnail).
 const axios = require('axios');
 const zlib = require('zlib');
 const readline = require('readline');

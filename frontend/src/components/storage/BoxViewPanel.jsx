@@ -22,13 +22,14 @@ export default function BoxViewPanel({
   if (!activeComp) return null;
   const activeCompIdx = compartments.findIndex(c => c.id === activeComp.id);
   const activeCompRuleCount = Array.isArray(activeComp.assignedFilters) ? activeComp.assignedFilters.length : (activeComp.rule_config ? 1 : 0);
-  const activeAcceptsLabel = activeCompRuleCount > 0 ? `Rules (${activeCompRuleCount})` : 'Accepts All';
+  // Worded as a binder page's button is (CompartmentView).
+  const activeAcceptsLabel = activeCompRuleCount > 0 ? t('compartment.acceptsCount', { count: activeCompRuleCount }) : t('compartment.accepts');
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
       <div key={activeComp.id} className="row-flash" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', background: 'rgba(0,0,0,0.1)', padding: '0.4rem 0.6rem', borderRadius: 'var(--radius-sm)', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <button className="btn btn-secondary btn-icon-only" disabled={activeCompIdx <= 0} onClick={() => setActiveCompartmentId(compartments[activeCompIdx - 1]?.id)} style={{ width: '24px', height: '24px', padding: 0 }}>
+          <button type="button" className="btn btn-secondary btn-icon-only" disabled={activeCompIdx <= 0} onClick={() => setActiveCompartmentId(compartments[activeCompIdx - 1]?.id)} aria-label={t('loc.prevRow')} title={t('loc.prevRow')} style={{ width: '24px', height: '24px', padding: 0 }}>
             &larr;
           </button>
           <select
@@ -46,7 +47,7 @@ export default function BoxViewPanel({
             {compartments.map(c => <option key={c.id} value={c.id}>{c.display_label}</option>)}
             <option value="__add_new__" disabled={!!selectedLoc.locked}>+ {t('loc.addRow')}</option>
           </select>
-          <button className="btn btn-secondary btn-icon-only" disabled={activeCompIdx >= compartments.length - 1} onClick={() => setActiveCompartmentId(compartments[activeCompIdx + 1]?.id)} style={{ width: '24px', height: '24px', padding: 0 }}>
+          <button type="button" className="btn btn-secondary btn-icon-only" disabled={activeCompIdx >= compartments.length - 1} onClick={() => setActiveCompartmentId(compartments[activeCompIdx + 1]?.id)} aria-label={t('loc.nextRow')} title={t('loc.nextRow')} style={{ width: '24px', height: '24px', padding: 0 }}>
             &rarr;
           </button>
         </div>

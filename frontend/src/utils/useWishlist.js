@@ -5,7 +5,7 @@ import { wishlist } from './wishlist';
 // Re-renders the caller whenever any heart changes; call wishlist.has(id) on
 // the returned store.
 export function useWishlist() {
-  useSyncExternalStore(wishlist.subscribe, wishlist.getVersion);
+  useSyncExternalStore(wishlist.subscribe, wishlist.getVersion, wishlist.getVersion);
   useEffect(() => { wishlist.load(); }, []);
   return wishlist;
 }

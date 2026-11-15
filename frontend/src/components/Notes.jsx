@@ -1,8 +1,16 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { Plus, Pin, Trash2, Search } from 'lucide-react';
 import { useT } from '../utils/i18n';
+import { createAutosave } from '../utils/noteAutosave';
+import { useStableCallback } from '../utils/useStableCallback';
 
-function NoteItem({ note, onSave, onTogglePin, onDelete }) {
+// One text field of one note, as the autosave (utils/noteAutosave) names it.
+const fieldKey = (id, field) => `${id}:${field}`;
+// keepalive lets a save sent while the page goes away still arrive. Browsers cap
+// such a request's body at 64 KiB, so a longer note goes as an ordinary request.
+const KEEPALIVE_MAX = 60000;
+
+function NoteItem({ note, onEdit, onCommit, onTogglePin, onDelete }) {
   const { t } = useT();
   const [title, setTitle] = useState(note.title || '');
   const [body, setBody] = useState(note.body || '');
@@ -15,17 +23,10 @@ function NoteItem({ note, onSave, onTogglePin, onDelete }) {
     setBody(note.body || '');
   }, [note.body]);
 
-  const handleTitleBlur = () => {
-    if (title !== (note.title || '')) {
-      onSave(note.id, 'title', title);
-    }
-  };
-
-  const handleBodyBlur = () => {
-    if (body !== (note.body || '')) {
-      onSave(note.id, 'body', body);
-    }
-  };
+  // Each keystroke goes to the autosave, which saves once the typing pauses;
+  // leaving the field saves at once.
+  const editTitle = (value) => { setTitle(value); onEdit(note.id, 'title', value, note.title || ''); };
+  const editBody = (value) => { setBody(value); onEdit(note.id, 'body', value, note.body || ''); };
 
   return (
     <div className="glass-panel" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -33,9 +34,10 @@ function NoteItem({ note, onSave, onTogglePin, onDelete }) {
         <input
           value={title}
           placeholder={t('notes.titlePlaceholder')}
-          onChange={e => setTitle(e.target.value)}
-          onBlur={handleTitleBlur}
-          style={{ flex: 1, background: 'transparent', border: 'none', color: 'var(--text-strong)', fontWeight: 600, fontSize: '1rem', outline: 'none' }}
+          aria-label={t('notes.titlePlaceholder')}
+          onChange={e => editTitle(e.target.value)}
+          onBlur={() => onCommit(note.id, 'title', title, note.title || '')}
+          style={{ flex: 1, background: 'transparent', border: 'none', color: 'var(--text-strong)', fontWeight: 600, fontSize: '1rem' }}
         />
         <button
           className="btn btn-secondary btn-icon-only"
@@ -59,35 +61,83 @@ function NoteItem({ note, onSave, onTogglePin, onDelete }) {
       <textarea
         value={body}
         placeholder={t('notes.bodyPlaceholder')}
-        onChange={e => setBody(e.target.value)}
-        onBlur={handleBodyBlur}
+        aria-label={t('notes.bodyPlaceholder')}
+        onChange={e => editBody(e.target.value)}
+        onBlur={() => onCommit(note.id, 'body', body, note.body || '')}
         rows={5}
-        style={{ resize: 'vertical', background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', color: 'var(--text-strong)', padding: '0.5rem', fontSize: '0.9rem', outline: 'none', fontFamily: 'inherit' }}
+        style={{ resize: 'vertical', background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', color: 'var(--text-strong)', padding: '0.5rem', fontSize: '0.9rem', fontFamily: 'inherit' }}
       />
     </div>
   );
 }
 
 // Standalone scratchpad notebook, separate from card entries. Notes are
-// per-user (auth via the global fetch token interceptor). Editing saves on
-// blur; pin keeps a note at the top.
-function Notes({ showToast }) {
+// per-user (auth via the global fetch token interceptor). Typing saves a moment
+// after it pauses, and at once when the field loses focus, this tab is hidden,
+// or the page is closed or backgrounded; pin keeps a note at the top.
+function Notes({ showToast, active = true }) {
   const { t } = useT();
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('updated');
 
+  // PUT one text field; resolves to whether the server took it.
+  const saveText = useStableCallback(async (key, value) => {
+    const at = key.indexOf(':');
+    const field = key.slice(at + 1);
+    const body = JSON.stringify({ [field]: value });
+    const r = await fetch(`/api/notes/${key.slice(0, at)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive: new TextEncoder().encode(body).length < KEEPALIVE_MAX,
+    });
+    return r.ok;
+  });
+  const saveFailed = useStableCallback(() => showToast?.(t('notes.errSave')));
+  const saverRef = useRef(null);
+  if (!saverRef.current) saverRef.current = createAutosave({ save: saveText, onError: saveFailed });
+  const saver = saverRef.current;
+
+  // Typing not saved yet goes out at once when the page is hidden or left (a
+  // closed tab, the app sent to the background) and when Notes unmounts (a
+  // logout); only on blur, it was lost.
   useEffect(() => {
+    const flush = () => { saver.flushAll(); };
+    const onVisibility = () => { if (document.visibilityState === 'hidden') flush(); };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onVisibility);
+      flush();
+      saver.dispose();
+    };
+  }, [saver]);
+
+  // And when another tab is opened: Notes stays mounted, hidden, meanwhile.
+  useEffect(() => {
+    if (!active) saver.flushAll();
+  }, [active, saver]);
+
+  // Loaded once. It used to reload whenever `t` changed (a language switch),
+  // which could put an older copy of a note over text still being saved; and a
+  // failed load showed an empty notebook instead of saying it failed.
+  const loadFailed = useStableCallback(() => showToast?.(t('notes.errLoad')));
+  useEffect(() => {
+    let cancelled = false;
     fetch('/api/notes')
-      .then(r => (r.ok ? r.json() : { notes: [] }))
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(d => {
+        if (cancelled) return;
         const list = Array.isArray(d.notes) ? d.notes : (Array.isArray(d) ? d : []);
         setNotes(list);
       })
-      .catch(() => showToast?.(t('notes.errLoad')))
-      .finally(() => setLoading(false));
-  }, [showToast, t]);
+      .catch(() => { if (!cancelled) loadFailed(); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [loadFailed]);
 
   const createNote = async () => {
     try {
@@ -110,7 +160,21 @@ function Notes({ showToast }) {
     }
   };
 
-  // Persist one field. Bumps updated_at server-side; we re-sort on next load.
+  // A keystroke in a title or body: the autosave saves it once the typing pauses.
+  const editField = (id, field, value, original) => saver.edit(fieldKey(id, field), value, original);
+
+  // Leaving a field: the list's copy takes the text (search and sort read it),
+  // and the autosave sends it now instead of after the pause. Also a retry for a
+  // save that failed earlier.
+  const commitField = (id, field, value, original) => {
+    setNotes(prev => (prev.some(n => n.id === id && (n[field] || '') !== value)
+      ? prev.map(n => (n.id === id ? { ...n, [field]: value } : n))
+      : prev));
+    saver.edit(fieldKey(id, field), value, original);
+    saver.flush(fieldKey(id, field));
+  };
+
+  // Persist one field (the pin). Bumps updated_at server-side; we re-sort on next load.
   const saveField = async (id, field, value) => {
     setNotes(prev => prev.map(n => (n.id === id ? { ...n, [field]: value } : n)));
     try {
@@ -135,6 +199,9 @@ function Notes({ showToast }) {
         showToast?.(t('notes.errDelete'));
         return;
       }
+      // Typing still waiting to be saved has no note to go to now.
+      saver.forget(fieldKey(id, 'title'));
+      saver.forget(fieldKey(id, 'body'));
       setNotes(prev => prev.filter(n => n.id !== id));
     } catch {
       showToast?.(t('notes.errDelete'));
@@ -176,10 +243,11 @@ function Notes({ showToast }) {
               value={query}
               onChange={e => setQuery(e.target.value)}
               placeholder={t('notes.searchPlaceholder')}
+              aria-label={t('notes.searchPlaceholder')}
               style={{ paddingLeft: '2rem', width: '100%' }}
             />
           </div>
-          <select className="select-control" value={sort} onChange={e => setSort(e.target.value)} style={{ width: 'auto' }}>
+          <select className="select-control" value={sort} onChange={e => setSort(e.target.value)} aria-label={t('collection.sortBy')} style={{ width: 'auto' }}>
             <option value="updated">{t('notes.sortUpdated')}</option>
             <option value="created">{t('notes.sortCreated')}</option>
             <option value="title">{t('notes.sortTitle')}</option>
@@ -201,7 +269,8 @@ function Notes({ showToast }) {
             <NoteItem
               key={note.id}
               note={note}
-              onSave={saveField}
+              onEdit={editField}
+              onCommit={commitField}
               onTogglePin={togglePin}
               onDelete={deleteNote}
             />
@@ -212,4 +281,5 @@ function Notes({ showToast }) {
   );
 }
 
-export default Notes;
+// Memoized: App re-renders on every toast, and its props here are stable.
+export default memo(Notes);

@@ -3,7 +3,8 @@ import { BarChart2 } from 'lucide-react';
 import { useT } from '../../utils/i18n';
 import { lazyNamed } from '../../utils/lazyWithReload';
 import ChartFallback from '../charts/ChartFallback';
-import { cardGroup as cardGroupFor } from './deckHelpers';
+import { CARD_COLORS } from '../../utils/cardColors';
+import { cardGroup as cardGroupFor, deckGroupLabel } from './deckHelpers';
 
 // The analytics plots are code-split (charts/DeckCharts), so recharts is fetched
 // when a deck's stats are first drawn rather than with the deck list.
@@ -13,6 +14,10 @@ const SupertypeDonut = lazyNamed(deckCharts, 'SupertypeDonut');
 const TypeBars = lazyNamed(deckCharts, 'TypeBars');
 
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#64748b'];
+
+// Magic's colour letters, and the colour each basic land type makes.
+const MTG_COLORS = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
+const BASIC_LAND_COLORS = { Plains: 'White', Island: 'Blue', Swamp: 'Black', Mountain: 'Red', Forest: 'Green' };
 
 // The open deck's statistics panels: cost curve, supertype breakdown and the
 // energy / color distribution. Each panel is drawn only when it has data.
@@ -28,7 +33,7 @@ export default function DeckStats({ activeDeck, deckGame }) {
       const g = cardGroup(c);
       counts[g] = (counts[g] || 0) + c.quantity;
     });
-    return Object.keys(counts).map(key => ({ name: key, value: counts[key] })).filter(d => d.value > 0);
+    return Object.keys(counts).map(key => ({ name: deckGroupLabel(t, key), value: counts[key] })).filter(d => d.value > 0);
   };
 
   const getManaCurveData = () => {
@@ -48,7 +53,16 @@ export default function DeckStats({ activeDeck, deckGame }) {
 
   const getEnergyChartData = () => {
     if (!activeDeck) return [];
-    const map = {};
+    // Keyed by the English category the card data uses; each bar carries the
+    // label it shows and its colour (utils/cardColors, shared by every chart of
+    // types). A category with no colour there gets the chart's default.
+    const map = new Map();
+    const add = (key, name, qty, color = CARD_COLORS[key]) => {
+      const entry = map.get(key) || { name, value: 0, color };
+      entry.value += qty;
+      map.set(key, entry);
+    };
+    const colorless = () => t('deck.chartColorless');
     if (deckGame === 'mtg') {
       // Color and Land type distribution
       activeDeck.cards.forEach(c => {
@@ -56,43 +70,44 @@ export default function DeckStats({ activeDeck, deckGame }) {
         const isLand = subs.includes('Land') || c.supertype === 'Land' || cardGroup(c) === 'Land';
         if (isLand) {
           const basicLandTypes = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'];
-          const foundType = basicLandTypes.find(t => subs.includes(t) || c.name.includes(t));
-          const label = foundType ? `Land (${foundType})` : 'Land (Nonbasic)';
-          map[label] = (map[label] || 0) + c.quantity;
+          const foundType = basicLandTypes.find(type => subs.includes(type) || c.name.includes(type));
+          if (foundType) add(`land:${foundType}`, t('deck.chartLand', { type: foundType }), c.quantity, CARD_COLORS[BASIC_LAND_COLORS[foundType]]);
+          else add('land:nonbasic', t('deck.chartLandNonbasic'), c.quantity);
         } else {
           const colors = c.colors || c.types || [];
           if (colors.length === 0) {
-            map['Colorless'] = (map['Colorless'] || 0) + c.quantity;
+            add('Colorless', colorless(), c.quantity);
           } else {
             colors.forEach(col => {
-              const colorName = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' }[col] || col;
-              map[colorName] = (map[colorName] || 0) + c.quantity;
+              const colorName = MTG_COLORS[col] || col;
+              add(colorName, MTG_COLORS[col] ? t(`deck.mtgColor.${col}`) : col, c.quantity);
             });
           }
         }
       });
-      return Object.keys(map).map(key => ({ name: key, value: map[key] }));
+      return [...map.values()];
     }
     if (deckGame === 'lorcana') {
       activeDeck.cards.forEach(c => {
         const inks = Array.isArray(c.types) && c.types.length ? c.types : (c.ink ? [c.ink] : []);
         if (inks.length === 0) {
-          map['Colorless'] = (map['Colorless'] || 0) + c.quantity;
+          add('Colorless', colorless(), c.quantity);
         } else {
-          inks.forEach(ink => { map[ink] = (map[ink] || 0) + c.quantity; });
+          inks.forEach(ink => add(ink, ink, c.quantity));
         }
       });
-      return Object.keys(map).map(key => ({ name: key, value: map[key] }));
+      return [...map.values()];
     }
     activeDeck.cards.forEach(c => {
       if (c.supertype === 'Energy') {
-        const name = c.name.replace(/\s*Energy/i, '').trim() || 'Special';
-        map[name] = (map[name] || 0) + c.quantity;
+        const name = c.name.replace(/\s*Energy/i, '').trim();
+        if (name) add(name, name, c.quantity);
+        else add('special', t('deck.chartSpecialEnergy'), c.quantity);
       } else if (c.types && c.types.length > 0) {
-        c.types.forEach(t => { map[t] = (map[t] || 0) + c.quantity; });
+        c.types.forEach(type => add(type, type, c.quantity));
       }
     });
-    return Object.keys(map).map(key => ({ name: key, value: map[key] }));
+    return [...map.values()];
   };
 
   const supertypeData = getSupertypeChartData();
@@ -105,7 +120,7 @@ export default function DeckStats({ activeDeck, deckGame }) {
       {manaCurveData.some(d => d.count > 0) && (
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <h3 style={{ fontSize: '0.95rem', color: 'var(--text-strong)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <BarChart2 size={14} style={{ color: '#3b82f6' }} /> Energy / Mana Cost Curve
+            <BarChart2 size={14} style={{ color: 'var(--accent-blue)' }} /> {t('deck.costCurve')}
           </h3>
           <div style={{ width: '100%', height: '180px' }}>
             <Suspense fallback={<ChartFallback />}>
@@ -119,7 +134,7 @@ export default function DeckStats({ activeDeck, deckGame }) {
       {supertypeData.length > 0 && (
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <h3 style={{ fontSize: '0.95rem', color: 'var(--text-strong)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <BarChart2 size={14} style={{ color: 'var(--accent-red)' }} /> Supertype Breakdown
+            <BarChart2 size={14} style={{ color: 'var(--accent-red)' }} /> {t('deck.supertypeBreakdown')}
           </h3>
           <div style={{ width: '100%', height: '180px' }}>
             <Suspense fallback={<ChartFallback />}>

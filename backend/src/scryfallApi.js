@@ -1,28 +1,22 @@
-const axios = require('axios');
 const db = require('./db');
-const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
+const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept, WISHLIST_CARDS_SQL } = require('./utils/priceHelpers');
 const { parseSetList } = require('./utils/setQuery');
 const { rulesTextFields } = require('./utils/mtgRulesText');
 const scryfallSyntax = require('./utils/scryfallSyntax');
 const cardSearchSql = require('./utils/cardSearchSql');
 const languages = require('./utils/languages');
 const { cacheNormalizedCards } = require('./utils/cardCache');
-const metrics = require('./utils/metrics');
+const { createProviderClient } = require('./utils/providerClient');
 
 // Scryfall needs no API key but asks callers to identify themselves and accept
 // JSON. See https://scryfall.com/docs/api. IDs from Scryfall are UUIDs / set-num
 // slugs; we prefix them with "mtg-" so they never collide with Pokémon TCG ids
 // in the shared card_cache table and the game is derivable from the id.
-const client = axios.create({
-  baseURL: 'https://api.scryfall.com',
-  timeout: 6000,
-  headers: { 'User-Agent': 'Bindarr/1.0', 'Accept': 'application/json' }
-});
-metrics.instrumentAxiosClient(client, 'scryfall');
-
+//
 // Search, per-set fetches and the background price sweep all hit Scryfall and
 // can run concurrently, so every request goes through one serialized queue —
-// a global limiter beats per-caller delays that can't see each other.
+// a global limiter beats per-caller delays that can't see each other. The queue,
+// the pause and the retries are utils/providerClient's; the numbers are here.
 //
 // Scryfall publishes HARD, PER-ENDPOINT limits, and the card endpoints this app
 // leans on are the strict ones — not the 10/second that applies to everything
@@ -45,135 +39,52 @@ const ENDPOINT_GAPS = [
 const SCRYFALL_MIN_GAP_MS = 100 * GAP_SCALE; // floor for "all other methods" (10/second)
 // A 429 says "everything you are sending is too much", so backing off only the
 // request that got it is useless — the queue behind it keeps firing at full rate
-// and keeps the penalty alive. `cooldownUntil` pauses EVERY request until the
-// window Scryfall asked for has passed. Default 60s: that is what its 429 body
-// asks for when no Retry-After header is sent.
+// and keeps the penalty alive. One 429 pauses EVERY request until the window
+// Scryfall asked for has passed. Default 60s: that is what its 429 body asks for
+// when no Retry-After header is sent.
 const SCRYFALL_DEFAULT_COOLDOWN_MS = 60000;
-let scryfallQueue = Promise.resolve();
-let lastScryfallAt = 0;
-let cooldownUntil = 0;
-// Per-endpoint clocks. The limits are per endpoint, so a search and a /sets call
-// don't have to wait on each other beyond the global 10/second floor.
-const lastByEndpoint = new Map();
+// The longest pause a Retry-After can impose. Scryfall asks for seconds to a
+// minute; a header claiming an hour (or a date a clock skew pushed into next week)
+// would otherwise hold every background job for that long.
+const SCRYFALL_MAX_COOLDOWN_MS = 5 * 60 * 1000;
 
-// Which bucket a URL falls in. Callers pass both relative ('/cards/search?...')
-// and absolute (Scryfall's own next_page links) URLs, so read just the path.
-function endpointGap(url) {
-  let path = String(url || '');
-  if (/^https?:\/\//i.test(path)) {
-    try { path = new URL(path).pathname; } catch { /* fall through to raw */ }
-  }
-  path = path.split('?')[0];
-  for (const [pattern, gap] of ENDPOINT_GAPS) {
-    if (pattern.test(path)) return { key: pattern.source, gap };
-  }
-  return { key: 'default', gap: SCRYFALL_MIN_GAP_MS };
-}
+// An interactive request (a search, a card the user is looking at) refuses during
+// a 429 pause instead of waiting it out: a minute, or whatever Retry-After said,
+// is not something to hold a person's search for. It refuses with a 429 of its
+// own, which every caller already turns into RATE_LIMIT_EXCEEDED — or serves from
+// the cache. Background work (price sweeps, catalog builds, set refreshes) still
+// queues behind the pause, which is what it is for.
+const scryfall = createProviderClient({
+  name: 'scryfall',
+  label: 'Scryfall',
+  baseURL: 'https://api.scryfall.com',
+  timeout: 6000,
+  minGapMs: SCRYFALL_MIN_GAP_MS,
+  endpointGaps: ENDPOINT_GAPS,
+  defaultCooldownMs: SCRYFALL_DEFAULT_COOLDOWN_MS,
+  maxCooldownMs: SCRYFALL_MAX_COOLDOWN_MS,
+  attempts: 4,
+});
+const { client } = scryfall;
 
-// How long this request must wait: its own endpoint's gap, the global floor,
-// and any active 429 cooldown — whichever is longest.
-function waitFor(url) {
-  const now = Date.now();
-  const { key, gap } = endpointGap(url);
-  return {
-    key,
-    ms: Math.max(
-      cooldownUntil - now,
-      gap - (now - (lastByEndpoint.get(key) || 0)),
-      SCRYFALL_MIN_GAP_MS - (now - lastScryfallAt),
-      0
-    )
-  };
-}
-
-function noteRateLimit(error) {
-  if (!error.response || error.response.status !== 429) return false;
-  const ra = parseInt(error.response.headers?.['retry-after'], 10);
-  const waitMs = Number.isFinite(ra) ? ra * 1000 : SCRYFALL_DEFAULT_COOLDOWN_MS;
-  const until = Date.now() + waitMs;
-  if (until > cooldownUntil) {
-    cooldownUntil = until;
-    console.warn(`Scryfall rate-limited us — pausing all Scryfall traffic for ${Math.round(waitMs / 1000)}s.`);
-  }
-  return true;
-}
-
-function scryGet(url, config) {
-  const run = scryfallQueue.then(async () => {
-    // Re-check after waiting: a 429 may have armed the cooldown while queued.
-    for (let w = waitFor(url); w.ms > 0; w = waitFor(url)) {
-      await new Promise(r => setTimeout(r, w.ms));
-    }
-    const { key } = endpointGap(url);
-    lastScryfallAt = Date.now();
-    lastByEndpoint.set(key, lastScryfallAt);
-    try {
-      return await client.get(url, config);
-    } catch (error) {
-      noteRateLimit(error);
-      throw error;
-    }
-  });
-  // Keep the chain alive regardless of this request's outcome.
-  scryfallQueue = run.then(() => {}, () => {});
-  return run;
-}
+// One request through the shared queue and pause. `{ interactive: true }` fails
+// fast during a pause (above).
+const scryGet = (url, config, opts) => scryfall.get(url, config, opts);
 
 // Scryfall's bulk lookup takes at most 75 identifiers per request.
 const COLLECTION_BATCH = 75;
 
-// POST twin of scryGet: same one global queue, same gap, same 429 cooldown, so
-// bulk lookups can never race ahead of (or pile on top of) search traffic.
-function scryPost(url, body, config) {
-  const run = scryfallQueue.then(async () => {
-    for (let w = waitFor(url); w.ms > 0; w = waitFor(url)) {
-      await new Promise(r => setTimeout(r, w.ms));
-    }
-    const { key } = endpointGap(url);
-    lastScryfallAt = Date.now();
-    lastByEndpoint.set(key, lastScryfallAt);
-    try {
-      return await client.post(url, body, config);
-    } catch (error) {
-      noteRateLimit(error);
-      throw error;
-    }
-  });
-  scryfallQueue = run.then(() => {}, () => {});
-  return run;
-}
-
-async function scryPostRetried(url, body, config, retries = 4) {
-  let lastError;
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await scryPost(url, body, config);
-    } catch (error) {
-      lastError = error;
-      if (error.response && error.response.status === 429 && i < retries - 1) continue;
-      throw error;
-    }
-  }
-  throw lastError;
-}
+// POST twin of scryGet: same one global queue, same gap, same 429 pause, so bulk
+// lookups can never race ahead of (or pile on top of) search traffic.
+const scryPostRetried = (url, body, config, retries = 4) => scryfall.postRetried(url, body, config, { tries: retries });
 
 // Queue + 429 retry, returning the raw axios response (callers that need
 // has_more/next_page/total_cards can't use fetchFromScryfall, which strips to
-// .data.data). The wait itself is handled by the shared cooldown above, so a
-// retry here just re-queues behind it.
-async function scryGetRetried(url, config, retries = 4) {
-  let lastError;
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await scryGet(url, config);
-    } catch (error) {
-      lastError = error;
-      if (error.response && error.response.status === 429 && i < retries - 1) continue;
-      throw error;
-    }
-  }
-  throw lastError;
-}
+// .data.data). The wait itself is handled by the shared pause, so a retry here
+// just re-queues behind it. `interactive` retries only a 429 whose pause is
+// already over (Retry-After: 0), and otherwise fails fast.
+const scryGetRetried = (url, config, retries = 4, { interactive = false } = {}) =>
+  scryfall.getRetried(url, config, { tries: retries, interactive });
 
 const COLOR_NAMES = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
 const CACHE_AGE_LIMIT_MS = 1000 * 60 * 60 * 24 * 3; // 3 days
@@ -473,7 +384,8 @@ async function fetchWindow(q, lang, offset, limit, order) {
   while (out.length < limit) {
     let url = `/cards/search?q=${encodeURIComponent(scoped.q)}&page=${page}${scoped.params}`;
     if (order) url += `&order=${order}`;
-    const resp = await scryGetRetried(url);
+    // A search someone is waiting on: refused during a 429 pause, not held.
+    const resp = await scryGetRetried(url, undefined, 4, { interactive: true });
     if (resp.data && resp.data.total_cards != null) total = resp.data.total_cards;
     out.push(...(((resp.data && resp.data.data) || []).slice(skip)));
     skip = 0;
@@ -790,9 +702,9 @@ async function fetchAndCacheSets(force = false) {
   }
 }
 
-// Refresh prices for every owned/decked MTG card from Scryfall and record price
-// history. The Pokémon updater (tcgApi) skips these, so this is their only
-// periodic refresh path.
+// Refresh prices for every owned, decked or wishlisted MTG card from Scryfall and
+// record price history. The Pokémon updater (tcgApi) skips these, so this is their
+// only periodic refresh path.
 // `force` bypasses the once-a-day gate (used by the scheduled daily run, which
 // is already on the right cadence by construction).
 async function updateCollectionPrices(force = false) {
@@ -803,6 +715,9 @@ async function updateCollectionPrices(force = false) {
       UNION
       SELECT DISTINCT d.card_id, cc.set_id, cc.number, cc.name FROM deck_cards d
       JOIN card_cache cc ON d.card_id = cc.id WHERE cc.game = 'mtg'
+      UNION
+      SELECT DISTINCT w.card_id, cc.set_id, cc.number, cc.name FROM (${WISHLIST_CARDS_SQL}) w
+      JOIN card_cache cc ON w.card_id = cc.id WHERE cc.game = 'mtg'
     `);
     if (cards.length === 0) return;
     if (!force && !(await shouldSweepPrices('mtg'))) {
@@ -890,7 +805,7 @@ async function getPrintingInLang(setCode, number, lang) {
   );
   if (cached) return parseCardRow(cached);
   try {
-    const resp = await scryGet(`/cards/${encodeURIComponent(String(setCode).toLowerCase())}/${encodeURIComponent(number)}/${code}`);
+    const resp = await scryGet(`/cards/${encodeURIComponent(String(setCode).toLowerCase())}/${encodeURIComponent(number)}/${code}`, undefined, { interactive: true });
     if (!resp.data) return null;
     const norm = normalizeCard(resp.data, name);
     // Only keep it if Scryfall really answered in that language. A 404 is the
@@ -911,7 +826,7 @@ async function getCardById(cardId) {
   const cached = await db.get(`SELECT * FROM card_cache WHERE id = ?`, [cardId]);
   if (cached) return parseCardRow(cached);
   try {
-    const resp = await scryGet(`/cards/${rawId}`);
+    const resp = await scryGet(`/cards/${rawId}`, undefined, { interactive: true });
     if (resp.data) {
       const norm = normalizeCard(resp.data);
       await cacheCards([norm]);
@@ -924,4 +839,6 @@ async function getCardById(cardId) {
 // `client` and `fetchWindow` are exported for tests (stub the axios adapter),
 // mirroring how tcgApi exposes tcgClient.
 module.exports = { searchCards, normalizeCard, cacheCards, getCardsBySet, fetchAndCacheSets, updateCollectionPrices, getCardById, getPrintingInLang, scryGetRetried, bulkFetchByIdentifier, client, fetchWindow,
-  setPriceSource, getPriceSource, loadPriceSource, repriceForSourceChange, MTG_PRICE_SOURCES };
+  setPriceSource, getPriceSource, loadPriceSource, repriceForSourceChange, MTG_PRICE_SOURCES,
+  // For tests: how long the 429 pause has left, in ms (0 when none).
+  cooldownRemainingMs: scryfall.cooldownRemainingMs, SCRYFALL_MAX_COOLDOWN_MS };

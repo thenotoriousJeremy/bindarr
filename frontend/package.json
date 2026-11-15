@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.9.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "dev": "vite",
     "prebuild": "node scripts/copy-ort.mjs && node scripts/build-device-backend.mjs",
@@ -18,7 +21,6 @@
     "@capacitor-community/sqlite": "^8.1.1",
     "@capacitor/android": "^8.4.2",
     "@capacitor/app": "^8.1.2",
-    "@capacitor/cli": "^8.4.2",
     "@capacitor/core": "^8.4.2",
     "@capacitor/file-transfer": "^2.0.6",
     "@capacitor/filesystem": "^8.1.5",
@@ -39,6 +41,7 @@
   },
   "devDependencies": {
     "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.4.2",
     "@eslint/js": "^10.0.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

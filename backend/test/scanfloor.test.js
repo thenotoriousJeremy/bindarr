@@ -16,8 +16,10 @@
 //      English catalog, so that catalog is dropped from a scoped sweep rather
 //      than searched unscoped.
 //
-// Needs the ONNX models, a Japanese Pokemon catalog and network for one card
-// image; skips rather than fails without them.
+// Needs the ONNX models and a locally built Japanese Pokemon catalog; without
+// them it exits 77, which test/run.js reports as SKIP rather than PASS. The hit
+// half also fetches one card image from TCGdex, and is skipped (with the rest
+// still asserted) when that fetch fails.
 //
 // Run: node test/scanfloor.test.js
 const assert = require('assert');
@@ -38,12 +40,12 @@ async function noise() {
 async function main() {
   if (!cvScan.isBuilt('pokemon', 'Japanese')) {
     console.log('scanfloor.test.js: no Japanese Pokemon catalog — skipped');
-    return;
+    process.exit(77);
   }
   const s = await cvScan.load('pokemon', 'Japanese');
   if (!s.local || s.lang !== 'Japanese') {
     console.log('scanfloor.test.js: Japanese catalog is a fallback, not a local build — skipped');
-    return;
+    process.exit(77);
   }
 
   // 1. Something that is not a card at all must not come back as one.

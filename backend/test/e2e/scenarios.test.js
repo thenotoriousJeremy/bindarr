@@ -3,35 +3,15 @@
 process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
 process.env.BINDARR_DISABLE_FX_SYNC = '1';
 
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
 const assert = require('assert');
-const { spawn } = require('child_process');
+const harness = require('./harness');
 
 // Isolated temp DB and unique port
-const tmpDb = path.join(os.tmpdir(), `bindarr-scenarios-test-${process.pid}.db`);
-process.env.DB_PATH = tmpDb;
-const { freePort } = require('../freePort');
+const tmp = harness.tempDatabase('scenarios-test');
 let port;
 
-const projectRoot = path.join(__dirname, '../../../');
 const db = require('../../src/db');
 const { hashSessionToken } = require('../../src/utils/authHelpers');
-
-async function waitForServer(port) {
-  const url = `http://localhost:${port}/api/health`;
-  for (let i = 0; i < 150; i++) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return;
-    } catch (e) {
-      // retry
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error(`Server on port ${port} did not start in time`);
-}
 
 async function waitForDatabase() {
   for (let i = 0; i < 150; i++) {
@@ -46,35 +26,71 @@ async function waitForDatabase() {
   throw new Error('Database did not initialize in time');
 }
 
+// F6-TC6's containers and copies, written before the server opens the file.
+async function seedPlacement(adminId) {
+  const seedCard = (id, name) => db.run(
+    `INSERT OR REPLACE INTO card_cache (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, name, 'Pokémon', '[]', '[]', 'Common', 's1', 'Set One', '1', '', 1]
+  );
+  const addEntry = async (cardId, compId, locId, position) => {
+    const r = await db.run(
+      `INSERT INTO collection (card_id, quantity, condition, printing, language, location_id, compartment_id, position, user_id)
+       VALUES (?, 1, 'Near Mint', 'Normal', 'English', ?, ?, ?, ?)`,
+      [cardId, locId, compId, position, adminId]
+    );
+    return r.lastID;
+  };
+
+  // --- Box: insert between cards, shifting the rest down one ---
+  for (const [id, name] of [['pl-b1', 'B1'], ['pl-b2', 'B2'], ['pl-b3', 'B3'], ['pl-b4', 'B4']]) await seedCard(id, name);
+  const boxLoc = await db.run(`INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ['TC6 Box', 'Box', 'custom', 'normals_first', 'any', adminId]);
+  const boxRow = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [boxLoc.lastID, 1, 400]);
+  await addEntry('pl-b1', boxRow.lastID, boxLoc.lastID, 1000);
+  await addEntry('pl-b2', boxRow.lastID, boxLoc.lastID, 2000);
+  await addEntry('pl-b3', boxRow.lastID, boxLoc.lastID, 3000);
+  const b4 = await addEntry('pl-b4', null, null, 0); // unsorted
+
+  // --- Binder: absolute pocket (gap preserved), then swap ---
+  for (const [id, name] of [['pl-p1', 'P1'], ['pl-p2', 'P2']]) await seedCard(id, name);
+  const binLoc = await db.run(`INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ['TC6 Binder', 'Binder', 'custom', 'normals_first', 'any', adminId]);
+  const page = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [binLoc.lastID, 1, 9]);
+  const p1 = await addEntry('pl-p1', page.lastID, binLoc.lastID, 1000); // pocket 1
+  const p2 = await addEntry('pl-p2', null, null, 0); // unsorted
+
+  // A container in a fixed sort order, where manual placement is refused.
+  const schemeLoc = await db.run(`INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ['TC6 Scheme', 'Box', 'name-asc', 'normals_first', 'any', adminId]);
+  const schemeRow = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [schemeLoc.lastID, 1, 400]);
+
+  return { boxRow, b4, page, p1, p2, schemeRow };
+}
+
 async function runTests() {
-  port = String(await freePort());
-  // Start server preloading scryfall-mock.js
-  const mockScript = path.join(__dirname, 'scryfall-mock.js');
-  const serverScript = path.join(projectRoot, 'backend/src/server.js');
-  const server = spawn('node', ['-r', mockScript, serverScript], {
-    env: {
-      ...process.env,
-      PORT: port,
-      DB_PATH: tmpDb,
-      // F6-TC5 exercises the self-registration flow, which is invite-only unless
-      // explicitly enabled.
-      ALLOW_REGISTRATION: 'true'
-    }
+  await harness.prepare(db);
+  const adminId = await waitForDatabase();
+
+  // Insert a valid session token for authentication
+  const token = 'test-token-123';
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + 1);
+  await db.run(
+    `INSERT OR REPLACE INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`,
+    [hashSessionToken(token), adminId, expiresAt.toISOString()]
+  );
+  const placement = await seedPlacement(adminId);
+
+  // offline.js answers Scryfall from scryfall-mock.js.
+  const server = await harness.startServer(tmp, {
+    // F6-TC5 exercises the self-registration flow, which is invite-only unless
+    // explicitly enabled.
+    env: { ALLOW_REGISTRATION: 'true' },
   });
+  port = server.port;
 
   try {
-    await waitForServer(port);
-    const adminId = await waitForDatabase();
-
-    // Insert a valid session token for authentication
-    const token = 'test-token-123';
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 1);
-    await db.run(
-      `INSERT OR REPLACE INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)`,
-      [hashSessionToken(token), adminId, expiresAt.toISOString()]
-    );
-
     const authHeaders = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`
@@ -222,33 +238,13 @@ async function runTests() {
     // F6-TC6: Manual tap-to-place (Arrange). Box inserts-and-shifts; binder
     // places at an absolute pocket (no cascade) and swaps on an occupied one.
     try {
-      const seedCard = (id, name) => db.run(
-        `INSERT OR REPLACE INTO card_cache (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, name, 'Pokémon', '[]', '[]', 'Common', 's1', 'Set One', '1', '', 1]
-      );
-      const addEntry = async (cardId, compId, locId, position) => {
-        const r = await db.run(
-          `INSERT INTO collection (card_id, quantity, condition, printing, language, location_id, compartment_id, position, user_id)
-           VALUES (?, 1, 'Near Mint', 'Normal', 'English', ?, ?, ?, ?)`,
-          [cardId, locId, compId, position, adminId]
-        );
-        return r.lastID;
-      };
+      // The cards, containers and copies are seedPlacement's, from before the server started.
+      const { boxRow, b4, page, p1, p2, schemeRow } = placement;
       const placeReq = (entryId, body) => fetch(`http://localhost:${port}/api/collection/${entryId}/place`, {
         method: 'POST', headers: authHeaders, body: JSON.stringify(body)
       });
 
       // --- Box: insert between cards, shifting the rest down one ---
-      for (const [id, name] of [['pl-b1', 'B1'], ['pl-b2', 'B2'], ['pl-b3', 'B3'], ['pl-b4', 'B4']]) await seedCard(id, name);
-      const boxLoc = await db.run(`INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
-        ['TC6 Box', 'Box', 'custom', 'normals_first', 'any', adminId]);
-      const boxRow = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [boxLoc.lastID, 1, 400]);
-      await addEntry('pl-b1', boxRow.lastID, boxLoc.lastID, 1000);
-      await addEntry('pl-b2', boxRow.lastID, boxLoc.lastID, 2000);
-      await addEntry('pl-b3', boxRow.lastID, boxLoc.lastID, 3000);
-      const b4 = await addEntry('pl-b4', null, null, 0); // unsorted
-
       const boxRes = await placeReq(b4, { compartment_id: boxRow.lastID, slot: 2 });
       assert.strictEqual(boxRes.status, 200, 'box place should succeed');
       const boxRows = await db.all(`SELECT card_id, position FROM collection WHERE compartment_id = ? AND user_id = ? ORDER BY position`, [boxRow.lastID, adminId]);
@@ -256,13 +252,6 @@ async function runTests() {
       assert.deepStrictEqual(boxRows.map(r => r.position), [1000, 2000, 3000, 4000], 'box positions must densify after insert');
 
       // --- Binder: absolute pocket (gap preserved), then swap ---
-      for (const [id, name] of [['pl-p1', 'P1'], ['pl-p2', 'P2']]) await seedCard(id, name);
-      const binLoc = await db.run(`INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
-        ['TC6 Binder', 'Binder', 'custom', 'normals_first', 'any', adminId]);
-      const page = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [binLoc.lastID, 1, 9]);
-      const p1 = await addEntry('pl-p1', page.lastID, binLoc.lastID, 1000); // pocket 1
-      const p2 = await addEntry('pl-p2', null, null, 0); // unsorted
-
       // Place P2 at pocket 5 — absolute, no compaction, P1 stays at pocket 1.
       const binRes = await placeReq(p2, { compartment_id: page.lastID, slot: 5 });
       assert.strictEqual(binRes.status, 200, 'binder place should succeed');
@@ -278,9 +267,6 @@ async function runTests() {
       assert.strictEqual((await db.get(`SELECT position FROM collection WHERE id = ?`, [p1])).position, 5000, 'after swap P1 takes pocket 5');
 
       // Guard: manual placement is rejected on a non-custom container.
-      const schemeLoc = await db.run(`INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
-        ['TC6 Scheme', 'Box', 'name-asc', 'normals_first', 'any', adminId]);
-      const schemeRow = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [schemeLoc.lastID, 1, 400]);
       const rejRes = await placeReq(b4, { compartment_id: schemeRow.lastID, slot: 1 });
       assert.strictEqual(rejRes.status, 400, 'manual placement must be blocked outside custom order');
 
@@ -291,15 +277,8 @@ async function runTests() {
     }
 
   } finally {
-    try { server.kill('SIGKILL'); } catch {}
-    try {
-      await new Promise(resolve => {
-        db.dbConnection.close(() => resolve());
-      });
-    } catch {}
-    for (const suffix of ['', '-wal', '-shm']) {
-      try { fs.unlinkSync(tmpDb + suffix); } catch {}
-    }
+    await server.stop();
+    await harness.cleanup(db, tmp);
   }
 }
 
@@ -308,5 +287,6 @@ runTests()
     process.exit(0);
   })
   .catch(err => {
+    console.error(err);
     process.exit(1);
   });

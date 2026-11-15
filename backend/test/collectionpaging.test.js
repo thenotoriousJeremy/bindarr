@@ -182,6 +182,57 @@ async function main() {
   assert.deepStrictEqual(await res.json(), [], 'an offset past the end is an empty page');
   assert.strictEqual(res.headers.get('x-total-count'), '220');
   console.log('PASS: invalid limit/offset/fields are 400s; an offset past the end is an empty page');
+
+  // --- 6. Storage reads one container, or Unsorted, slim (DATA-18). ---
+  const box = (await db.run(`INSERT INTO locations (name, type, user_id) VALUES ('Box', 'Box', ?)`, [alice])).lastID;
+  const row1 = (await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, 1, 100)`, [box])).lastID;
+  const bobBox = (await db.run(`INSERT INTO locations (name, type, user_id) VALUES ('Bob Box', 'Box', ?)`, [bob])).lastID;
+  const filed = full.filter(r => r.list_type === 'collection').slice(0, 12).map(r => r.entry_id);
+  await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = id * 1000, purchase_price = 2.5
+                 WHERE id IN (${filed.map(() => '?').join(',')})`, [box, row1, ...filed]);
+  await db.run(`UPDATE collection SET location_id = ? WHERE user_id = ? AND id = (SELECT MIN(id) FROM collection WHERE user_id = ?)`, [bobBox, bob, bob]);
+
+  const inBox = await (await get(`/collection?location_id=${box}&fields=storage`)).json();
+  assert.deepStrictEqual(ids(inBox).sort((a, b) => a - b), [...filed].sort((a, b) => a - b), 'exactly the container\'s copies');
+  const unsorted = await (await get('/collection?location_id=none&fields=storage')).json();
+  assert.strictEqual(unsorted.length, 220 - filed.length, 'every copy in no container, and nothing else');
+  assert.ok(unsorted.every(r => r.location_id == null));
+  const all = new Set([...ids(inBox), ...ids(unsorted)]);
+  assert.strictEqual(all.size, 220, 'between them, the whole collection, each copy once');
+  assert.deepStrictEqual(await (await get(`/collection?location_id=${bobBox}&fields=storage`)).json(), [],
+    "another user's container holds none of yours");
+  assert.ok(!(await (await get('/collection?location_id=none', bob)).json()).some(r => filed.includes(r.entry_id)));
+  const one6 = inBox[0];
+  for (const key of ['entry_id', 'card_id', 'name', 'image_url', 'set_name', 'number', 'rarity', 'types', 'subtypes',
+    'supertype', 'printing', 'language', 'condition', 'game', 'price_trend', 'price_currency', 'checked_out_qty',
+    'location_id', 'compartment_id', 'position', 'purchase_price', 'favorite', 'added_at', 'grader']) {
+    assert.ok(key in one6, `storage row keeps ${key}`);
+  }
+  assert.strictEqual(one6.compartment_id, row1);
+  assert.strictEqual(one6.purchase_price, 2.5);
+  for (const key of ['notes', 'cert_number', 'oracle_text', 'type_line', 'keywords', 'sealed_unit_id', 'sealed_product_name',
+    'location_name', 'compartment_label', 'market_value', 'price_holofoil', 'tcgplayer_url']) {
+    assert.ok(!(key in one6), `storage row drops ${key}`);
+  }
+  const storageBytes = JSON.stringify(unsorted).length;
+  const fullUnsorted = await (await get('/collection?location_id=none')).json();
+  assert.deepStrictEqual(ids(fullUnsorted), ids(unsorted), 'the filter works without the slim columns too');
+  assert.ok(storageBytes < JSON.stringify(fullUnsorted).length * 0.6, 'storage rows are much smaller than full ones');
+  // Combined with paging and the other filters, like any filter.
+  const { rows: pagedBox, total: boxTotal } = await pagesOf(`location_id=${box}&fields=storage`, 5);
+  assert.strictEqual(boxTotal, filed.length);
+  assert.deepStrictEqual(ids(pagedBox), ids(inBox));
+  for (const query of ['location_id=abc', 'location_id=-1', 'location_id=1.5', 'location_id=', `location_id=${box}&location_id=1`]) {
+    res = await get(`/collection?${query}`);
+    assert.strictEqual(res.status, 400, `${query} is rejected`);
+  }
+  // Callers that send neither get what they always got: every copy, every column.
+  const fullAgain = await (await get('/collection')).json();
+  assert.deepStrictEqual(ids(fullAgain), ids(full));
+  const filedFull = fullAgain.find(r => r.entry_id === filed[0]);
+  assert.strictEqual(filedFull.location_name, 'Box');
+  assert.strictEqual(filedFull.notes, 'private note');
+  console.log(`PASS: location_id picks one container or Unsorted, and fields=storage is slim (${storageBytes} bytes for ${unsorted.length} rows)`);
 }
 
 main()

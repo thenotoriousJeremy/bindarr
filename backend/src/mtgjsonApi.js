@@ -17,16 +17,8 @@
 // ~600 KB), so only the fields an import reads are kept, and both the index and
 // the decks are cached for a day — the files are regenerated daily at most.
 // Requests go out one at a time with a gap between them, and a 429 pauses all of
-// them for as long as MTGJSON asks.
-const axios = require('axios');
-
-const USER_AGENT = `Bindarr/${require('../package.json').version} (self-hosted TCG collection manager; https://github.com/thenotoriousJeremy/bindarr)`;
-
-const client = axios.create({
-  baseURL: 'https://mtgjson.com/api/v5',
-  timeout: 30000,
-  headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
-});
+// them for as long as MTGJSON asks (else a minute) — utils/providerClient's queue.
+const { createProviderClient, USER_AGENT } = require('./utils/providerClient');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MIN_GAP_MS = 250;
@@ -35,28 +27,16 @@ const MAX_CACHED_DECKS = 30;
 // but are not cards anyone files, and MTGJSON keeps them in arrays of their own.
 const BOARDS = ['commander', 'mainBoard', 'sideBoard'];
 
-let queue = Promise.resolve();
-let lastAt = 0;
-let pausedUntil = 0;
-
-function paced(path) {
-  const run = queue.then(async () => {
-    const wait = Math.max(pausedUntil - Date.now(), MIN_GAP_MS - (Date.now() - lastAt), 0);
-    if (wait > 0) await new Promise(r => setTimeout(r, wait));
-    lastAt = Date.now();
-    try {
-      return await client.get(path);
-    } catch (error) {
-      if (error.response && error.response.status === 429) {
-        const seconds = parseInt(error.response.headers && error.response.headers['retry-after'], 10);
-        pausedUntil = Date.now() + (Number.isFinite(seconds) ? seconds * 1000 : 60000);
-      }
-      throw error;
-    }
-  });
-  queue = run.then(() => {}, () => {});
-  return run;
-}
+const mtgjson = createProviderClient({
+  name: 'mtgjson',
+  label: 'MTGJSON',
+  baseURL: 'https://mtgjson.com/api/v5',
+  timeout: 30000,
+  minGapMs: MIN_GAP_MS,
+  defaultCooldownMs: 60000,
+});
+const { client } = mtgjson;
+const paced = (path) => mtgjson.get(path);
 
 let index = null;        // { at, meta, decks }
 let indexPending = null;

@@ -40,8 +40,15 @@ process.env.DB_PATH = require('path').join(
     };
   };
 
-  // TCGdex serves a full card at /:lang/cards/:id.
+  // TCGdex serves a full card at /:lang/cards/:id, and a set's card list at
+  // /:lang/sets/:id. Japan never had the Western Base Set, so that one 404s.
+  const setRequests = [];
   tcgdex.client.get = async (url) => {
+    const s = url.match(/^\/([^/]+)\/sets\/([^/]+)$/);
+    if (s) {
+      setRequests.push(`${s[1]}/${decodeURIComponent(s[2])}`);
+      throw Object.assign(new Error('not found'), { response: { status: 404 } });
+    }
     const m = url.match(/^\/([^/]+)\/cards\/(.+)$/);
     if (!m) throw new Error(`unexpected url ${url}`);
     const [, lang, id] = m;
@@ -108,10 +115,14 @@ process.env.DB_PATH = require('path').join(
     assert.strictEqual(pkmn.id, `tcgdex-${l.code}-sv03-004`, `${l.name}: TCGdex id swapped by code`);
   }
 
-  // pokemontcg.io is English-only and its set numbering disagrees with TCGdex's, so
-  // there is no honest printing to swap to — the English row stays.
+  // pokemontcg.io is English-only and its ids carry no TCGdex id to swap, so the
+  // swap falls back to asking TCGdex for the same set and number in the language.
+  // Japan has no Base Set, so that answers nothing and the English row stays. The
+  // fixture names the set: without one the set+number fallback never runs, and an
+  // earlier version of this check passed without exercising it at all.
   assert.strictEqual(await cardApi.printingInLanguage(
-    { id: 'base1-4', game: 'pokemon', number: '4', language: 'English' }, 'Japanese'), null);
+    { id: 'base1-4', game: 'pokemon', set_id: 'base1', number: '4', language: 'English' }, 'Japanese'), null);
+  assert.deepStrictEqual(setRequests, ['ja/base1'], 'the set+number fallback asked TCGdex for the Japanese set');
 
   // A localized TCGdex row carries the localized name in BOTH columns, so the
   // collection could only be searched in the card's own language. learnEnglishName

@@ -5,46 +5,12 @@
 // through embedded.handle(), the same entry point the app's fetch shim calls.
 // The one thing that differs from a phone is the SQLite underneath: the shim is
 // handed a driver over node-sqlite3 here, where the app hands it the Capacitor
-// plugin (frontend/src/utils/deviceSqlite.js, tested on its own).
+// plugin (frontend/src/utils/deviceSqlite.js, tested on its own). The loader is
+// test/deviceHarness.js, shared with the other device-mode tests.
 const assert = require('assert');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const Module = require('module');
-const sqlite3 = require('sqlite3');
+const { loadEmbedded } = require('./deviceHarness');
 
-const tmpDb = path.join(os.tmpdir(), `bindarr-embedded-${process.pid}.db`);
-process.env.DB_PATH = tmpDb;
-delete process.env.DEFAULT_ADMIN_PASSWORD;
-
-// Swap modules only for code under src/, which is what the bundler does: the
-// test itself keeps the real sqlite3 to build its driver from.
-const SRC = path.join(__dirname, '..', 'src') + path.sep;
-const aliases = require('../src/embedded/aliases');
-const resolve = Module._resolveFilename;
-Module._resolveFilename = function (request, parent, ...rest) {
-  const fromSrc = parent && parent.filename && parent.filename.startsWith(SRC);
-  if (fromSrc && Object.prototype.hasOwnProperty.call(aliases, request)) {
-    return resolve.call(this, aliases[request], parent, ...rest);
-  }
-  return resolve.call(this, request, parent, ...rest);
-};
-
-function nodeDriver() {
-  let conn;
-  return {
-    open: (name) => new Promise((ok, fail) => { conn = new sqlite3.Database(name, err => (err ? fail(err) : ok())); }),
-    run: (sql, params) => new Promise((ok, fail) => conn.run(sql, params, function (err) {
-      if (err) fail(err); else ok({ lastID: this.lastID, changes: this.changes });
-    })),
-    all: (sql, params) => new Promise((ok, fail) => conn.all(sql, params, (err, rows) => (err ? fail(err) : ok(rows)))),
-    close: () => new Promise((ok, fail) => conn.close(err => (err ? fail(err) : ok()))),
-  };
-}
-
-const embedded = require('../src/embedded');
-const db = require('../src/db');
-embedded.setDriver(nodeDriver());
+const { embedded, db, cleanup } = loadEmbedded('embedded');
 
 let token;
 async function call(method, url, { body, auth = true, raw } = {}) {
@@ -76,7 +42,7 @@ function testRouterMatching() {
 async function testBootAndSession() {
   ({ token } = await embedded.start({ background: false }));
   assert.match(token, /^[0-9a-f]{64}$/);
-  assert.strictEqual((await embedded.start()).token, token, 'start() is idempotent');
+  assert.strictEqual((await embedded.start({ background: false })).token, token, 'start() is idempotent');
 
   const me = await call('GET', '/api/auth/me');
   assert.strictEqual(me.status, 200);
@@ -240,9 +206,17 @@ async function testBackupRoundTrip() {
 }
 
 async function testServerOnlyRoutes() {
-  for (const url of ['/api/admin/users', '/api/shared/abc123', '/api/card-art/index']) {
-    const res = await call('GET', url);
-    assert.strictEqual(res.status, 501, `${url} is not on the device`);
+  // Every server-only route answers 501, not 404: the UI can tell "needs a
+  // server" from a mistake (routes/mounts.js, held to server.js by apimounts.test.js).
+  const serverOnly = [
+    ['GET', '/api/admin/users'], ['GET', '/api/shared/abc123'], ['GET', '/api/card-art/index'],
+    ['GET', '/api/health'], ['GET', '/api/notifications'], ['POST', '/api/notifications/channels'],
+    ['POST', '/api/binder-art'], ['GET', '/api/binder-art/7/image'], ['GET', '/api/locations/1/binder-art'],
+    ['PUT', '/api/compartments/1/binder-art'],
+  ];
+  for (const [method, url] of serverOnly) {
+    const res = await call(method, url, method === 'GET' ? {} : { body: {} });
+    assert.strictEqual(res.status, 501, `${method} ${url} is not on the device`);
     assert.strictEqual(res.json.deviceMode, true);
   }
   const missing = await call('GET', '/api/no-such-route');
@@ -306,6 +280,88 @@ async function testDeviceScan() {
   const lorcana = await call('POST', '/api/scan-match', { body: { ...body, game: 'lorcana' } });
   assert.strictEqual(lorcana.status, 503);
   assert.match(lorcana.json.error, /Lorcana/);
+
+  // The data is on the phone but milo would not run (frontend/src/device/runtime.js
+  // sends embedError): that is not "download the scan data" (MOB-04).
+  const { embedding, ...photoless } = body;
+  assert.ok(embedding);
+  const failed = await call('POST', '/api/scan-match', { body: { ...photoless, embedError: 'no WebAssembly SIMD' } });
+  assert.strictEqual(failed.status, 503);
+  assert.strictEqual(failed.json.scanFailed, true);
+  assert.ok(!failed.json.notBuilt, 'a failed embedding is not reported as missing scan data');
+  assert.match(failed.json.error, /SIMD/);
+  // With no catalog for the game, downloading it IS the fix, failure or not.
+  const notBuilt = await call('POST', '/api/scan-match', { body: { ...photoless, game: 'pokemon', embedError: 'x' } });
+  assert.strictEqual(notBuilt.json.notBuilt, true);
+}
+
+// Deleting moves a copy to the trash on the phone as on a server, so the trash
+// routes have to be there too: Undo, the Trash dialog and "Empty trash" (MOB-01).
+async function testTrashOnDevice() {
+  const added = await call('POST', '/api/collection', { body: { card_id: 'mtg-embedded-1', game: 'mtg' } });
+  assert.strictEqual(added.status, 200, JSON.stringify(added.json));
+  const id = added.json.id;
+
+  const deleted = await call('DELETE', `/api/collection/${id}`);
+  assert.strictEqual(deleted.status, 200, JSON.stringify(deleted.json));
+  const batch = deleted.json.trash_batch;
+  assert.ok(batch, 'a delete names its trash batch');
+
+  const listed = await call('GET', '/api/collection/trash');
+  assert.strictEqual(listed.status, 200, 'the Trash dialog loads');
+  assert.deepStrictEqual(listed.json.batches.map(b => [b.batch_id, b.count]), [[batch, 1]]);
+
+  const restored = await call('POST', `/api/collection/trash/${batch}/restore`);
+  assert.strictEqual(restored.status, 200, `Undo restores: ${JSON.stringify(restored.json)}`);
+  assert.strictEqual(restored.json.restored, 1);
+  assert.ok(await db.get(`SELECT id FROM collection WHERE id = ?`, [id]), 'the copy is back under its own id');
+
+  // "Empty trash" reaches the trash, not the delete-one-copy route behind it.
+  await call('DELETE', `/api/collection/${id}`);
+  const emptied = await call('DELETE', '/api/collection/trash');
+  assert.strictEqual(emptied.status, 200, JSON.stringify(emptied.json));
+  assert.strictEqual(emptied.json.removed, 1);
+  assert.strictEqual((await call('GET', '/api/collection/trash')).json.batches.length, 0);
+}
+
+// The trash names each batch with a UUID, and WebCrypto's randomUUID only arrived
+// in iOS 15.4; the app supports 15.0 (MOB-16).
+function testRandomUuidWithoutWebCrypto() {
+  const shim = require('../src/embedded/shims/crypto');
+  const native = shim.randomUUID();
+  const webCrypto = globalThis.crypto;
+  webCrypto.randomUUID = undefined;   // an own property shadowing the method
+  try {
+    const seen = new Set();
+    for (let i = 0; i < 200; i++) {
+      const id = shim.randomUUID();
+      assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, id);
+      seen.add(id);
+    }
+    assert.strictEqual(seen.size, 200);
+  } finally {
+    delete webCrypto.randomUUID;
+  }
+  assert.match(native, /^[0-9a-f-]{36}$/);
+  assert.strictEqual(typeof globalThis.crypto.randomUUID, 'function', 'the real one is back');
+}
+
+// notify.emit queues with setImmediate, which a WebView lacks (MOB-05).
+async function testGlobalsForAWebView() {
+  const { installGlobals } = require('../src/embedded/globals');
+  const view = {};
+  installGlobals(view);
+  assert.deepStrictEqual(view.process, { env: {} });
+  const ran = await new Promise((resolve) => view.setImmediate((a, b) => resolve([a, b]), 1, 2));
+  assert.deepStrictEqual(ran, [1, 2], 'setImmediate runs its callback with its arguments');
+  const cancelled = view.setImmediate(() => assert.fail('cleared'));
+  view.clearImmediate(cancelled);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  // Where there is one already (Node here), it is left alone.
+  const node = { setImmediate, process };
+  installGlobals(node);
+  assert.strictEqual(node.setImmediate, setImmediate);
+  assert.strictEqual(node.process, process);
 }
 
 async function main() {
@@ -319,11 +375,11 @@ async function main() {
     await testBackupRoundTrip();
     await testServerOnlyRoutes();
     await testDeviceScan();
+    await testTrashOnDevice();
+    testRandomUuidWithoutWebCrypto();
+    await testGlobalsForAWebView();
   } finally {
-    try { await new Promise(ok => db.dbConnection.close(ok)); } catch { /* already closed */ }
-    for (const suffix of ['', '-wal', '-shm']) {
-      try { fs.unlinkSync(tmpDb + suffix); } catch { /* not present */ }
-    }
+    await cleanup();
   }
 }
 

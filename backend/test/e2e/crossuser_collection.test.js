@@ -3,41 +3,20 @@
 process.env.BINDARR_DISABLE_TCGCSV_SYNC = '1';
 process.env.BINDARR_DISABLE_FX_SYNC = '1';
 
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
 const crypto = require('crypto');
 const assert = require('assert');
-const { spawn } = require('child_process');
+const harness = require('./harness');
 
 // F9: one user's collection requests cannot reach another user's containers or
 // copies. Compartment, location, deck and entry ids are global, so an id that
 // exists is not an id that is yours. PUT /api/collection/:id used to take
 // compartment_id on trust: any user could file their cards into another user's
 // binder. Two real users, a real server, real HTTP.
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `bindarr-crossuser-test-${process.pid}-`));
-const tmpDb = path.join(tmpDir, 'bindarr.db');
-process.env.DB_PATH = tmpDb;
-const { freePort } = require('../freePort');
-let port;
+const tmp = harness.tempDatabase('crossuser-test');
 let base;
 
-const projectRoot = path.join(__dirname, '../../../');
 const db = require('../../src/db');
 const { hashSessionToken } = require('../../src/utils/authHelpers');
-
-async function waitForServer() {
-  for (let i = 0; i < 150; i++) {
-    try {
-      const res = await fetch(`${base}/api/health`);
-      if (res.ok) return;
-    } catch (e) {
-      // retry
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error(`Server on port ${port} did not start in time`);
-}
 
 async function createMember(username) {
   const { lastID } = await db.run(
@@ -80,27 +59,25 @@ async function step(name, fn) {
 }
 
 async function runTests() {
-  port = String(await freePort());
-  base = `http://localhost:${port}`;
-  const serverScript = path.join(projectRoot, 'backend/src/server.js');
-  const server = spawn('node', [serverScript], {
-    env: { ...process.env, PORT: port, DB_PATH: tmpDb }
-  });
+  // Every fixture is in the file before the server opens it.
+  await harness.prepare(db);
+  const aliceId = await createMember('alice');
+  const bobId = await createMember('bob');
+  const bob = await sessionHeaders(bobId);
+  await db.run(`INSERT INTO card_cache (id, name, game, language, price_trend) VALUES ('mtg-xu-1', 'Shared Card', 'mtg', 'English', 1)`);
+
+  const aliceBinder = await createBinder(aliceId, 'Alice Binder');
+  const aliceCopy = await addCopy(aliceId, 'mtg-xu-1', aliceBinder, 1000);
+  const aliceDeck = (await db.run(`INSERT INTO decks (user_id, name, game) VALUES (?, 'Alice Deck', 'mtg')`, [aliceId])).lastID;
+  const bobBinder = await createBinder(bobId, 'Bob Binder');
+  const bobBox = await createBinder(bobId, 'Bob Second Binder');
+  const bobCopy = await addCopy(bobId, 'mtg-xu-1', bobBinder, 1000);
+  const bobLoose = await addCopy(bobId, 'mtg-xu-1', null);
+
+  const server = await harness.startServer(tmp);
+  base = server.base;
 
   try {
-    await waitForServer();
-    const aliceId = await createMember('alice');
-    const bobId = await createMember('bob');
-    const bob = await sessionHeaders(bobId);
-    await db.run(`INSERT INTO card_cache (id, name, game, language, price_trend) VALUES ('mtg-xu-1', 'Shared Card', 'mtg', 'English', 1)`);
-
-    const aliceBinder = await createBinder(aliceId, 'Alice Binder');
-    const aliceCopy = await addCopy(aliceId, 'mtg-xu-1', aliceBinder, 1000);
-    const aliceDeck = (await db.run(`INSERT INTO decks (user_id, name, game) VALUES (?, 'Alice Deck', 'mtg')`, [aliceId])).lastID;
-    const bobBinder = await createBinder(bobId, 'Bob Binder');
-    const bobBox = await createBinder(bobId, 'Bob Second Binder');
-    const bobCopy = await addCopy(bobId, 'mtg-xu-1', bobBinder, 1000);
-    const bobLoose = await addCopy(bobId, 'mtg-xu-1', null);
     const aliceBefore = await rowOf(aliceCopy);
     const put = (id, body) => fetch(`${base}/api/collection/${id}`, { method: 'PUT', headers: bob, body: JSON.stringify(body) });
     const post = (url, body) => fetch(`${base}${url}`, { method: 'POST', headers: bob, body: JSON.stringify(body) });
@@ -184,13 +161,8 @@ async function runTests() {
       assert.strictEqual((await db.get(`SELECT COUNT(*) AS n FROM collection WHERE user_id = ?`, [aliceId])).n, 1);
     });
   } finally {
-    try { server.kill('SIGKILL'); } catch {}
-    try {
-      await new Promise(resolve => {
-        db.dbConnection.close(() => resolve());
-      });
-    } catch {}
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    await server.stop();
+    await harness.cleanup(db, tmp);
   }
 }
 

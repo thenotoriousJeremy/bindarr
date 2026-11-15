@@ -123,10 +123,10 @@ export function FilingBar({ filingQueue, filingIndex, filingReadOnly, filingBarC
             </span>
           )}
           <div style={{ display: 'flex', gap: '0.3rem', flexShrink: 0 }}>
-            <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setFilingBarCollapsed(c => !c)} title={t(filingBarCollapsed ? 'loc.expand' : 'loc.collapse')} style={{ width: '26px', height: '26px', padding: 0 }}>
+            <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setFilingBarCollapsed(c => !c)} title={t(filingBarCollapsed ? 'loc.expand' : 'loc.collapse')} aria-label={t(filingBarCollapsed ? 'loc.expand' : 'loc.collapse')} aria-expanded={!filingBarCollapsed} style={{ width: '26px', height: '26px', padding: 0 }}>
               {filingBarCollapsed ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
             </button>
-            <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => { setFilingMode(false); setFilingReadOnly(false); refreshAll(); }} title={t('loc.exitFiling')} style={{ width: '26px', height: '26px', padding: 0 }}>
+            <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => { setFilingMode(false); setFilingReadOnly(false); refreshAll(); }} title={t('loc.exitFiling')} aria-label={t('loc.exitFiling')} style={{ width: '26px', height: '26px', padding: 0 }}>
               <X size={13} />
             </button>
           </div>
@@ -158,7 +158,7 @@ export function FilingBar({ filingQueue, filingIndex, filingReadOnly, filingBarC
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem' }}>
                 <span style={{ fontSize: '0.6rem', color: '#ffc107', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>{t('loc.tapToLocate')}</span>
-                <strong style={{ fontSize: '0.95rem', color: '#ffc107', whiteSpace: 'nowrap' }}>Slot {Math.floor(currentRecSpot.position / 1000)}</strong>
+                <strong style={{ fontSize: '0.95rem', color: '#ffc107', whiteSpace: 'nowrap' }}>{t('loc.slotNumber', { n: Math.floor(currentRecSpot.position / 1000) })}</strong>
               </div>
               {!filingBarCollapsed && (<>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-strong)', fontWeight: 600, marginTop: '0.1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -185,14 +185,14 @@ export function FilingBar({ filingQueue, filingIndex, filingReadOnly, filingBarC
                 onClick={() => handleFilingPlaced(filingQueue[filingIndex].entry.entry_id, currentRecSpot.location_id, currentRecSpot.compartment_id, currentRecSpot.position)}
                 style={{ flex: 2, padding: '0.55rem', fontSize: '0.85rem', fontWeight: 700 }}
               >
-                {filingReadOnly ? 'Next' : 'Placed'}
+                {filingReadOnly ? t('loc.next') : t('loc.placed')}
               </button>
             </div>
           </>
         ) : (
           <>
             <div style={{ fontSize: '0.75rem', color: 'var(--accent-red)', fontWeight: 700, textAlign: 'center' }}>
-              {filingQueue[filingIndex].rejected ? "Doesn't fit this container's rule" : 'Container full'}
+              {filingQueue[filingIndex].rejected ? t('loc.rejectedRule') : t('loc.containerFull')}
             </div>
             <button type="button" className="btn btn-secondary" onClick={advanceFiling} style={{ padding: '0.55rem', fontSize: '0.82rem', fontWeight: 700 }}>{t('loc.skip')}</button>
           </>

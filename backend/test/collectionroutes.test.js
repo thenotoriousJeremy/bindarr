@@ -33,7 +33,7 @@ const EXPECTED = [
   'POST /scan-match [searchLimiter]',
   'GET /collection',
   'GET /collection/:id',
-  'GET /cards/:id/printing',
+  'GET /cards/:id/printing [searchLimiter]',
   'POST /collection',
   'POST /collection/bulk-add',
   'PUT /collection/:id',

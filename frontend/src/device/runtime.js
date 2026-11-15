@@ -15,6 +15,11 @@ import { createDeviceDriver } from '../utils/deviceSqlite';
 import * as scanAssets from './scanAssets';
 
 let booting = null;
+// Set by stopDevice() when the app leaves device mode; the next startDevice()
+// then starts the backend's background jobs again.
+let stopped = false;
+// The on-device scan engine, once a scan has loaded it.
+let scanEngine = null;
 
 // What the backend's scan route sweeps (backend/src/cvScan.js setSource): the
 // catalogs this phone has downloaded. Handing it over again drops any catalog it
@@ -47,7 +52,32 @@ async function boot() {
 // load, so only a relaunch can try it again.
 export function startDevice() {
   if (!booting) booting = boot();
+  else if (stopped) {
+    stopped = false;
+    // Back in device mode after leaving it: the price, exchange-rate and upkeep
+    // timers stopped with it.
+    booting.then(({ backend }) => backend.start()).catch(() => {});
+  }
   return booting;
+}
+
+// Leaving device mode for a server (apiBase.setDeviceMode(false)). The database
+// stays open for a return; the backend's timers stop, so a phone pointed at a
+// server is not still sweeping prices into a database it no longer shows.
+export async function stopDevice() {
+  if (!booting || stopped) return;
+  stopped = true;
+  try {
+    (await booting).backend.stop();
+  } catch { /* never started: nothing is running */ }
+  await releaseScanEngine();
+}
+
+// The scanner closed: let onnxruntime-web free the two models' sessions. The
+// downloaded catalog stays loaded in the backend, so the next scan does not pay
+// for reading it again.
+export async function releaseScanEngine() {
+  if (scanEngine) await scanEngine.releaseSessions().catch(() => {});
 }
 
 // Download a game's scan data (models included when missing). The ready-made
@@ -85,7 +115,9 @@ async function bodyText(body) {
 // no native ONNX runtime to embed one, so the app does that part (scanEngine.js)
 // and the route takes it from the embedding. With no scan data for the game the
 // photo is simply dropped: /scan-match then answers notBuilt, and /search returns
-// its results unscored.
+// its results unscored. With the data there but milo failing to run on this
+// phone, embedError says so, and /scan-match answers that rather than offering
+// a download that would not help (MOB-04).
 async function embedScanBody(url, method, body) {
   if (method !== 'POST' || typeof body !== 'string' || !/^\/api\/(scan-match|search)\b/.test(url)) return body;
   let parsed;
@@ -95,29 +127,46 @@ async function embedScanBody(url, method, body) {
   const game = rest.game || 'pokemon';
   if (!scanAssets.modelsReady() || !scanAssets.catalogReady(game)) return JSON.stringify(rest);
   try {
-    const { embedScan } = await import('./scanEngine.js');
-    const { embedding, thumb, detected } = await embedScan(image, !!rest.cropped);
+    scanEngine = scanEngine || await import('./scanEngine.js');
+    const { embedding, thumb, detected } = await scanEngine.embedScan(image, !!rest.cropped);
     return JSON.stringify({ ...rest, embedding, thumb, detected });
   } catch (err) {
     console.error('On-device scan failed:', err);
-    return JSON.stringify(rest);
+    return JSON.stringify({ ...rest, embedError: String((err && err.message) || err).slice(0, 200) });
   }
+}
+
+const abortError = () => new DOMException('The operation was aborted.', 'AbortError');
+
+// Settles with `promise`, or rejects with an AbortError the moment `signal`
+// aborts, as fetch() itself would.
+function unlessAborted(promise, signal) {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    if (signal.aborted) return onAbort();
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 
 // fetch(), answered in-process. The app's own Authorization header is replaced
 // by the device's session: there is one account here, and a token left over from
 // a server login means nothing to this database.
+//
+// init.signal is honoured as fetch honours it (MOB-16): an aborted call rejects
+// with an AbortError, and one still waiting for its turn at the database never
+// runs at all, so a search the user has typed past does not reach a provider.
 export async function deviceFetch(url, init = {}) {
+  const signal = init.signal || null;
+  if (signal && signal.aborted) throw abortError();
   const { backend, token } = await startDevice();
   const headers = Object.fromEntries(new Headers(init.headers || {}).entries());
   headers.authorization = `Bearer ${token}`;
   const method = (init.method || 'GET').toUpperCase();
-  const res = await backend.handle({
-    method,
-    url,
-    headers,
-    body: await embedScanBody(url, method, await bodyText(init.body)),
-  });
+  const body = await embedScanBody(url, method, await bodyText(init.body));
+  if (signal && signal.aborted) throw abortError();
+  const res = await unlessAborted(backend.handle({ method, url, headers, body }, { signal }), signal);
   const empty = res.status === 204 || res.status === 304;
   return new Response(empty ? null : res.body, { status: res.status, headers: res.headers });
 }

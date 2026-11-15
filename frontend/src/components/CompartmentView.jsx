@@ -237,6 +237,11 @@ export default function CompartmentView({
   // Pull mode: cards that aren't part of this pull (neither to-pull nor pulled)
   // are context only — greyed out and inert.
   const isGrey = (id) => pullMode && !highlightSet.has(id) && !pulledSet.has(id);
+  // The stamp on a card taken out for a deck: pulled (in a pull), some copies
+  // out, or every copy in play.
+  const outLabel = (card) => (pullMode ? t('compartment.pulled')
+    : card.checked_out_qty < card.quantity ? t('compartment.partlyOut', { out: card.checked_out_qty, total: card.quantity })
+      : t('deck.inPlayShort'));
 
   // Long-press arms selection (shared gesture, mirrors CollectionList). Coexists
   // with the swipe/coverflow touch handlers because a >10px move cancels it. A
@@ -578,7 +583,7 @@ export default function CompartmentView({
             )}
             
             {canRemove && onRemove && (
-              <button type="button" className="btn btn-danger btn-icon-only" onClick={onRemove} title={t('compartment.removePage')} style={{ width: '22px', height: '22px', padding: 0, marginLeft: 'auto' }}>
+              <button type="button" className="btn btn-danger btn-icon-only" onClick={onRemove} title={t('compartment.removePage')} aria-label={t('compartment.removePage')} style={{ width: '22px', height: '22px', padding: 0, marginLeft: 'auto' }}>
                 &times;
               </button>
             )}
@@ -662,7 +667,7 @@ export default function CompartmentView({
                   {(pullMode ? pulledSet.has(card.entry_id) : card.checked_out_qty > 0) && (
                     <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.62)', borderRadius: '4px', zIndex: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
                       <span style={{ fontSize: '0.5rem', fontWeight: 900, letterSpacing: '0.04em', color: 'var(--text-strong)', background: 'var(--accent-red)', padding: '2px 5px', borderRadius: '4px', transform: 'rotate(-8deg)', textTransform: 'uppercase' }}>
-                        {pullMode ? 'Pulled' : (card.checked_out_qty < card.quantity ? `${card.checked_out_qty}/${card.quantity} Out` : 'In Play')}
+                        {outLabel(card)}
                       </span>
                     </div>
                   )}
@@ -850,7 +855,7 @@ export default function CompartmentView({
                 <strong onDoubleClick={() => { setLabelDraft(compartment.label || ''); setEditingLabel(true); }} title={t('compartment.renameHint')} style={{ cursor: 'pointer', fontSize: '0.85rem' }}>
                   {compartment.display_label}
                 </strong>
-                <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => { setLabelDraft(compartment.label || ''); setEditingLabel(true); }} style={{ padding: 0, width: '20px', height: '20px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} title={t('compartment.renamePageRow')}>
+                <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => { setLabelDraft(compartment.label || ''); setEditingLabel(true); }} style={{ padding: 0, width: '20px', height: '20px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} title={t('compartment.renamePageRow')} aria-label={t('compartment.renamePageRow')}>
                   <Edit3 size={11} />
                 </button>
               </div>
@@ -896,6 +901,7 @@ export default function CompartmentView({
               className="box-coverflow-nav left"
               disabled={activeCardIndex <= 0}
               onClick={() => setCoverflowActiveIndex(prev => Math.max(0, prev - 1))}
+              aria-label={t('compartment.prevCard')}
             >
               &larr;
             </button>
@@ -1014,7 +1020,7 @@ export default function CompartmentView({
                     {(pullMode ? pulledSet.has(card.entry_id) : card.checked_out_qty > 0) && (
                       <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.62)', borderRadius: '5px', zIndex: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
                         <span style={{ fontSize: '0.7rem', fontWeight: 900, letterSpacing: '0.04em', color: 'var(--text-strong)', background: 'var(--accent-red)', padding: '3px 8px', borderRadius: '4px', transform: 'rotate(-8deg)', textTransform: 'uppercase' }}>
-                          {pullMode ? 'Pulled' : (card.checked_out_qty < card.quantity ? `${card.checked_out_qty}/${card.quantity} Out` : 'In Play')}
+                          {outLabel(card)}
                         </span>
                       </div>
                     )}
@@ -1035,6 +1041,7 @@ export default function CompartmentView({
               className="box-coverflow-nav right"
               disabled={activeCardIndex >= renderedCards.length - 1}
               onClick={() => setCoverflowActiveIndex(prev => Math.min(renderedCards.length - 1, prev + 1))}
+              aria-label={t('compartment.nextCard')}
             >
               &rarr;
             </button>
