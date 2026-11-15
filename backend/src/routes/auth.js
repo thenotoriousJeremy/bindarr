@@ -402,7 +402,10 @@ function sessionUser(user) {
     has_api_key: !!user.api_key,
     // The nav-bar tabs this user chose (null: the default set). Not a secret, and
     // carried here so the bar is right from the first frame after sign-in.
-    nav_tabs: readNavTabs(user.nav_tabs)
+    nav_tabs: readNavTabs(user.nav_tabs),
+    // Whether this member trades with other members (routes/transfers.js). Opt-in:
+    // off, they are not listed to anyone and cannot be sent an offer.
+    trades_enabled: !!user.trades_enabled
   };
 }
 
@@ -568,8 +571,18 @@ router.post('/logout', authenticateToken, async (req, res) => {
 // Get current user profile. The same secret-free shape as a sign-in (sessionUser):
 // this used to return req.user whole, provider keys and API key included, and the
 // SPA saved it to localStorage. id and oidc_sub ride along; neither is a secret.
-router.get('/me', authenticateToken, (req, res) => {
-  res.json({ user: { id: req.user.id, ...sessionUser(req.user), oidc_sub: req.user.oidc_sub } });
+//
+// trades_enabled is read here: the authentication gate (middleware/auth.js) does
+// not carry it on req.user.
+router.get('/me', authenticateToken, async (req, res) => {
+  try {
+    const row = await db.get(`SELECT trades_enabled FROM users WHERE id = ?`, [req.user.id]);
+    const user = { ...req.user, trades_enabled: row ? row.trades_enabled : 0 };
+    res.json({ user: { id: req.user.id, ...sessionUser(user), oidc_sub: req.user.oidc_sub } });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to load your profile' });
+  }
 });
 
 // The API key used to be readable again here, which meant storing it as-is: a
@@ -620,7 +633,7 @@ const PROVIDER_KEY_UPDATES = {
 // Update settings (password, sharing). passwordLimiter counts the wrong current
 // passwords a password change is sent with, per account.
 router.put('/settings', authenticateToken, passwordLimiter, async (req, res) => {
-  const { current_password, password, share_enabled, share_locations, regenerate_share_token } = req.body;
+  const { current_password, password, share_enabled, share_locations, trades_enabled, regenerate_share_token } = req.body;
 
   let navTabs;
   if (req.body.nav_tabs !== undefined) {
@@ -678,6 +691,12 @@ router.put('/settings', authenticateToken, passwordLimiter, async (req, res) => 
       await db.run(`UPDATE users SET share_locations = ? WHERE id = ?`, [share_locations ? 1 : 0, req.user.id]);
     }
 
+    // Turning trading off settles nothing by itself: the offers already open stay
+    // visible to this member, who can still reject or cancel them.
+    if (trades_enabled !== undefined) {
+      await db.run(`UPDATE users SET trades_enabled = ? WHERE id = ?`, [trades_enabled ? 1 : 0, req.user.id]);
+    }
+
     for (const [sql, value] of keyUpdates) {
       await db.run(sql, [value, req.user.id]);
     }
@@ -693,7 +712,7 @@ router.put('/settings', authenticateToken, passwordLimiter, async (req, res) => 
     }
 
     // Retrieve updated info
-    const updatedUser = await db.get(`SELECT username, role, share_token, share_enabled, share_locations, tcg_api_key, psa_api_token, graded_price_api_key, api_key, nav_tabs FROM users WHERE id = ?`, [req.user.id]);
+    const updatedUser = await db.get(`SELECT username, role, share_token, share_enabled, share_locations, tcg_api_key, psa_api_token, graded_price_api_key, api_key, nav_tabs, trades_enabled FROM users WHERE id = ?`, [req.user.id]);
     res.json({
       message: 'Settings updated successfully',
       user: sessionUser(updatedUser)

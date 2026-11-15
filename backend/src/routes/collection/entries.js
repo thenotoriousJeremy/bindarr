@@ -66,10 +66,15 @@ const COLLECTION_FULL_COLUMNS = `
         su.id AS sealed_unit_id,
         c.acquired_via_transfer_item_id,
         c.acquired_via_historical_trade_item_id,
+        c.acquired_via_external_item_id,
         acquired_transfer.id AS acquired_transfer_id,
         acquired_transfer.transfer_type AS acquired_transfer_type,
         acquired_transfer.completed_at AS acquired_transfer_completed_at,
-        transfer_partner.username AS acquired_transfer_partner,
+        -- The partner's name now, or as it was then if their account is gone.
+        COALESCE(transfer_partner.username, CASE
+          WHEN acquired_transfer.proposer_id = c.user_id THEN acquired_transfer.recipient_name
+          ELSE acquired_transfer.proposer_name
+        END) AS acquired_transfer_partner,
         external_item.id AS acquired_external_transaction_item_id,
         external_transaction.id AS acquired_external_transaction_id,
         external_transaction.transaction_type AS acquired_external_transaction_type,
@@ -77,7 +82,10 @@ const COLLECTION_FULL_COLUMNS = `
         external_transaction.completed_at AS acquired_external_completed_at,
         historical_trade.id AS acquired_historical_trade_id,
         historical_trade.completed_at AS acquired_historical_trade_completed_at,
-        historical_partner.username AS acquired_historical_trade_partner,
+        COALESCE(historical_partner.username, CASE
+          WHEN historical_trade.creator_id = c.user_id THEN historical_trade.recipient_name
+          ELSE historical_trade.creator_name
+        END) AS acquired_historical_trade_partner,
         sp.id AS sealed_purchase_id,
         sp.product_id AS sealed_product_id,
         sp.product_name AS sealed_product_name,
@@ -253,6 +261,9 @@ const COLLECTION_SEALED_JOINS = `
                        AND COALESCE(su.claimed_by_user_id, owner.user_id) = c.user_id)
       LEFT JOIN sealed_purchases sp ON sp.id = su.purchase_id`;
 
+// Where a copy came from: a transfer between members, a deal with someone outside
+// Bindarr, or a trade recorded after the fact. Each is the acquired_via_* column the
+// hand-over wrote on the copy (indexed), and only ever the copy owner's own history.
 const COLLECTION_TRADE_JOINS = `
       LEFT JOIN user_transfer_items acquired_transfer_item
         ON acquired_transfer_item.id = c.acquired_via_transfer_item_id
@@ -265,7 +276,7 @@ const COLLECTION_TRADE_JOINS = `
           ELSE acquired_transfer.proposer_id
         END
       LEFT JOIN external_transaction_items external_item
-        ON external_item.source_collection_id = c.id AND external_item.direction = 'received'
+        ON external_item.id = c.acquired_via_external_item_id AND external_item.direction = 'received'
       LEFT JOIN external_transactions external_transaction
         ON external_transaction.id = external_item.transaction_id
        AND external_transaction.user_id = c.user_id
