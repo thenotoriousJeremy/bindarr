@@ -40,7 +40,7 @@
     "recharts": "^3.10.1"
   },
   "devDependencies": {
-    "@capacitor/assets": "^3.0.5",
+    "@capacitor/assets": "^4.0.0",
     "@capacitor/cli": "^8.4.2",
     "@eslint/js": "^10.0.1",
     "@types/react": "^19.3.0",
