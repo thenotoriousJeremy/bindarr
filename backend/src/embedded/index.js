@@ -72,7 +72,7 @@ db.withTransaction = async function withTransaction(fn) {
 const scryfallApi = require('../scryfallApi');
 const { authenticateToken } = require('../middleware/auth');
 const { hashSessionToken } = require('../utils/authHelpers');
-const { syncSets, sweepPrices } = require('../utils/syncJobs');
+const { syncSets, checkSets, sweepPrices } = require('../utils/syncJobs');
 const { mountOnDevice } = require('../routes/mounts');
 const { dispatch } = require('./dispatch');
 const cvScan = require('../cvScan');
@@ -169,7 +169,19 @@ const due = async (key, every) => Date.now() - (Number(await deviceState(key)) |
 async function refreshSets() {
   const forced = await due('sets_refreshed_at', WEEK);
   await syncSets(forced);
-  if (forced) await deviceState('sets_refreshed_at', Date.now());
+  if (forced) {
+    await deviceState('sets_refreshed_at', Date.now());
+    await deviceState('sets_checked_at', Date.now());   // a forced refresh is also today's check
+  }
+  await require('../utils/compartmentSort').loadSetsCache(db);
+}
+
+// New sets between the weekly refreshes, as server.js's daily sets-check job: one
+// set-list request per provider (utils/syncJobs.checkSets), at most once a day.
+async function dailySetCheck() {
+  if (!(await due('sets_checked_at', DAY))) return;
+  await checkSets();
+  await deviceState('sets_checked_at', Date.now());
   await require('../utils/compartmentSort').loadSetsCache(db);
 }
 
@@ -278,6 +290,7 @@ async function step(name, fn) {
 // Stacked rows are split by initDb itself (db.splitStackedRows), as on a server.
 async function warmUp() {
   await step('set refresh', refreshSets);
+  await step('set check', dailySetCheck);
   await step('TCGCSV sync', weeklyTcgcsv);
   await step('trash purge', dailyTrashPurge);
 }
@@ -308,6 +321,7 @@ function startBackground() {
   // The weekly TCGCSV sync and the daily trash purge keep their clocks in
   // device_state, for an app left open across days.
   every(HOUR, () => step('upkeep', async () => {
+    await dailySetCheck();
     await weeklyTcgcsv();
     await dailyTrashPurge();
   }));
