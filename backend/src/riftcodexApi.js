@@ -98,11 +98,17 @@ function get(path, config) {
 
 const SAFE = /^[a-z0-9-]$/;
 
+// TextEncoder/TextDecoder rather than Buffer: these run on the phone too (device
+// mode bundles this module), where there is no Buffer. Same bytes, and the same
+// U+FFFD for a malformed sequence that Buffer's utf8 decoding gives.
+const utf8Encoder = new TextEncoder();
+const utf8Decoder = new TextDecoder('utf-8');
+
 function encodeCode(riftboundId) {
   let out = '';
   for (const ch of String(riftboundId || '').trim().toLowerCase()) {
     if (SAFE.test(ch)) out += ch;
-    else for (const byte of Buffer.from(ch, 'utf8')) out += `.${byte.toString(16).padStart(2, '0')}`;
+    else for (const byte of utf8Encoder.encode(ch)) out += `.${byte.toString(16).padStart(2, '0')}`;
   }
   return out;
 }
@@ -121,7 +127,7 @@ function decodeCode(code) {
       bytes.push(s.charCodeAt(i));
     }
   }
-  return Buffer.from(bytes).toString('utf8');
+  return utf8Decoder.decode(Uint8Array.from(bytes));
 }
 
 // The Bindarr card id for a riftbound_id, and for the non-canonical printing of a
