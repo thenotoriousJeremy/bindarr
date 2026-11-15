@@ -1,7 +1,8 @@
 // The browser dewarps the card itself and uploads only the rectified square
 // (CameraScanner.localDewarp -> cvScan.match with `cropped`). That is two
-// implementations of one geometry — a JS warp in the page and sharp/warpRgb on
-// the server — and if they ever disagree the failure is silent: milo still
+// samplers over one geometry — warpPerspective in the page, sharp plus
+// warpPerspectiveRgb on the server (both shared/imgproc.mjs, deliberately not
+// rounding alike) — and if they ever disagree the failure is silent: milo still
 // returns a card, just a slightly worse-framed one, and accuracy drifts with
 // nothing pointing at the cause.
 //

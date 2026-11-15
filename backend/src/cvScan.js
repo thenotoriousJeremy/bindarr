@@ -19,16 +19,16 @@ const sharp = require('sharp');
 const ort = require('onnxruntime-node');
 const { loadNpz } = require('./utils/npz');
 const games = require('./utils/games');
+// Where the models and catalogs live (CV_MODEL_DIR): defined once, in modelAssets.
+const { MODEL_DIR } = require('./utils/modelAssets');
+// What the models take (input sizes, ImageNet normalisation, the corner gate) and
+// the dewarp geometry are shared with the browser and the phone, in one copy each.
+// require() of an ES module: Node 22.12+, the documented floor.
+const {
+  CORN_SIZE, EMBED_SIZE, DEWARP_SOURCE_WIDTH, SHARPNESS_GATE, imagenetChw, dewarpTransform,
+} = require('../../shared/scanModel.mjs');
+const { warpPerspectiveRgb } = require('../../shared/imgproc.mjs');
 
-const MODEL_DIR = process.env.CV_MODEL_DIR || path.join(__dirname, '..', 'data', 'models');
-const CORN_SIZE = 384;     // cornelius input
-const EMBED_SIZE = 448;    // milo input, and the dewarp target
-const MEAN = [0.485, 0.456, 0.406];
-const STD = [0.229, 0.224, 0.225];
-// Below this the corner head's SimCC peaks are flat — it is not looking at a
-// card. Matching the raw frame anyway is what the previous detector did on a
-// miss, and it still recovers most of them.
-const SHARPNESS_GATE = 0.02;
 // Cosine at which a match is confident enough to auto-fill. Correct matches on
 // the eval sample sat at 0.55-0.95; the one confident wrong answer sat at 0.88,
 // so the margin below does the work this number cannot.
@@ -226,93 +226,11 @@ async function loadAll(game, lang) {
   return english ? [native, english] : [native];
 }
 
-// ImageNet-normalised NCHW float from raw interleaved RGB.
+// ImageNet-normalised NCHW float from raw interleaved RGB. Both models' input, at
+// scan time here and at build time in catalog.js, so a catalog row and the scan
+// matched against it are normalised by the same arithmetic.
 function toTensor(rgb, size) {
-  const x = new Float32Array(3 * size * size);
-  const plane = size * size;
-  for (let p = 0; p < plane; p++) {
-    x[p] = (rgb[p * 3] / 255 - MEAN[0]) / STD[0];
-    x[plane + p] = (rgb[p * 3 + 1] / 255 - MEAN[1]) / STD[1];
-    x[2 * plane + p] = (rgb[p * 3 + 2] / 255 - MEAN[2]) / STD[2];
-  }
-  return new ort.Tensor('float32', x, [1, 3, size, size]);
-}
-
-// Perspective warp, RGB in / RGB out. The imgproc version works on RGBA and is
-// shared with the browser; this stays local because the whole point is to keep
-// the pixels as raw RGB from decode to embed with no PNG round trip. Encoding
-// the dewarped card to PNG and decoding it again cost ~100 ms per scan.
-function warpRgb(src, sw, sh, M, size) {
-  const [a, b, c, d, e, f, g, i] = M;
-  const det = a * (e - f * i) - b * (d - f * g) + c * (d * i - e * g);
-  const inv = [
-    (e - f * i) / det, (c * i - b) / det, (b * f - c * e) / det,
-    (f * g - d) / det, (a - c * g) / det, (c * d - a * f) / det,
-    (d * i - e * g) / det, (b * g - a * i) / det, (a * e - b * d) / det,
-  ];
-  const out = new Uint8Array(size * size * 3);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const den = inv[6] * x + inv[7] * y + inv[8];
-      const sx = (inv[0] * x + inv[1] * y + inv[2]) / den;
-      const sy = (inv[3] * x + inv[4] * y + inv[5]) / den;
-      const o = (y * size + x) * 3;
-      if (sx < 0 || sy < 0 || sx > sw - 1 || sy > sh - 1) continue;
-      const x0 = sx | 0, y0 = sy | 0;
-      const x1 = Math.min(x0 + 1, sw - 1), y1 = Math.min(y0 + 1, sh - 1);
-      const fx = sx - x0, fy = sy - y0;
-      for (let ch = 0; ch < 3; ch++) {
-        const p00 = src[(y0 * sw + x0) * 3 + ch], p01 = src[(y0 * sw + x1) * 3 + ch];
-        const p10 = src[(y1 * sw + x0) * 3 + ch], p11 = src[(y1 * sw + x1) * 3 + ch];
-        out[o + ch] = (p00 * (1 - fx) + p01 * fx) * (1 - fy) + (p10 * (1 - fx) + p11 * fx) * fy;
-      }
-    }
-  }
-  return out;
-}
-
-// Solve for the 8 homography coefficients mapping src quad -> dst quad.
-function perspectiveTransform(src, dst) {
-  const A = [], b = [];
-  for (let i = 0; i < 4; i++) {
-    A.push([src[i].x, src[i].y, 1, 0, 0, 0, -src[i].x * dst[i].x, -src[i].y * dst[i].x]); b.push(dst[i].x);
-    A.push([0, 0, 0, src[i].x, src[i].y, 1, -src[i].x * dst[i].y, -src[i].y * dst[i].y]); b.push(dst[i].y);
-  }
-  for (let col = 0; col < 8; col++) {
-    let piv = col;
-    for (let r = col + 1; r < 8; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
-    [A[col], A[piv]] = [A[piv], A[col]];
-    [b[col], b[piv]] = [b[piv], b[col]];
-    const p = A[col][col];
-    if (!p) return null;
-    for (let r = 0; r < 8; r++) {
-      if (r === col) continue;
-      const factor = A[r][col] / p;
-      for (let k = col; k < 8; k++) A[r][k] -= factor * A[col][k];
-      b[r] -= factor * b[col];
-    }
-  }
-  return A.map((row, r) => b[r] / row[r]);
-}
-
-function orderQuad(pts) {
-  if (!pts || pts.length !== 4) return pts;
-  const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
-  const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
-  const sorted = [...pts].sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
-  let tlIdx = 0, minScore = Infinity;
-  for (let i = 0; i < 4; i++) {
-    const score = sorted[i].x + sorted[i].y;
-    if (score < minScore) { minScore = score; tlIdx = i; }
-  }
-  const pTL = sorted[tlIdx];
-  const pNext = sorted[(tlIdx + 1) % 4];
-  const pPrev = sorted[(tlIdx + 3) % 4];
-  if (pNext.x - pTL.x > pPrev.x - pTL.x || pPrev.y - pTL.y > pNext.y - pTL.y) {
-    return [sorted[tlIdx], sorted[(tlIdx + 1) % 4], sorted[(tlIdx + 2) % 4], sorted[(tlIdx + 3) % 4]];
-  } else {
-    return [sorted[tlIdx], sorted[(tlIdx + 3) % 4], sorted[(tlIdx + 2) % 4], sorted[(tlIdx + 1) % 4]];
-  }
+  return new ort.Tensor('float32', imagenetChw(rgb, size, 3), [1, 3, size, size]);
 }
 
 // Detect the card and return a dewarped EMBED_SIZE square of raw RGB.
@@ -326,10 +244,9 @@ async function useClientCrop(imageBuffer) {
 }
 
 async function detectAndDewarp(session, imageBuffer) {
-  // One decode, downscaled once. 1200px is plenty of source resolution for a
-  // 448px dewarp and keeps the bilinear sample loop cheap.
+  // One decode, downscaled once (DEWARP_SOURCE_WIDTH, 1200px).
   const { data: rgb, info } = await sharp(imageBuffer)
-    .resize({ width: 1200, withoutEnlargement: true })
+    .resize({ width: DEWARP_SOURCE_WIDTH, withoutEnlargement: true })
     .removeAlpha().raw().toBuffer({ resolveWithObject: true });
 
   const { data: small } = await sharp(imageBuffer)
@@ -340,30 +257,25 @@ async function detectAndDewarp(session, imageBuffer) {
   const corners = out.corners.data;
   const sharpness = out.sharpness ? out.sharpness.data[0] : 1;
 
+  // Not a card in view. Matching the raw frame anyway is what the previous
+  // detector did on a miss, and it still recovers most of them.
   if (!(sharpness > SHARPNESS_GATE)) {
     const { data } = await sharp(imageBuffer).resize(EMBED_SIZE, EMBED_SIZE, { fit: 'fill' })
       .removeAlpha().raw().toBuffer({ resolveWithObject: true });
     return { rgb: data, detected: false, sharpness };
   }
 
-  // Order points into [TL, TR, BR, BL] around centroid to guarantee non-crossing quad.
-  const pts = [];
-  for (let k = 0; k < 4; k++) {
-    pts.push({ x: corners[k * 2] * info.width, y: corners[k * 2 + 1] * info.height });
-  }
-  const src = orderQuad(pts);
-  const dst = [
-    { x: 0, y: 0 }, { x: EMBED_SIZE - 1, y: 0 },
-    { x: EMBED_SIZE - 1, y: EMBED_SIZE - 1 }, { x: 0, y: EMBED_SIZE - 1 },
-  ];
-  const M = perspectiveTransform(src, dst);
+  // The corners in [TL, TR, BR, BL] order (sorted around their centroid, so the
+  // quad never crosses itself) and the homography onto milo's square. Null when
+  // they do not span a plane: then the raw frame is matched too.
+  const { quad: src, M } = dewarpTransform(corners, info.width, info.height, { nullIfSingular: true });
   if (!M) {
     const { data } = await sharp(imageBuffer).resize(EMBED_SIZE, EMBED_SIZE, { fit: 'fill' })
       .removeAlpha().raw().toBuffer({ resolveWithObject: true });
     return { rgb: data, detected: false, sharpness };
   }
   return {
-    rgb: warpRgb(rgb, info.width, info.height, M, EMBED_SIZE),
+    rgb: warpPerspectiveRgb(rgb, info.width, info.height, M, EMBED_SIZE, EMBED_SIZE),
     detected: true, sharpness, corners: src,
   };
 }
@@ -665,5 +577,7 @@ function reloadModels() {
   models = null;
 }
 
-module.exports = { match, load, loadAll, isBuilt, builtLangs, reload, reloadModels, scoreCards, setSource, STRONG_SIM, STRONG_MARGIN, GAP_FLOOR };
+// toTensor for catalog.js, which embeds with it; detectAndDewarp for
+// test/scanshared.test.js, which holds it to the code it replaced.
+module.exports = { match, load, loadAll, isBuilt, builtLangs, reload, reloadModels, scoreCards, setSource, toTensor, detectAndDewarp, STRONG_SIM, STRONG_MARGIN, GAP_FLOOR };
 
