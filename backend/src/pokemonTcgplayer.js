@@ -78,7 +78,8 @@ const priceColumns = (q) => ({
   price_normal: q ? q.normal : null,
   price_holofoil: q ? q.holo : null,
   price_reverse_holofoil: q ? q.reverse : null,
-  price_trend: q ? (q.normal ?? q.holo ?? q.reverse ?? q.first ?? null) : null,
+  // The rule tcgcsvApi.priceSet uses for every other Pokémon card: holofoil first.
+  price_trend: q ? (q.holo ?? q.normal ?? q.reverse ?? q.first ?? null) : null,
 });
 
 // --- coverage: built by the scan-catalogs workflow -------------------------------
@@ -164,6 +165,57 @@ async function loadCoverage(meta) {
   return coverage;
 }
 
+// Remove one TCGplayer-only set's cards that nothing of a user's refers to, with the
+// rows that only described them, and the set itself once it is empty. Returns
+// { removed, kept }.
+//
+// What refers to a card is read from the database itself: every table with a
+// `card_id` column (collections, trash, decks, lists, sealed recipes, trade
+// history...) other than the rows that only describe a card. A table added later
+// counts without anyone remembering to list it here. A failed read throws rather
+// than counting as "nothing refers to it": that would delete a card someone owns.
+const DESCRIBING_ROWS = ['price_history', 'tcgplayer_product', 'notification_price_state'];
+const quoteName = (name) => `"${String(name).replace(/"/g, '""')}"`;
+async function referencingTables() {
+  const tables = await db.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`);
+  const out = [];
+  for (const { name } of tables) {
+    if (name === 'card_cache' || DESCRIBING_ROWS.includes(name)) continue;
+    const columns = await db.all(`PRAGMA table_info(${quoteName(name)})`);
+    if (columns.some(c => c.name === 'card_id')) out.push(name);
+  }
+  return out;
+}
+async function dropFallbackSet(setId) {
+  const rows = await db.all(`SELECT id FROM card_cache WHERE set_id = ? AND id LIKE 'tcgplayer-%'`, [setId]);
+  if (!rows.length) return { removed: 0, kept: 0 };
+  const owned = new Set();
+  for (const table of await referencingTables()) {
+    const refs = await db.all(
+      `SELECT DISTINCT card_id FROM ${quoteName(table)}
+        WHERE card_id IN (SELECT id FROM card_cache WHERE set_id = ? AND id LIKE 'tcgplayer-%')`,
+      [setId]
+    );
+    for (const r of refs) owned.add(r.card_id);
+  }
+  const doomed = rows.map(r => r.id).filter(id => !owned.has(id));
+  await db.withTransaction(async () => {
+    for (let i = 0; i < doomed.length; i += 400) {
+      const chunk = doomed.slice(i, i + 400);
+      const marks = chunk.map(() => '?').join(',');
+      for (const table of DESCRIBING_ROWS) {
+        await db.run(`DELETE FROM ${table} WHERE card_id IN (${marks})`, chunk);
+      }
+      await db.run(`DELETE FROM card_cache WHERE id IN (${marks})`, chunk);
+    }
+    // The set's listing (setListing.js) names the removed ids; it is a cache, read
+    // again from card_cache the next time the set is opened.
+    await db.run(`DELETE FROM set_listings WHERE game = 'pokemon' AND LOWER(set_id) = LOWER(?)`, [setId]);
+    if (!owned.size) await db.run(`DELETE FROM sets WHERE id = ? AND game = 'pokemon'`, [setId]);
+  });
+  return { removed: doomed.length, kept: owned.size };
+}
+
 // Write the fallback cards and the borrowed art for one language from the TCGCSV
 // cache. Only the groups whose products or prices changed are rewritten.
 async function materialize(lang, coverage, { force = false } = {}) {
@@ -185,8 +237,12 @@ async function materialize(lang, coverage, { force = false } = {}) {
   }
   const wanted = new Set(coverage.fallbackGroups);
   const fallback = groups.filter(g => wanted.has(g.groupId));
-  const codes = tcgcsvGames.setCodes(fallback);
+  // Codes over every group of the category, not just the fallback ones: a group's
+  // set id must not move when another group joins or leaves the coverage.
+  const codes = tcgcsvGames.setCodes(groups);
   const parse = (s) => { try { return JSON.parse(s || '{}'); } catch { return {}; } };
+  // Every group written before, forced rewrite or not: what may need taking out.
+  const previous = state ? parse(state.price_hashes) : {};
   const hashes = force || !state ? {} : parse(state.price_hashes);
   let cards = 0;
 
@@ -230,6 +286,26 @@ async function materialize(lang, coverage, { force = false } = {}) {
     cards += rows.length;
   }
 
+  // Groups written before that the coverage no longer lists: TCGdex serves them now
+  // (a Japanese set it has filled in), or TCGplayer dropped them. Left in place,
+  // each card would sit beside TCGdex's own as a duplicate in search, set lists and
+  // price sweeps. A card someone holds, lists, decks or keeps in a recipe stays,
+  // as it was; the rest go, with what only described them.
+  let removed = 0, kept = 0;
+  for (const gid of Object.keys(previous).map(Number).filter(g => !wanted.has(g))) {
+    const setId = codes.has(gid) ? setIdFor(meta.code, codes.get(gid)) : null;
+    if (setId) {
+      const r = await dropFallbackSet(setId);
+      removed += r.removed;
+      kept += r.kept;
+    }
+    delete hashes[gid];
+  }
+  if (removed || kept) {
+    console.log(`Pokémon (${meta.name}): ${removed} TCGplayer-only card(s) removed now that TCGdex serves their set`
+      + (kept ? `; ${kept} kept because a collection, deck, list, recipe or trade refers to them` : '') + '.');
+  }
+
   // Art for TCGdex cards that have none: the TCGplayer product's image. Never
   // replaces art TCGdex does have.
   let art = 0;
@@ -250,9 +326,12 @@ async function materialize(lang, coverage, { force = false } = {}) {
   return { cards, art };
 }
 
-// Called before a Pokémon search or lookup reads the cache. Cheap once current: one
-// in-memory check. The first call for a language downloads the coverage and, if the
-// TCGCSV cache lacks Pokémon, syncs it (from the mirror's bundles: a few requests).
+// Brings the fallback rows up to date, in the background of a Pokémon search or set
+// list: callers do not wait for it, and serve what is cached. Cheap once current
+// (one in-memory check). It never syncs TCGCSV itself — a user's search is not an
+// admin asking for a sync — so with no TCGCSV data yet it does nothing, not even
+// fetch the coverage; the scheduled sync brings Pokémon in once the install holds
+// a Pokémon card, and the next call writes the rows.
 const inflight = new Map();
 const ready = new Map();   // code -> time of the last completed check
 const RECHECK_MS = 60 * 60 * 1000;
@@ -264,17 +343,11 @@ function ensure(lang) {
   if (inflight.has(meta.code)) return inflight.get(meta.code);
   const run = (async () => {
     if (await pokemonProvider.providerFor(meta.code) !== pokemonProvider.TCGDEX) return null;
-    // Nothing to write the cards from, and never will be: no TCGCSV data and the
-    // sync switched off (an offline install, the tests). Not worth a download.
-    if (process.env.BINDARR_DISABLE_TCGCSV_SYNC === '1' && !(await tcgcsv.currentVersion())) return null;
+    if (!(await tcgcsv.currentVersion())) return null;
     const coverage = await loadCoverage(meta);
     if (!coverage) return null;
-    let result = await materialize(meta.name, coverage);
-    if (result.missing) {
-      await tcgcsv.syncIfUpdatedSafely(`TCGplayer-only Pokémon cards (${meta.name})`, { explicit: true });
-      result = await materialize(meta.name, coverage);
-    }
-    ready.set(meta.code, Date.now());
+    const result = await materialize(meta.name, coverage);
+    if (!result.missing) ready.set(meta.code, Date.now());
     return result;
   })().catch((e) => {
     console.warn(`Pokémon TCGplayer fallback (${meta.code}) failed: ${e.message}`);
@@ -311,12 +384,10 @@ async function getCardById(id) {
   };
   const cached = await read();
   if (cached) return cached;
-  // Not written yet on this install: a scan of a card this install has never seen.
-  for (const name of Object.keys(LANGS)) {
-    await ensure(name);
-    const card = await read();
-    if (card) return card;
-  }
+  // Not written yet on this install (a scan matched it from a downloaded catalog):
+  // the rows are written in the background, and this answer goes without them —
+  // writing a language's worth of rows inside one request is not on.
+  for (const name of Object.keys(LANGS)) ensure(name).catch(() => {});
   return null;
 }
 

@@ -133,9 +133,12 @@ the button, from the same pinned, checksummed Hugging Face files
 `backend/scripts/fetch-models.mjs` uses) and that game's catalog. The catalog is
 Bindarr's own, from the weekly `scan-catalogs` release (PROJECT.md, "Published
 catalogs"): Magic ~33 MB, Pokémon ~8 MB, the others smaller, after which the app
-checks once a day at launch and downloads only the new cards. When the release
-cannot be reached, the model author's dated snapshot is downloaded instead (Magic
-~56 MB, Pokémon ~13 MB, Yu-Gi-Oh! ~21 MB; Riftbound has none).
+checks once a day at launch and downloads only the new cards. A phone with no
+catalog installed asks GitHub for nothing until the scanning setup is opened.
+When the release cannot be reached, the model author's dated snapshot is
+downloaded instead (Magic ~56 MB, Pokémon ~13 MB, Yu-Gi-Oh! ~21 MB; Riftbound has
+none). Pokémon's catalog names cards by TCGdex id, so it is used only while the
+phone takes its Pokémon cards from TCGdex; otherwise the snapshot is offered.
 
 - `frontend/src/device/scanAssets.js` downloads with `@capacitor/file-transfer`
   into the app's private storage, checks each file's exact size and SHA-256, and

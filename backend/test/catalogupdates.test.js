@@ -37,8 +37,8 @@ const embedder = () => ({
   async fetch(u) { return Buffer.from(u); },
   async embed() { return new Float32Array(DIM).fill(1); },
 });
-async function build(opts = {}) {
-  catalog.start('mtg', 'English', { skipCache: true, embedder: embedder(), ...opts });
+async function build({ lang = 'English', ...opts } = {}) {
+  catalog.start('mtg', lang, { skipCache: true, embedder: embedder(), ...opts });
   for (let i = 0; i < 2000 && catalog.state(); i++) await new Promise(r => setTimeout(r, 5));
   assert.strictEqual(catalog.state(), null, 'the build finished');
   const r = catalog.lastResult();
@@ -111,6 +111,35 @@ async function main() {
     const behind = await catalog.behindCatalogs();
     const mtg = behind.find(c => c.game === 'mtg' && c.lang === 'English');
     assert.ok(mtg && mtg.sets.includes('zzz'), 'behindCatalogs carries the grown set');
+
+    // 7. Magic's update sends a whole-game catalog each set with its family (the
+    //    promo and token sets printed beside it). A scoped catalog was built as
+    //    exactly its sets, so its update is not widened to theirs.
+    cardSets.mtgFamilyCodes = async (code) => [code, `p${code}`];
+    const whole = (await catalog.behindCatalogs()).find(c => c.game === 'mtg' && c.lang === 'English');
+    assert.ok(whole.sets.includes('zzz') && whole.sets.includes('pzzz'), 'a whole-game catalog is sent the family');
+    const french = (id) => db.run(
+      `INSERT INTO card_cache (id, name, set_id, number, game, language, image_url) VALUES (?, ?, 'aaa', ?, 'mtg', 'French', ?)`,
+      [id, id, id.replace(/\D/g, ''), `https://img.test/${id}.jpg`]
+    );
+    await french('mtg-fr-a1');
+    await build({ lang: 'French', sets: ['aaa'] });
+    await french('mtg-fr-a2');
+    const scoped = (await catalog.behindCatalogs()).find(c => c.game === 'mtg' && c.lang === 'French');
+    assert.ok(scoped, 'the scoped catalog has a grown set to update');
+    assert.deepStrictEqual(scoped.scope, ['aaa']);
+    assert.deepStrictEqual(scoped.sets, ['aaa'], 'and is sent exactly that set, not its family');
+
+    // 8. Pokémon's TCGplayer-only sets (tcgp-*) are written from the TCGCSV cache,
+    //    never walked: the update does not send TCGdex looking for them.
+    await db.run(
+      `INSERT INTO card_cache (id, name, set_id, number, game, language, image_url) VALUES
+        ('tcgplayer-21', 'Pikachu', 'tcgp-en-wcd', '1', 'pokemon', 'English', 'https://img.test/21.jpg'),
+        ('tcgdex-en-sv01-001', 'Sprigatito', 'sv01', '1', 'pokemon', 'English', 'https://img.test/sv1.jpg')`
+    );
+    const pokemonGrown = await catalog.grownSets('pokemon', 'English');
+    assert.ok(pokemonGrown.includes('sv01'), 'a TCGdex set with art not embedded has grown');
+    assert.ok(!pokemonGrown.includes('tcgp-en-wcd'), 'a TCGplayer-only set never has');
     assert.strictEqual(outbound, 0, 'nothing here went to the network');
   } finally {
     console.log = quiet;

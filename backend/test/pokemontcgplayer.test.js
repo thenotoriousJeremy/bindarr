@@ -42,11 +42,16 @@ const PRODUCTS = {
     { productId: 21, name: 'Pikachu', number: '1', rarity: 'Promo' },
     { productId: 22, name: 'Raichu', number: '2', imageUrl: null },
   ],
-  300: [{ productId: 31, name: 'Energy', number: '5' }],
+  300: [
+    { productId: 31, name: 'Energy', number: '5' },
+    { productId: 32, name: 'Water Energy', number: '6' },
+    { productId: 33, name: 'Fire Energy', number: '7' },
+  ],
   400: [{ productId: 41, name: 'Tin', number: null, imageUrl: null, groupId: 400 }],
 };
 let PRICES = {
   200: [
+    { productId: 21, subTypeName: 'Normal', marketPrice: 1.25, midPrice: 1.5 },
     { productId: 21, subTypeName: 'Holofoil', marketPrice: 3.5, midPrice: 4 },
     { productId: 21, subTypeName: '1st Edition Holofoil', marketPrice: 9, midPrice: 10 },
     { productId: 22, subTypeName: 'Normal', marketPrice: 0, midPrice: 0.25 },
@@ -56,10 +61,23 @@ let version = 'v1';
 tcgcsv.getGroups = async (cat) => GROUPS[cat] || [];
 tcgcsv.getProducts = async (cat, gid) => PRODUCTS[gid] || [];
 tcgcsv.getPrices = async (cat, gid) => PRICES[gid] || [];
-tcgcsv.currentVersion = async () => version;
+let versionAsks = 0;
+tcgcsv.currentVersion = async () => { versionAsks++; return version; };
 tcgdexApi.listSets = async () => [{ id: 'sv01', name: 'Scarlet & Violet' }, { id: 'sv02', name: 'Paldea Evolved' }];
 let published = null;
-releaseAssets.fetchJson = async (name) => (name === 'pokemon-tcgplayer.en.json' ? published : null);
+let coverageFetches = 0;
+let coverageGate = null;   // a promise the download waits on, when a test holds it
+releaseAssets.fetchJson = async (name) => {
+  coverageFetches++;
+  if (coverageGate) await coverageGate;
+  return name === 'pokemon-tcgplayer.en.json' ? published : null;
+};
+// Resolves with the promise's value, or 'still waiting' after `ms`.
+const within = (promise, ms) => {
+  let timer;
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve('still waiting'), ms); });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+};
 
 const tcgplayer = require('../src/pokemonTcgplayer');
 
@@ -83,7 +101,7 @@ async function main() {
 
   // --- an install's side ---
   const first = await tcgplayer.materialize('English', coverage);
-  assert.deepStrictEqual(first, { cards: 3, art: 1 });
+  assert.deepStrictEqual(first, { cards: 5, art: 1 });
 
   const pikachu = await tcgplayer.getCardById('tcgplayer-21');
   assert.strictEqual(pikachu.name, 'Pikachu');
@@ -95,7 +113,8 @@ async function main() {
   const row21 = await db.get(`SELECT * FROM card_cache WHERE id = 'tcgplayer-21'`);
   assert.strictEqual(row21.price_holofoil, 3.5);
   assert.strictEqual(row21.price_1st_edition, 9, '1st Edition has a column of its own');
-  assert.strictEqual(row21.price_trend, 3.5);
+  assert.strictEqual(row21.price_normal, 1.25);
+  assert.strictEqual(row21.price_trend, 3.5, 'holofoil first, the rule tcgcsvApi.priceSet uses for every other Pokémon card');
   const row22 = await db.get(`SELECT * FROM card_cache WHERE id = 'tcgplayer-22'`);
   assert.strictEqual(row22.image_url, '', 'no TCGplayer picture: no image, not a url that answers 403');
   assert.strictEqual(row22.price_normal, 0.25, 'the mid price when there is no market price');
@@ -138,6 +157,58 @@ async function main() {
   const stored = await db.get(`SELECT product_hashes FROM tcgcsv_catalogues WHERE game = 'pokemon-fallback-en-coverage'`);
   assert.deepStrictEqual(JSON.parse(stored.product_hashes).fallbackGroups, [200, 300], 'the last good coverage survives a restart');
   assert.strictEqual(await tcgplayer.ensure('French'), null);
+
+  // The daily TCGCSV price sweep leaves these sets to pokemonTcgplayer.refresh,
+  // which prices them from the same data: priced twice, each card would take two
+  // history points a day.
+  assert.deepStrictEqual((await tcgcsv.setsToPrice('all')).map(r => r.set_id), ['sv01']);
+
+  // A search never syncs TCGCSV: with no TCGCSV data yet, ensure() does nothing —
+  // not even download the coverage.
+  version = null;
+  const asked = versionAsks, fetched = coverageFetches;
+  assert.strictEqual(await tcgplayer.ensure('Japanese'), null);
+  assert.ok(versionAsks > asked, 'it looked for TCGCSV data');
+  assert.strictEqual(coverageFetches, fetched, 'and, finding none, did not download the coverage');
+  version = 'v3';
+
+  // A scan can match a TCGplayer-only card this install has not written yet. The
+  // lookup answers at once, without it, and the rows are written in the background
+  // (here: held at the coverage download, so a lookup that waited would time out).
+  let letGo;
+  coverageGate = new Promise((resolve) => { letGo = resolve; });
+  assert.strictEqual(await within(tcgplayer.getCardById('tcgplayer-999'), 2000), null, 'answered without waiting');
+  const background = tcgplayer.ensure('Japanese');
+  letGo();
+  coverageGate = null;
+  await background;
+  assert.strictEqual(coverageFetches, fetched + 1, 'the lookup started the background write');
+
+  // The coverage stops listing a group (TCGdex serves the set now): its cards go,
+  // with what only described them, except a card something refers to — a
+  // collection, or a table added after this code was written — which stays as it
+  // was, and so does its set.
+  await db.run(`INSERT INTO collection (card_id) VALUES ('tcgplayer-31')`);
+  await db.run(`CREATE TABLE "a later feature" (id INTEGER PRIMARY KEY, card_id TEXT)`);
+  await db.run(`INSERT INTO "a later feature" (card_id) VALUES ('tcgplayer-33')`);
+  await db.run(`INSERT INTO price_history (card_id, price) VALUES ('tcgplayer-32', 1)`);
+  await db.run(
+    `INSERT INTO set_listings (game, language, set_id, source, card_ids) VALUES ('pokemon', 'English', 'tcgp-en-g300', 'tcgplayer', ?)`,
+    [JSON.stringify(['tcgplayer-31', 'tcgplayer-32'])]
+  );
+  assert.deepStrictEqual(await tcgplayer.materialize('English', { ...coverage, fallbackGroups: [200] }), { cards: 0, art: 0 });
+  assert.ok(await db.get(`SELECT id FROM card_cache WHERE id = 'tcgplayer-31'`), 'a card a collection holds stays');
+  assert.ok(await db.get(`SELECT id FROM card_cache WHERE id = 'tcgplayer-33'`), 'so does one a newer table refers to');
+  assert.strictEqual(await db.get(`SELECT id FROM card_cache WHERE id = 'tcgplayer-32'`), undefined, 'the rest of the group goes');
+  assert.strictEqual(await db.get(`SELECT card_id FROM price_history WHERE card_id = 'tcgplayer-32'`), undefined, 'with its price history');
+  assert.strictEqual(await db.get(`SELECT set_id FROM set_listings WHERE set_id = 'tcgp-en-g300'`), undefined, "and the set's listing, which named it");
+  assert.ok(await db.get(`SELECT id FROM sets WHERE id = 'tcgp-en-g300'`), 'the set stays while a card in it is held');
+  assert.ok(await db.get(`SELECT id FROM card_cache WHERE id = 'tcgplayer-21'`), 'a group still listed is untouched');
+  // A group nothing holds goes whole, set and all.
+  assert.deepStrictEqual(await tcgplayer.materialize('English', { ...coverage, fallbackGroups: [] }), { cards: 0, art: 0 });
+  assert.strictEqual((await db.get(`SELECT COUNT(*) AS n FROM card_cache WHERE set_id = 'tcgp-en-wcd'`)).n, 0);
+  assert.strictEqual(await db.get(`SELECT id FROM sets WHERE id = 'tcgp-en-wcd'`), undefined, 'and its set');
+  assert.ok(await db.get(`SELECT id FROM card_cache WHERE id = 'tcgplayer-31'`), 'the held card from before is still there');
 
   // Ids and set ids.
   assert.strictEqual(tcgplayer.isFallbackId('tcgplayer-5'), true);

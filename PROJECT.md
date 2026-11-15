@@ -342,6 +342,24 @@ quotes: Normal/Unlimited, Foil (any foil), and Yu-Gi-Oh!'s 1st Edition in
 `price_1st_edition`, which is why the registry's `printings: "edition"` maps
 Unlimited to `Normal` and keeps `1st Edition` as stored.
 
+#### Pokémon cards TCGdex does not have
+
+On an install whose Pokémon provider is TCGdex, `pokemonTcgplayer.js` fills TCGdex's
+gaps from the same TCGCSV cache: a TCGplayer group no TCGdex set with cards covers
+is written as cards `tcgplayer-<product id>` in sets `tcgp-<lang>-<code>`, priced
+by TCGplayer, and a TCGdex card with no art borrows the product's image. Which
+groups those are is measured by the weekly catalog build (it walks every TCGdex
+set anyway) and published as `pokemon-tcgplayer.<lang>.json`; an install reads
+that file, never TCGdex, and writes the rows in the background of a Pokémon search
+or set list (`ensure`, which never syncs TCGCSV itself and does nothing until the
+cache holds Pokémon). Only groups whose products or prices changed are rewritten.
+A group the coverage stops listing (TCGdex serves the set now) is taken out with
+the rows that only described its cards; a card anything else refers to stays,
+"anything" being every table with a `card_id` column, read from the database so
+that a table added later counts too. These sets are priced by `pokemonTcgplayer.refresh` in the
+daily sweep, not by `tcgcsvApi`'s set matcher, and the weekly catalog update never
+asks TCGdex for them.
+
 #### The game registry
 
 Which games exist is one table, `shared/games.json` (with an ESM twin,
@@ -787,18 +805,32 @@ database, and runs the normal build, so only new or changed art is downloaded an
 embedded (`artKey` resume). The result is compared with the published float16 bits
 and the difference becomes one delta segment. A new base, under the next
 generation, is written when nothing is published yet, on `--rebase`/`--fresh`,
-after 26 deltas, or once the deltas hold a quarter of the rows. A build that lost
-more than 3% of the published rows is refused: that is a provider failing, and
-publishing it would delete those cards from every scanner. For Pokémon the build
-also works out which TCGplayer groups TCGdex lacks (`pokemonTcgplayer.computeCoverage`),
-publishes that as `pokemon-tcgplayer.<lang>.json`, and embeds those cards too. A
-last job writes `catalogs.json` (what Admin lists) from the manifests, read through
-the API rather than the CDN, and deletes segments of superseded generations only.
+after 26 deltas, or once the deltas hold a quarter of the rows. A published card
+the build did not embed is removed only when it is provably gone: no longer listed,
+from a set this run downloaded (the state file records each row's set). A set that
+failed to download, or an image that would not, keeps last week's vector, and the
+run's summary names the failed sets. A build that would still remove more than 3%
+of the published rows is refused: that is a provider failing, and publishing it
+would delete those cards from every scanner. For Pokémon the build also works out
+which TCGplayer groups TCGdex lacks (`pokemonTcgplayer.computeCoverage`), publishes
+that as `pokemon-tcgplayer.<lang>.json`, and embeds those cards too; when a TCGdex
+set failed to download, last week's coverage stands, since a set that failed reads
+exactly like one TCGdex does not serve. A last job writes `catalogs.json` (what
+Admin lists) from the manifests, read through the API rather than the CDN, and
+deletes segments of superseded generations only. The build jobs run `npm ci` and
+provider code for hours with a read-only token and hand their files over as
+artifacts; only the two short jobs that create the release and publish to it can
+write.
 
 **Install** (`catalogReleases.js`, Admin → Catalogs → Bindarr's catalogs). The
-manifest first, then only the segments not on disk, each checked for size,
-SHA-256 and a clean decode before it is kept. A new generation downloads beside
-the old one and replaces it only when complete. The `scan-catalog-releases`
+manifest first, then only the segments not on disk (or on disk at the wrong size),
+each refused as it streams once it runs past the manifest's size, then checked for
+SHA-256 and a clean decode before it is kept. A new generation downloads into
+`<key>.next`, emptied first, with its state file, and replaces the working one in
+one rename only when complete. Pokémon catalogs are keyed by TCGdex's ids, so they
+are offered only while TCGdex is the install's Pokémon provider (`fitsInstall`);
+`applyProvider`, run at startup and after the provider changes, switches an
+installed one off (not loaded, updated or downloaded) or back on. The `scan-catalog-releases`
 scheduler job repeats that daily for every installed catalog: one manifest request
 when nothing changed (`CATALOG_AUTO_UPDATE=0` turns it off, `CATALOG_RELEASE_URL`
 moves it). `cvScan.load` applies the segments in order and merges the result with
@@ -806,7 +838,9 @@ a catalog built locally for the same game, the local row winning a shared id. A
 match the install has never cached is fetched by `cardApi.getCardById` (one TCGdex
 or Scryfall request; none for the TCGCSV-served games). Phones do the same in
 `frontend/src/device/scanAssets.js`, falling back to the model author's snapshot
-when the release cannot be reached.
+when the release cannot be reached. A phone installs no segment it cannot verify
+(no WebCrypto, no install), and asks for the release's list only when its scanning
+setup is opened.
 
 Measured with the script end to end against a local stand-in for the release
 (2026-11-15): a rebuild with nothing new uploads nothing, a set added becomes a

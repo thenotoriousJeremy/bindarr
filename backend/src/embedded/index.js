@@ -210,6 +210,11 @@ async function syncTcgcsvForTheWeek(context, options) {
   return result;
 }
 
+// A game served from TCGplayer's catalogue (Yu-Gi-Oh!, One Piece...) switched on
+// for the first time syncs its category now, with the switch lifted, instead of
+// staying empty until the weekly sync (tcgcsvGameApi.setFirstUseSync).
+require('../tcgcsvGameApi').setFirstUseSync((context) => syncTcgcsvForTheWeek(context));
+
 async function weeklyTcgcsv() {
   if (!(await due('tcgcsv_synced_at', WEEK))) return;
   await syncTcgcsvForTheWeek('the device weekly sync');
@@ -414,6 +419,9 @@ module.exports = {
       base: require('../utils/releaseAssets').base(),
       segments: require('../utils/catalogSegments'),
       model: require('../utils/modelAssets').MODEL_ID,
+      // Whether a game's release catalog fits this phone's card ids: a Pokémon one
+      // is keyed by TCGdex ids (catalogReleases.fitsInstall on a server).
+      fits: async (game) => game !== 'pokemon' || require('../utils/pokemonProvider').usesTcgdex('en'),
     },
   },
   setScanSource: cvScan.setSource,

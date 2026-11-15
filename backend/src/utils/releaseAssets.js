@@ -30,7 +30,12 @@ class AssetMissingError extends Error {
 // The bytes of one published file. A 404 is its own error: before the workflow
 // has run, or for a catalog nobody publishes, "not there" is an answer, not a
 // failure.
-async function fetchAsset(name, { timeoutMs = 120000 } = {}) {
+//
+// `maxBytes` caps the body: the manifest says how big a segment is, and a
+// response that runs past that is refused as it streams, not after it has filled
+// memory. A JSON file is capped small by default.
+const JSON_MAX_BYTES = 16 * 1024 * 1024;
+async function fetchAsset(name, { timeoutMs = 120000, maxBytes = Infinity } = {}) {
   if (disabled()) throw new AssetMissingError(name);
   const res = await fetch(urlFor(name), {
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/octet-stream, application/json' },
@@ -39,13 +44,36 @@ async function fetchAsset(name, { timeoutMs = 120000 } = {}) {
   });
   if (res.status === 404) throw new AssetMissingError(name);
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${name}`);
-  return new Uint8Array(await res.arrayBuffer());
+  const tooBig = () => new Error(`${name} is larger than the ${maxBytes} bytes expected — refusing it`);
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    try { await res.body?.cancel(); } catch { /* already closed */ }
+    throw tooBig();
+  }
+  if (!res.body || !Number.isFinite(maxBytes)) return new Uint8Array(await res.arrayBuffer());
+  const chunks = [];
+  let total = 0;
+  const reader = res.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > maxBytes) {
+      try { await reader.cancel(); } catch { /* already closed */ }
+      throw tooBig();
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) { out.set(c, at); at += c.length; }
+  return out;
 }
 
 // A published JSON file, or null when it is not published.
-async function fetchJson(name, opts) {
+async function fetchJson(name, { maxBytes = JSON_MAX_BYTES, ...opts } = {}) {
   try {
-    return JSON.parse(new TextDecoder().decode(await fetchAsset(name, opts)));
+    return JSON.parse(new TextDecoder().decode(await fetchAsset(name, { maxBytes, ...opts })));
   } catch (err) {
     if (err.code === 'ASSET_MISSING') return null;
     throw err;

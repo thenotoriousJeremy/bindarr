@@ -28,8 +28,11 @@ on:
   schedule:
     - cron: '41 4 * * 3'
 
+# Read-only by default. The builds run npm ci (install scripts) for hours, so they
+# get no write token at all: they hand their files over as artifacts, and only the
+# two short jobs that touch the release — creating it, and publishing — can write.
 permissions:
-  contents: write
+  contents: read
 
 # One run at a time: two would race their uploads to the same assets.
 concurrency:
@@ -46,6 +49,8 @@ env:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       keys: ${{ steps.keys.outputs.keys }}
     steps:
@@ -72,6 +77,8 @@ jobs:
   build:
     needs: plan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     # The first Magic build embeds ~110k images; a weekly one, a few hundred.
     timeout-minutes: 340
     strategy:
@@ -81,6 +88,8 @@ jobs:
         key: ${{ fromJson(needs.plan.outputs.keys) }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -97,6 +106,8 @@ jobs:
           CV_MODEL_DIR: ${{ runner.temp }}/models
         run: node backend/scripts/fetch-models.mjs
 
+      # Reads last week's catalog from the public release (no token needed) and
+      # writes this week's files to $RUNNER_TEMP/out.
       - name: Build ${{ matrix.key }}
         env:
           CV_MODEL_DIR: ${{ runner.temp }}/models
@@ -105,34 +116,59 @@ jobs:
           FRESH: ${{ inputs.fresh && '--fresh' || '' }}
         run: node scripts/scan-catalogs/build.mjs --key "$KEY" --out "$RUNNER_TEMP/out" $REBASE $FRESH
 
+      - name: Hand the files to the publish job
+        uses: actions/upload-artifact@v7
+        with:
+          name: catalog-${{ matrix.key }}
+          path: ${{ runner.temp }}/out
+          retention-days: 3
+          if-no-files-found: error
+
+  publish:
+    needs: [plan, build]
+    # A failed catalog keeps last week's copy; the others still publish, and the
+    # list still names every catalog.
+    if: ${{ always() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Only scripts/scan-catalogs/build.mjs --index runs here, which needs no
+      # dependencies; nothing is installed in the job that can write.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Collect the builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: catalog-*
+          path: ${{ runner.temp }}/artifacts
+
       # Segments and state first, the manifest last: an install that reads the new
       # manifest can always download everything it names.
-      - name: Publish
+      - name: Publish each catalog
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/out"
-          mapfile -t files < <(jq -r '.upload[]' publish.json)
-          if [ "${#files[@]}" -gt 0 ]; then
-            gh release upload "$TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
-          fi
-          manifest=$(jq -r '.manifest // empty' publish.json)
-          if [ -n "$manifest" ]; then
-            gh release upload "$TAG" "$manifest" --clobber --repo "$GITHUB_REPOSITORY"
-          fi
-          echo "Uploaded: ${files[*]:-nothing} ${manifest}"
-
-  index:
-    needs: [plan, build]
-    # A failed catalog keeps last week's copy; the index still lists every catalog.
-    if: ${{ always() && needs.plan.result == 'success' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
+          shopt -s nullglob
+          for dir in "$RUNNER_TEMP"/artifacts/catalog-*; do
+            [ -f "$dir/publish.json" ] || continue
+            cd "$dir"
+            mapfile -t files < <(jq -r '.upload[]' publish.json)
+            if [ "${#files[@]}" -gt 0 ]; then
+              gh release upload "$TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+            fi
+            manifest=$(jq -r '.manifest // empty' publish.json)
+            if [ -n "$manifest" ]; then
+              gh release upload "$TAG" "$manifest" --clobber --repo "$GITHUB_REPOSITORY"
+            fi
+            echo "$(basename "$dir"): ${files[*]:-nothing} ${manifest}"
+          done
 
       # Manifests through the API rather than the download URL, which a CDN may
       # serve a few minutes stale — the list of what to delete is built from them.

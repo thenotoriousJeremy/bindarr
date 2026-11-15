@@ -269,6 +269,12 @@ async function refreshCatalogue(game, { force = false } = {}) {
 // for a game activates it, which brings its TCGCSV category into the sync and
 // fetches it (from the mirror's bundles: a few requests). Concurrent callers share
 // one run.
+//
+// The sync is replaceable: on a phone (embedded/index.js) the TCGCSV switch is off
+// between its weekly syncs, so the plain one would do nothing and a game switched
+// on would stay empty for up to a week.
+let firstUseSync = (context) => tcgcsv.syncIfUpdatedSafely(context);
+const setFirstUseSync = (fn) => { firstUseSync = fn; };
 const inflight = new Map();
 function ensureCatalogue(game) {
   if (!isTcgcsvGame(game)) return Promise.resolve(null);
@@ -277,7 +283,7 @@ function ensureCatalogue(game) {
     await db.run(`INSERT OR IGNORE INTO tcgcsv_catalogues (game) VALUES (?)`, [game]);
     let result = await refreshCatalogue(game);
     if (result.missing) {
-      await tcgcsv.syncIfUpdatedSafely(`first use of ${games.get(game).short}`);
+      await firstUseSync(`first use of ${games.get(game).short}`);
       result = await refreshCatalogue(game);
     }
     return result;
@@ -463,6 +469,7 @@ function forGame(game) {
 }
 
 module.exports = {
+  setFirstUseSync,
   forGame, isTcgcsvGame, tcgcsvGames, categoryOf, activated, cardIdFor, productIdOf,
   setCodes, displayNumber, quotesByProduct, finishOf, normalizeProduct, priceColumns, writePrices, hashOf,
   refreshCatalogue, ensureCatalogue, searchCards, getCardById, listSetCodes, getCardsBySet,

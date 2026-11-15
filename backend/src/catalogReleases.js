@@ -46,10 +46,45 @@ function installed() {
   try { names = fs.readdirSync(ROOT); } catch { return []; }
   return names.filter(validKey).map(readState).filter(Boolean);
 }
-// Installed AND in the embedding space this version scans with. A catalog left
-// from before a model change is not one: its vectors would match nothing.
-const usable = (s) => !!s && s.model === MODEL_ID;
+// Installed, in the embedding space this version scans with (a catalog left from
+// before a model change would match nothing), and not switched off: a Pokémon
+// catalog is keyed by TCGdex's card ids, so it answers only while TCGdex is the
+// install's Pokémon provider (applyProvider). On a pokemontcg.io or
+// pokemontcgapi.com install its matches would file TCGdex-numbered cards beside
+// the install's own — exactly what the provider pin exists to prevent.
+const usable = (s) => !!s && s.model === MODEL_ID && !s.disabled;
 const isInstalled = (game, lang) => usable(readState(keyFor(game, lang)));
+
+// Whether a catalog of `game` in `lang` fits this install's card ids. Only
+// Pokémon depends on a setting.
+async function fitsInstall(game, lang) {
+  if (game !== 'pokemon') return true;
+  return require('./utils/pokemonProvider').usesTcgdex(lang);
+}
+
+function writeState(key, next, dir = dirFor(key)) {
+  const file = path.join(dir, 'state.json');
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(next, null, 1));
+  fs.renameSync(`${file}.tmp`, file);
+}
+
+// After the Pokémon provider changes (routes/settings.js, the provider migration,
+// and at startup): each installed Pokémon catalog is switched on or off to match,
+// and the scanner reloads what changed. Never throws.
+async function applyProvider() {
+  for (const st of installed()) {
+    if (st.game !== 'pokemon') continue;
+    try {
+      const off = !(await fitsInstall(st.game, st.lang));
+      if (!!st.disabled === off) continue;
+      writeState(st.key, { ...st, disabled: off });
+      require('./cvScan').reload(st.game, st.lang);
+      console.log(`Scan catalog ${st.key}: ${off ? 'off — this install no longer uses TCGdex for Pokémon' : 'back on'}`);
+    } catch (e) {
+      console.warn(`Scan catalog ${st.key}: could not apply the Pokémon provider: ${e.message}`);
+    }
+  }
+}
 
 // What the release offers, cached for ten minutes: the Admin panel polls.
 let indexCache = null;
@@ -80,50 +115,71 @@ async function sync(key, job = {}) {
     throw new Error(`${key} is built for scan model ${manifest.model}, and this version of Bindarr scans with ${MODEL_ID} — update Bindarr to use it`);
   }
   const langName = languages.toName(manifest.lang) || 'English';
+  if (!(await fitsInstall(manifest.game, langName))) {
+    throw new Error(`${key} names cards by TCGdex id, and this install takes its Pokémon cards from another provider — `
+      + 'the model author\'s catalog (or a catalog built here) is the one to use');
+  }
   const have = readState(key);
   const sameGeneration = have && have.generation === manifest.generation && have.model === manifest.model;
-  const onDisk = new Set(sameGeneration ? have.applied || [] : []);
-  const wanted = manifest.segments.filter(s => !onDisk.has(s.name));
-  job.total = wanted.reduce((n, s) => n + s.bytes, 0);
+  const dir = dirFor(key);
+  // A segment the state names but the disk lacks, or holds at the wrong size (a
+  // file deleted or truncated since), is downloaded again.
+  const intact = (name) => {
+    const want = manifest.segments.find(x => x.name === name);
+    try { return !!want && fs.statSync(path.join(dir, name)).size === want.bytes; } catch { return false; }
+  };
+  const onDisk = new Set(sameGeneration ? (have.applied || []).filter(intact) : []);
+  const wanted = manifest.segments.filter(x => !onDisk.has(x.name));
+  job.total = wanted.reduce((n, x) => n + x.bytes, 0);
   job.done = 0;
 
   // A new generation lands beside the old one and replaces it only when complete,
-  // so a failed download leaves the catalog that was working.
-  const dir = dirFor(key);
+  // so a failed download leaves the catalog that was working. Its folder starts
+  // empty: what an earlier failed attempt left there is not trusted.
   const work = sameGeneration ? dir : `${dir}.next`;
+  if (!sameGeneration) fs.rmSync(work, { recursive: true, force: true });
   fs.mkdirSync(work, { recursive: true });
   let bytes = 0;
-  for (const s of wanted) {
-    if (!/^[\w.-]+\.seg$/.test(s.name)) throw new Error(`refusing a segment named ${s.name}`);
-    job.name = s.name;
-    const data = await releaseAssets.fetchAsset(s.name);
-    if (data.length !== s.bytes || sha256(data) !== s.sha256) {
-      throw new Error(`${s.name} does not match its manifest (${data.length} bytes) — refusing to install it`);
+  try {
+    for (const x of wanted) {
+      if (!/^[\w.-]+\.seg$/.test(x.name)) throw new Error(`refusing a segment named ${x.name}`);
+      job.name = x.name;
+      const data = await releaseAssets.fetchAsset(x.name, { maxBytes: x.bytes });
+      if (data.length !== x.bytes || sha256(data) !== x.sha256) {
+        throw new Error(`${x.name} does not match its manifest (${data.length} bytes) — refusing to install it`);
+      }
+      segments.decodeSegment(data);   // refuses anything that would not load
+      const file = path.join(work, x.name);
+      fs.writeFileSync(`${file}.tmp`, data);
+      fs.renameSync(`${file}.tmp`, file);
+      bytes += data.length;
+      job.done += data.length;
     }
-    segments.decodeSegment(data);   // refuses anything that would not load
-    const file = path.join(work, s.name);
-    fs.writeFileSync(`${file}.tmp`, data);
-    fs.renameSync(`${file}.tmp`, file);
-    bytes += data.length;
-    job.done += data.length;
-  }
-  if (!sameGeneration) {
-    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
-    fs.renameSync(work, dir);
-  }
-  // Files the manifest no longer names (an older generation's) go.
-  const keep = new Set(manifest.segments.map(s => s.name));
-  for (const f of fs.readdirSync(dir)) {
-    if (f.endsWith('.seg') && !keep.has(f)) fs.rmSync(path.join(dir, f), { force: true });
+  } catch (e) {
+    if (!sameGeneration) fs.rmSync(work, { recursive: true, force: true });
+    throw e;
   }
   const next = {
     key, game: manifest.game, lang: langName, model: manifest.model, dim: manifest.dim,
-    generation: manifest.generation, applied: manifest.segments.map(s => s.name),
-    rows: manifest.rows, bytes: manifest.segments.reduce((n, s) => n + s.bytes, 0),
+    generation: manifest.generation, applied: manifest.segments.map(x => x.name),
+    rows: manifest.rows, bytes: manifest.segments.reduce((n, x) => n + x.bytes, 0),
     publishedAt: manifest.updatedAt, checkedAt: new Date().toISOString(),
+    ...(manifest.game === 'pokemon' ? { provider: 'tcgdex' } : {}),
   };
-  fs.writeFileSync(`${statePath(key)}.tmp`, JSON.stringify(next, null, 1));
-  fs.renameSync(`${statePath(key)}.tmp`, statePath(key));
+  if (!sameGeneration) {
+    // The state goes in with the segments, so the swap below is the one step that
+    // changes which catalog answers: a crash on either side of it leaves a whole one.
+    writeState(key, next, work);
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    fs.renameSync(work, dir);
+  } else {
+    writeState(key, next);
+  }
+  // Files the manifest no longer names (an older generation's) go.
+  const keep = new Set(manifest.segments.map(x => x.name));
+  for (const f of fs.readdirSync(dir)) {
+    if (f.endsWith('.seg') && !keep.has(f)) fs.rmSync(path.join(dir, f), { force: true });
+  }
   if (wanted.length) require('./cvScan').reload(manifest.game, langName);
   return { downloaded: wanted.length, bytes };
 }
@@ -132,7 +188,7 @@ async function sync(key, job = {}) {
 // job. Returns the progress record; the caller polls state().
 function start(keys) {
   if (current) throw new Error('a catalog download is already running');
-  const list = (keys && keys.length ? keys : installed().map(s => s.key)).filter(validKey);
+  const list = (keys && keys.length ? keys : installed().filter(s => !s.disabled).map(s => s.key)).filter(validKey);
   if (!list.length) throw new Error('no catalog to download');
   const job = { keys: list, key: list[0], name: '', done: 0, total: 0, phase: 'downloading', message: '' };
   current = job;
@@ -165,7 +221,8 @@ function start(keys) {
 // The weekly check: every installed catalog against its manifest. Never throws.
 async function updateInstalled() {
   if (current) return { skipped: 'busy' };
-  const keys = installed().map(s => s.key);
+  // A catalog switched off (a Pokémon one off TCGdex) is not updated: sync would refuse it.
+  const keys = installed().filter(s => !s.disabled).map(s => s.key);
   if (!keys.length) return { skipped: 'none installed' };
   try {
     start(keys);
@@ -206,22 +263,31 @@ async function status({ fresh = false } = {}) {
     error = e.message;
   }
   const mine = new Map(installed().map(s => [s.key, s]));
+  const fits = new Map();
+  for (const c of (offered && offered.catalogs) || []) {
+    if (!fits.has(`${c.game}|${c.lang}`)) fits.set(`${c.game}|${c.lang}`, await fitsInstall(c.game, c.lang).catch(() => false));
+  }
   const catalogs = ((offered && offered.catalogs) || [])
     .filter(c => games.isGame(c.game))
+    // A catalog that does not fit this install's card ids is not offered (a
+    // Pokémon one off TCGdex); one installed before the provider changed still
+    // shows, switched off, so it can be removed.
+    .filter(c => fits.get(`${c.game}|${c.lang}`) || mine.has(c.key))
     .map(c => {
       const local = mine.get(c.key);
       return {
         ...c,
         installed: !!local,
+        disabled: !!(local && local.disabled),
         upToDate: usable(local) && local.generation === c.generation && (local.applied || []).length === c.segments,
         installedRows: local ? local.rows : null,
       };
     });
   // Installed but no longer listed (or the list could not be fetched): still shown.
   for (const [key, s] of mine) {
-    if (!catalogs.some(c => c.key === key)) catalogs.push({ key, game: s.game, lang: s.lang, rows: s.rows, bytes: s.bytes, installed: true, upToDate: null });
+    if (!catalogs.some(c => c.key === key)) catalogs.push({ key, game: s.game, lang: s.lang, rows: s.rows, bytes: s.bytes, installed: true, disabled: !!s.disabled, upToDate: null });
   }
   return { catalogs, published: !!offered, error, progress: state(), last };
 }
 
-module.exports = { keyFor, installed, isInstalled, available, sync, start, state, lastResult, updateInstalled, remove, load, status, ROOT };
+module.exports = { keyFor, installed, isInstalled, available, sync, start, state, lastResult, updateInstalled, remove, load, status, applyProvider, fitsInstall, ROOT };

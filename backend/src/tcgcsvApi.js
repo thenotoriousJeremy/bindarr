@@ -946,7 +946,10 @@ async function setsToPrice(scope = 'owned') {
   `);
   // These rows already have a source-aware EUR/USD price. TCGCSV must not
   // replace it with a USD proxy or leave printing columns in mixed currencies.
-  return rows.filter(r => r.set_id && !r.set_id.startsWith('pokemontcgapi-') && !isPocketSet(r.set_id));
+  // Pokémon's TCGplayer-only sets (tcgp-*) are priced by their own sweep
+  // (pokemonTcgplayer.refresh), from the same data: priced here as well, each card
+  // took two history points a day.
+  return rows.filter(r => r.set_id && !r.set_id.startsWith('pokemontcgapi-') && !r.set_id.startsWith('tcgp-') && !isPocketSet(r.set_id));
 }
 
 // Price one matched set: fetch its products and prices, join them to the cached

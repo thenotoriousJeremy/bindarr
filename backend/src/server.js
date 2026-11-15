@@ -543,6 +543,10 @@ async function startupTasks() {
   const { loadSetsCache } = require('./utils/compartmentSort');
   await loadSetsCache(db);
 
+  // A Pokémon provider changed while the server was down (a restored backup, a
+  // setting edited by hand) switches Bindarr's Pokémon scan catalog to match,
+  // before the scanner warms up on it.
+  await require('./catalogReleases').applyProvider();
   warmScanCatalogs();
 }
 

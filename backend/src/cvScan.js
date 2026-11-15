@@ -203,8 +203,15 @@ async function load(game = 'mtg', lang) {
         parts.push({ from: 'built here', cat: new Float32Array(buf.buffer, buf.byteOffset, n * dim), ids: meta.ids, n, dim });
       }
       if (hasBindarr(game, useLang)) {
-        const got = require('./catalogReleases').load(game, useLang || 'English');
-        if (got) parts.push({ from: `downloaded, generation ${got.generation}`, ...got });
+        // A segment that went missing or bad on disk must not take the scanner
+        // down with it, nor a catalog built here: it is left out, and the next
+        // update (catalogReleases.sync) downloads it again.
+        try {
+          const got = require('./catalogReleases').load(game, useLang || 'English');
+          if (got) parts.push({ from: `downloaded, generation ${got.generation}`, ...got });
+        } catch (e) {
+          console.warn(`cvScan: the downloaded ${key} catalog could not be read (${e.message}); left out until it is repaired`);
+        }
       }
       if (parts.length) {
         const { cat, ids, n, dim } = mergeTables(parts);

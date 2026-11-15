@@ -189,53 +189,108 @@ async function build(args) {
     return r;
   };
 
-  let coverage = null;
-  let skipped = [];
+  let coverage = null;        // what this build's TCGplayer rows were written from
+  let coverageIsNew = false;  // worked out this run, rather than last week's reused
+  let cacheRun;
   const tcgplayer = game === 'pokemon' ? backend('./src/pokemonTcgplayer') : null;
   if (tcgplayer && tcgplayer.LANGS[lang] && !sets.length) {
     // Pokémon: TCGdex first, then the TCGplayer groups it lacks, then embed both.
-    skipped = (await run({ cacheOnly: true })).skipped || [];
+    cacheRun = await run({ cacheOnly: true });
     const tcgcsv = backend('./src/tcgcsvApi');
     const synced = await tcgcsv.syncIfUpdated({ explicit: true });
     if (synced && synced.disabled) throw new Error('TCGCSV sync is disabled (BINDARR_DISABLE_TCGCSV_SYNC=1)');
-    coverage = await tcgplayer.computeCoverage(lang);
-    const wrote = await tcgplayer.materialize(lang, coverage, { force: true });
-    console.log(`${key}: ${coverage.fallbackGroups.length} TCGplayer group(s) TCGdex lacks (${wrote.cards || 0} cards), art borrowed for ${Object.keys(coverage.artFill).length} TCGdex card(s)`);
+    if ((cacheRun.failedSets || []).length) {
+      // A TCGdex set that failed to download reads, to computeCoverage, exactly like
+      // one TCGdex does not serve, and its TCGplayer group would be published as a
+      // fallback for every install. Last week's coverage stands instead.
+      coverage = await releaseAssets.fetchJson(tcgplayer.coverageAsset(code)).catch(() => null);
+      console.warn(`${key}: ${cacheRun.failedSets.length} TCGdex set(s) failed to download; ${coverage ? "reusing last week's TCGplayer coverage" : 'no TCGplayer fallback this run'}`);
+    } else {
+      coverage = await tcgplayer.computeCoverage(lang);
+      coverageIsNew = true;
+    }
+    if (coverage) {
+      const wrote = await tcgplayer.materialize(lang, coverage, { force: true });
+      console.log(`${key}: ${coverage.fallbackGroups.length} TCGplayer group(s) TCGdex lacks (${wrote.cards || 0} cards), art borrowed for ${Object.keys(coverage.artFill).length} TCGdex card(s)`);
+    }
     await run({ skipCache: true });
   } else {
-    skipped = (await run({})).skipped || [];
+    cacheRun = await run({});
   }
+  const skipped = cacheRun.skipped || [];
+  const failedSets = cacheRun.failedSets || [];
+  const normSet = (id) => games.bareSetId(String(id || '').toLowerCase());
+  const fetched = new Set((cacheRun.fetchedSets || []).map(normSet));
 
   // 3. What changed against what is published.
   if (!fs.existsSync(catalog.metaPath(game, lang))) throw new Error(`${key}: the build produced no rows`);
   const meta = JSON.parse(fs.readFileSync(catalog.metaPath(game, lang), 'utf8'));
   const buf = fs.readFileSync(catalog.binPath(game, lang));
   const dim = meta.dim;
-  const ids = meta.ids;
+  const built = meta.ids;
+  if (!built.length) throw new Error(`${key}: the build produced no rows`);
+  const builtCat = new Float32Array(buf.buffer, buf.byteOffset, built.length * dim);
+  const srcs = { ...(meta.srcs || {}) };
+
+  // The set each row belongs to, kept in the state file so next week can tell a
+  // card that left its set from one whose set did not download.
+  const listed = new Set();
+  const rowSets = {};
+  for (const r of await db.all(`SELECT id, set_id FROM card_cache WHERE game = ? AND language = ?`, [game, lang])) {
+    listed.add(r.id);
+    rowSets[r.id] = normSet(r.set_id);
+  }
+  const baseId = (id) => String(id).replace(/_back$/, '');
+
+  // A published card this build did not embed is removed only when it is provably
+  // gone: no longer listed at all, from a set this run fetched (or, for Pokémon's
+  // TCGplayer-only cards, not in the coverage this run wrote them from). A set
+  // that failed or came back empty, an image that would not download, art that is
+  // missing this week: last week's vector stays. Publishing those as removals
+  // would take the cards out of every install's scanner for a week.
+  const diffable = reuse && prev.dim === dim;
+  const ids = [...built];
+  const carried = [];   // indices into prev
+  let removes = [];
+  if (diffable) {
+    const now = new Set(built);
+    const gone = (id) => {
+      const b = baseId(id);
+      if (listed.has(b)) return false;
+      if (b.startsWith('tcgplayer-')) return !!coverage;
+      const set = prev.sets ? prev.sets[b] : undefined;
+      return set != null && fetched.has(set);
+    };
+    prev.ids.forEach((id, j) => {
+      if (now.has(id)) return;
+      if (gone(id)) removes.push(id);
+      else { carried.push(j); ids.push(id); if (prev.srcs[id]) srcs[id] = prev.srcs[id]; }
+    });
+    // A provider listing far fewer cards than last week is broken, not pruned.
+    const limit = Math.max(50, Math.ceil(prev.ids.length * MAX_REMOVED_SHARE));
+    if (removes.length > limit && !args['allow-removals']) {
+      throw new Error(`${key}: ${removes.length} of ${prev.ids.length} published cards are gone (limit ${limit}) — `
+        + 'a provider failing, most likely. Nothing published; rerun with --allow-removals if it is real.');
+    }
+  }
+  for (const id of carried.map(j => prev.ids[j])) if (prev.sets && prev.sets[baseId(id)]) rowSets[baseId(id)] = prev.sets[baseId(id)];
+
   const n = ids.length;
-  if (!n) throw new Error(`${key}: the build produced no rows`);
-  const cat = new Float32Array(buf.buffer, buf.byteOffset, n * dim);
+  const cat = new Float32Array(n * dim);
+  cat.set(builtCat, 0);
+  carried.forEach((j, k) => cat.set(prev.cat.subarray(j * dim, (j + 1) * dim), (built.length + k) * dim));
   const halves = new Uint16Array(n * dim);
   for (let i = 0; i < halves.length; i++) halves[i] = segments.toHalf(cat[i]);
 
-  const diffable = reuse && prev.dim === dim;
   const changed = [];
-  let removes = [];
   if (diffable) {
     const where = new Map(prev.ids.map((id, i) => [id, i]));
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < built.length; i++) {
       const j = where.get(ids[i]);
       if (j === undefined) { changed.push(i); continue; }
       for (let d = 0; d < dim; d++) {
         if (halves[i * dim + d] !== segments.toHalf(prev.cat[j * dim + d])) { changed.push(i); break; }
       }
-    }
-    const now = new Set(ids);
-    removes = prev.ids.filter(id => !now.has(id));
-    const limit = Math.max(50, Math.ceil(prev.ids.length * MAX_REMOVED_SHARE));
-    if (removes.length > limit && !args['allow-removals']) {
-      throw new Error(`${key}: ${removes.length} of ${prev.ids.length} published cards are gone (limit ${limit}) — `
-        + 'a provider failing, most likely. Nothing published; rerun with --allow-removals if it is real.');
     }
   }
 
@@ -271,12 +326,14 @@ async function build(args) {
     };
     fs.writeFileSync(path.join(out, `${key}.json`), `${JSON.stringify(manifest, null, 1)}\n`);
     // The image each row came from: next week's resume key. Only the build reads it.
-    const state = zlib.gzipSync(JSON.stringify({ key, generation, srcs: meta.srcs || {} }), { level: 9 });
+    const rowSet = {};
+    for (const id of ids) { const b = baseId(id); if (rowSets[b]) rowSet[b] = rowSets[b]; }
+    const state = zlib.gzipSync(JSON.stringify({ key, generation, srcs, sets: rowSet }), { level: 9 });
     fs.writeFileSync(path.join(out, `${key}.state.json.gz`), state);
     files.push(name, `${key}.state.json.gz`);
   }
 
-  if (coverage) {
+  if (coverage && coverageIsNew) {
     // Installs re-read this daily; only a change in WHAT it says is worth an upload.
     const asset = tcgplayer.coverageAsset(code);
     const before = await releaseAssets.fetchJson(asset).catch(() => null);
@@ -305,7 +362,9 @@ async function build(args) {
     // Normal for some catalogues (TCGdex lists Japanese sets it has no cards for);
     // a jump here between weeks is a provider failing, and worth a look.
     skipped.length ? `Sets skipped, no card data upstream (${skipped.length}): ${skipped.slice(0, 30).join(', ')}${skipped.length > 30 ? ', …' : ''}.` : '',
-    coverage ? `TCGplayer fallback: ${coverage.fallbackGroups.length} group(s)${files.includes(tcgplayer.coverageAsset(code)) ? ' (updated)' : ' (unchanged)'}.` : '',
+    failedSets.length ? `**Sets that failed to download (${failedSets.length})**, their published cards kept: ${failedSets.slice(0, 30).join(', ')}${failedSets.length > 30 ? ', …' : ''}.` : '',
+    carried.length ? `${carried.length} published card(s) not rebuilt this run kept their vectors.` : '',
+    coverage ? `TCGplayer fallback: ${coverage.fallbackGroups.length} group(s)${!coverageIsNew ? " (last week's, kept)" : files.includes(tcgplayer.coverageAsset(code)) ? ' (updated)' : ' (unchanged)'}.` : '',
   ].filter(s => s !== undefined));
 
   // Best effort: on Windows the open database keeps the folder until exit.
@@ -326,15 +385,18 @@ async function restore(key, { releaseAssets, segments }) {
   }
   const { ids, cat, dim } = segments.applySegments(decoded);
   let srcs = {};
+  let sets = null;
   try {
     const gz = await releaseAssets.fetchAsset(`${key}.state.json.gz`, { timeoutMs: 600000 });
-    srcs = JSON.parse(zlib.gunzipSync(gz).toString('utf8')).srcs || {};
+    const state = JSON.parse(zlib.gunzipSync(gz).toString('utf8'));
+    srcs = state.srcs || {};
+    sets = state.sets || null;
   } catch (e) {
     if (e.code !== 'ASSET_MISSING') throw e;
     // Without it every card re-embeds once: slow, not wrong.
     console.warn(`${key}: no ${key}.state.json.gz; every card will be embedded again`);
   }
-  return { manifest, ids, cat, dim, srcs };
+  return { manifest, ids, cat, dim, srcs, sets };
 }
 
 const args = parseArgs(process.argv.slice(2));

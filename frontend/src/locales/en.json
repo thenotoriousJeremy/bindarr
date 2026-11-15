@@ -2031,6 +2031,8 @@
   "catalog.releasesTitle": "Bindarr's catalogs",
   "catalog.releasesDesc": "Built every week from every card's artwork and published with Bindarr's releases. Each is one download, after which only the week's new cards are fetched, and every match names a card this install can show — cached or not.",
   "catalog.releasesUnavailable": "Unavailable",
+  "catalog.releaseOff": "Off",
+  "catalog.releaseOffHint": "This catalog names Pokémon cards by TCGdex id, and this install takes its Pokémon cards from another provider. It switches back on if TCGdex is selected again.",
   "catalog.releasesNotYet": "No catalogs are published yet. The model author's snapshots below work in the meantime.",
   "catalog.releasesError": "Could not reach the list of Bindarr's catalogs ({message}). The model author's snapshots below still work.",
   "catalog.thCards": "Cards",

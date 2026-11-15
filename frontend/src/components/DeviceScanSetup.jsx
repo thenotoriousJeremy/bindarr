@@ -1,6 +1,6 @@
 import { useState, useEffect, useSyncExternalStore } from 'react';
 import { Camera, Download, Trash2, Check } from 'lucide-react';
-import { subscribe, getSnapshot } from '../device/scanAssets';
+import { subscribe, getSnapshot, loadReleaseIndex } from '../device/scanAssets';
 import { downloadScanData, removeScanData, productMapStatus } from '../device/runtime';
 import { GAMES, isGameEnabled } from '../utils/games';
 import { useT } from '../utils/i18n';
@@ -19,6 +19,9 @@ const label = (game) => (GAMES.find(g => g.value === game) || { label: game }).l
 function DeviceScanSetup({ gate = false, children = null, showToast }) {
   const { t } = useT();
   const state = useSyncExternalStore(subscribe, getSnapshot);
+  // Bindarr's catalog list is fetched here, when scanning is looked at, and never
+  // at launch (device/scanAssets.js).
+  useEffect(() => { loadReleaseIndex(); }, []);
   const [productMap, setProductMap] = useState(null);
 
   // Only the model author's Pokémon snapshot names its matches through the product

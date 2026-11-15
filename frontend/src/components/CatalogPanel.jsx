@@ -186,13 +186,18 @@ function ReleaseCatalogsCard({ releases, onInstall, onRemove, busy, enginePresen
                           <Download size={14} /> {t('catalog.get')}
                         </button>
                       )}
-                      {c.installed && c.upToDate === false && (
+                      {c.installed && !c.disabled && c.upToDate === false && (
                         <button type="button" className="btn btn-primary btn-sm" disabled={busy}
                           onClick={() => onInstall([c.key])} style={BTN}>
                           <RefreshCw size={14} /> {t('catalog.update')}
                         </button>
                       )}
-                      {c.installed && c.upToDate !== false && (
+                      {c.installed && c.disabled && (
+                        <span style={{ color: 'var(--accent-yellow)', fontSize: '0.8rem' }} title={t('catalog.releaseOffHint')}>
+                          {t('catalog.releaseOff')}
+                        </span>
+                      )}
+                      {c.installed && !c.disabled && c.upToDate !== false && (
                         <span style={{ color: 'var(--type-grass)', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
                           <Check size={14} /> {t('catalog.installed')}
                         </span>
@@ -917,7 +922,9 @@ export default function CatalogPanel({ showToast }) {
       {/* The model author's snapshots: shown when Bindarr's own list cannot be
           reached, or when one of them is already installed (so it can be seen,
           and its product map still managed). */}
-      {(!releases?.published || (engine?.catalogs || []).some(c => c.present)) && <ReadyMadeCard
+      {(!releases?.published || (engine?.catalogs || []).some(c => c.present)
+        || (engine?.catalogs || []).some(c => isGameEnabled(c.game)
+          && !(releases?.catalogs || []).some(r => r.game === c.game && !r.disabled))) && <ReadyMadeCard
         n={releases ? '2b' : '2'}
         engine={engine}
         onDownload={download}

@@ -401,8 +401,10 @@ repository's CI from every card's artwork and published to its
 [`scan-catalogs` release](https://github.com/thenotoriousJeremy/bindarr/releases/tag/scan-catalogs).
 After that the server checks once a day and downloads only the new cards, usually
 a few hundred kilobytes a week. Every row is a Bindarr card id, so a match always
-names a card, even one this install has never cached. `CATALOG_AUTO_UPDATE=0`
-turns the daily check off; `CATALOG_RELEASE_URL` points it at a mirror.
+names a card, even one this install has never cached. The Pokémon catalogs use
+TCGdex's card ids, so they are offered only while TCGdex is your Pokémon data
+provider. `CATALOG_AUTO_UPDATE=0` turns the daily check off; `CATALOG_RELEASE_URL`
+points it at a mirror, and `CATALOG_RELEASE_URL=off` turns the downloads off.
 
 You can also build one per game and language on the same page: it downloads that
 game's card list and fingerprints every card's artwork — hours for a full English

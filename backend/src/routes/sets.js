@@ -38,8 +38,9 @@ router.get('/', async (req, res) => {
       try {
         // Plus the sets TCGdex does not serve in this language, from TCGplayer
         // (Japanese: most of them). English ones are in the `sets` table already.
+        // Brought up to date in the background; this list is what is cached now.
         const fallback = require('../pokemonTcgplayer');
-        await fallback.ensure(lang);
+        fallback.ensure(lang).catch(() => {});
         return res.json([...await require('../tcgdexApi').listSets(lang), ...await fallback.fallbackSets(lang)]);
       } catch (err) {
         console.error(`Failed to fetch ${lang} Pokémon sets from TCGdex:`, err.message);
@@ -51,8 +52,9 @@ router.get('/', async (req, res) => {
     // here: the list is a convenience and searching still says what is wrong.
     if (game === 'riftbound') await require('../riftcodexApi').ensureCatalogue().catch(() => {});
     // English Pokémon sets TCGdex lacks (World Championship decks, Prize Pack...)
-    // are written into `sets` from TCGplayer on first use.
-    if (game === 'pokemon') await require('../pokemonTcgplayer').ensure('English').catch(() => {});
+    // are written into `sets` from TCGplayer, in the background: this list is
+    // what is cached now, and opening Add Cards never waits on a download.
+    if (game === 'pokemon') require('../pokemonTcgplayer').ensure('English').catch(() => {});
     // The TCGplayer-catalogue games build their set list from TCGCSV on first use.
     if (require('../tcgcsvGameApi').isTcgcsvGame(game)) {
       await require('../tcgcsvGameApi').ensureCatalogue(game).catch(() => {});

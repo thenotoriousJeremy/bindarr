@@ -47,6 +47,9 @@ let snapshots = [];           // the model author's .npz catalogs
 let release = null;           // { base, segments, model } from the bundled backend
 let index = null;             // the release's catalogs.json, once fetched
 let installed = new Map();    // game -> the state of its release catalog here
+// Games whose release catalog does not fit this phone's card ids: Pokémon when the
+// phone takes its Pokémon cards from another provider than TCGdex (release.fits).
+let unfit = new Set();
 let present = new Set();      // model and .npz files on disk at their exact size
 let busy = null;              // { name, fraction } while a download runs
 let error = null;
@@ -68,8 +71,8 @@ function catalogList() {
   ]);
   return [...games].map((game) => {
     const npz = snapshotFor(game) || null;
-    const rel = offered(game);
-    const mine = installed.get(game) || null;
+    const rel = unfit.has(game) ? null : offered(game);
+    const mine = unfit.has(game) ? null : installed.get(game) || null;
     return {
       game,
       name: npz ? npz.name : null,
@@ -98,10 +101,11 @@ export const subscribe = (fn) => { listeners.add(fn); return () => listeners.del
 export const getSnapshot = () => snapshot;
 
 export const modelsReady = () => models.length > 0 && models.every(m => present.has(m.name));
-export const catalogReady = (game) => installed.has(game) || (!!snapshotFor(game) && present.has(snapshotFor(game).name));
+const releaseReady = (game) => installed.has(game) && !unfit.has(game);
+export const catalogReady = (game) => releaseReady(game) || (!!snapshotFor(game) && present.has(snapshotFor(game).name));
 // True when the game scans from a release catalog (keyed by card ids, so no
 // product map is needed to name a match).
-export const isReleaseCatalog = (game) => installed.has(game);
+export const isReleaseCatalog = (game) => releaseReady(game);
 
 async function sizeOf(name) {
   try {
@@ -182,10 +186,14 @@ async function moveFromOldHome(names) {
   await Filesystem.rmdir({ path: DIR, directory: OLD_HOME, recursive: true }).catch(() => {});
 }
 
-// What the release offers, for sizes and dates before anything is downloaded. Not
-// awaited at startup: a phone offline at launch still opens, and still scans.
-async function loadIndex() {
-  if (!release) return;
+// What the release offers, for sizes and dates before anything is downloaded.
+// Asked for by the scan-setup screen when it opens (DeviceScanSetup), never at
+// launch: nothing goes to GitHub until the owner looks at scanning. Once is enough
+// per launch.
+let indexAsked = false;
+export async function loadReleaseIndex() {
+  if (!release || !supported || indexAsked) return;
+  indexAsked = true;
   try {
     const res = await fetch(`${release.base}/catalogs.json`, { cache: 'no-store' });
     if (!res.ok) return;
@@ -194,7 +202,18 @@ async function loadIndex() {
       index = { ...j, catalogs: j.catalogs.filter(c => c.model === release.model) };
       emit();
     }
-  } catch { /* the snapshots are still offered */ }
+  } catch { indexAsked = false; /* the snapshots are still offered; asked again next time */ }
+}
+
+// Which release catalogs fit this phone (release.fits, from the bundled backend).
+async function checkFit() {
+  const next = new Set();
+  if (release && release.fits) {
+    for (const game of new Set([...snapshots.map(c => c.game), ...installed.keys(), 'pokemon'])) {
+      if (!(await release.fits(game).catch(() => true))) next.add(game);
+    }
+  }
+  unfit = next;
 }
 
 export async function initScanAssets({ MODELS, CATALOGS, release: rel }) {
@@ -205,7 +224,8 @@ export async function initScanAssets({ MODELS, CATALOGS, release: rel }) {
   if (!supported) error = NO_SIMD_MESSAGE;
   await moveFromOldHome([...MODELS, ...CATALOGS].map(a => a.name)).catch(err => console.warn('Scan data move failed:', err));
   await refresh();
-  if (supported) loadIndex();
+  await checkFit();
+  emit();
 }
 
 // The descriptors come from modelAssets.js, which pins each file to one Hugging
@@ -265,7 +285,10 @@ function downloadAsset(asset) {
 // A new generation downloads beside the old one, which keeps answering until the
 // new state is written. False when the release has no catalog for the game.
 async function syncRelease(game) {
-  if (!release) return false;
+  if (!release || unfit.has(game)) return false;
+  // A segment's SHA-256 is what stands between a bad download and a catalog that
+  // scores every card wrong: without WebCrypto to check it, nothing is installed.
+  if (!globalThis.crypto?.subtle) throw new Error('this WebView cannot verify downloads (no WebCrypto)');
   const key = keyFor(game);
   const res = await fetch(`${release.base}/${key}.json`, { cache: 'no-store' });
   if (res.status === 404) return false;
@@ -281,7 +304,8 @@ async function syncRelease(game) {
     busy = { name: s.name, fraction: 0 };
     emit();
     const data = await downloadTo(`${release.base}/${s.name}`, s.name, s.bytes, { sha256: s.sha256 });
-    release.segments.decodeSegment(data || await readBytes(s.name));   // refuses anything that would not load
+    if (!data) throw new Error(`${s.name} could not be verified`);
+    release.segments.decodeSegment(data);   // refuses anything that would not load
   }
   const state = {
     key, game, generation: manifest.generation, model: manifest.model, rows: manifest.rows,
@@ -307,6 +331,7 @@ export async function downloadForGame(game) {
     throw Object.assign(new Error(NO_SIMD_MESSAGE), { code: 'noWasmSimd' });
   }
   error = null;
+  await checkFit();
   try {
     for (const m of models.filter(a => !present.has(a.name))) {
       busy = { name: m.name, fraction: 0 };
@@ -352,8 +377,10 @@ export async function downloadForGame(game) {
 // the scanner). Quiet on failure: scanning keeps the catalog it has.
 export async function updateReleases({ force = false } = {}) {
   if (busy || !release || !supported) return false;
+  await checkFit();
   let changed = false;
   for (const [game, s] of [...installed]) {
+    if (unfit.has(game)) continue;
     if (!force && Date.now() - (s.checkedAt || 0) < RECHECK_MS) continue;
     try {
       const before = s.segments.map(x => x.name).join();
@@ -404,7 +431,7 @@ export async function readBytes(name) {
 // A catalog in the shape cvScan's device source hands back. `local` says the ids
 // are card ids (a release catalog) rather than the snapshot's provider ids.
 export async function loadCatalog(game) {
-  const mine = installed.get(game);
+  const mine = releaseReady(game) ? installed.get(game) : null;
   if (mine) {
     const decoded = [];
     for (const s of mine.segments) decoded.push(release.segments.decodeSegment(await readBytes(s.name)));

@@ -97,8 +97,12 @@ const state = () => (current ? {
   done: current.done, total: current.total, message: current.message,
   // So the panel can say WHICH sets are building rather than implying the whole game.
   sets: current.sets,
-  // Sets the cache phase found no card data for (a release build reports them).
+  // What the cache phase did, set by set: fetched, found no card data for, or
+  // failed to fetch (a network error, a 5xx). The release build trusts a removal
+  // only from a set it fetched (scripts/scan-catalogs/build.mjs).
+  fetchedSets: current.fetchedSets || [],
   skipped: current.skipped || [],
+  failedSets: current.failedSets || [],
   startedAt: current.startedAt, cancelled: current.cancelled,
 } : null);
 
@@ -878,7 +882,9 @@ function start(game, lang = 'English', opts = {}) {
   currentRun = (async () => {
     try {
       const cached = opts.skipCache ? newOutcome() : await cachePhase(job);
+      job.fetchedSets = [...cached.ok];
       job.skipped = [...cached.gapIds];
+      job.failedSets = [...cached.failedIds];
       // cacheOnly: the release build (scripts/scan-catalogs/build.mjs) caches every
       // set first, adds rows of its own, then embeds with skipCache.
       const embedded = opts.cacheOnly || (job.cancelled && !opts.keepGoing) ? null : await embedPhase(job);
@@ -890,7 +896,8 @@ function start(game, lang = 'English', opts = {}) {
       }
       // Say what was skipped and why, or a build that could not touch 46 listed sets
       // reports success and leaves the user wondering why the coverage did not move.
-      const skipped = cached.gaps ? `, ${cached.gaps} set(s) skipped — no card data upstream` : '';
+      const skipped = (cached.gaps ? `, ${cached.gaps} set(s) skipped — no card data upstream` : '')
+        + (cached.failed ? `, ${cached.failed} set(s) failed to download` : '');
       const keptNote = embedded && embedded.kept ? `, ${embedded.kept} kept from the previous build` : '';
       job.message = embedded
         ? `${embedded.rows || 0} cards embedded (${embedded.built} new, ${embedded.reused} reused, ${embedded.failed} failed${keptNote})${skipped}`
@@ -928,7 +935,7 @@ function autoUpdates(catalogs) {
   return (catalogs || [])
     .filter(c => c.built && Array.isArray(c.pending) && c.pending.length)
     .sort((a, b) => String(a.built.builtAt || '').localeCompare(String(b.built.builtAt || '')))
-    .map(c => ({ game: c.game, lang: c.lang, newSets: c.newSets, sets: c.pending }));
+    .map(c => ({ game: c.game, lang: c.lang, newSets: c.newSets, sets: c.pending, scope: c.built.scope || null }));
 }
 
 // Sets a built catalog already covers that have grown since. setsBehind counts a
@@ -978,6 +985,10 @@ async function grownSets(game, lang, { scope = null } = {}) {
   const out = [];
   for (const [sid, e] of per) {
     if (inScope && !inScope.has(sid)) continue;
+    // Pokémon's TCGplayer-only sets are written from the TCGCSV cache
+    // (pokemonTcgplayer.js), not walked from TCGdex: re-walking one asks TCGdex
+    // for a set it has never had.
+    if (sid.startsWith('tcgp-')) continue;
     if (!unfinished(e)) continue;
     const c = checks.get(sid);
     if (c && c.sig === signature(e) && c.tries >= GROWTH_GIVE_UP) continue;
@@ -1012,8 +1023,9 @@ async function recordSetChecks(job) {
 
 // autoUpdates over the live list, with each catalog's grown sets added to what it
 // is missing. A new Magic release is listed by its root code (setUniverse); its
-// tokens, promos and art cards are their own codes beneath it, so the build is sent
-// the whole family.
+// tokens, promos and art cards are their own codes beneath it, so a whole-game
+// catalog's build is sent the whole family. A scoped catalog is built as exactly
+// its own codes: the user may have left a release's tokens out on purpose.
 async function behindCatalogs() {
   const rows = await list();
   for (const c of rows) {
@@ -1023,7 +1035,7 @@ async function behindCatalogs() {
   }
   const out = autoUpdates(rows);
   for (const c of out) {
-    if (c.game !== 'mtg') continue;
+    if (c.game !== 'mtg' || c.scope) continue;
     const codes = new Set();
     for (const root of c.sets) for (const code of await cardSets.mtgFamilyCodes(root)) codes.add(setKey(code));
     c.sets = [...codes];

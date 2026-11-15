@@ -24,14 +24,27 @@ fs.writeFileSync(path.join(MODELS, 'cornelius.onnx'), 'x');
 fs.writeFileSync(path.join(MODELS, 'milo.onnx'), 'x');
 
 const requests = [];
+const streamed = new Set();   // files served chunked, with no Content-Length
 const server = http.createServer((req, res) => {
   const name = decodeURIComponent(req.url.slice(1));
   requests.push(name);
   const file = path.join(REL, name);
   if (!name || name.includes('/') || !fs.existsSync(file)) { res.writeHead(404); res.end('Not Found'); return; }
+  const data = fs.readFileSync(file);
+  if (streamed.has(name)) {
+    res.writeHead(200, { 'Transfer-Encoding': 'chunked' });
+    res.write(data.subarray(0, data.length >> 1));
+    res.end(data.subarray(data.length >> 1));
+    return;
+  }
   res.writeHead(200);
-  res.end(fs.readFileSync(file));
+  res.end(data);
 });
+
+// The Pokémon provider, as catalogReleases.fitsInstall asks it.
+const pokemonProvider = require('../src/utils/pokemonProvider');
+let onTcgdex = true;
+pokemonProvider.usesTcgdex = async () => onTcgdex;
 
 const segments = require('../src/utils/catalogSegments');
 const DIM = 8;
@@ -63,9 +76,14 @@ function publish(key, generation, segs, { model = 'milo1', tamper = null, missin
     : segments.encodeSegment({ key, game, lang: 'English', model, dim: DIM, generation, seq: s.seq, base: s.base, ids: s.ids, vectors: rows(s.ids), removes: s.removes || [] }))));
   const manifest = { format: 1, key, game, lang: 'English', model, dim: DIM, generation, rows: applied.rows, updatedAt: new Date().toISOString(), segments: entries };
   fs.writeFileSync(path.join(REL, `${key}.json`), JSON.stringify(manifest));
-  fs.writeFileSync(path.join(REL, 'catalogs.json'), JSON.stringify({
-    format: 1, catalogs: [{ key, game, lang: 'English', model, dim: DIM, generation, rows: applied.rows, segments: entries.length, bytes: entries.reduce((n, e) => n + e.bytes, 0), updatedAt: manifest.updatedAt }],
-  }));
+  const indexFile = path.join(REL, 'catalogs.json');
+  let index = { format: 1, catalogs: [] };
+  try { index = JSON.parse(fs.readFileSync(indexFile, 'utf8')); } catch { /* the first catalog */ }
+  index.catalogs = index.catalogs.filter(c => c.key !== key).concat({
+    key, game, lang: 'English', model, dim: DIM, generation, rows: applied.rows, segments: entries.length,
+    bytes: entries.reduce((n, e) => n + e.bytes, 0), updatedAt: manifest.updatedAt,
+  });
+  fs.writeFileSync(indexFile, JSON.stringify(index));
   return manifest;
 }
 
@@ -130,6 +148,20 @@ async function main() {
   await releases.updateInstalled();
   assert.deepStrictEqual(requests, ['lorcana-en.json']);
 
+  // A segment the install lost since — cut short, or deleted — is downloaded
+  // again, and only that one.
+  const installedDir = path.join(releases.ROOT, 'lorcana-en');
+  fs.writeFileSync(path.join(installedDir, 'lorcana-en.g1.0.seg'), 'cut short');
+  requests.length = 0;
+  last = await releases.updateInstalled();
+  assert.strictEqual(last.phase, 'done', last.message);
+  assert.deepStrictEqual(requests, ['lorcana-en.json', 'lorcana-en.g1.0.seg']);
+  fs.rmSync(path.join(installedDir, 'lorcana-en.g1.1.seg'));
+  requests.length = 0;
+  last = await releases.updateInstalled();
+  assert.deepStrictEqual(requests, ['lorcana-en.json', 'lorcana-en.g1.1.seg']);
+  assert.deepStrictEqual(releases.load('lorcana', 'English').ids, ['lorcana-1', 'lorcana-3', 'lorcana-4']);
+
   // 3. A segment that does not match its manifest is refused, and the catalog
   // already installed keeps working.
   publish('lorcana-en', 1, [
@@ -143,6 +175,26 @@ async function main() {
   assert.ok(!fs.existsSync(path.join(releases.ROOT, 'lorcana-en', 'lorcana-en.g1.2.seg')), 'a refused segment is not kept');
   assert.deepStrictEqual(releases.load('lorcana', 'English').ids, ['lorcana-1', 'lorcana-3', 'lorcana-4']);
 
+  // A segment bigger than its manifest says is refused as it arrives, whether the
+  // response declares its length or streams without one.
+  const g12 = 'lorcana-en.g1.2.seg';
+  publish('lorcana-en', 1, [
+    { seq: 0, base: true, ids: ['lorcana-1', 'lorcana-2', 'lorcana-3'] },
+    { seq: 1, base: false, ids: ['lorcana-4'], removes: ['lorcana-2'] },
+    { seq: 2, base: false, ids: ['lorcana-5'] },
+  ]);
+  fs.appendFileSync(path.join(REL, g12), Buffer.alloc(4096));
+  last = await releases.updateInstalled();
+  assert.strictEqual(last.phase, 'error');
+  assert.match(last.message, /larger than the \d+ bytes expected/);
+  streamed.add(g12);
+  last = await releases.updateInstalled();
+  assert.strictEqual(last.phase, 'error');
+  assert.match(last.message, /larger than the \d+ bytes expected/, 'without a Content-Length too');
+  streamed.delete(g12);
+  assert.ok(!fs.existsSync(path.join(installedDir, g12)), 'nothing of it is kept');
+  assert.deepStrictEqual(releases.load('lorcana', 'English').ids, ['lorcana-1', 'lorcana-3', 'lorcana-4']);
+
   // 4. A catalog for another scan model is refused.
   publish('lorcana-en', 9, [{ seq: 0, base: true, ids: ['lorcana-9'] }], { model: 'milo2' });
   last = await releases.updateInstalled();
@@ -150,7 +202,11 @@ async function main() {
   assert.match(last.message, /scan model milo2/);
   assert.deepStrictEqual(releases.load('lorcana', 'English').ids, ['lorcana-1', 'lorcana-3', 'lorcana-4']);
 
-  // 5. A new generation: the new base only, the old files go.
+  // 5. A new generation: the new base only, the old files go. What an earlier
+  // failed attempt left beside it is not trusted, and not carried over.
+  const nextDir = path.join(releases.ROOT, 'lorcana-en.next');
+  fs.mkdirSync(nextDir, { recursive: true });
+  fs.writeFileSync(path.join(nextDir, 'left-over.tmp'), 'from a crash');
   publish('lorcana-en', 2, [{ seq: 0, base: true, ids: ['lorcana-1', 'lorcana-3', 'lorcana-4', 'lorcana-5'] }]);
   requests.length = 0;
   last = await releases.updateInstalled();
@@ -169,6 +225,7 @@ async function main() {
   last = await releases.updateInstalled();
   assert.strictEqual(last.phase, 'error');
   assert.strictEqual(releases.load('lorcana', 'English').generation, 2, 'the old generation still answers');
+  assert.ok(!fs.existsSync(nextDir), 'and the half-downloaded one is not left on disk');
 
   // The scanner loads it as a catalog keyed by card ids.
   publish('lorcana-en', 4, [{ seq: 0, base: true, ids: ['lorcana-1', 'lorcana-2'] }]);
@@ -182,6 +239,49 @@ async function main() {
   assert.throws(() => releases.remove('../models'), /not a catalog/);
   assert.throws(() => releases.start(['../models']), /no catalog to download/);
   assert.strictEqual(releases.keyFor('pokemon', 'Japanese'), 'pokemon-ja');
+
+  // 8. A Pokémon catalog names cards by TCGdex id: it is used only while TCGdex is
+  // this install's Pokémon provider.
+  publish('pokemon-en', 1, [{ seq: 0, base: true, ids: ['tcgdex-en-sv01-001', 'tcgdex-en-sv01-002'] }]);
+  last = await run(releases, ['pokemon-en']);
+  assert.strictEqual(last.phase, 'done', last.message);
+  assert.strictEqual(releases.isInstalled('pokemon', 'English'), true);
+  assert.strictEqual(cvScan.isBuilt('pokemon', 'English'), true);
+
+  // The install moves to pokemontcg.io: the catalog is switched off — the scanner
+  // stops using it and the weekly update skips it — but stays listed, to remove.
+  onTcgdex = false;
+  await releases.applyProvider();
+  assert.strictEqual(releases.isInstalled('pokemon', 'English'), false);
+  assert.strictEqual(releases.load('pokemon', 'English'), null);
+  assert.strictEqual(cvScan.isBuilt('pokemon', 'English'), false, 'the scanner does not use it');
+  status = await releases.status({ fresh: true });
+  let pokemonRow = status.catalogs.find(c => c.key === 'pokemon-en');
+  assert.ok(pokemonRow && pokemonRow.installed && pokemonRow.disabled, 'listed, as switched off');
+  assert.strictEqual(pokemonRow.upToDate, false);
+  requests.length = 0;
+  assert.deepStrictEqual(await releases.updateInstalled(), { skipped: 'none installed' });
+  assert.deepStrictEqual(requests, [], 'the weekly update leaves it alone');
+  last = await run(releases, ['pokemon-en']);
+  assert.strictEqual(last.phase, 'error', 'and it cannot be downloaded again');
+  assert.match(last.message, /TCGdex/);
+
+  // Back on TCGdex, it answers again, as it was.
+  onTcgdex = true;
+  await releases.applyProvider();
+  assert.strictEqual(releases.isInstalled('pokemon', 'English'), true);
+  assert.deepStrictEqual(releases.load('pokemon', 'English').ids, ['tcgdex-en-sv01-001', 'tcgdex-en-sv01-002']);
+
+  // Removed while off TCGdex, it is not offered at all; on TCGdex, it is.
+  onTcgdex = false;
+  await releases.applyProvider();
+  assert.strictEqual(releases.remove('pokemon-en'), true);
+  status = await releases.status({ fresh: true });
+  assert.ok(!status.catalogs.some(c => c.key === 'pokemon-en'), 'not offered to an install off TCGdex');
+  onTcgdex = true;
+  status = await releases.status({ fresh: true });
+  pokemonRow = status.catalogs.find(c => c.key === 'pokemon-en');
+  assert.ok(pokemonRow && !pokemonRow.installed && !pokemonRow.disabled, 'offered on TCGdex');
 }
 
 main().then(() => {
@@ -189,7 +289,9 @@ main().then(() => {
 }).catch((err) => {
   console.error(err);
   process.exitCode = 1;
-}).finally(() => {
+}).finally(async () => {
   server.close();
+  // pokemonProvider opened the database; closed first, or Windows keeps the file.
+  try { await new Promise(ok => require('../src/db').dbConnection.close(ok)); } catch { /* already closed */ }
   try { fs.rmSync(ROOT, { recursive: true, force: true }); } catch { /* a temp folder */ }
 });

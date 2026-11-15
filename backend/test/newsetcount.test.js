@@ -179,9 +179,9 @@ async function main() {
     { game: 'lorcana', lang: 'Japanese', newSets: 0, pending: ['14'], built: at('05') },
   ];
   assert.deepStrictEqual(autoUpdates(listed), [
-    { game: 'mtg', lang: 'English', newSets: 1, sets: ['fdn'] },
-    { game: 'lorcana', lang: 'Japanese', newSets: 0, sets: ['14'] },
-    { game: 'pokemon', lang: 'English', newSets: 3, sets: ['sv09', 'sv10', 'sv11'] },
+    { game: 'mtg', lang: 'English', newSets: 1, sets: ['fdn'], scope: ['fdn', 'blb'] },
+    { game: 'lorcana', lang: 'Japanese', newSets: 0, sets: ['14'], scope: null },
+    { game: 'pokemon', lang: 'English', newSets: 3, sets: ['sv09', 'sv10', 'sv11'], scope: null },
   ]);
   listed[1].built.builtAt = '2026-11-15T00:00:00.000Z';   // just rebuilt: to the back of the line
   assert.deepStrictEqual(autoUpdates(listed).map(c => c.game), ['lorcana', 'pokemon', 'mtg']);

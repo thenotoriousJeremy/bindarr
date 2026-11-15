@@ -288,8 +288,9 @@ async function runSearch(nameQuery = '', numberQuery = '', setQuery = '', scope 
   };
 
   // The cards TCGdex does not have (TCGplayer-only, pokemonTcgplayer.js) live in the
-  // same cache, so they answer the local query below. Cheap once current.
-  await require('./pokemonTcgplayer').ensure(langName);
+  // same cache, so they answer the local query below. Brought up to date in the
+  // background: this search serves what is cached, and never waits on it.
+  require('./pokemonTcgplayer').ensure(langName).catch(() => {});
 
   let localResults = [];
   if (scope !== 'internet') {

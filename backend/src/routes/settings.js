@@ -228,6 +228,8 @@ router.put('/', requireAdmin, async (req, res) => {
           await source.fetchAndCacheSets(true);
           await require('../utils/compartmentSort').loadSetsCache(db);
           require('../tcgplayerCatalog').start();
+          // Bindarr's Pokémon scan catalog is keyed by TCGdex ids: on with it, off without.
+          await require('../catalogReleases').applyProvider();
         } catch (e) {
           console.error(`Provider switch follow-up failed: ${e.message}`);
         }
