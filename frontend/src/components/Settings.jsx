@@ -11,6 +11,7 @@ import { REPO_URL } from '../utils/repo';
 import { saveFile } from '../utils/saveFile';
 import NotificationSettings from './NotificationSettings';
 import { isDeviceMode } from '../apiBase';
+import { tradesEnabledFor } from '../utils/tradeAccess';
 import InstanceSettings from './InstanceSettings';
 import PreconImportModal from './PreconImportModal';
 import NavTabsSettings from './NavTabsSettings';
@@ -85,6 +86,25 @@ function KeyField({ id, label, hint, link, linkLabel, configured, value, onChang
   );
 }
 
+// One on/off setting: its name, a line saying what it does, and the switch
+// (.switch-control in index.css).
+function SettingsSwitch({ label, hint, checked, onChange, disabled }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', background: 'var(--surface-1)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+      <div>
+        <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.95rem' }}>{label}</div>
+        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{hint}</div>
+      </div>
+      <label className="switch-control">
+        <input type="checkbox" checked={checked} aria-label={label} onChange={(e) => onChange(e.target.checked)} disabled={disabled} />
+        <span className={`switch-slider ${checked ? 'active' : ''}`}>
+          <span className="switch-knob" />
+        </span>
+      </label>
+    </div>
+  );
+}
+
 // onDataChanged: an import, restore or precon import wrote cards, so the other
 // open tabs (and useApi's cache) must refetch.
 function Settings({ user, onUpdateUser, showToast, onLeaveDevice, onDataChanged }) {
@@ -102,6 +122,8 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice, onDataChanged 
   const [shareLocations, setShareLocations] = useState(user?.share_locations === 1);
   const [shareLoading, setShareLoading] = useState(false);
   const [containers, setContainers] = useState([]);
+  const [tradesEnabled, setTradesEnabled] = useState(() => tradesEnabledFor(user));
+  const [tradesLoading, setTradesLoading] = useState(false);
 
   // New values typed for the provider keys, not the saved ones -- the server never
   // sends those (see KeyField). Empty means "keep what is saved".
@@ -326,6 +348,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice, onDataChanged 
     if (user) {
       setShareEnabled(user.share_enabled === 1 || user.share_enabled === true);
       setShareLocations(user.share_locations === 1 || user.share_locations === true);
+      setTradesEnabled(tradesEnabledFor(user));
     }
   }, [user]);
 
@@ -433,6 +456,35 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice, onDataChanged 
       showToast(t('settings.errLocationsGeneric'));
     } finally {
       setShareLoading(false);
+    }
+  };
+
+  // The same save as the two sharing switches, and the same way back into the
+  // stored profile (onUpdateUser), so Trades & Gifts follows at once.
+  const handleTradesToggle = async (checked) => {
+    setTradesEnabled(checked);
+    setTradesLoading(true);
+    try {
+      const response = await fetch('/api/auth/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trades_enabled: checked })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        onUpdateUser(data.user);
+        showToast(t(checked ? 'settings.tradesOn' : 'settings.tradesOff'));
+      } else {
+        setTradesEnabled(!checked);
+        const data = await response.json().catch(() => null);
+        showToast(apiErrorText(t, data, 'settings.errTrades'));
+      }
+    } catch (err) {
+      console.error(err);
+      setTradesEnabled(!checked);
+      showToast(t('settings.errTradesGeneric'));
+    } finally {
+      setTradesLoading(false);
     }
   };
 
@@ -607,41 +659,13 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice, onDataChanged 
               <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem' }}>{t('settings.sharingTitle')}</h3>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-              <div>
-                <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.95rem' }}>{t('settings.shareLibrary')}</div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{t('settings.shareLibraryHint')}</div>
-              </div>
-              <label className="switch-control" style={{ position: 'relative', display: 'inline-block', width: '46px', height: '24px' }}>
-                <input 
-                  type="checkbox" 
-                  checked={shareEnabled} 
-                  aria-label={t('settings.shareLibrary')}
-                  onChange={(e) => handleShareToggle(e.target.checked)}
-                  disabled={shareLoading}
-                  style={{ opacity: 0, width: 0, height: 0 }}
-                />
-                <span className={`switch-slider ${shareEnabled ? 'active' : ''}`} style={{
-                  position: 'absolute',
-                  cursor: 'pointer',
-                  top: 0, left: 0, right: 0, bottom: 0,
-                  backgroundColor: shareEnabled ? 'var(--type-grass)' : '#334155',
-                  transition: '0.3s',
-                  borderRadius: '24px'
-                }}>
-                  <span style={{
-                    position: 'absolute',
-                    height: '18px', width: '18px',
-                    left: shareEnabled ? '24px' : '4px',
-                    bottom: '3px',
-                    backgroundColor: '#fff',
-                    transition: '0.3s',
-                    borderRadius: '50%',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
-                  }}></span>
-                </span>
-              </label>
-            </div>
+            <SettingsSwitch
+              label={t('settings.shareLibrary')}
+              hint={t('settings.shareLibraryHint')}
+              checked={shareEnabled}
+              onChange={handleShareToggle}
+              disabled={shareLoading}
+            />
 
             {shareEnabled && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem' }}>
@@ -709,41 +733,13 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice, onDataChanged 
                   })}
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                  <div>
-                    <div style={{ fontWeight: 700, color: 'var(--text-strong)', fontSize: '0.95rem' }}>{t('settings.showLocations')}</div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{t('settings.showLocationsHint')}</div>
-                  </div>
-                  <label className="switch-control" style={{ position: 'relative', display: 'inline-block', width: '46px', height: '24px' }}>
-                    <input
-                      type="checkbox"
-                      checked={shareLocations}
-                      aria-label={t('settings.showLocations')}
-                      onChange={(e) => handleLocationsToggle(e.target.checked)}
-                      disabled={shareLoading}
-                      style={{ opacity: 0, width: 0, height: 0 }}
-                    />
-                    <span className={`switch-slider ${shareLocations ? 'active' : ''}`} style={{
-                      position: 'absolute',
-                      cursor: 'pointer',
-                      top: 0, left: 0, right: 0, bottom: 0,
-                      backgroundColor: shareLocations ? 'var(--type-grass)' : '#334155',
-                      transition: '0.3s',
-                      borderRadius: '24px'
-                    }}>
-                      <span style={{
-                        position: 'absolute',
-                        height: '18px', width: '18px',
-                        left: shareLocations ? '24px' : '4px',
-                        bottom: '3px',
-                        backgroundColor: '#fff',
-                        transition: '0.3s',
-                        borderRadius: '50%',
-                        boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
-                      }}></span>
-                    </span>
-                  </label>
-                </div>
+                <SettingsSwitch
+                  label={t('settings.showLocations')}
+                  hint={t('settings.showLocationsHint')}
+                  checked={shareLocations}
+                  onChange={handleLocationsToggle}
+                  disabled={shareLoading}
+                />
 
                 {/* A container link opens that binder or box as itself — pockets
                     and pages, or box rows — rather than as a flat card list, which
@@ -791,6 +787,16 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice, onDataChanged 
                 <span>{t('settings.privateNotice')}</span>
               </div>
             )}
+
+            {/* Trading with other members is opt-in. Off, nobody can find you
+                in Trades & Gifts or send you offers, and you cannot send any. */}
+            <SettingsSwitch
+              label={t('settings.allowTrades')}
+              hint={t('settings.allowTradesHint')}
+              checked={tradesEnabled}
+              onChange={handleTradesToggle}
+              disabled={tradesLoading}
+            />
           </div>
         )}
 

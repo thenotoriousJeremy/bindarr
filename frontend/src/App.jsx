@@ -12,6 +12,7 @@ import { useStableCallback } from './utils/useStableCallback';
 import { clearApiCache } from './utils/useApi';
 import { isAbortError } from './utils/request';
 import { isNative, isDeviceMode, setDeviceMode } from './apiBase';
+import { offersTradeShortcuts } from './utils/tradeAccess';
 import { parseOidcReturn, takeVerifier } from './utils/nativeOidc';
 import { isSessionExpired } from './utils/sessionExpiry';
 import { loadStoredUser, saveStoredUser } from './utils/storedUser';
@@ -630,6 +631,12 @@ function App() {
   // Settings (see InstanceSettings).
   const deviceMode = isDeviceMode();
   const showAdmin = user.role === 'admin' && !deviceMode;
+  // "Propose trade" on a card or sealed unit starts an offer to another member,
+  // and a phone on its own has none (utils/tradeAccess). Its deals with people
+  // outside Bindarr are still under Add/Remove Cards > Trades & Gifts.
+  const tradeShortcuts = offersTradeShortcuts({ deviceMode });
+  const proposeCardTrade = tradeShortcuts ? openTradeComposer : undefined;
+  const proposeSealedTrade = tradeShortcuts ? openSealedTradeComposer : undefined;
   const barTabs = navBarTabs(user.nav_tabs, { activeTab });
   const litTab = litNavTab(activeTab, barTabs);
   // What the bar leaves out, under More (utils/navTabs.js).
@@ -659,9 +666,9 @@ function App() {
     const active = tab === activeTab;
     switch (tab === 'admin' && !showAdmin ? 'dashboard' : tab) {
       case 'dashboard':
-        return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} onProposeTrade={openTradeComposer} onViewTrade={openTradeHistory} />;
+        return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} onProposeTrade={proposeCardTrade} onViewTrade={openTradeHistory} />;
       case 'add-cards':
-        return <AddCards active={active} user={user} onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab}
+        return <AddCards active={active} user={user} onAddSuccess={triggerRefresh} onUpdateUser={handleUpdateUser} showToast={showToast} setActiveTab={goTab}
           transferLaunch={transferLaunch} transferHistoryFocus={transferHistoryFocus}
           onInitialOfferHandled={clearTransferLaunch} onHistoryFocusHandled={clearTradeHistoryFocus} />;
       case 'collection':
@@ -677,7 +684,7 @@ function App() {
             onNavigate={goTab}
             setSelectedLocationId={setSelectedLocationId}
             setFocusEntryId={setFocusEntryId}
-            onProposeTrade={openTradeComposer}
+            onProposeTrade={proposeCardTrade}
             onViewTrade={openTradeHistory}
           />
         );
@@ -692,7 +699,7 @@ function App() {
             setSelectedLocationId={setSelectedLocationId}
             focusEntryId={focusEntryId}
             setFocusEntryId={setFocusEntryId}
-            onProposeTrade={openTradeComposer}
+            onProposeTrade={proposeCardTrade}
             onViewTrade={openTradeHistory}
           />
         );
@@ -705,13 +712,13 @@ function App() {
       case 'notes':
         return <Notes active={active} showToast={showToast} />;
       case 'sealed':
-        return <SealedList active={active} statsTrigger={statsTrigger} showToast={showToast} onProposeTrade={openSealedTradeComposer} />;
+        return <SealedList active={active} statsTrigger={statsTrigger} showToast={showToast} onProposeTrade={proposeSealedTrade} />;
       case 'settings':
         return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} onLeaveDevice={handleLeaveDevice} onDataChanged={handleDataChanged} />;
       case 'admin':
         return <AdminPanel user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
       default:
-        return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} onProposeTrade={openTradeComposer} onViewTrade={openTradeHistory} />;
+        return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} onProposeTrade={proposeCardTrade} onViewTrade={openTradeHistory} />;
     }
   };
 

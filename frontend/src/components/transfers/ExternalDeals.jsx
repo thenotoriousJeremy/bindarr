@@ -1,27 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Plus, Search, Trash2 } from 'lucide-react';
-import { useT } from '../utils/i18n';
-import { GAMES } from '../utils/games';
-import SealedCatalogPicker from './SealedCatalogPicker';
+import { apiErrorText } from '../../utils/apiError';
+import { useT } from '../../utils/i18n';
+import { GAMES } from '../../utils/games';
+import { LatestRequest, fetchJson, isAbortError } from '../../utils/request';
+import { costText, timestampText } from '../../utils/transferView';
+import SealedCatalogPicker from '../SealedCatalogPicker';
+import LoadMore from './LoadMore';
 
-async function requestJson(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...options.headers
-    }
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
-  return data;
-}
+// Deals recorded with people outside Bindarr: a local record only, nobody is
+// sent a proposal. Kept on every device, the phone in device mode included.
 
-function itemName(item) {
+function itemName(item, t) {
   const snapshot = item.item_snapshot || item;
-  return snapshot.name || snapshot.product_name || snapshot.card_id || 'Item';
+  return snapshot.name || snapshot.product_name || snapshot.card_id || t('transfer.unknownItem');
 }
 
+// What a contact gave you: cards found by search, sealed products from the
+// catalog. `onItemsChange` takes an updater, like a state setter.
 export function ExternalReceivedItems({ items, onItemsChange, disabled = false }) {
   const { t } = useT();
   const [cardQuery, setCardQuery] = useState('');
@@ -34,23 +30,26 @@ export function ExternalReceivedItems({ items, onItemsChange, disabled = false }
   const [originUnitNumber, setOriginUnitNumber] = useState('');
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState('');
+  const searchReq = useRef(null);
+  if (!searchReq.current) searchReq.current = new LatestRequest();
 
   const searchCards = async () => {
     if (!cardQuery.trim()) return;
+    const req = searchReq.current.begin();
     setSearching(true);
     setError('');
     try {
       const params = new URLSearchParams({ name: cardQuery.trim(), game: cardGame, scope: 'internet', limit: '20' });
-      const results = await requestJson(`/api/search?${params}`);
-      setCardResults(Array.isArray(results) ? results.slice(0, 20) : []);
+      const { data } = await fetchJson(`/api/search?${params}`, { signal: req.signal });
+      if (req.isLatest()) setCardResults(Array.isArray(data) ? data.slice(0, 20) : []);
     } catch (err) {
-      setError(err.message || t('transfer.external.errSearch'));
+      if (!isAbortError(err) && req.isLatest()) setError(apiErrorText(t, err?.body, 'transfer.external.errSearch'));
     } finally {
-      setSearching(false);
+      if (req.isLatest()) setSearching(false);
     }
   };
 
-  const addReceivedCard = card => {
+  const addReceivedCard = (card) => {
     const item = {
       type: 'card',
       card_id: card.id,
@@ -62,11 +61,11 @@ export function ExternalReceivedItems({ items, onItemsChange, disabled = false }
       quantity: 1,
       condition: 'Near Mint',
       printing: 'Normal',
-      language: 'English'
+      language: 'English',
     };
-    onItemsChange(current => {
+    onItemsChange((current) => {
       const existing = current.find(row => row.type === 'card' && row.card_id === item.card_id);
-      if (existing) return current.map(row => row === existing ? { ...row, quantity: Math.min(100, row.quantity + 1) } : row);
+      if (existing) return current.map(row => (row === existing ? { ...row, quantity: Math.min(100, row.quantity + 1) } : row));
       return [...current, item];
     });
   };
@@ -83,7 +82,7 @@ export function ExternalReceivedItems({ items, onItemsChange, disabled = false }
       image_url: sealedProduct.image_url || null,
       quantity: Math.max(1, Number(sealedQuantity) || 1),
       origin_product_name: originName.trim() || null,
-      origin_unit_number: originUnitNumber ? Math.max(1, Number(originUnitNumber) || 1) : null
+      origin_unit_number: originUnitNumber ? Math.max(1, Number(originUnitNumber) || 1) : null,
     }]);
     setSealedProduct(null);
     setSealedQuantity(1);
@@ -92,9 +91,9 @@ export function ExternalReceivedItems({ items, onItemsChange, disabled = false }
   };
 
   const updateReceivedQuantity = (item, quantity) => {
-    onItemsChange(current => current.map(row => row === item
+    onItemsChange(current => current.map(row => (row === item
       ? { ...row, quantity: Math.max(1, Math.min(100, Number(quantity) || 1)) }
-      : row));
+      : row)));
   };
 
   return (
@@ -108,9 +107,11 @@ export function ExternalReceivedItems({ items, onItemsChange, disabled = false }
           value={cardQuery}
           onChange={event => setCardQuery(event.target.value)}
           placeholder={t('transfer.external.searchCards')}
-          onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); searchCards(); } }}
+          aria-label={t('transfer.external.searchCards')}
+          onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); searchCards(); } }}
         />
-        <button type="button" className="btn btn-secondary" disabled={disabled || searching} onClick={searchCards}>
+        <button type="button" className="btn btn-secondary" disabled={disabled || searching} onClick={searchCards}
+          aria-label={t('common.search')} title={t('common.search')}>
           <Search size={14} />
         </button>
       </div>
@@ -123,11 +124,13 @@ export function ExternalReceivedItems({ items, onItemsChange, disabled = false }
               key={card.id}
               disabled={disabled}
               onClick={() => addReceivedCard(card)}
-              style={{ display: 'block', width: '100%', padding: '0.4rem', textAlign: 'left', color: 'var(--text-strong)', background: 'transparent', border: 0, cursor: 'pointer' }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', width: '100%', padding: '0.4rem', textAlign: 'left', color: 'var(--text-strong)', background: 'transparent', border: 0, cursor: 'pointer' }}
             >
-              {card.printed_name || card.name}
-              <span style={{ color: 'var(--text-secondary)' }}>{[card.set_name, card.number && `#${card.number}`].filter(Boolean).join(' · ')}</span>
-              <Plus size={13} style={{ float: 'right' }} />
+              <span style={{ flex: 1, minWidth: 0 }}>
+                {card.printed_name || card.name}{' '}
+                <span style={{ color: 'var(--text-secondary)' }}>{[card.set_name, card.number && `#${card.number}`].filter(Boolean).join(' · ')}</span>
+              </span>
+              <Plus size={13} aria-hidden="true" />
             </button>
           ))}
         </div>
@@ -158,7 +161,6 @@ export function ExternalReceivedItems({ items, onItemsChange, disabled = false }
                   min="1"
                   max="100"
                   value={item.quantity}
-                  aria-label={t('transfer.quantity')}
                   disabled={disabled}
                   onChange={event => updateReceivedQuantity(item, event.target.value)}
                   style={{ width: '4.5rem', padding: '0.45rem 0.55rem' }}
@@ -168,6 +170,7 @@ export function ExternalReceivedItems({ items, onItemsChange, disabled = false }
                 type="button"
                 className="btn btn-secondary"
                 aria-label={t('transfer.external.removeItem')}
+                title={t('transfer.external.removeItem')}
                 disabled={disabled}
                 onClick={() => onItemsChange(current => current.filter(row => row !== item))}
               >
@@ -181,79 +184,51 @@ export function ExternalReceivedItems({ items, onItemsChange, disabled = false }
   );
 }
 
-export function ExternalDealHistory({ focus, onFocusHandled, onFocusMissing }) {
-  const { t } = useT();
-  const [transactions, setTransactions] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let active = true;
-    requestJson('/api/transfers/external')
-      .then(data => {
-        if (active) setTransactions(data.transactions || []);
-      })
-      .catch(err => {
-        if (active) setError(err.message || t('transfer.external.errLoad'));
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => { active = false; };
-  }, [t]);
-
-  useEffect(() => {
-    if (focus?.type !== 'external' || loading) return;
-    if (error) {
-      onFocusHandled?.(focus.requestId);
-      return;
-    }
-    const target = document.getElementById(`external-trade-${focus.id}`);
-    if (target) {
-      target.open = true;
-      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      onFocusHandled?.(focus.requestId);
-    } else {
-      onFocusMissing?.();
-      onFocusHandled?.(focus.requestId);
-    }
-  }, [error, focus, loading, onFocusHandled, onFocusMissing, transactions]);
-
+// The deals recorded so far, a page at a time (`list` is useTransfers'
+// external list). `expandedIds` (strings) are the ones shown open.
+export function ExternalDealHistory({ list, expandedIds, onToggle }) {
+  const { t, locale } = useT();
+  const { items: transactions, loaded, error } = list;
   return (
     <section className="glass-panel" style={{ padding: '1rem' }}>
       <h3 style={{ color: 'var(--text-strong)', margin: '0 0 0.5rem' }}>{t('transfer.external.history')}</h3>
-      {error && <div role="alert" style={{ color: 'var(--accent-red)' }}>{error}</div>}
-      {loading ? <p style={{ color: 'var(--text-secondary)' }}>{t('common.loading')}</p>
-        : error ? null
-          : transactions.length === 0 ? <p style={{ color: 'var(--text-secondary)' }}>{t('transfer.external.noHistory')}</p> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-              {transactions.map(transaction => (
-                <details
-                  key={transaction.id}
-                  id={`external-trade-${transaction.id}`}
-                  className="glass-panel"
-                  style={{ padding: '0.65rem' }}
-                >
-                  <summary style={{ cursor: 'pointer', color: 'var(--text-strong)' }}>
-                    <strong>{transaction.contact_name} · {t(`transfer.${transaction.transaction_type}`)}</strong>
-                    <span style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
-                      {new Date(transaction.completed_at || transaction.created_at).toLocaleString()}
-                    </span>
-                  </summary>
-                  {transaction.items.map(item => {
-                    const cost = item.direction === 'given' ? item.purchase_cost : item.received_cost;
-                    return (
-                      <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', padding: '0.3rem 0', fontSize: '0.8rem' }}>
-                        <span style={{ color: 'var(--text-secondary)' }}>{item.direction === 'given' ? t('transfer.external.given') : t('transfer.external.received')}: {itemName(item)}</span>
-                        <span style={{ whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{cost == null ? t('transfer.unknownCost') : `$${Number(cost).toFixed(2)}`}</span>
-                      </div>
-                    );
-                  })}
-                  {transaction.message && <p style={{ margin: '0.25rem 0', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>{transaction.message}</p>}
-                </details>
-              ))}
-            </div>
-          )}
+      {error && !loaded && <div role="alert" style={{ color: 'var(--accent-red)' }}>{apiErrorText(t, error.body, 'transfer.external.errLoad')}</div>}
+      {!loaded && !error ? <p style={{ color: 'var(--text-secondary)' }}>{t('common.loading')}</p>
+        : loaded && transactions.length === 0 ? <p style={{ color: 'var(--text-secondary)' }}>{t('transfer.external.noHistory')}</p> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+            {transactions.map(transaction => (
+              <details
+                key={transaction.id}
+                id={`external-trade-${transaction.id}`}
+                className="glass-panel"
+                open={expandedIds.has(String(transaction.id))}
+                onToggle={event => onToggle(String(transaction.id), event.currentTarget.open)}
+                style={{ padding: '0.65rem' }}
+              >
+                <summary style={{ cursor: 'pointer', color: 'var(--text-strong)' }}>
+                  <strong>{transaction.contact_name} · {t(transaction.transaction_type === 'gift' ? 'transfer.gift' : 'transfer.trade')}</strong>
+                  <span style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
+                    {timestampText(transaction.completed_at || transaction.created_at, locale)}
+                  </span>
+                </summary>
+                {(transaction.items || []).map((item) => {
+                  const given = item.direction === 'given';
+                  const cost = given ? item.purchase_cost : item.received_cost;
+                  return (
+                    <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', padding: '0.3rem 0', fontSize: '0.8rem' }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>
+                        {t(given ? 'transfer.external.givenItem' : 'transfer.external.receivedItem', { item: itemName(item, t) })}
+                      </span>
+                      <span style={{ whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{costText(cost, locale) ?? t('transfer.unknownCost')}</span>
+                    </div>
+                  );
+                })}
+                {transaction.message && <p style={{ margin: '0.25rem 0', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>{transaction.message}</p>}
+              </details>
+            ))}
+            <LoadMore list={list} />
+          </div>
+        )}
     </section>
   );
 }
