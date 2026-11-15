@@ -82,7 +82,9 @@ async function main() {
   await row(carol, 'pk-boom');
   await db.run(`CREATE TRIGGER no_boom BEFORE INSERT ON card_list_items WHEN NEW.card_id = 'pk-boom' BEGIN SELECT RAISE(ABORT, 'boom'); END`);
   await assert.rejects(db.initDb(), /boom/, 'a failed move fails loudly');
-  assert.deepStrictEqual(await legacyRows(), ['pk-a', 'pk-a', 'pk-a', 'pk-b', 'pk-boom', 'pk-c', 'pk-gone'], 'nothing was deleted');
+  // The move runs last in initDb, after the stack split, so the stacked rows are
+  // single copies by now (the same quantities); the failed move deleted none.
+  assert.deepStrictEqual(await legacyRows(), ['pk-a', 'pk-a', 'pk-a', 'pk-b', 'pk-b', 'pk-boom', 'pk-c', 'pk-c', 'pk-c', 'pk-gone'], 'nothing was deleted');
   assert.deepStrictEqual((await items(alice)).map(i => [i.card_id, i.quantity_wanted, i.notes]), [['pk-c', 1, 'hearted']],
     'nothing was added to the list either');
   assert.strictEqual((await db.get(`SELECT COUNT(*) AS n FROM card_lists WHERE user_id = ?`, [bob])).n, 0, 'no list was made');

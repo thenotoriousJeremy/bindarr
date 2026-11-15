@@ -370,7 +370,6 @@ async function initDb() {
   // hearts tapped at once cannot make two.
   await addColumns('card_lists', { is_default: 'INTEGER NOT NULL DEFAULT 0' });
   await create('idx_card_lists_default');
-  await require('../utils/wishlistMigration').migrateLegacyWishlists();
   await create(
     'notification_channels', 'idx_notification_channels_user', 'notification_prefs', 'notification_price_state',
     'notification_log', 'idx_notification_log_queue', 'idx_notification_log_dedupe',
@@ -966,6 +965,12 @@ async function initDb() {
     await adoptOrphanRows(adminId);
     await seedStarterLocations(adminId);
   }
+
+  // The pre-1.9 wishlist (collection rows with list_type = 'wishlist') moves onto
+  // each user's default Wishlist (utils/wishlistMigration.js). After every step
+  // above, so it also catches the rows a pre-compartment upgrade copies in,
+  // which a call next to the card_lists tables only reached on the second boot.
+  await require('../utils/wishlistMigration').migrateLegacyWishlists();
 
   // Last: this release has now brought the file up to date. Not written when a
   // step above throws, so the next boot still knows the migration is unfinished.

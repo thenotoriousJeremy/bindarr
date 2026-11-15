@@ -179,9 +179,12 @@ async function main() {
 
   // Every card is there, for the right user, with what it carried, and unplaced.
   // Row 2 stacked three copies; the usual startup split turns it into three rows.
+  // The wishlist row (row 3) is not a copy anyone owns: the same boot moves it
+  // onto its owner's Wishlist (utils/wishlistMigration.js, last in initDb).
+  const owned = legacyRows.filter(r => r.list_type !== 'wishlist');
   const cards = await db.all(`SELECT * FROM collection ORDER BY id`);
-  assert.strictEqual(cards.length, legacyRows.length + 2, 'every legacy collection row must be copied (plus the split copies)');
-  for (const old of legacyRows) {
+  assert.strictEqual(cards.length, owned.length + 2, 'every legacy collection row must be copied (plus the split copies)');
+  for (const old of owned) {
     const now = cards.find(c => c.id === old.id);
     assert.ok(now, `legacy row ${old.id} must keep its id`);
     assert.strictEqual(now.quantity, 1, `row ${old.id} is one copy`);
@@ -195,7 +198,10 @@ async function main() {
     assert.strictEqual(now.game, 'pokemon', 'pre-compartment releases were Pokémon-only');
     assert.strictEqual(now.notes, '', 'new columns take their defaults');
   }
-  assert.deepStrictEqual(cards.filter(c => c.user_id === 1).map(c => c.id), [1, 2, 3, 10, 11]);
+  assert.deepStrictEqual(cards.filter(c => c.user_id === 1).map(c => c.id), [1, 2, 10, 11]);
+  assert.deepStrictEqual(await db.all(
+    `SELECT l.user_id, l.is_default, i.card_id FROM card_list_items i JOIN card_lists l ON l.id = i.list_id`
+  ), [{ user_id: 1, is_default: 1, card_id: 'base1-7' }], 'the wishlist row is on the default Wishlist of its owner after the first boot');
   assert.deepStrictEqual(cards.filter(c => c.user_id === 2).map(c => c.id), [7, 8, 9]);
 
   // Clean locations come across as plain containers under their own id; the one
@@ -218,16 +224,10 @@ async function main() {
     'only the row that was already orphaned in the legacy database lacks its card_cache row');
   assert.strictEqual((await db.get(`PRAGMA foreign_keys`)).foreign_keys, 1, 'foreign keys must be back on');
 
-  // The second boot moves the copied wishlist row (row 3) onto the owner's
-  // Wishlist list (utils/wishlistMigration.js runs before the copy above, so it
-  // finds the row one boot later), and changes nothing else.
+  // A second boot changes nothing: the wishlist row moved on the first.
   const before = await snapshot();
   await db.initDb();
-  assert.deepStrictEqual(await snapshot(), { ...before, collection: before.collection.filter(r => r.id !== 3) },
-    'a second initDb only moves the wishlist row');
-  assert.deepStrictEqual(await db.all(
-    `SELECT l.user_id, l.is_default, i.card_id FROM card_list_items i JOIN card_lists l ON l.id = i.list_id`
-  ), [{ user_id: 1, is_default: 1, card_id: 'base1-7' }], 'onto its owner\'s default Wishlist');
+  assert.deepStrictEqual(await snapshot(), before, 'a second initDb must not change anything');
 
   // A third boot changes nothing.
   const settled = await snapshot();
