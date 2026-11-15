@@ -36,21 +36,43 @@ const HF = 'https://huggingface.co';
 // Sizes are asserted, not assumed. A truncated ONNX file fails at session
 // creation with a protobuf error that says nothing about the download, and a
 // truncated catalog loads as garbage that quietly scores every card wrong.
+//
+// And pinned: each file is fetched from one Hugging Face commit (`revision`) and
+// must hash to the SHA-256 that commit's LFS pointer records, or it is refused.
+// They used to come from `resolve/main`, a moving target, checked by size alone,
+// and went straight into native ONNX and npz parsing. Both values were read from
+// the Hugging Face API (/api/models/<repo>/revision/main, then /tree/<revision>)
+// on 2026-11-15; moving to a newer file means updating all three fields here.
+const MODEL_REVISION = '2ef37ff78ee80ad4c3558e4a15341e447ff8a1be';   // HanClinto/ccgdetector-fastweb-single
+const MILO_REVISION = '9bcc5e809e936b8c5630d1e7101aae1de1e76621';    // HanClinto/milo
 const MODELS = [
-  { name: 'cornelius.onnx', repo: 'HanClinto/ccgdetector-fastweb-single', file: 'fastweb-single-1.39.onnx', bytes: 3185226 },
-  { name: 'milo.onnx', repo: 'HanClinto/milo', file: 'model.onnx', bytes: 5191100 },
+  {
+    name: 'cornelius.onnx', repo: 'HanClinto/ccgdetector-fastweb-single', revision: MODEL_REVISION,
+    file: 'fastweb-single-1.39.onnx', bytes: 3185226,
+    sha256: '05d2b90b928a5a3bf0f49aa90aa86211b2103d9c347c238fd18b4f544b3cb8ca',
+  },
+  {
+    name: 'milo.onnx', repo: 'HanClinto/milo', revision: MILO_REVISION,
+    file: 'model.onnx', bytes: 5191100,
+    sha256: 'bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df',
+  },
 ];
 
 const CATALOGS = [
   {
-    name: 'milo-mtg.npz', repo: 'HanClinto/milo', game: 'mtg',
+    name: 'milo-mtg.npz', repo: 'HanClinto/milo', revision: MILO_REVISION, game: 'mtg',
     file: 'catalogs/milo1-scryfall-mtg-2026-07-09.npz', bytes: 56252182, snapshot: '2026-07-09',
+    sha256: 'c5cb0dc150eb9f5b183396dd25aecaa9efc5ce3d001dd8bef282fcc73ee778be',
   },
   {
-    name: 'milo-pokemon.npz', repo: 'HanClinto/milo', game: 'pokemon',
+    name: 'milo-pokemon.npz', repo: 'HanClinto/milo', revision: MILO_REVISION, game: 'pokemon',
     file: 'catalogs/milo1-tcgplayer-pokemon-2026-05-07.npz', bytes: 13236761, snapshot: '2026-05-07',
+    sha256: '84fecd5b9f1ddc4973fbb276bc9b0d253ac100e35d57ef00c5cfd6432aaa9dff',
   },
 ];
+
+// Where an asset is fetched from: its pinned commit, never a branch.
+const assetUrl = (a) => `${HF}/${a.repo}/resolve/${a.revision}/${a.file}`;
 
 const LICENSE = {
   spdx: 'MIT / AGPL-3.0',
@@ -93,23 +115,26 @@ function status() {
 
 // Stream to a temp file and rename, so an interrupted download cannot leave a
 // half file that the size check above would have to catch later.
-async function fetchAsset(a, onProgress) {
+// `fetchImpl` is a seam for tests, which must never reach Hugging Face.
+async function fetchAsset(a, onProgress, { fetchImpl = fetch } = {}) {
   const dest = assetPath(a);
   // Current, not merely present: an outdated file is replaced. The rename below
   // swaps it atomically, so scanning keeps the old model until the new one lands.
   if (isCurrent(a)) return 'present';
   fs.mkdirSync(MODEL_DIR, { recursive: true });
-  const res = await fetch(`${HF}/${a.repo}/resolve/main/${a.file}`, {
+  const res = await fetchImpl(assetUrl(a), {
     headers: { 'User-Agent': 'Mozilla/5.0' },
     redirect: 'follow', signal: AbortSignal.timeout(900000),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${a.name}`);
   const tmp = `${dest}.tmp`;
   const out = fs.createWriteStream(tmp);
+  const hash = require('crypto').createHash('sha256');
   let got = 0;
   try {
     for await (const chunk of res.body) {
       got += chunk.length;
+      hash.update(chunk);
       if (!out.write(chunk)) await new Promise(r => out.once('drain', r));
       onProgress?.(got);
     }
@@ -122,6 +147,13 @@ async function fetchAsset(a, onProgress) {
   if (got !== a.bytes) {
     fs.rmSync(tmp, { force: true });
     throw new Error(`${a.name} came back ${got} bytes, expected ${a.bytes} — refusing to install it`);
+  }
+  // Right size, wrong bytes is a different file: never handed to the ONNX or npz
+  // parser, which are native code reading whatever they are given.
+  const digest = hash.digest('hex');
+  if (digest !== a.sha256) {
+    fs.rmSync(tmp, { force: true });
+    throw new Error(`${a.name} has SHA-256 ${digest}, expected ${a.sha256} — refusing to install it`);
   }
   fs.renameSync(tmp, dest);
   return 'fetched';
@@ -180,4 +212,4 @@ function start(what) {
   return state();
 }
 
-module.exports = { MODELS, CATALOGS, LICENSE, MODEL_DIR, status, start, state, lastResult, isPresent, isOutdated };
+module.exports = { MODELS, CATALOGS, LICENSE, MODEL_DIR, status, start, state, lastResult, isPresent, isOutdated, fetchAsset, assetUrl };
