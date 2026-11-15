@@ -26,7 +26,7 @@ Bindarr is a self-hosted, multi-user collection manager for Pokémon, Magic: The
 - `frontend/src/locales/` — BCP-47 JSON dictionaries; loaded dynamically by `utils/i18n.jsx`.
 - `frontend/scripts/` — frontend build/locale helpers. `frontend/android/` and `frontend/ios/` are Capacitor native shells.
 - `frontend/native-detector/` — the app's own Capacitor plugin (Java + Swift): the live scanner's corner model on native ONNX Runtime. A local `file:` dependency; `npx cap sync` wires it in. See MOBILE.md.
-- `shared/` — code and data both halves use: JSON tables (sort schemes, languages, translations, games; some with an ES-module `.js` twin), plain ES modules (`*.mjs`: the Scryfall query parser, deck rules, image processing, card detection) and bundled card art. The backend reads it at runtime and the frontend bundles it. Not an npm workspace package.
+- `shared/` — code and data both halves use: JSON tables (sort schemes, languages, translations, games; some with an ES-module `.js` twin), plain ES modules (`*.mjs`: the Scryfall query parser, deck rules, card sorting, image processing, card detection) and bundled card art. The backend reads it at runtime and the frontend bundles it. Not an npm workspace package.
 - `backend/scripts/` — operator maintenance tasks, not normal development hooks.
 
 ## Development Commands
@@ -83,7 +83,7 @@ Use `npm ci` in each package scope for reproducible CI/container installs. Backe
 ## Runtime/Tooling Preferences
 
 - Use **npm**, with separate root, `backend/`, and `frontend/` manifests/lockfiles; this is not an npm workspace.
-- Local documented floor: Node 22.12+ and npm 10+ (Vite 8 and the Capacitor CLI refuse anything older; each package.json's `engines` says so). Use **Node 24** (LTS, supported until April 2028, `.nvmrc`) for server/container/CI parity; every workflow, the mobile/demo releases included, runs on it.
+- Local documented floor: Node 22.12+ and npm 10+ (Vite 8 and the Capacitor CLI refuse anything older, and the backend `require()`s ES modules from `shared/`; each package.json's `engines` says so). Use **Node 24** (LTS, supported until April 2028, `.nvmrc`) for server/container/CI parity; every workflow, the mobile/demo releases included, runs on it.
 - Frontend: React/Vite, ESM, JSX, HTTPS on `https://localhost:5173`. Backend: Node/Express/CommonJS on `http://localhost:3001` by default.
 - Native dependencies (`sqlite3`, `sharp`, `onnxruntime-node`) are platform-sensitive. Install/rebuild in the target environment; Docker production uses Debian/glibc, not Alpine.
 - Configure runtime through `.env.example`. Preserve `DB_PATH`, TLS, CORS, `PUBLIC_BASE_URL`, `TRUST_PROXY`, bootstrap auth, and provider-key semantics. Do not commit `.env`, database/WAL files, build output, models, catalogs, or generated native assets.
