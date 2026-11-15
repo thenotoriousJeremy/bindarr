@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LatestRequest, QueryCore, ResponseCache, fetchJson, ApiError, isAbortError } from './request.js';
+import { LatestRequest, QueryCore, ResponseCache, fetchJson, sendJson, ApiError, isAbortError } from './request.js';
 
 // A promise resolved from outside, so a test decides the order responses land in.
 function deferred() {
@@ -147,6 +147,22 @@ test('fetchJson throws ApiError carrying the server message, and passes the sign
   assert.equal(gotSignal, controller.signal);
   await assert.rejects(fetchJson('/missing', { fetchImpl }), (err) => err instanceof ApiError && err.status === 404 && err.message === 'Not here');
   assert.equal(isAbortError({ name: 'AbortError' }), true);
+});
+
+test('sendJson serialises the body and sets its type; a bare write sends neither', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => { calls.push({ url, init }); return { ok: true, status: 200, json: async () => ({ done: true }) }; };
+  const { data } = await sendJson('/api/x', 'POST', { a: 1 }, { fetchImpl, headers: { 'X-Extra': '1' } });
+  assert.deepEqual(data, { done: true });
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.body, '{"a":1}');
+  assert.deepEqual(calls[0].init.headers, { 'Content-Type': 'application/json', 'X-Extra': '1' });
+  await sendJson('/api/x/1/cancel', 'PUT', undefined, { fetchImpl });
+  assert.equal(calls[1].init.method, 'PUT');
+  assert.equal(calls[1].init.body, undefined);
+  assert.equal(calls[1].init.headers, undefined);
+  const refusing = async () => ({ ok: false, status: 409, json: async () => ({ error: 'No', code: 'asset_changed' }) });
+  await assert.rejects(sendJson('/api/x', 'PUT', {}, { fetchImpl: refusing }), (err) => err instanceof ApiError && err.body.code === 'asset_changed');
 });
 
 test('ResponseCache keeps the most recently used entries', () => {
