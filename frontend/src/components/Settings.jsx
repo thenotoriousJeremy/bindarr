@@ -104,11 +104,11 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
   const [psaToken, setPsaToken] = useState('');
   const [gradedKey, setGradedKey] = useState('');
   const [keysLoading, setKeysLoading] = useState(false);
-  // The read-only API key, held here only once fetched on request (or just made):
-  // the stored user object knows only that one exists.
+  // The read-only API key. The server keeps only its hash, so the key itself is
+  // here only right after it is made, the one time it is shown; otherwise the
+  // stored user object knows only that one exists.
   const hasAccessKey = !!user?.has_api_key;
   const [accessKey, setAccessKey] = useState('');
-  const [showAccessKey, setShowAccessKey] = useState(false);
   const [accessKeyLoading, setAccessKeyLoading] = useState(false);
 
   const [publicBaseUrl, setPublicBaseUrl] = useState('');
@@ -500,31 +500,10 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
     putKeys({ [field]: '' }, 'settings.keyCleared');
   };
 
-  // Show or hide the read-only API key. Fetched only when asked for, and kept in
-  // this component's state: the user object App stores knows only has_api_key.
-  const toggleAccessKey = async () => {
-    if (showAccessKey) { setShowAccessKey(false); return; }
-    if (accessKey) { setShowAccessKey(true); return; }
-    setAccessKeyLoading(true);
-    try {
-      const response = await fetch('/api/auth/api-key');
-      const data = await response.json().catch(() => null);
-      if (response.ok && data?.api_key) {
-        setAccessKey(data.api_key);
-        setShowAccessKey(true);
-      } else {
-        showToast(data?.error || t('settings.errAccessKey'));
-      }
-    } catch (err) {
-      console.error(err);
-      showToast(t('settings.errAccessKey'));
-    } finally {
-      setAccessKeyLoading(false);
-    }
-  };
-
   // Create/rotate/revoke the read-only API key. Rotating and revoking both break
-  // whatever is already using the old key, so both ask first.
+  // whatever is already using the old key, so both ask first. A new key is shown
+  // from this component's state, once: it is never in the user object App stores,
+  // and the server cannot show it again.
   const handleAccessKey = async (action) => {
     if (action === 'create' && hasAccessKey && !window.confirm(t('settings.accessConfirmRotate'))) return;
     if (action === 'revoke' && !window.confirm(t('settings.accessConfirmRevoke'))) return;
@@ -535,7 +514,6 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
       if (response.ok) {
         const next = action === 'revoke' ? '' : (data?.api_key || '');
         setAccessKey(next);
-        setShowAccessKey(action !== 'revoke');
         onUpdateUser({ ...user, has_api_key: !!next });
         showToast(t(action === 'revoke' ? 'settings.accessRevoked' : 'settings.accessCreated'));
       } else {
@@ -925,47 +903,40 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice }) {
           </form>
 
           {/* The one key that points the other way: not a credential Bindarr uses
-              to reach a service, but one something else uses to read Bindarr. It
-              can be shown again rather than only once at creation — read-only is
-              what makes that acceptable, and a write-once secret is one people
-              rotate repeatedly until they manage to catch it. Shown on request
-              only, though: it is fetched when the eye is pressed and lives in this
-              component, never in the user object App keeps in localStorage. */}
+              to reach a service, but one something else uses to read Bindarr. The
+              server keeps only its hash, so it is shown once, right after it is
+              made, from this component's state -- never from the user object App
+              keeps in localStorage. Lost, it is replaced, not recovered. */}
           {!deviceMode && (
             <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label htmlFor="settings-access-key">{t('settings.accessTitle')}</label>
-                {hasAccessKey ? (
-                  <div style={{ position: 'relative' }}>
+                {accessKey ? (
+                  <>
                     <input
                       id="settings-access-key"
                       type="text"
                       readOnly
                       className="input-control"
-                      value={showAccessKey ? accessKey : ''}
-                      placeholder="bnd_••••••••••••••••••••••••"
+                      value={accessKey}
                       onClick={(e) => e.target.select()}
-                      style={{ fontFamily: 'monospace', paddingRight: '2.4rem', width: '100%' }}
+                      aria-describedby="settings-access-key-once"
+                      style={{ fontFamily: 'monospace', width: '100%' }}
                     />
-                    <button
-                      type="button"
-                      onClick={toggleAccessKey}
-                      disabled={accessKeyLoading}
-                      aria-label={t(showAccessKey ? 'settings.hideApiKey' : 'settings.showApiKey')}
-                      title={t(showAccessKey ? 'settings.hideApiKey' : 'settings.showApiKey')}
-                      style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
-                    >
-                      {showAccessKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
+                    <div id="settings-access-key-once" role="status" style={{ fontSize: '0.75rem', color: 'var(--accent-red)', marginTop: '0.35rem', lineHeight: 1.45 }}>
+                      {t('settings.accessShownOnce')}
+                    </div>
+                  </>
                 ) : (
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{t('settings.accessNone')}</div>
+                  <div id="settings-access-key" style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    {t(hasAccessKey ? 'settings.accessIsSet' : 'settings.accessNone')}
+                  </div>
                 )}
                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: 1.45 }}>
                   {t('settings.accessIntro')} {t('settings.accessNetWorth')}
                 </div>
                 <pre style={{ margin: '0.4rem 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                  {`curl -H "Authorization: Bearer ${(showAccessKey && accessKey) || '<key>'}" ${origin}/api/stats/networth`}
+                  {`curl -H "Authorization: Bearer ${accessKey || '<key>'}" ${origin}/api/stats/networth`}
                 </pre>
               </div>
 

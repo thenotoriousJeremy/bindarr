@@ -167,7 +167,9 @@ async function sendExport(req, res, entryIds = null) {
     res.setHeader('Content-Disposition', `attachment; filename=pokedexrr_collection_${targetFormat}.csv`);
     res.send(csvContent);
   } catch (error) {
-    res.status(500).json({ error: 'Export failed', message: error.message });
+    // The detail is SQLite's, and stays in the log.
+    console.error('Export failed:', error);
+    res.status(500).json({ error: 'Export failed' });
   }
 }
 router.get('/export', (req, res) => sendExport(req, res));
@@ -430,7 +432,8 @@ router.post('/import', importLimiter, async (req, res) => {
       : '';
     return res.json({ success: true, count: importedCount, clamped: clampedRows, unresolved, message: `Successfully imported ${importedCount} items.${unmatched}${empty}${adjusted}${skipped}` });
   } catch (error) {
-    return res.status(500).json({ error: 'Import failed', code: 'import_failed', message: error.message });
+    console.error('Import failed:', error);
+    return res.status(500).json({ error: 'Import failed', code: 'import_failed' });
   }
 });
 

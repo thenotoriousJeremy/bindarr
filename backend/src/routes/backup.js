@@ -29,13 +29,16 @@
 const express = require('express');
 const db = require('../db');
 const cardApi = require('../utils/cardApi');
-const { importLimiter } = require('../middleware/auth');
 
 const router = express.Router();
 
 const FORMAT = 'bindarr-backup';
 const VERSION = 1;
 const CHUNK = 500;   // SQLite caps bound parameters per statement
+// The most cards a member's restore asks the providers for, one request each:
+// the row cap /import has (importExport.js MAX_IMPORT_ROWS), for the same reason.
+// A file needing more is refused before the first request, not cut off midway.
+const MAX_CARD_LOOKUPS = 5000;
 
 async function columnsOf(table) {
   return (await db.all(`PRAGMA table_info(${table})`)).map(c => c.name);
@@ -125,6 +128,18 @@ function referencedCardIds(list) {
   ].filter(id => typeof id === 'string' && id))];
 }
 
+// The ids in `ids` that card_cache does not hold.
+async function uncachedCardIds(ids) {
+  const known = new Set();
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const part = ids.slice(i, i + CHUNK);
+    for (const row of await db.all(`SELECT id FROM card_cache WHERE id IN (${part.map(() => '?').join(',')})`, part)) {
+      known.add(row.id);
+    }
+  }
+  return ids.filter(id => !known.has(id));
+}
+
 // Bring each card the install does not hold into card_cache from its provider.
 // Before the transaction, never inside it: the connection lock is held for a
 // transaction's whole callback, and every other request would wait on the network.
@@ -142,7 +157,12 @@ async function fetchMissingCards(ids, user) {
   return { fetched, missing };
 }
 
-router.post('/backup/restore', importLimiter, async (req, res) => {
+// A refusal the client can act on, thrown from inside the transaction so that
+// nothing it already did is kept.
+const refusal = (status, code, message) => Object.assign(new Error(message), { clientStatus: status, code });
+
+// Counted against the import budget by server.js before the body is parsed.
+router.post('/backup/restore', async (req, res) => {
   const backup = req.body && req.body.backup;
   if (!isBackup(backup)) {
     return res.status(400).json({ error: 'Not a Bindarr backup file.' });
@@ -155,7 +175,19 @@ router.post('/backup/restore', importLimiter, async (req, res) => {
   const trusted = req.user.role === 'admin';
 
   try {
-    const fetchedCards = trusted ? null : await fetchMissingCards(referencedCardIds(list), req.user);
+    let fetchedCards = null;
+    if (!trusted) {
+      const uncached = await uncachedCardIds(referencedCardIds(list));
+      if (uncached.length > MAX_CARD_LOOKUPS) {
+        return res.status(413).json({
+          error: `This backup names ${uncached.length} cards this server has not seen, and a restore looks up at most ${MAX_CARD_LOOKUPS}. `
+            + 'An admin can restore it: an admin\'s restore takes the card data from the file.',
+          code: 'restore_too_many_cards',
+          params: { count: uncached.length, max: MAX_CARD_LOOKUPS },
+        });
+      }
+      fetchedCards = await fetchMissingCards(uncached, req.user);
+    }
     const cols = {};
     for (const t of ['locations', 'compartments', 'compartment_assignments', 'collection', 'decks',
       'deck_cards', 'notes', 'card_cache', 'price_history', 'tcgplayer_product', 'sealed_templates',
@@ -166,6 +198,20 @@ router.post('/backup/restore', importLimiter, async (req, res) => {
     const cardKnown = async (id) => !!(await db.get(`SELECT 1 FROM card_cache WHERE id = ?`, [id]));
 
     await db.withTransaction(async () => {
+      // Replacing the account's sealed purchases deletes their units, and a unit
+      // another account has claimed is that account's box. sealed.js refuses to
+      // delete such a purchase; a restore, which deletes all of them, is refused
+      // for the same reason.
+      const claimedByOthers = await db.get(
+        `SELECT 1 FROM sealed_units u JOIN sealed_purchases p ON p.id = u.purchase_id
+          WHERE p.user_id = ? AND u.claimed_by_user_id IS NOT NULL AND u.claimed_by_user_id != ? LIMIT 1`,
+        [uid, uid]
+      );
+      if (claimedByOthers) {
+        throw refusal(409, 'restore_claimed_units',
+          'Some of your sealed purchases have units claimed by other users, and a restore would delete them. Nothing was changed.');
+      }
+
       // Shared card data first, from an admin's file only (top of this file): the
       // collection's card_id references card_cache.
       for (const row of trusted ? list('card_cache') : []) {
@@ -227,10 +273,21 @@ router.post('/backup/restore', importLimiter, async (req, res) => {
           source_unit_id: null,
         }));
       }
+      // A unit's claim names an account on the install the file came from. Only
+      // the file owner's own claim means anything here, and it becomes the
+      // restorer's; any other is dropped. Copied as written, a member's file
+      // could put a box into whichever account it named.
+      const fileOwnerOf = new Map(list('sealed_purchases').map(p => [p && p.id, p && p.user_id]));
       const unitMap = new Map();
       for (const row of list('sealed_units')) {
         const purchaseId = purchaseMap.get(row.purchase_id);
-        if (purchaseId != null) unitMap.set(row.id, await insert('sealed_units', cols.sealed_units, row, { purchase_id: purchaseId }));
+        if (purchaseId == null) continue;
+        const fileOwner = fileOwnerOf.get(row.purchase_id);
+        const ownClaim = row.claimed_by_user_id != null && fileOwner != null && Number(row.claimed_by_user_id) === Number(fileOwner);
+        unitMap.set(row.id, await insert('sealed_units', cols.sealed_units, row, {
+          purchase_id: purchaseId,
+          claimed_by_user_id: ownClaim ? uid : null,
+        }));
       }
       for (const row of list('sealed_purchases')) {
         const unitId = row.source_unit_id == null ? null : unitMap.get(row.source_unit_id);
@@ -295,6 +352,7 @@ router.post('/backup/restore', importLimiter, async (req, res) => {
     await require('../utils/compartmentSort').loadSetsCache(db).catch(() => {});
     res.json({ message: 'Backup restored', ...counts });
   } catch (error) {
+    if (error.clientStatus) return res.status(error.clientStatus).json({ error: error.message, code: error.code });
     console.error('Restore failed:', error);
     res.status(500).json({ error: 'Restore failed. Nothing was changed.' });
   }

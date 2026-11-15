@@ -288,12 +288,12 @@ async function withSavepoint(parent, fn) {
   }
 }
 
-const PBKDF2_ITERATIONS = 210000;
-
+// Passwords are hashed in utils/authHelpers. This is its synchronous form, kept
+// for initDb's DEFAULT_ADMIN_PASSWORD seed, the reset-password script and tests;
+// request paths use authHelpers.hashPassword, which leaves the event loop free.
+// Required on use, not at the top: authHelpers requires this module.
 function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, 64, 'sha512').toString('hex');
-  return `${PBKDF2_ITERATIONS}:${salt}:${hash}`;
+  return require('./utils/authHelpers').hashPasswordSync(password);
 }
 
 // Initialize tables
@@ -1682,6 +1682,24 @@ async function initDb() {
     await run(`ALTER TABLE users ADD COLUMN nav_tabs TEXT`);
   }
 
+  // API keys are stored as their SHA-256 (utils/authHelpers.hashApiKey, the same
+  // digest a session token gets), so a copy of this file or an admin backup holds
+  // no key that reads anyone's collection. Keys made before that are hashed in
+  // place and keep working; the 'sha256:' prefix marks a row as done, as it does
+  // for sessions below. Each key is unique, so its hash is too.
+  const plainApiKeys = await all(
+    `SELECT id, api_key FROM users WHERE api_key IS NOT NULL AND api_key <> '' AND api_key NOT LIKE 'sha256:%'`
+  );
+  if (plainApiKeys.length) {
+    await withTransaction(async () => {
+      for (const { id, api_key: key } of plainApiKeys) {
+        const hashed = `sha256:${crypto.createHash('sha256').update(String(key)).digest('hex')}`;
+        await run(`UPDATE users SET api_key = ? WHERE id = ?`, [hashed, id]);
+      }
+    });
+    console.log(`Hashed ${plainApiKeys.length} stored API key(s).`);
+  }
+
   // Session tokens are stored as their SHA-256 (utils/authHelpers.hashSessionToken),
   // so a copy of this file holds nothing that signs anyone in. Rows from before
   // that hold the token itself; hash them in place so nobody is signed out by the
@@ -2021,10 +2039,19 @@ async function adoptOrphanRows(userId) {
 }
 
 // A binder and a bulk box, so a new account has somewhere to put its first card.
-// Runs from initDb when DEFAULT_ADMIN_PASSWORD seeds the account, and from the
-// bootstrap route when the owner creates it through the UI instead.
-async function seedStarterLocations(userId) {
-  const locCount = await get(`SELECT COUNT(*) as count FROM locations`);
+//
+// `newAccount` is every route that creates an account (the owner's bootstrap,
+// registration, an admin's Add User, SSO sign-up): it counts that account's own
+// locations, so each new account gets the pair. Counting the whole install's, as
+// this used to for everyone, gave them to the first account and to no one after.
+//
+// Without it, the install-wide count stays: initDb calls this at every boot for
+// the existing owner, and an owner who deleted their starter locations must not
+// get them back on each restart.
+async function seedStarterLocations(userId, { newAccount = false } = {}) {
+  const locCount = newAccount
+    ? await get(`SELECT COUNT(*) as count FROM locations WHERE user_id = ?`, [userId])
+    : await get(`SELECT COUNT(*) as count FROM locations`);
   if (locCount.count > 0) return;
 
   console.log('Populating default locations...');
