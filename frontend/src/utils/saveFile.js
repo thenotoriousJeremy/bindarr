@@ -32,24 +32,73 @@ function webDownload(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+// The bridge to the native file system carries strings, so binary goes across as
+// base64. A whole full backup in one call (tens of MB in device mode) meant one
+// giant data-URL string plus the copies the bridge makes of it; written in
+// slices instead, only one slice is ever in flight (MOB-07). A multiple of 3
+// bytes, so no slice's base64 ends in padding.
+export const CHUNK_BYTES = 3 * 512 * 1024;
+
+export function bytesToBase64(bytes) {
+  let binary = '';
+  // fromCharCode takes its bytes as arguments; a few thousand at a time stays
+  // well inside every engine's argument limit.
+  for (let i = 0; i < bytes.length; i += 0x2000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x2000));
+  return btoa(binary);
+}
+
+// Shared files live in their own folder of the app's cache, so the next export
+// can clear out whatever an earlier one left behind.
+const EXPORT_DIR = 'exports';
+
+// How long a shared file stays after the share sheet closes. The sheet returns
+// once a target is picked, and on Android that app may still be reading the file;
+// it is gone by the next export at the latest either way.
+export const KEEP_SHARED_MS = 2 * 60 * 1000;
+
+// Write the blob in slices, share it, then remove it. fs is @capacitor/filesystem
+// ({ Filesystem, Directory }), share is @capacitor/share's Share: passed in, so
+// the slicing and the clean-up are testable without a phone.
+export async function writeAndShare(blob, filename, { fs, share, later = setTimeout }) {
+  const { Filesystem, Directory } = fs;
+  const dir = { directory: Directory.Cache };
+  // Whatever an earlier export left (an app killed before its clean-up ran).
+  await Filesystem.rmdir({ path: EXPORT_DIR, ...dir, recursive: true }).catch(() => {});
+  await Filesystem.mkdir({ path: EXPORT_DIR, ...dir, recursive: true }).catch(() => {});
+  const path = `${EXPORT_DIR}/${safeFileName(filename)}`;
+  const remove = () => Filesystem.deleteFile({ path, ...dir }).catch(() => {});
+  let uri;
+  try {
+    const slices = Math.max(1, Math.ceil(blob.size / CHUNK_BYTES));
+    for (let i = 0; i < slices; i++) {
+      const data = bytesToBase64(new Uint8Array(await blob.slice(i * CHUNK_BYTES, (i + 1) * CHUNK_BYTES).arrayBuffer()));
+      if (i === 0) ({ uri } = await Filesystem.writeFile({ path, data, ...dir }));
+      else await Filesystem.appendFile({ path, data, ...dir });
+    }
+  } catch (err) {
+    await remove();
+    throw err;
+  }
+  try {
+    await share.share({ title: filename, url: uri, dialogTitle: filename });
+  } catch (err) {
+    // Closing the share sheet without picking a target is a choice, not a failure.
+    if (!/cancel/i.test(err && err.message)) {
+      await remove();
+      throw err;
+    }
+    await remove();
+    return;
+  }
+  later(remove, KEEP_SHARED_MS);
+}
+
 async function nativeShare(blob, filename) {
-  const [{ Filesystem, Directory }, { Share }] = await Promise.all([
+  const [fs, { Share }] = await Promise.all([
     import('@capacitor/filesystem'),
     import('@capacitor/share'),
   ]);
-  const data = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ''));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
-  });
-  const { uri } = await Filesystem.writeFile({ path: safeFileName(filename), data, directory: Directory.Cache });
-  try {
-    await Share.share({ title: filename, url: uri, dialogTitle: filename });
-  } catch (err) {
-    // Closing the share sheet without picking a target is a choice, not a failure.
-    if (!/cancel/i.test(err && err.message)) throw err;
-  }
+  return writeAndShare(blob, filename, { fs, share: Share });
 }
 
 export async function saveFile(blob, filename, {
