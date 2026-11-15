@@ -185,6 +185,16 @@ const importLimiter = rateLimit({
   message: { error: 'Too many imports. Please wait before importing again.' }
 });
 
+// Binder artwork uploads: each one is decoded and re-encoded by sharp.
+const artUploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 60,
+  keyGenerator: perUserKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many uploads. Please wait a while before uploading more artwork.' }
+});
+
 // Public share links (routes/shared.js). No account, so per address. Each view
 // builds a whole collection and its stats; this is far above what reading one
 // takes and well below what scraping one in a loop would.
@@ -201,5 +211,5 @@ const shareLimiter = rateLimit({
 
 module.exports = {
   authenticateToken, requireAdmin, authLimiter, loginLimiter, passwordLimiter, searchLimiter, importLimiter,
-  shareLimiter, trustProxySetting
+  artUploadLimiter, shareLimiter, trustProxySetting
 };
