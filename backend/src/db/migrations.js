@@ -672,6 +672,10 @@ async function initDb() {
     source_unit_price_original: 'REAL',
     source_unit_price_saved: 'INTEGER NOT NULL DEFAULT 0',
     available_to_all: 'INTEGER NOT NULL DEFAULT 0',
+    // Where a purchase that arrived by transfer came from, kept on the purchase
+    // because the source unit belongs to another account (routes/transfers.js).
+    source_product_name: 'TEXT',
+    source_unit_number: 'INTEGER',
   });
   await addColumns('sealed_template_components', { expected_cards: 'INTEGER' });
   if ((await addColumns('sealed_templates', { expected_cards: 'INTEGER' })).length) {
@@ -697,8 +701,25 @@ async function initDb() {
   await addColumns('sealed_units', {
     claimed_by_user_id: 'INTEGER REFERENCES users(id) ON DELETE SET NULL',
     components_applied_at: 'DATETIME',
+    // Marked "for trade", like collection.is_trade on a card.
+    is_trade: 'INTEGER DEFAULT 0',
   });
   await create('idx_sealed_units_claimed_by_user');
+
+  // Trades and gifts between users, trades recorded after the fact, and deals with
+  // people outside Bindarr (routes/transfers.js, routes/externalTransfers.js).
+  // Before collection's columns below, which reference their item tables.
+  await create(
+    'user_transfers', 'idx_user_transfers_proposer_status', 'idx_user_transfers_recipient_status',
+    'user_transfer_items', 'idx_user_transfer_items_transfer', 'idx_user_transfer_items_collection',
+    'idx_user_transfer_items_sealed_unit',
+    'historical_trades', 'idx_historical_trades_creator', 'idx_historical_trades_recipient',
+    'historical_trade_items', 'idx_historical_trade_items_trade', 'idx_historical_trade_items_collection',
+    'external_contacts', 'idx_external_contacts_user_name', 'idx_external_contacts_user',
+    'external_transactions', 'idx_external_transactions_user_created',
+    'external_transaction_items', 'idx_external_transaction_items_transaction',
+    'idx_external_transaction_items_collection'
+  );
 
   // Riftbound (riftcodexApi.js). Four card fields no provider stored before —
   // which way the card is printed (Riftbound battlefields are landscape), its
@@ -748,6 +769,10 @@ async function initDb() {
     // considered judgement and nothing should quietly replace it.
     market_value_source: 'TEXT',
     market_value_at: 'DATETIME',
+    // Which transfer item or recorded trade item brought this copy in, for "where
+    // did this come from". SET NULL: deleting the history keeps the card.
+    acquired_via_transfer_item_id: 'INTEGER REFERENCES user_transfer_items(id) ON DELETE SET NULL',
+    acquired_via_historical_trade_item_id: 'INTEGER REFERENCES historical_trade_items(id) ON DELETE SET NULL',
   });
   await create('idx_collection_cert');
 

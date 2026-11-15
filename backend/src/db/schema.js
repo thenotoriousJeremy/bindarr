@@ -594,6 +594,154 @@ module.exports = {
 
   idx_sealed_units_claimed_by_user: `CREATE INDEX IF NOT EXISTS idx_sealed_units_claimed_by_user ON sealed_units(claimed_by_user_id)`,
 
+  // A transfer is a proposal between two users. Item rows snapshot the asset at
+  // proposal time and keep nullable source links so completed history survives
+  // when the original collection row or sealed unit is later removed.
+  user_transfers: `
+    CREATE TABLE IF NOT EXISTS user_transfers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      proposer_id INTEGER NOT NULL,
+      recipient_id INTEGER NOT NULL,
+      transfer_type TEXT NOT NULL CHECK(transfer_type IN ('gift', 'trade')),
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'accepted', 'rejected', 'cancelled', 'countered')),
+      response_to_transfer_id INTEGER,
+      message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME,
+      CHECK(proposer_id != recipient_id),
+      FOREIGN KEY(proposer_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(recipient_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(response_to_transfer_id) REFERENCES user_transfers(id) ON DELETE SET NULL
+    )
+  `,
+  idx_user_transfers_proposer_status: `CREATE INDEX IF NOT EXISTS idx_user_transfers_proposer_status ON user_transfers(proposer_id, status, created_at)`,
+  idx_user_transfers_recipient_status: `CREATE INDEX IF NOT EXISTS idx_user_transfers_recipient_status ON user_transfers(recipient_id, status, created_at)`,
+
+  user_transfer_items: `
+    CREATE TABLE IF NOT EXISTS user_transfer_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      transfer_id INTEGER NOT NULL,
+      from_user_id INTEGER NOT NULL,
+      to_user_id INTEGER NOT NULL,
+      item_type TEXT NOT NULL CHECK(item_type IN ('card', 'sealed')),
+      source_collection_id INTEGER,
+      source_sealed_unit_id INTEGER,
+      quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
+      purchase_cost REAL,
+      received_cost REAL,
+      item_snapshot TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(transfer_id) REFERENCES user_transfers(id) ON DELETE CASCADE,
+      FOREIGN KEY(from_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(to_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(source_collection_id) REFERENCES collection(id) ON DELETE SET NULL,
+      FOREIGN KEY(source_sealed_unit_id) REFERENCES sealed_units(id) ON DELETE SET NULL
+    )
+  `,
+  idx_user_transfer_items_transfer: `CREATE INDEX IF NOT EXISTS idx_user_transfer_items_transfer ON user_transfer_items(transfer_id)`,
+  idx_user_transfer_items_collection: `CREATE INDEX IF NOT EXISTS idx_user_transfer_items_collection ON user_transfer_items(source_collection_id)`,
+  idx_user_transfer_items_sealed_unit: `CREATE INDEX IF NOT EXISTS idx_user_transfer_items_sealed_unit ON user_transfer_items(source_sealed_unit_id)`,
+
+  historical_trades: `
+    CREATE TABLE IF NOT EXISTS historical_trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      creator_id INTEGER NOT NULL,
+      recipient_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending_confirmation'
+        CHECK(status IN ('pending_confirmation', 'confirmed', 'rejected')),
+      completed_at TEXT NOT NULL,
+      message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      confirmed_at DATETIME,
+      CHECK(creator_id != recipient_id),
+      FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(recipient_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `,
+  idx_historical_trades_creator: `CREATE INDEX IF NOT EXISTS idx_historical_trades_creator
+    ON historical_trades(creator_id, status, completed_at DESC)`,
+  idx_historical_trades_recipient: `CREATE INDEX IF NOT EXISTS idx_historical_trades_recipient
+    ON historical_trades(recipient_id, status, completed_at DESC)`,
+
+  historical_trade_items: `
+    CREATE TABLE IF NOT EXISTS historical_trade_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trade_id INTEGER NOT NULL,
+      from_user_id INTEGER NOT NULL,
+      to_user_id INTEGER NOT NULL,
+      card_id TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
+      item_snapshot TEXT NOT NULL,
+      creator_collection_id INTEGER,
+      recipient_collection_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(trade_id) REFERENCES historical_trades(id) ON DELETE CASCADE,
+      FOREIGN KEY(from_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(to_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(creator_collection_id) REFERENCES collection(id) ON DELETE SET NULL,
+      FOREIGN KEY(recipient_collection_id) REFERENCES collection(id) ON DELETE SET NULL
+    )
+  `,
+  idx_historical_trade_items_trade: `CREATE INDEX IF NOT EXISTS idx_historical_trade_items_trade
+    ON historical_trade_items(trade_id, id)`,
+  idx_historical_trade_items_collection: `CREATE INDEX IF NOT EXISTS idx_historical_trade_items_collection
+    ON historical_trade_items(creator_collection_id, recipient_collection_id)`,
+
+  external_contacts: `
+    CREATE TABLE IF NOT EXISTS external_contacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 100),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `,
+  idx_external_contacts_user_name: `CREATE UNIQUE INDEX IF NOT EXISTS idx_external_contacts_user_name
+    ON external_contacts(user_id, name COLLATE NOCASE)`,
+  idx_external_contacts_user: `CREATE INDEX IF NOT EXISTS idx_external_contacts_user ON external_contacts(user_id, name)`,
+
+  external_transactions: `
+    CREATE TABLE IF NOT EXISTS external_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      contact_id INTEGER,
+      contact_name_snapshot TEXT NOT NULL,
+      transaction_type TEXT NOT NULL CHECK(transaction_type IN ('gift', 'trade')),
+      message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(contact_id) REFERENCES external_contacts(id) ON DELETE SET NULL
+    )
+  `,
+  idx_external_transactions_user_created: `CREATE INDEX IF NOT EXISTS idx_external_transactions_user_created
+    ON external_transactions(user_id, created_at DESC)`,
+
+  external_transaction_items: `
+    CREATE TABLE IF NOT EXISTS external_transaction_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      transaction_id INTEGER NOT NULL,
+      direction TEXT NOT NULL CHECK(direction IN ('given', 'received')),
+      item_type TEXT NOT NULL CHECK(item_type IN ('card', 'sealed')),
+      source_collection_id INTEGER,
+      source_sealed_unit_id INTEGER,
+      quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
+      purchase_cost REAL,
+      received_cost REAL,
+      item_snapshot TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(transaction_id) REFERENCES external_transactions(id) ON DELETE CASCADE,
+      FOREIGN KEY(source_collection_id) REFERENCES collection(id) ON DELETE SET NULL,
+      FOREIGN KEY(source_sealed_unit_id) REFERENCES sealed_units(id) ON DELETE SET NULL
+    )
+  `,
+  idx_external_transaction_items_transaction: `CREATE INDEX IF NOT EXISTS idx_external_transaction_items_transaction
+    ON external_transaction_items(transaction_id)`,
+  idx_external_transaction_items_collection: `CREATE INDEX IF NOT EXISTS idx_external_transaction_items_collection
+    ON external_transaction_items(source_collection_id, direction)`,
+
   // A cert number identifies one physical slab, so entering it twice is a mistake
   // rather than a second copy — unlike raw cards, where two identical rows are
   // normal and `quantity` exists for exactly that reason.
