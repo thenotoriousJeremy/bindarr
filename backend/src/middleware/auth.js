@@ -92,6 +92,36 @@ function requireAdmin(req, res, next) {
   }
 }
 
+// TRUST_PROXY, as Express's `trust proxy` setting: a hop count ("1"), or an
+// Express trust string ("loopback", a subnet list).
+//
+// "true" is the exception. Express reads `true` as "trust every hop", which makes
+// req.ip the LEFT-most X-Forwarded-For entry -- a value the client writes itself,
+// so rotating it defeated every IP rate limit, login included. Someone writing
+// "true" means "there is a proxy in front", so it is taken as one hop, which is
+// what the docs always described, and the boot log says so (`warning`).
+function trustProxySetting(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return { value: undefined };
+  const tp = String(raw).trim();
+  if (tp.toLowerCase() === 'true') {
+    return {
+      value: 1,
+      warning: 'TRUST_PROXY=true is read as TRUST_PROXY=1 (one reverse proxy). Trusting every hop would let any client '
+        + 'choose its own IP through X-Forwarded-For and walk past the rate limits. Set the hop count to silence this.',
+    };
+  }
+  return { value: Number.isNaN(Number(tp)) ? tp : Number(tp) };
+}
+
+// Signed-in limiters count per account rather than per address: a household
+// behind one router is several people, and one of them importing should not
+// spend everyone else's budget. A request without an account (none of the routes
+// these are mounted on take one) falls back to its address.
+function perUserKey(req) {
+  if (req.user && req.user.id != null) return `user:${req.user.id}`;
+  return rateLimit.ipKeyGenerator(req.ip || '');
+}
+
 // Throttle auth endpoints to slow down credential-stuffing/brute-force attempts.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -107,6 +137,7 @@ const authLimiter = rateLimit({
 const searchLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 300,
+  keyGenerator: perUserKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many searches. Please slow down and try again shortly.' }
@@ -117,9 +148,13 @@ const searchLimiter = rateLimit({
 const importLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   limit: 20,
+  keyGenerator: perUserKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many imports. Please wait before importing again.' }
 });
 
-module.exports = { authenticateToken, requireAdmin, authLimiter, searchLimiter, importLimiter };
+module.exports = {
+  authenticateToken, requireAdmin, authLimiter, searchLimiter, importLimiter,
+  trustProxySetting
+};

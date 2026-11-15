@@ -129,10 +129,12 @@ checkScanModels();
 // and the rate limiters use the real client IP from X-Forwarded-For instead of
 // the proxy's. Leave it UNSET when the app is directly exposed: trusting that
 // header otherwise lets any client spoof its IP and defeat the rate limiter.
-// Accepts a hop count ("1"), "true", or an express trust-proxy string ("loopback").
+// Accepts a hop count ("1") or an express trust-proxy string ("loopback"); "true"
+// means one hop, never "trust every hop" (middleware/auth.js trustProxySetting).
 if (process.env.TRUST_PROXY) {
-  const tp = process.env.TRUST_PROXY;
-  app.set('trust proxy', tp === 'true' ? true : (Number.isNaN(Number(tp)) ? tp : Number(tp)));
+  const tp = require('./middleware/auth').trustProxySetting(process.env.TRUST_PROXY);
+  if (tp.warning) console.warn(`STARTUP: ${tp.warning}`);
+  if (tp.value !== undefined) app.set('trust proxy', tp.value);
 }
 
 // Content Security Policy, enforced. Identification is server-side (the client
