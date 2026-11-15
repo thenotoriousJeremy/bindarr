@@ -239,7 +239,9 @@ async function cardPrinting(req, res) {
 function register(router) {
   router.all('/search', searchLimiter, searchCards);
   router.get('/collection/cert/:certNumber', searchLimiter, lookupCert);
-  router.get('/cards/:id/printing', cardPrinting);
+  // It asks the card provider for the printing, so it shares search's budget: a
+  // read-only API key could otherwise drive provider calls without any limit.
+  router.get('/cards/:id/printing', searchLimiter, cardPrinting);
 }
 
 module.exports = { register, normalizeSearchParams };
