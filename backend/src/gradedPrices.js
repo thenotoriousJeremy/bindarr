@@ -110,11 +110,20 @@ async function query(params, apiKey) {
   }
 }
 
-// One card's price at one grade.
+// The currency every price here is in: eBay completed sales, quoted in US dollars.
+const CURRENCY = 'USD';
+
+// One card's price at one grade, with the currency it is in.
 //
 // `game` gates this: the provider covers Pokémon only, and an MTG slab must be
 // told that plainly instead of getting a silent miss that reads as "no data".
-async function fetchGradedPrice({ game, name, setName, number, grader, grade, tcgPlayerId, apiKey }) {
+//
+// `currency`: the currency the caller stores this value in — the card's own
+// price_currency, since a copy's market_value is read in the card's currency. The
+// eBay dollar figure is converted at the latest ECB rate, and refused when there
+// is no rate yet: storing $120 as €120 on a euro-priced card is the mix this
+// exists to stop. Omitted, the value comes back in USD, labelled as such.
+async function fetchGradedPrice({ game, name, setName, number, grader, grade, tcgPlayerId, apiKey, currency }) {
   if (game && !require('./utils/games').hasFeature(game, 'gradedPrices')) {
     throw new GradedPriceError(400, 'Automatic graded prices cover Pokémon only. Enter the value by hand for this card.');
   }
@@ -170,8 +179,9 @@ async function fetchGradedPrice({ game, name, setName, number, grader, grade, tc
   }
 
   const bucket = byGrade[key];
-  return {
+  const result = {
     price,
+    currency: CURRENCY,
     // What the number actually is, so the UI can say so rather than implying the
     // app knows what this exact slab is worth. It is eBay sold data for that card
     // at that grade, and the sale count is how much to trust it.
@@ -179,8 +189,16 @@ async function fetchGradedPrice({ game, name, setName, number, grader, grade, tc
     count: bucket.count || null,
     source: 'pokemonpricetracker',
   };
+  if (!currency || currency === CURRENCY) return result;
+  const { convert, roundMoney } = require('./utils/fx');
+  const converted = convert(price, CURRENCY, currency, await require('./fxRates').latestRates());
+  if (converted == null) {
+    throw new GradedPriceError(409,
+      `This card is priced in ${currency} and there is no exchange rate yet to convert the ${CURRENCY} sale price. Try again after the daily rate update, or enter the value by hand.`);
+  }
+  return { ...result, price: roundMoney(converted, currency), currency, quoted: { price, currency: CURRENCY } };
 }
 
 module.exports = {
-  fetchGradedPrice, GradedPriceError, gradeKey, pickCard, priceOf, cardsOf, normalizeNumber, client, SEARCH_LIMIT,
+  fetchGradedPrice, GradedPriceError, gradeKey, pickCard, priceOf, cardsOf, normalizeNumber, client, SEARCH_LIMIT, CURRENCY,
 };

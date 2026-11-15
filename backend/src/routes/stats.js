@@ -586,12 +586,19 @@ const PRICE_HISTORY_RANGES = { '30d': 30 };
 // last 30 days, so it is plotted at the middle of that span, not its start —
 // plotting a 30-day MEAN at "30 days ago" would misread as the price on that
 // day. Same for avg7. avg1 is yesterday's average.
+//
+// Only when the averages are in the line's own currency. They are Cardmarket's
+// (avgCurrency), while price_trend is in the row's currency — for most English
+// Pokémon cards TCGplayer's USD — and the chart drew €13 of average and $20 of
+// quote as one line, a fake swing between two marketplaces. Without a match the
+// line is just the recorded points and the current price.
 function marketAnchors(card, now) {
   const pts = [];
   if (!card) return pts;
-  if (card.price_avg30 > 0) pts.push({ price: card.price_avg30, time: now - 15 * 86400000, source: 'market' });
-  if (card.price_avg7 > 0) pts.push({ price: card.price_avg7, time: now - 3.5 * 86400000, source: 'market' });
-  if (card.price_avg1 > 0) pts.push({ price: card.price_avg1, time: now - 86400000, source: 'market' });
+  const sameUnit = avgCurrency(card) === rowCurrency(card);
+  if (sameUnit && card.price_avg30 > 0) pts.push({ price: card.price_avg30, time: now - 15 * 86400000, source: 'market' });
+  if (sameUnit && card.price_avg7 > 0) pts.push({ price: card.price_avg7, time: now - 3.5 * 86400000, source: 'market' });
+  if (sameUnit && card.price_avg1 > 0) pts.push({ price: card.price_avg1, time: now - 86400000, source: 'market' });
   if (card.price_trend > 0) pts.push({ price: card.price_trend, time: now, source: 'current' });
   return pts;
 }
@@ -632,7 +639,7 @@ router.get('/cards/:id/price-history', async (req, res) => {
     // 30-day window; on 'all' they would crowd the left edge of a longer line.
     const anchors = rangeKey === '30d'
       ? marketAnchors(await db.get(
-        `SELECT price_trend, price_avg1, price_avg7, price_avg30 FROM card_cache WHERE id = ?`, [id]
+        `SELECT price_trend, price_avg1, price_avg7, price_avg30, price_currency, price_source FROM card_cache WHERE id = ?`, [id]
       ), now)
       : [];
     const marketCount = anchors.filter(a => a.source === 'market').length;
