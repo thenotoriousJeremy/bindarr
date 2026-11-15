@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const path = require('path');
 const db = require('../db');
 const tcgApi = require('../tcgApi');
 const scryfallApi = require('../scryfallApi');
@@ -12,6 +13,7 @@ const getCollectionMetrics = require('../utils/collectionMetrics');
 const { revokeSessions, hashPassword } = require('../utils/authHelpers');
 const { BACKUP_DIR, listBackups, createBackup, resolveBackupFile } = require('../backup');
 const binderArtStore = require('../utils/binderArtStore');
+const { sendFileAt } = require('../utils/sendFileAt');
 
 const router = express.Router();
 
@@ -446,7 +448,13 @@ router.get('/backups/:file/download', (req, res) => {
   if (!full) {
     return res.status(404).json({ error: 'Backup not found' });
   }
-  res.download(full);
+  // sendFileAt, not res.download: Express 5's send refuses any path with a
+  // dot-folder in it, and a database under ~/.local/share/... answered every
+  // download with a 404. resolveBackupFile has already vetted the file itself.
+  res.attachment(path.basename(full));
+  sendFileAt(res, full, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: 'Backup not found' });
+  });
 });
 
 module.exports = router;

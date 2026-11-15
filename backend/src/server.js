@@ -268,7 +268,11 @@ const BIG_BODY_PATHS = ['/api/import', '/api/scan-match', '/api/search'];
 // A full backup restore (routes/backup.js) can be far larger still; it gets its own
 // limit below the gate, like the paths above.
 const BACKUP_BODY_PATH = '/api/backup';
-const isBigBodyPath = (p) => [...BIG_BODY_PATHS, BACKUP_BODY_PATH].some(b => p === b || p.startsWith(`${b}/`));
+// Card art uploads (an admin's, base64 in JSON, up to 8 MB of image) are parsed by
+// routes/cardArt.js itself, behind its own admin gate: that router sits above the
+// /api gate, where a parser here would read the body before anyone signed in.
+const CARD_ART_BODY_PATH = '/api/card-art';
+const isBigBodyPath = (p) => [...BIG_BODY_PATHS, BACKUP_BODY_PATH, CARD_ART_BODY_PATH].some(b => p === b || p.startsWith(`${b}/`));
 const smallJson = express.json({ limit: '1mb' });
 app.use((req, res, next) => (isBigBodyPath(req.path) ? next() : smallJson(req, res, next)));
 // The restore's parsers and limiter, mounted below the gate.
@@ -682,8 +686,14 @@ app.use((err, req, res, next) => {
   // body-parser's other refusals (broken JSON, a body that is a bare string,
   // number or null, an unsupported charset) are the client's mistake and carry a
   // 4xx. Answering them 500 blamed the server and logged a stack per request.
+  // body-parser marks each of its errors with a `type`; another exposed 4xx (a
+  // file send's 404, say) is answered with its own status, not called a body
+  // problem.
   if (err && err.expose && err.status >= 400 && err.status < 500) {
-    return res.status(err.status).json({ error: err.type === 'entity.parse.failed' ? 'Request body is not valid JSON' : 'Bad request body' });
+    if (typeof err.type === 'string') {
+      return res.status(err.status).json({ error: err.type === 'entity.parse.failed' ? 'Request body is not valid JSON' : 'Bad request body' });
+    }
+    return res.status(err.status).json({ error: err.status === 404 ? 'Not found' : 'Bad request' });
   }
   console.error(err);
   res.status(500).json({ error: 'Internal server error' });
@@ -725,6 +735,12 @@ if (metrics.prometheusEnabled) {
 
   const prometheusServer = prometheusApp.listen(prometheusPort, '0.0.0.0', () => {
     console.log(`Prometheus metrics listener running on port ${prometheusPort}${prometheusToken ? ' (bearer token required)' : ''}`);
+    // Documented, and still easy to miss: with no token, every address that can
+    // reach this port reads the usernames and each account's collection value.
+    if (!prometheusToken) {
+      console.warn(`STARTUP: PROMETHEUS_METRICS_TOKEN is not set, so /metrics on port ${prometheusPort} (all interfaces) `
+        + 'answers anyone who can reach it, usernames and collection values included. Set a token, or keep the port off untrusted networks.');
+    }
   });
   prometheusServer.on('error', error => {
     console.error(`Prometheus metrics listener failed on port ${prometheusPort}:`, error);
