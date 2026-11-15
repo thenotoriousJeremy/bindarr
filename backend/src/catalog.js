@@ -27,10 +27,10 @@ const cvScan = require('./cvScan');
 const pokemonProvider = require('./utils/pokemonProvider');
 const metrics = require('./utils/metrics');
 const games = require('./utils/games');
+// Where the models and catalogs live (CV_MODEL_DIR): defined once, in modelAssets.
+const { MODEL_DIR } = require('./utils/modelAssets');
 // milo's input square (require() of an ES module: Node 22.12+).
 const { EMBED_SIZE } = require('../../shared/scanModel.mjs');
-
-const MODEL_DIR = process.env.CV_MODEL_DIR || path.join(__dirname, '..', 'data', 'models');
 // Every game the registry marks scannable (shared/games.json).
 const GAMES = games.withFeature('scan');
 

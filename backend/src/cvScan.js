@@ -19,6 +19,8 @@ const sharp = require('sharp');
 const ort = require('onnxruntime-node');
 const { loadNpz } = require('./utils/npz');
 const games = require('./utils/games');
+// Where the models and catalogs live (CV_MODEL_DIR): defined once, in modelAssets.
+const { MODEL_DIR } = require('./utils/modelAssets');
 // What the models take (input sizes, ImageNet normalisation, the corner gate) and
 // the dewarp geometry are shared with the browser and the phone, in one copy each.
 // require() of an ES module: Node 22.12+, the documented floor.
@@ -27,7 +29,6 @@ const {
 } = require('../../shared/scanModel.mjs');
 const { warpPerspectiveRgb } = require('../../shared/imgproc.mjs');
 
-const MODEL_DIR = process.env.CV_MODEL_DIR || path.join(__dirname, '..', 'data', 'models');
 // Cosine at which a match is confident enough to auto-fill. Correct matches on
 // the eval sample sat at 0.55-0.95; the one confident wrong answer sat at 0.88,
 // so the margin below does the work this number cannot.

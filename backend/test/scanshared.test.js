@@ -20,19 +20,33 @@
 //
 // Run: node test/scanshared.test.js
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `bindarr-scanshared-${process.pid}-`));
+process.env.CV_MODEL_DIR = path.join(tmpDir, 'models');
+const tmpDb = path.join(os.tmpdir(), `bindarr-scanshared-${process.pid}.db`);
+process.env.DB_PATH = tmpDb;
+delete process.env.DEFAULT_ADMIN_PASSWORD;
 
 const sharp = require('sharp');
 const ort = require('onnxruntime-node');
 const cvScan = require('../src/cvScan');
+const catalog = require('../src/catalog');
+const modelAssets = require('../src/utils/modelAssets');
+const db = require('../src/db');
 const scanModel = require('../../shared/scanModel.mjs');
 const imgproc = require('../../shared/imgproc.mjs');
+
+const SRC = path.join(__dirname, '..', 'src');
 
 // ---- The replaced code, verbatim ------------------------------------------------
 
 // backend/src/cvScan.js
 const OLD_CVSCAN = (() => {
+  const MODEL_DIR = process.env.CV_MODEL_DIR || path.join(SRC, '..', 'data', 'models');
   const CORN_SIZE = 384;     // cornelius input
   const EMBED_SIZE = 448;    // milo input, and the dewarp target
   const MEAN = [0.485, 0.456, 0.406];
@@ -167,14 +181,18 @@ const OLD_CVSCAN = (() => {
     };
   }
 
-  return { CORN_SIZE, EMBED_SIZE, MEAN, STD, SHARPNESS_GATE, toTensor, warpRgb, perspectiveTransform, orderQuad, detectAndDewarp };
+  return { MODEL_DIR, CORN_SIZE, EMBED_SIZE, MEAN, STD, SHARPNESS_GATE, toTensor, warpRgb, perspectiveTransform, orderQuad, detectAndDewarp };
 })();
 
 // backend/src/catalog.js
 const OLD_CATALOG = (() => {
+  const MODEL_DIR = process.env.CV_MODEL_DIR || path.join(SRC, '..', 'data', 'models');
   const SIZE = 448;
   const MEAN = [0.485, 0.456, 0.406];
   const STD = [0.229, 0.224, 0.225];
+  const suffix = (lang) => (!lang || lang === 'en' || lang === 'English' ? '' : `-${String(lang).toLowerCase()}`);
+  const binPath = (game, lang) => path.join(MODEL_DIR, `milo-${game}${suffix(lang)}-local.bin`);
+  const metaPath = (game, lang) => path.join(MODEL_DIR, `milo-${game}${suffix(lang)}-local.json`);
 
   function toTensor(rgb) {
     const plane = SIZE * SIZE;
@@ -187,8 +205,11 @@ const OLD_CATALOG = (() => {
     return new ort.Tensor('float32', x, [1, 3, SIZE, SIZE]);
   }
 
-  return { SIZE, MEAN, STD, toTensor };
+  return { MODEL_DIR, SIZE, MEAN, STD, binPath, metaPath, toTensor };
 })();
+
+// backend/src/utils/modelAssets.js's own spelling, from one directory deeper.
+const OLD_MODELASSETS_DIR = process.env.CV_MODEL_DIR || path.join(SRC, 'utils', '..', '..', 'data', 'models');
 
 // shared/imgproc.mjs
 const OLD_IMGPROC = (() => {
@@ -519,6 +540,25 @@ function testConstants() {
   assert.ok(Object.isFrozen(m.MEAN) && Object.isFrozen(m.STD), 'one copy, so nobody may change it under the others');
 }
 
+// MODEL_DIR was spelled out in cvScan, catalog and modelAssets; the first two
+// read modelAssets' now.
+function testModelDir() {
+  assert.strictEqual(modelAssets.MODEL_DIR, OLD_CVSCAN.MODEL_DIR);
+  assert.strictEqual(modelAssets.MODEL_DIR, OLD_CATALOG.MODEL_DIR);
+  assert.strictEqual(modelAssets.MODEL_DIR, OLD_MODELASSETS_DIR);
+  for (const [game, lang] of [['mtg'], ['mtg', 'English'], ['pokemon', 'Japanese'], ['lorcana', 'German']]) {
+    assert.strictEqual(catalog.binPath(game, lang), OLD_CATALOG.binPath(game, lang));
+    assert.strictEqual(catalog.metaPath(game, lang), OLD_CATALOG.metaPath(game, lang));
+  }
+  // Without CV_MODEL_DIR the three wrote the default from different directories.
+  assert.strictEqual(path.join(SRC, '..', 'data', 'models'), path.join(SRC, 'utils', '..', '..', 'data', 'models'));
+  // cvScan looks for the models and catalogs in that same directory.
+  fs.mkdirSync(modelAssets.MODEL_DIR, { recursive: true });
+  assert.strictEqual(cvScan.isBuilt('mtg'), false);
+  for (const f of ['cornelius.onnx', 'milo.onnx', 'milo-mtg.npz']) fs.writeFileSync(path.join(modelAssets.MODEL_DIR, f), '');
+  assert.strictEqual(cvScan.isBuilt('mtg'), true, 'cvScan reads CV_MODEL_DIR through modelAssets');
+}
+
 function testOrderQuad() {
   const sets = pointSets();
   for (const pts of sets) {
@@ -712,9 +752,18 @@ async function testFrontendExports() {
   assert.strictEqual(detectResult.SHARPNESS_GATE, scanModel.SHARPNESS_GATE);
 }
 
+async function cleanup() {
+  await new Promise(resolve => { try { db.dbConnection.close(() => resolve()); } catch { resolve(); } });
+  for (const suffix of ['', '-wal', '-shm']) {
+    try { fs.unlinkSync(tmpDb + suffix); } catch { /* already gone */ }
+  }
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+}
+
 (async () => {
   try {
     testConstants();
+    testModelDir();
     const quads = testOrderQuad();
     testHomography();
     testDewarpTransform();
@@ -726,5 +775,7 @@ async function testFrontendExports() {
   } catch (err) {
     console.error(err);
     process.exitCode = 1;
+  } finally {
+    await cleanup();
   }
 })();
