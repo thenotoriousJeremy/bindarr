@@ -85,6 +85,16 @@ class BlockedAddressError extends Error {
   }
 }
 
+// What a member is told about a HOSTNAME that cannot be used: one sentence for
+// "did not resolve" and "resolved somewhere blocked" alike, without the address.
+// Spelled out, the answer turned the channel form into a way to read the
+// server's internal DNS ("db.internal resolves to 10.0.0.5"). The detail goes to
+// the server log, where the admin who can change NOTIFY_ALLOW_PRIVATE reads it.
+function hostRefusal(host) {
+  return `Notifications cannot be sent to ${host}: it does not resolve, or it resolves to a private or reserved address.`
+    + (allowPrivate() ? '' : ' An admin can set NOTIFY_ALLOW_PRIVATE=true for services on your own network.');
+}
+
 // A drop-in for dns.lookup, handed to http(s).request as `lookup`. Node calls it
 // for the connection it is about to open, so whatever it approves is exactly what
 // gets connected to. Every resolved address must pass, not just the first: a
@@ -97,7 +107,10 @@ function guardedLookup(hostname, options, callback) {
     const list = Array.isArray(addresses) ? addresses : [{ address: addresses, family: options.family || 4 }];
     for (const a of list) {
       const problem = addressProblem(a.address);
-      if (problem) return callback(new BlockedAddressError(`${hostname} resolves to ${a.address}: ${problem}`));
+      if (problem) {
+        console.warn(`notify: blocked a connection to ${hostname} (${a.address}): ${problem}`);
+        return callback(new BlockedAddressError(hostRefusal(hostname)));
+      }
     }
     if (!list.length) return callback(new Error(`${hostname} did not resolve`));
     if (options.all) return callback(null, list);
@@ -142,13 +155,28 @@ async function checkUrl(raw, { resolve = true } = {}) {
   try {
     list = await lookupAll(host);
   } catch {
-    throw new Error(`Could not resolve ${host}.`);
+    throw new Error(hostRefusal(host));
   }
   for (const a of list) {
     const problem = addressProblem(a.address);
-    if (problem) throw new Error(`${host} resolves to ${a.address}: ${problem}`);
+    if (problem) {
+      console.warn(`notify: refused a channel URL for ${host} (${a.address}): ${problem}`);
+      throw new Error(hostRefusal(host));
+    }
   }
   return url;
 }
 
-module.exports = { checkUrl, guardedLookup, addressProblem, allowPrivate, BlockedAddressError };
+// Whether checkUrl would ask DNS about this URL: a well-formed http(s) URL whose
+// host is a name, not an address literal or localhost. Those lookups are what a
+// member could use to probe the network, so they are what routes/notifications.js
+// rate-limits.
+function needsLookup(raw) {
+  let url;
+  try { url = new URL(String(raw || '').trim()); } catch { return false; }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  return !!host && !net.isIP(host) && !/^localhost$|\.localhost$/i.test(host);
+}
+
+module.exports = { checkUrl, guardedLookup, addressProblem, allowPrivate, needsLookup, BlockedAddressError };
