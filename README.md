@@ -34,7 +34,7 @@ Try it without installing anything at **[thenotoriousjeremy.github.io/bindarr](h
 - **Search and bulk add** — search or browse a whole set with multi-select; pin a set and add by collector number one keystroke at a time.
 - **Lists and a wishlist** — buylists, wishlists and a deck's "missing cards" list, each showing what you own and what the rest would cost. The heart on any card puts it on your Wishlist.
 - **Dashboard** — collection value, 7/30-day trends, rarity and type breakdowns, set completion.
-- **Prices in your currency** — every price can be shown converted at the European Central Bank's daily reference rate, with the original a hover away.
+- **Prices in your currency** — card prices can be shown converted at the European Central Bank's daily reference rate, with the original a hover away.
 - **Price notifications** — Discord, ntfy, Apprise or any webhook tells you when cards you own or want move in price, and tells admins when a backup or price update fails.
 - **Graded slabs** — record grader, grade and cert number per copy (PSA cert lookup fills them in), and give a slab its own value instead of the raw card's price.
 - **Sealed products** — track purchases and individual opened/unopened units, save reusable contents recipes, link cards to the opened product they came from, and track unopened market value separately from what you paid. Purchases and recipes can be shared with the other accounts on your server.
@@ -527,7 +527,7 @@ This prints a new random password, or uses one you pass with `-e NEW_PASSWORD=..
 
 ## Development
 
-Node 22.12+ and npm 10+. Node 24 is what the Docker image and CI run, so it is the one to use if you can.
+Node 22.12+ and npm 10+. Node 24 is what the Docker image and CI run, so it is the one to use if you can (`.nvmrc` names it, for `nvm use`).
 
 ```bash
 npm run install:all
