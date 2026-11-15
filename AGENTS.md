@@ -26,7 +26,7 @@ Bindarr is a self-hosted, multi-user collection manager for Pokémon, Magic: The
 - `frontend/src/locales/` — BCP-47 JSON dictionaries; loaded dynamically by `utils/i18n.jsx`.
 - `frontend/scripts/` — frontend build/locale helpers. `frontend/android/` and `frontend/ios/` are Capacitor native shells.
 - `frontend/native-detector/` — the app's own Capacitor plugin (Java + Swift): the live scanner's corner model on native ONNX Runtime. A local `file:` dependency; `npx cap sync` wires it in. See MOBILE.md.
-- `shared/` — code and data both halves use: JSON tables (sort schemes, languages, translations, games; some with an ES-module `.js` twin), plain ES modules (`*.mjs`: the Scryfall query parser, deck rules, card sorting, image processing, card detection) and bundled card art. The backend reads it at runtime and the frontend bundles it. Not an npm workspace package.
+- `shared/` — code and data both halves use: JSON tables (sort schemes, languages, translations, games; some with an ES-module `.js` twin), plain ES modules (`*.mjs`: the Scryfall query parser, deck rules, card sorting, the scan models' sizes, gate and preprocessing (`scanModel.mjs`, which the server, the browser and the phone must share exactly), image processing, card detection) and bundled card art. The backend reads it at runtime and the frontend bundles it. Not an npm workspace package.
 - `backend/scripts/` — operator maintenance tasks, not normal development hooks.
 
 ## Development Commands
