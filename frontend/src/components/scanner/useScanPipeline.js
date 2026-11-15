@@ -47,6 +47,13 @@ export function useScanPipeline({
   const setDetectStats = detectStatsStore.set;
 
   const outlineCanvas = useRef(null);   // one canvas, reused every update
+  // The latest render's crop builder. The loop below outlives renders, and the
+  // builder closes over the guide box's angle and scale: the one the loop
+  // started with framed every live crop at the box's old angle and size after
+  // the user twisted or pinched it, and the capture then dewarped the current
+  // crop with corners found in that stale one.
+  const buildCanvas = useRef(buildFramedCanvas);
+  buildCanvas.current = buildFramedCanvas;
   const smoothed = useRef(null);        // eased corners, what actually gets drawn
   const lastRawQuad = useRef(null);     // previous RAW detection, for drift
   const steadyFrames = useRef(0);       // consecutive low-drift detections
@@ -300,7 +307,7 @@ export function useScanPipeline({
         const v = videoRef.current;
         if (guideElement && v?.videoWidth && v.readyState >= 2) {
           if (!outlineCanvas.current) outlineCanvas.current = document.createElement('canvas');
-          const c = buildFramedCanvas(v, guideElement, DETECT_W, outlineCanvas.current, true);
+          const c = buildCanvas.current(v, guideElement, DETECT_W, outlineCanvas.current, true);
           // Fire-and-forget: the worker answers on its own schedule and a frame
           // is skipped rather than queued while one is in flight. Queueing would
           // only produce results describing a scene that has already moved.
