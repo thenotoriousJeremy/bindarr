@@ -99,6 +99,10 @@ function parsePrice(raw) {
 }
 
 // Look a column up by any of its spellings: the first non-blank one wins.
+//
+// A leading apostrophe before = + - @ is what csvExporters adds so a spreadsheet
+// shows such a value as text ("+2 Mace" is a card); it is not part of the value,
+// so a Bindarr export imports back as it was.
 function columns(row) {
   const byKey = new Map();
   for (const [header, value] of Object.entries(row || {})) {
@@ -108,7 +112,7 @@ function columns(row) {
   return (...names) => {
     for (const name of names) {
       const value = byKey.get(name);
-      if (value != null && String(value).trim() !== '') return String(value).trim();
+      if (value != null && String(value).trim() !== '') return String(value).trim().replace(/^'(?=[=+\-@\t\r])/, '');
     }
     return undefined;
   };
