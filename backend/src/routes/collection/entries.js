@@ -597,7 +597,8 @@ async function updateEntry(req, res) {
 async function fetchMarketValue(req, res) {
   try {
     const entry = await db.get(`
-      SELECT c.id, c.grade, c.grader, cc.name, cc.set_name, cc.number, cc.game, cc.tcgplayer_product_id
+      SELECT c.id, c.grade, c.grader, cc.name, cc.set_name, cc.number, cc.game, cc.tcgplayer_product_id,
+             cc.price_currency
       FROM collection c JOIN card_cache cc ON cc.id = c.card_id
       WHERE c.id = ? AND c.user_id = ?`, [req.params.id, req.user.id]);
     if (!entry) return res.status(404).json({ error: 'Collection entry not found', code: 'entry_not_found' });
@@ -616,6 +617,9 @@ async function fetchMarketValue(req, res) {
       // is the difference between 2 credits and a hundred.
       tcgPlayerId: entry.tcgplayer_product_id,
       apiKey: req.user.graded_price_api_key,
+      // market_value is read in the card's own currency, so a USD sale price is
+      // converted to it here (a 409 when there is no exchange rate yet).
+      currency: entry.price_currency || undefined,
     });
 
     await db.run(
@@ -623,7 +627,7 @@ async function fetchMarketValue(req, res) {
        WHERE id = ? AND user_id = ?`,
       [result.price, result.source, req.params.id, req.user.id]
     );
-    res.json({ market_value: result.price, source: result.source, basis: result.basis });
+    res.json({ market_value: result.price, source: result.source, basis: result.basis, currency: result.currency });
   } catch (error) {
     // A refusal from the graded-price module carries its own status and a message
     // written for the user. Anything else is ours, and its text (a SQLite message,
