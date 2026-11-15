@@ -616,10 +616,13 @@ app.use('/api', authenticateToken);
 app.use(BIG_BODY_PATHS, express.json({ limit: '15mb' }));
 // A restore is counted against the import budget BEFORE its body is read, so the
 // limiter, not the parser, is what turns away the twenty-first upload of the hour.
-app.post('/api/backup/restore', importLimiter);
 // An admin's restore can bring card data for everyone (routes/backup.js); a
-// member's restores only their own rows and gets a smaller ceiling.
-app.use(BACKUP_BODY_PATH, (req, res, next) => (req.user && req.user.role === 'admin' ? adminBackupJson : memberBackupJson)(req, res, next));
+// member's restores only their own rows and gets a smaller ceiling. Both are
+// middleware on the backup path, not a router: routes/backup.js answers it, from
+// routes/mounts.js like every other /api router.
+app.use(BACKUP_BODY_PATH,
+  (req, res, next) => (req.method === 'POST' && req.path === '/restore' ? importLimiter(req, res, next) : next()),
+  (req, res, next) => (req.user && req.user.role === 'admin' ? adminBackupJson : memberBackupJson)(req, res, next));
 
 // --- AUTHENTICATED API ROUTES ---
 mountApi({ public: false });
@@ -740,7 +743,7 @@ if (metrics.prometheusEnabled) {
 // A fresh install's owner account is claimed with a one-time setup code
 // (routes/auth.js). It goes to the log once the database can say no account
 // exists; a failed start is handled above and says nothing here.
-dbInit.then(() => authRoutes.announceSetupCode(), () => {});
+dbInit.then(() => require('./routes/auth').announceSetupCode(), () => {});
 
 httpServer = app.listen(PORT, '0.0.0.0', async () => {
   console.log(`=========================================`);
