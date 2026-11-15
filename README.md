@@ -8,7 +8,7 @@
 
 Identify cards with your phone camera, track prices, record which binder page and slot each card lives in, and pull decks back out again.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/thenotoriousJeremy/bindarr/docker-build.yml?branch=main&label=CI&logo=github)](https://github.com/thenotoriousJeremy/bindarr/actions/workflows/docker-build.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/thenotoriousJeremy/bindarr/test.yml?branch=main&label=CI&logo=github)](https://github.com/thenotoriousJeremy/bindarr/actions/workflows/test.yml)
 [![Docker image](https://img.shields.io/badge/ghcr.io-bindarr-2496ED?logo=docker&logoColor=white)](https://github.com/thenotoriousJeremy/bindarr/pkgs/container/bindarr)
 [![License: MIT](https://img.shields.io/github/license/thenotoriousJeremy/bindarr?color=blue)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/thenotoriousJeremy/bindarr?style=flat&logo=github)](https://github.com/thenotoriousJeremy/bindarr/stargazers)
@@ -29,15 +29,20 @@ Try it without installing anything at **[thenotoriousjeremy.github.io/bindarr](h
 ## Features
 
 - **Camera scanning** — photograph a card and the server identifies it from the image alone. Works for Magic, Pokémon, Lorcana and Riftbound.
-- **Physical location tracking** — binders by page and slot (1–9), boxes by row and divider, with layout and scalable image-list views. Drag cards between pockets to arrange a binder, or file them by tapping on a phone.
+- **Physical location tracking** — binders page by page and pocket by pocket (pages of up to 12 pockets, laid out like the real ones or in 1–12 columns), boxes by row and divider, with layout, all-cards and scalable image-list views. Drag cards between pockets to arrange a binder, or file them by tapping on a phone, and print your own artwork as pocket inserts.
 - **Deck Builder & checkout** — build decks, edit their properties, import ManaBox decklists, reserve cards for play, and see exactly which checked-out deck makes a copy unavailable.
 - **Search and bulk add** — search or browse a whole set with multi-select; pin a set and add by collector number one keystroke at a time.
+- **Lists and a wishlist** — buylists, wishlists and a deck's "missing cards" list, each showing what you own and what the rest would cost. The heart on any card puts it on your Wishlist.
 - **Dashboard** — collection value, 7/30-day trends, rarity and type breakdowns, set completion.
+- **Prices in your currency** — card prices can be shown converted at the European Central Bank's daily reference rate, with the original a hover away.
+- **Price notifications** — Discord, ntfy, Apprise or any webhook tells you when cards you own or want move in price, and tells admins when a backup or price update fails.
 - **Graded slabs** — record grader, grade and cert number per copy (PSA cert lookup fills them in), and give a slab its own value instead of the raw card's price.
-- **Sealed products** — track purchases and individual opened/unopened units, save reusable contents recipes, link cards to the opened product they came from, and track unopened market value separately from what you paid.
+- **Sealed products** — track purchases and individual opened/unopened units, save reusable contents recipes, link cards to the opened product they came from, and track unopened market value separately from what you paid. Purchases and recipes can be shared with the other accounts on your server.
+- **Trash with undo** — deleted cards wait in the trash for 30 days, and restoring one puts it back in its old slot.
 - **Cards in 11 languages** — search, scan and record Japanese, Korean, Chinese, German, French, Spanish, Italian, Portuguese and Russian printings. A copy references the printing it actually is, so it shows the name and artwork on the card while staying searchable by its English name.
-- **Exports and API** — CSV (TCGplayer-compatible) or JSON, plus a read-only API key for reading net worth from elsewhere.
-- **Multi-user** — session-token auth, admin panel for users and roles, optional public share links.
+- **Exports, backups and API** — CSV (TCGplayer-compatible) or JSON, a full per-account backup that moves a collection between servers, and a read-only API key for reading net worth from elsewhere.
+- **Multi-user and single sign-on** — session-token auth, sign-in through any OpenID Connect provider (Authelia, Authentik, Keycloak and others), an admin panel for users and roles, and optional public share links.
+- **Installable** — add Bindarr to a phone's home screen or a desktop as an app, or use the Android and iOS apps.
 - **Phone-only option** — the Android and iOS apps can run without any server, keeping the collection on the phone ([Mobile apps](#mobile-apps)).
 - **11 UI languages**, community-translated.
 
@@ -99,8 +104,9 @@ services:
     ports:
       - "3001:3001"   # HTTP  — point a reverse proxy here
       - "3443:3443"   # HTTPS — use this directly if you have no proxy (scanning needs it)
-    environment: {}
-      # All optional — see the table below.
+    environment:
+      - HTTPS_PORT=3443              # the image's default; "" serves plain HTTP only
+      # Everything else is optional — see the table below.
       # - POKEMON_TCG_API_KEY=       # only if you already have one; pokemontcg.io is deprecated (see below)
       # - POKEMONTCGAPI_KEY=         # only for the optional pokemontcgapi.com provider (see below)
       # - PUBLIC_BASE_URL=
@@ -161,7 +167,7 @@ All optional.
 | `PORT` | `3001` | HTTP port. |
 | `HTTPS_PORT` | `3443` in the image | HTTPS port. Set to `""` for HTTP only. |
 | `SSL_CERT_PATH` / `SSL_KEY_PATH` | — | Your own certificate instead of the generated self-signed one. |
-| `DB_PATH` | `/app/database/bindarr.db` | SQLite file location. |
+| `DB_PATH` | `/app/database/bindarr.db` | SQLite file location. Outside Docker the default is `backend/database/bindarr.db`, and a relative path is read from `backend/` (`app/backend/` for the prebuilt server), the folder the server runs in. |
 | `DEFAULT_ADMIN_PASSWORD` | — | Create the `admin` account with this password at startup instead of letting the first browser visit create the owner account. Only applied while the `users` table is empty — changing it later does nothing to an existing account. |
 | `POKEMON_TCG_API_KEY` | — | **Only for installs still on the pokemontcg.io provider.** Raises its rate limit from 1,000 to 20,000 requests/day. pokemontcg.io is deprecated: [new registrations are closed](https://dev.pokemontcg.io/) and existing keys stop working on **1 March 2027**. New installs default to TCGdex, which needs no key — leave this unset. |
 | `POKEMONTCGAPI_KEY` | unset | Server-side key for the optional [pokemontcgapi.com provider](#pokemon-data-providers). Setting a key alone does not enable it. |
@@ -173,16 +179,24 @@ All optional.
 | `OIDC_CLIENT_ID` | — | OIDC OAuth2 client ID. |
 | `OIDC_CLIENT_SECRET` | — | OIDC OAuth2 client secret. |
 | `OIDC_PROVIDER_NAME` | `Single Sign-On` | Display name shown on the login button (e.g. `Authelia`, `Authentik`, `Keycloak`). |
+| `OIDC_SESSION_SECRET` | random at each start | Secret that signs the short-lived state of a sign-in in progress (`SESSION_SECRET` is read if this is unset). Left unset, a restart in the middle of someone's sign-in fails it, and several replicas behind one address reject each other's sign-ins. Set a long random string to keep it stable. |
+| `OIDC_SCOPES` | `openid profile email` | Scopes requested from the provider. |
 | `OIDC_USER_CLAIM` | `preferred_username` | Identity claim to map to the Bindarr username. |
 | `OIDC_AUTO_PROVISION` | `true` | Automatically create a Bindarr member account on first successful SSO login. |
+| `OIDC_DEFAULT_ROLE` | `member` | Role of an account created by that first login. `admin` makes **every** new SSO user an administrator, so only use it when the identity provider admits no one else. |
 | `OIDC_ALLOW_USERNAME_LINK` | `false` | Let an SSO identity attach itself to an **existing** Bindarr account that has the same username. Needed to move accounts created before SSO onto it. **Only turn this on if your users cannot choose their own username at the identity provider** — if they can, someone setting theirs to `admin` takes the owner account on their first login. With it off, an SSO login whose username is already taken is refused rather than silently given a second, empty account. |
 | `OIDC_TOKEN_ENDPOINT_AUTH_METHOD` | `client_secret_basic` | Token endpoint client authentication method. Set to client_secret_basic or client_secret_post. |
 | `NODE_EXTRA_CA_CERTS` | — | PEM file of a private root CA to trust, for an identity provider whose certificate it signed. See [SSO with a private CA](#sso-with-a-private-ca). |
-| `TRUST_PROXY` | — | Number of proxy hops (usually `1`) when a reverse proxy terminates TLS, so rate limiting sees the real client IP. |
+| `TRUST_PROXY` | — | Number of proxy hops in front of Bindarr (usually `1`) when a reverse proxy terminates TLS, so rate limiting sees the real client IP. `true` counts as one hop; give the real number if there are more (a CDN in front of your proxy is two). Leave unset when Bindarr is reached directly: trusting the header then lets any client choose its own IP. |
 | `CSP_REPORT_ONLY` | unset | The Content-Security-Policy is enforced, so the browser blocks scripts that are not Bindarr's own and card images from hosts it does not list. If card art stops loading after a provider moves to a new image host, set `true` until Bindarr is updated. The policy is then only reported in the browser console. |
 | `NOTIFY_ALLOW_PRIVATE` | unset | `true` lets notification channels reach loopback and private-LAN addresses, such as an ntfy or Apprise server on your own network. Unset, those are refused so an account cannot use notifications to probe the server's network. Link-local stays blocked. |
 | `CV_MODEL_DIR` | `/app/database/models` in the image | Where the scan models and catalogs live. Must be on persistent storage, or an image update discards every catalog you built. |
 | `CV_SCAN_GAP` | `0.10` | How far a match must stand above its runner-ups before it counts as an answer rather than "this card is not in the catalog". Lower accepts more guesses. |
+| `CATALOG_AUTO_UPDATE` | on | After the weekly set refresh, a scan catalog that has already been built is brought up to date with newly released sets (only the new cards are downloaded and embedded). `0` turns this off. It never builds a catalog that does not exist. |
+| `METRICS_ENABLED` | `false` | `true` adds a Metrics panel to Admin: collection totals per user, and API request and provider call counts and timings, kept in memory. |
+| `PROMETHEUS_METRICS_ENABLED` | `false` | `true` serves the same metrics at `/metrics` on a separate listener (`PROMETHEUS_PORT`). They include usernames and per-user collection values: set a token, and do not publish the port beyond your Prometheus. |
+| `PROMETHEUS_PORT` | `9100` | Port of that listener. Must differ from `PORT` and `HTTPS_PORT`. |
+| `PROMETHEUS_METRICS_TOKEN` | — | Require `Authorization: Bearer <token>` on `/metrics` (in Prometheus: `authorization.credentials`). Unset, the endpoint answers anyone who can reach the port. |
 | `BACKUP_DIR` | `backups/` beside `DB_PATH` | Where automatic, manual and pre-upgrade snapshots are written, listed and downloaded from. See [Backup and restore](#backup-and-restore). |
 | `BACKUP_INTERVAL_HOURS` | `24` | Automatic database snapshot interval, `0.25`–`8784`. `0` disables. Counted from the last backup, which is kept in the database, so restarts do not delay it. An unreadable value falls back to `24` with a warning in the log. |
 | `BACKUP_KEEP_LAST` | `10` | How many regular snapshots to retain. Pre-upgrade snapshots are kept separately (the newest 3). |
@@ -219,7 +233,7 @@ If you'd rather not run Docker, every release ships a self-contained server. Dow
 | Linux | `Bindarr-Server-linux-x64.tar.gz` | `tar xzf`, then `chmod +x bindarr-server && ./bindarr-server` |
 | macOS (Apple Silicon) | `Bindarr-Server-macos-arm64.tar.gz` | `tar xzf`, then `chmod +x bindarr-server && ./bindarr-server` |
 
-The first visit in a browser asks you to create the owner account. The SQLite file is created next to the binary. To set variables from the table above, create `app/backend/.env` before the first run — HTTPS is off by default here, so add `HTTPS_PORT=3443` if you want to scan from a phone.
+The first visit in a browser asks you to create the owner account. The database is created in `app/backend/database/` (`bindarr.db`, with backups, uploaded art and the TLS certificate beside it) and scan models and catalogs go in `app/backend/data/models/`, so keep both folders when you replace the binary with a newer release. To set variables from the table above, create `app/backend/.env` before the first run — HTTPS is off by default here, so add `HTTPS_PORT=3443` if you want to scan from a phone. A relative `DB_PATH` there is read from `app/backend`, where the server runs.
 
 ### Mobile apps
 
@@ -513,7 +527,7 @@ This prints a new random password, or uses one you pass with `-e NEW_PASSWORD=..
 
 ## Development
 
-Node 22.12+ and npm 10+. Node 24 is what the Docker image and CI run, so it is the one to use if you can.
+Node 22.12+ and npm 10+. Node 24 is what the Docker image and CI run, so it is the one to use if you can (`.nvmrc` names it, for `nvm use`).
 
 ```bash
 npm run install:all

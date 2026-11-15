@@ -1,20 +1,47 @@
 name: Build Mobile Apps
 
 # workflow_dispatch -> build only: uploads packages as workflow artifacts (test).
-# push a v* tag  -> release: also uploads Android .aab to Google Play (internal
-# track) and the iOS .ipa to TestFlight, and attaches both to the GitHub Release.
-# Store-upload steps are gated on the tag event, so dispatch never touches a store.
+# push a v* tag  -> release: runs the test suite first, then also uploads the
+# Android .aab to Google Play (internal track) and the iOS .ipa to TestFlight, and
+# attaches both to the GitHub Release. Store-upload steps are gated on the tag
+# event, so dispatch never touches a store.
+#
+# Pull requests that touch the native projects get a debug build in android.yml.
 on:
   push:
     tags: [ "v*" ]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+# One run per ref, never cancelled: a store upload stopped halfway is worse than
+# a second run waiting its turn.
+concurrency:
+  group: mobile-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Nothing in the frontend uses onnxruntime-node, but every npm ci in the
+  # workflows sets this: its install script otherwise downloads ~245 MB of CUDA
+  # libraries on Linux.
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
 
 jobs:
+  # A release ships only what passed the full suite. test.yml does not run on
+  # tags, so it runs here for any run on a tag.
+  tests:
+    if: github.ref_type == 'tag'
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+
   android:
+    needs: tests
+    # Runs when the tests passed, or were skipped because this is not a release.
+    if: ${{ !cancelled() && (needs.tests.result == 'success' || needs.tests.result == 'skipped') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -34,6 +61,8 @@ jobs:
           npm run build
           npx cap sync android
 
+      # The version name is the tag without its leading "v" (1.9.0, not v1.9.0),
+      # the same number the iOS build gets as MARKETING_VERSION.
       - name: Build APK + AAB
         working-directory: frontend/android
         env:
@@ -41,9 +70,10 @@ jobs:
           BINDARR_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           BINDARR_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           BINDARR_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_VERSION_NAME: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0' }}
+          VERSION_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0' }}
           ANDROID_VERSION_CODE: ${{ github.run_number }}
         run: |
+          export ANDROID_VERSION_NAME="${VERSION_TAG#v}"
           chmod +x ./gradlew
           if [ -n "$KEYSTORE_B64" ]; then
             echo "$KEYSTORE_B64" | base64 -d > release.keystore
@@ -70,25 +100,32 @@ jobs:
 
       - name: Upload to Google Play (internal track)
         if: github.ref_type == 'tag' && env.AAB != ''
-        uses: r0adkll/upload-google-play@v1
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.bindarr.app
           releaseFiles: ${{ env.AAB }}
           track: internal
 
+      # Handed to the release job, which is the only one that can write.
       - name: Rename APK for release
         if: github.ref_type == 'tag'
-        run: cp "${{ env.APK }}" "Bindarr-Android.apk"
+        run: |
+          mkdir -p release
+          cp "${{ env.APK }}" release/Bindarr-Android.apk
 
-      - name: Attach APK to release
+      - uses: actions/upload-artifact@v7
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
         with:
-          files: Bindarr-Android.apk
+          name: release-android
+          path: release/Bindarr-Android.apk
+          retention-days: 1
 
   ios:
+    needs: tests
+    if: ${{ !cancelled() && (needs.tests.result == 'success' || needs.tests.result == 'skipped') }}
     runs-on: macos-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
@@ -113,7 +150,7 @@ jobs:
 
       - name: Import signing certificate
         if: steps.gate.outputs.ready == 'true'
-        uses: apple-actions/import-codesign-certs@v7
+        uses: apple-actions/import-codesign-certs@288b8ec97b82c66b6f2a6baaf7acc8dfbcbe331c # v7.2.0
         with:
           p12-file-base64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
           p12-password: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
@@ -193,12 +230,36 @@ jobs:
           xcrun altool --upload-app --type ios --file "$IPA" \
             --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
 
+      # Handed to the release job, which is the only one that can write.
       - name: Rename IPA for release
         if: steps.gate.outputs.ready == 'true' && github.ref_type == 'tag'
         run: cp "$(ls "$RUNNER_TEMP"/export/*.ipa | head -1)" "$RUNNER_TEMP/Bindarr-Apple-iOS.ipa"
 
-      - name: Attach IPA to release
+      - uses: actions/upload-artifact@v7
         if: steps.gate.outputs.ready == 'true' && github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
         with:
-          files: ${{ runner.temp }}/Bindarr-Apple-iOS.ipa
+          name: release-ios
+          path: ${{ runner.temp }}/Bindarr-Apple-iOS.ipa
+          retention-days: 1
+
+  # The only job that can write to the repository, and it runs no install, build
+  # or signing step: it attaches the packages the jobs above uploaded. The APK
+  # goes out whether or not iOS built, as it always has.
+  release:
+    needs: [android, ios]
+    if: ${{ !cancelled() && github.ref_type == 'tag' && needs.android.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: assets/*

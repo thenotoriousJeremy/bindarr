@@ -77,7 +77,8 @@ frontend/
     components/            One component per screen/widget (see Frontend section)
     utils/                 Pure helpers: sorting, pricing, printing/rarity styling, language, shuffle
 Dockerfile, docker-compose.yml, .github/workflows/docker-build.yml   Container build + smoke test + CI publish to GHCR
-.github/workflows/test.yml, audit.yml, .github/dependabot.yml        Test gate on every PR, dependency audit, weekly update PRs
+.github/workflows/test.yml, audit.yml, .github/dependabot.yml        Test gate on every PR (and before every release), dependency audit, weekly update PRs
+.github/workflows/android.yml, scan-tests.yml                        Android debug build on native PRs; weekly scan tests with the models
 ```
 
 Regenerable/large artifacts live in `backend/data/models` (the two ONNX files and
@@ -873,8 +874,8 @@ only `decks.checked_out` changes.
 
 Setup and Docker deployment: see [README.md](README.md). Quick reference:
 
-- Runtime: Node 24 in the image (`node:24-slim`, Debian/glibc) and in every workflow; Node 22.12+ works locally. Bump the Dockerfile, the workflows and these docs together.
+- Runtime: Node 24 in the image (`node:24-slim`, Debian/glibc), in every workflow and in `.nvmrc`; Node 22.12+ works locally (the `engines` field of each package.json). Bump the Dockerfile, the workflows, `.nvmrc` and these docs together.
 - Backend: `cd backend && npm run dev` (nodemon) or `npm start`; port `3001`.
 - Frontend: `cd frontend && npm run dev` (Vite, port `5173`, proxies `/api` → `3001`).
-- Tests: `npm test` from the root runs every suite — the unit suites in `backend/test/`, the e2e suites under `backend/test/e2e/`, the frontend utility tests, the locale check and the TCGCSV mirror test — each whether or not an earlier one failed, then prints one summary (`scripts/test-all.mjs`). `cd backend && npm test` runs both backend runners the same way; `npm run test:unit` / `npm run test:e2e` run one. No framework — each file is a plain `node` script, and each e2e server takes a free port (`backend/test/freePort.js`), so two runs can overlap.
+- Tests: `npm test` from the root runs every suite — the unit suites in `backend/test/`, the e2e suites under `backend/test/e2e/`, the frontend utility tests, the locale check and the TCGCSV mirror test — each whether or not an earlier one failed, then prints one summary (`scripts/test-all.mjs`). `cd backend && npm test` runs both backend runners the same way; `npm run test:unit` / `npm run test:e2e` run one. No framework — each file is a plain `node` script. A unit test that cannot run here (the scan tests, without the models) exits 77 and is reported as SKIP; `scan-tests.yml` runs those weekly with the models. Every e2e server is started by `backend/test/e2e/harness.js` on a free port, so two runs can overlap, and runs offline: `offline.js` answers the provider clients and `netguard.js` refuses any other connection off the machine, which fails the e2e run.
 - Lint (matches CI): `cd frontend && npm run lint`.

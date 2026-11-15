@@ -1,41 +1,68 @@
 name: Build Server Binaries
 
-# push a v* tag -> build the self-hosted server binary for Windows, Linux and
-# macOS and attach each archive to the GitHub Release. workflow_dispatch ->
-# build only, uploaded as workflow artifacts (test). Each binary is a Node
-# Single Executable App (stdlib, no third-party packager) whose blob is just
-# backend/launch.js; the real server ships beside it under app/ (backend src +
-# node_modules + frontend build). Scan indexes (backend/data) and .env are
-# gitignored, so they are NOT bundled: the server runs, and code-free card-image
-# matching stays inert until the operator builds the indexes and drops a .env in
-# app/backend.
+# push a v* tag -> run the test suite, then build the self-hosted server binary
+# for Windows, Linux and macOS and attach each archive to the GitHub Release.
+# workflow_dispatch -> build only, uploaded as workflow artifacts (test). A pull
+# request that touches what the binary is assembled from (backend packaging, the
+# launcher, shared/) builds and boots the Linux binary only, so a packaging break
+# shows up before a tag instead of after one.
+#
+# Each binary is a Node Single Executable App (stdlib, no third-party packager)
+# whose blob is just backend/launch.js; the real server ships beside it under app/
+# (backend src + node_modules + frontend build). Scan models and catalogs
+# (backend/data) and .env are gitignored, so they are NOT bundled: the server
+# runs, card scanning stays off until the operator downloads the models and a
+# catalog from Admin -> Catalogs, and settings come from a .env in app/backend.
 on:
   push:
     tags: [ "v*" ]
+  pull_request:
+    paths:
+      - 'backend/package.json'
+      - 'backend/package-lock.json'
+      - 'backend/launch.js'
+      - 'shared/**'
+      - '.github/workflows/server-release.yml'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+# One run per ref; a pull request's newer push supersedes its older run.
+concurrency:
+  group: server-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# onnxruntime-node's install script otherwise downloads about 245 MB of CUDA
+# libraries on Linux into a binary that never uses them (inference is CPU-only).
+env:
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
 
 jobs:
+  # A release ships only what passed the full suite. test.yml does not run on
+  # tags, so it runs here for any run on a tag (a push, or a manual re-run that
+  # would attach to its release); a pull request has already run it in test.yml.
+  tests:
+    if: github.ref_type == 'tag'
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+
   server:
+    needs: tests
+    # Runs when the tests passed, or were skipped because this is not a release.
+    if: ${{ !cancelled() && (needs.tests.result == 'success' || needs.tests.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            target: windows-x64
-            exe: bindarr-server.exe
-            archive: zip
-          - os: ubuntu-latest
-            target: linux-x64
-            exe: bindarr-server
-            archive: tar
-          - os: macos-latest
-            target: macos-arm64
-            exe: bindarr-server
-            archive: tar
-    runs-on: ${{ matrix.os }}
+        # Every platform for a release or a manual run; Linux alone for a pull
+        # request. The per-platform details follow from the target below.
+        target: ${{ fromJSON(github.event_name == 'pull_request' && '["linux-x64"]' || '["windows-x64", "linux-x64", "macos-arm64"]') }}
+    runs-on: ${{ matrix.target == 'windows-x64' && 'windows-latest' || (matrix.target == 'macos-arm64' && 'macos-latest' || 'ubuntu-latest') }}
+    timeout-minutes: 30
+    env:
+      EXE: ${{ matrix.target == 'windows-x64' && 'bindarr-server.exe' || 'bindarr-server' }}
+      ARCHIVE: ${{ matrix.target == 'windows-x64' && 'zip' || 'tar' }}
     defaults:
       run:
         shell: bash
@@ -63,22 +90,24 @@ jobs:
           node --experimental-sea-config sea-config.json
 
       # Copy this runner's node binary, inject the SEA blob. macOS must strip the
-      # existing signature before injection and re-sign (ad-hoc) after.
+      # existing signature before injection and re-sign (ad-hoc) after. postject
+      # is pinned: an unpinned `npx --yes` would run whatever was published last.
       - name: Assemble binary + release tree
         run: |
           ROOT=build/bindarr-server
           mkdir -p "$ROOT/app/backend" "$ROOT/app/frontend"
-          EXE="$ROOT/${{ matrix.exe }}"
-          node -e "require('fs').copyFileSync(process.execPath, process.argv[1])" "$EXE"
+          EXE_PATH="$ROOT/$EXE"
+          node -e "require('fs').copyFileSync(process.execPath, process.argv[1])" "$EXE_PATH"
           FUSE=NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+          POSTJECT=postject@1.0.0-alpha.6
           if [ "${{ runner.os }}" = "macOS" ]; then
-            codesign --remove-signature "$EXE"
-            npx --yes postject "$EXE" NODE_SEA_BLOB sea-prep.blob --sentinel-fuse "$FUSE" --macho-segment-name NODE_SEA
-            codesign --sign - "$EXE"
+            codesign --remove-signature "$EXE_PATH"
+            npx --yes "$POSTJECT" "$EXE_PATH" NODE_SEA_BLOB sea-prep.blob --sentinel-fuse "$FUSE" --macho-segment-name NODE_SEA
+            codesign --sign - "$EXE_PATH"
           else
-            npx --yes postject "$EXE" NODE_SEA_BLOB sea-prep.blob --sentinel-fuse "$FUSE"
+            npx --yes "$POSTJECT" "$EXE_PATH" NODE_SEA_BLOB sea-prep.blob --sentinel-fuse "$FUSE"
           fi
-          chmod +x "$EXE" || true
+          chmod +x "$EXE_PATH" || true
           cp -r backend/src          "$ROOT/app/backend/src"
           cp -r backend/node_modules "$ROOT/app/backend/node_modules"
           cp    backend/package.json "$ROOT/app/backend/package.json"
@@ -93,15 +122,19 @@ jobs:
       # invisible to every other test in this repo — they all run from source,
       # where ../../../shared resolves and node_modules is hoisted differently.
       #
-      # Runs against a COPY: starting the server creates a database (with a
-      # generated admin user) and a log beside the exe, and on Windows it holds
-      # those files open. Testing the tree we are about to ship would both
-      # package that database and break the archive step on a locked file.
+      # Runs against a COPY: starting the server creates a database
+      # (app/backend/database) beside the exe, and on Windows it holds that file
+      # open. Testing the tree we are about to ship would both package that
+      # database and break the archive step on a locked file. No TCGCSV or FX sync
+      # from a throwaway boot: a fresh database would run both.
       - name: Smoke test the packaged binary
+        env:
+          BINDARR_DISABLE_TCGCSV_SYNC: '1'
+          BINDARR_DISABLE_FX_SYNC: '1'
         run: |
           cp -r build/bindarr-server build/smoketest
           cd build/smoketest
-          ./${{ matrix.exe }} > boot.log 2>&1 &
+          ./"$EXE" > boot.log 2>&1 &
           SRV=$!
           ok=0
           for i in $(seq 1 60); do
@@ -125,6 +158,7 @@ jobs:
           [ "$ok" = 1 ]
 
       - name: Write README
+        if: github.event_name != 'pull_request'
         run: |
           ROOT=build/bindarr-server
           if [ "${{ runner.os }}" = "Windows" ]; then
@@ -138,17 +172,18 @@ jobs:
           $RUN
           Then open http://localhost:3001
           Config: copy app/backend/.env.example to app/backend/.env and edit.
-          Code-free card-image scan matching needs the whole-game indexes in
-          app/backend/data (built from Admin -> Global Scan Indexes); without
-          them, set-scoped scanning still works and code-free returns nothing.
+          The database is created in app/backend/database.
+          Card scanning needs the scan models and a catalog. Neither is bundled
+          (the models are AGPL-3.0); download them from Admin -> Catalogs.
           EOF
 
       # Archive the tree contents at the root (no wrapping folder), matching the
       # original layout server.js expects.
       - name: Package
+        if: github.event_name != 'pull_request'
         run: |
           NAME="Bindarr-Server-${{ matrix.target }}"
-          if [ "${{ matrix.archive }}" = "zip" ]; then
+          if [ "$ARCHIVE" = "zip" ]; then
             ( cd build/bindarr-server && 7z a "$GITHUB_WORKSPACE/$NAME.zip" ./* >/dev/null )
             echo "ASSET=$NAME.zip" >> "$GITHUB_ENV"
           else
@@ -157,12 +192,29 @@ jobs:
           fi
 
       - uses: actions/upload-artifact@v7
+        if: github.event_name != 'pull_request'
         with:
           name: bindarr-server-${{ matrix.target }}
           path: ${{ env.ASSET }}
 
-      - name: Attach to release
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+  # The only job that can write to the repository, and it runs no install, build
+  # or downloaded tool: it takes the archives the jobs above uploaded and
+  # attaches them to the release.
+  release:
+    needs: server
+    if: ${{ !cancelled() && github.ref_type == 'tag' && needs.server.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
         with:
-          files: ${{ env.ASSET }}
+          path: assets
+          pattern: bindarr-server-*
+          merge-multiple: true
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: assets/*

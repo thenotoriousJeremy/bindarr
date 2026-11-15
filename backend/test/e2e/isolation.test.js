@@ -155,11 +155,14 @@ async function testCase(id, title, fn) {
 }
 
 async function runTests() {
-  srv = await harness.startServer(tmp);
+  // Accounts and cards straight into the file before the server opens it; the
+  // rest of both users' data through the API.
+  await harness.prepare(db);
   adminUser = await harness.admin(db);
   alice = await harness.member(db, 'alice');
   bob = await harness.member(db, 'bob');
   await seedCards();
+  srv = await harness.startServer(tmp);
   await seedAlice();
   await seedBob();
   const before = await aliceSnapshot();

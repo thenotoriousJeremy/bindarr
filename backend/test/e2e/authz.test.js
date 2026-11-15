@@ -5,37 +5,19 @@ process.env.BINDARR_DISABLE_FX_SYNC = '1';
 
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
 const crypto = require('crypto');
 const assert = require('assert');
-const { spawn } = require('child_process');
+const harness = require('./harness');
 
 // Own temp directory rather than a bare file in os.tmpdir(): uploaded card art is
 // written to a `card-art` folder beside the database, and that must not land in
 // (or read from) the shared temp root.
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `bindarr-authz-test-${process.pid}-`));
-const tmpDb = path.join(tmpDir, 'bindarr.db');
-process.env.DB_PATH = tmpDb;
-const { freePort } = require('../freePort');
-let port;
+const tmp = harness.tempDatabase('authz-test');
+const tmpDir = tmp.dir;
 let base;
 
-const projectRoot = path.join(__dirname, '../../../');
 const db = require('../../src/db');
 const { hashSessionToken } = require('../../src/utils/authHelpers');
-
-async function waitForServer() {
-  for (let i = 0; i < 150; i++) {
-    try {
-      const res = await fetch(`${base}/api/health`);
-      if (res.ok) return;
-    } catch (e) {
-      // retry
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error(`Server on port ${port} did not start in time`);
-}
 
 async function waitForAdmin() {
   for (let i = 0; i < 150; i++) {
@@ -76,26 +58,26 @@ const filtersOf = async (compId) =>
     .map(r => r.filter_value);
 
 async function runTests() {
-  port = String(await freePort());
-  base = `http://localhost:${port}`;
-  const serverScript = path.join(projectRoot, 'backend/src/server.js');
-  const server = spawn('node', [serverScript], {
-    env: { ...process.env, PORT: port, DB_PATH: tmpDb }
-  });
+  // Every fixture is in the file before the server opens it.
+  await harness.prepare(db);
+  const adminId = await waitForAdmin();
+  const aliceId = await createMember('alice');
+  const bobId = await createMember('bob');
+  const adminHeaders = await sessionHeaders(adminId);
+  const aliceHeaders = await sessionHeaders(aliceId);
+  const bobHeaders = await sessionHeaders(bobId);
+
+  const alice = await createBinder(aliceId, 'Alice Binder');
+  const bob = await createBinder(bobId, 'Bob Binder');
+  await db.run(`INSERT INTO compartment_assignments (compartment_id, filter_value) VALUES (?, ?)`, [alice.compId, 'alice-filter']);
+
+  const cardId = 'authz-test-card';
+  await db.run(`INSERT INTO card_cache (id, name, game) VALUES (?, ?, ?)`, [cardId, 'Authz Test Card', 'pokemon']);
+
+  const server = await harness.startServer(tmp);
+  base = server.base;
 
   try {
-    await waitForServer();
-    const adminId = await waitForAdmin();
-    const aliceId = await createMember('alice');
-    const bobId = await createMember('bob');
-    const adminHeaders = await sessionHeaders(adminId);
-    const aliceHeaders = await sessionHeaders(aliceId);
-    const bobHeaders = await sessionHeaders(bobId);
-
-    const alice = await createBinder(aliceId, 'Alice Binder');
-    const bob = await createBinder(bobId, 'Bob Binder');
-    await db.run(`INSERT INTO compartment_assignments (compartment_id, filter_value) VALUES (?, ?)`, [alice.compId, 'alice-filter']);
-
     // F8-TC1: pairing your own location with another user's compartment id must
     // not rewrite that compartment's assignments (nor touch its row).
     try {
@@ -162,8 +144,6 @@ async function runTests() {
       throw err;
     }
 
-    const cardId = 'authz-test-card';
-    await db.run(`INSERT INTO card_cache (id, name, game) VALUES (?, ?, ?)`, [cardId, 'Authz Test Card', 'pokemon']);
     const sharp = require('sharp');
     const png = await sharp({ create: { width: 4, height: 6, channels: 3, background: { r: 200, g: 40, b: 40 } } }).png().toBuffer();
     const image = `data:image/png;base64,${png.toString('base64')}`;
@@ -215,13 +195,8 @@ async function runTests() {
       throw err;
     }
   } finally {
-    try { server.kill('SIGKILL'); } catch {}
-    try {
-      await new Promise(resolve => {
-        db.dbConnection.close(() => resolve());
-      });
-    } catch {}
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    await server.stop();
+    await harness.cleanup(db, tmp);
   }
 }
 

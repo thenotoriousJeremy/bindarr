@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/thenotoriousJeremy/bindarr/security/advisories/new
+    about: Privately, please, not in a public issue. See SECURITY.md.
+  - name: Translate Bindarr
+    url: https://github.com/thenotoriousJeremy/bindarr/blob/main/docs/TRANSLATING.md
+    about: Adding or improving a language is a pull request that edits one JSON file.
