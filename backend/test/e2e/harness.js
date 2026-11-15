@@ -96,20 +96,25 @@ async function startServer(tmp, { env = {}, wait = true } = {}) {
   // Kept, not echoed: the suites print their own verdicts, and a server log is
   // only interesting when something failed (see `tail`). Both pipes are always
   // read, so a chatty server can never fill one and stall.
+  // `logs` is both streams interleaved (the last 400 chunks, for `tail`); each
+  // stream is also kept on its own, its last 256 KB, for stdout()/stderr().
   const logs = [];
-  const streams = { stdout: '', stderr: '' };
+  const streams = { stdout: { chunks: [], size: 0 }, stderr: { chunks: [], size: 0 } };
   const keep = (name) => (chunk) => {
     const text = chunk.toString();
     logs.push(text);
     if (logs.length > 400) logs.shift();
-    streams[name] = (streams[name] + text).slice(-256 * 1024);
+    const s = streams[name];
+    s.chunks.push(text);
+    s.size += text.length;
+    while (s.size > 256 * 1024 && s.chunks.length > 1) s.size -= s.chunks.shift().length;
   };
   child.stdout.on('data', keep('stdout'));
   child.stderr.on('data', keep('stderr'));
 
   if (wait) {
     let healthy = false;
-    for (let i = 0; i < 600 && !healthy; i++) {
+    for (let i = 0; i < 600; i++) {
       try {
         healthy = (await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(2000) })).ok;
       } catch { /* not listening yet */ }
@@ -167,8 +172,8 @@ async function startServer(tmp, { env = {}, wait = true } = {}) {
   const tail = (n = 40) => logs.join('').split('\n').slice(-n).join('\n');
   return {
     base, port, child, exited, request, alive, stop, tail,
-    stdout: () => streams.stdout,
-    stderr: () => streams.stderr,
+    stdout: () => streams.stdout.chunks.join(''),
+    stderr: () => streams.stderr.chunks.join(''),
   };
 }
 
