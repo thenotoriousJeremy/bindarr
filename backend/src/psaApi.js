@@ -17,33 +17,25 @@
 //      PSA's documented casing has moved before, and a cert costs a request from a
 //      per-account quota — so a wrong guess about a field name must be fixable
 //      from the cache rather than by re-fetching every cert the user ever entered.
-const axios = require('axios');
 const db = require('./db');
-const metrics = require('./utils/metrics');
+const { createProviderClient } = require('./utils/providerClient');
 
 const API_BASE_URL = 'https://api.psacard.com/publicapi';
 
-const client = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 10000,
-  headers: { 'User-Agent': 'Bindarr/1.0', Accept: 'application/json' },
-});
-metrics.instrumentAxiosClient(client, 'psa');
-
 // PSA meters the public API per token and does not publish the ceiling as a
 // header, so the only safe assumption is that it is low. Requests are serialized
-// behind a minimum gap instead of fanned out: entering a box of slabs one at a
-// time is the actual usage pattern, and it costs the user nothing to be slow.
+// with a pause after each answer instead of fanned out: entering a box of slabs
+// one at a time is the actual usage pattern, and it costs the user nothing to be
+// slow. The queue is utils/providerClient's.
 const MIN_REQUEST_GAP_MS = 350;
-let gate = Promise.resolve();
-function serialized(fn) {
-  const run = gate.then(fn, fn);
-  gate = run.then(
-    () => new Promise(r => setTimeout(r, MIN_REQUEST_GAP_MS)),
-    () => new Promise(r => setTimeout(r, MIN_REQUEST_GAP_MS))
-  );
-  return run;
-}
+const psa = createProviderClient({
+  name: 'psa',
+  label: 'PSA',
+  baseURL: API_BASE_URL,
+  timeout: 10000,
+  gapAfterMs: MIN_REQUEST_GAP_MS,
+});
+const { client } = psa;
 
 // A cert number as PSA indexes it: digits only. Users read them off a label and
 // type them with spaces or a stray dash, and '1234 5678' must not become a second
@@ -160,10 +152,10 @@ async function lookupCert(certInput, token = '') {
 
   let data;
   try {
-    const res = await serialized(() => client.get(`/cert/GetByCertNumber/${cert_number}`, {
+    const res = await psa.get(`/cert/GetByCertNumber/${cert_number}`, {
       // Lowercase 'bearer' is what PSA's own documentation shows.
       headers: { Authorization: `bearer ${token}` },
-    }));
+    });
     data = res.data;
   } catch (err) {
     const status = err.response?.status;
