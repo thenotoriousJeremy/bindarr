@@ -21,6 +21,10 @@ async function syncSets(force = false) {
   // Riftbound refreshes only when forced (the weekly sets-refresh job) and only on an
   // install that has used it; first use fetches the catalogue itself (riftcodexApi).
   await require('../riftcodexApi').fetchAndCacheSets(force);
+  // The TCGplayer-catalogue games: only those someone has opened, and from the
+  // local TCGCSV cache — no request of their own.
+  const tcgcsvGames = require('../tcgcsvGameApi');
+  for (const game of await tcgcsvGames.activated()) await tcgcsvGames.fetchAndCacheSets(game, force);
 }
 
 // Every provider's price refresh, through utils/priceSweeps: its one ordered list,

@@ -2,7 +2,7 @@ import { useState, useEffect, useSyncExternalStore } from 'react';
 import { Camera, Download, Trash2, Check } from 'lucide-react';
 import { subscribe, getSnapshot } from '../device/scanAssets';
 import { downloadScanData, removeScanData, productMapStatus } from '../device/runtime';
-import { GAMES } from '../utils/games';
+import { GAMES, isGameEnabled } from '../utils/games';
 import { useT } from '../utils/i18n';
 
 // Scan data on the phone, for device mode: download, progress, remove.
@@ -21,9 +21,10 @@ function DeviceScanSetup({ gate = false, children = null, showToast }) {
   const state = useSyncExternalStore(subscribe, getSnapshot);
   const [productMap, setProductMap] = useState(null);
 
-  const pokemonReady = !!state?.catalogs.find(c => c.game === 'pokemon' && c.present);
-  // The Pokémon catalog names its matches through the product map, which builds in
-  // the background after the download; say so while it does.
+  // Only the model author's Pokémon snapshot names its matches through the product
+  // map, which builds in the background after the download; say so while it does.
+  // Bindarr's release catalog names cards directly.
+  const pokemonReady = !!state?.catalogs.find(c => c.game === 'pokemon' && c.present && !c.release);
   useEffect(() => {
     if (!pokemonReady) return undefined;
     let cancelled = false;
@@ -69,14 +70,18 @@ function DeviceScanSetup({ gate = false, children = null, showToast }) {
       </div>
       <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.5 }}>{t('deviceScan.intro')}</p>
 
-      {state.catalogs.map(c => {
+      {state.catalogs.filter(c => c.present || isGameEnabled(c.game)).map(c => {
         const ready = c.present && state.modelsReady;
         const size = c.bytes + missingModels;
         return (
           <div key={c.game} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem' }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ color: 'var(--text-strong)', fontWeight: 600, fontSize: '0.9rem' }}>{label(c.game)}</div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{t('deviceScan.snapshot', { date: c.snapshot })}</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                {c.release
+                  ? t('deviceScan.weekly', { date: c.updatedAt ? new Date(c.updatedAt).toLocaleDateString() : '—' })
+                  : t('deviceScan.snapshot', { date: c.snapshot })}
+              </div>
             </div>
             {ready ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -118,7 +123,7 @@ function DeviceScanSetup({ gate = false, children = null, showToast }) {
       )}
 
       <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.72rem', lineHeight: 1.45 }}>
-        {t('deviceScan.lorcana')} {t('deviceScan.license')}
+        {t('deviceScan.license')}
       </p>
     </div>
   );

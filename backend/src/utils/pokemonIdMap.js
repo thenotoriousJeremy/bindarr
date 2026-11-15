@@ -22,7 +22,11 @@ const { matcher, normId, fold } = require('./setCatalogueMatch');
 // its numbers carry no dash, which keeps `mtg-<uuid>` and `tcgdex-en-sv01-001` out
 // before the prefix check; pokemonMigration also requires a Pokémon card_cache row.
 const LEGACY_ID = /^([a-z0-9]+)-([^\s-]+)$/;
-const FOREIGN = new Set(['mtg', 'tcgdex', 'pokemontcgapi', 'lorcana']);
+// Every prefix the game registry knows, so no other provider's id can pass for a
+// pokemontcg.io one: 'yugioh-12345' and 'tcgplayer-669489' have exactly its shape.
+const FOREIGN_PREFIXES = [...new Set(require('../../../shared/games.json')
+  .flatMap(g => g.idPrefixes || []))];
+const FOREIGN = new Set(FOREIGN_PREFIXES.map(p => p.replace(/-$/, '')));
 
 function parseLegacyId(id) {
   const m = LEGACY_ID.exec(String(id || ''));
@@ -408,6 +412,7 @@ function storageSetIds(fixedSlots, ruleConfigs) {
 }
 
 module.exports = {
+  FOREIGN_PREFIXES,
   parseLegacyId, isLegacyId, numKey, namesCompatible, subsetParent, halfSet, findSet, setCandidates,
   indexByNumber, sourceProductOf, setsToList, buildPlan, setMoves, remapFixedSlots, remapRules, storageSetIds,
   setNumberKey, normId,

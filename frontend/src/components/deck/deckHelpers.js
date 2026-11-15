@@ -55,18 +55,38 @@ const lorcanaCardType = (card) => {
   for (const t of LORCANA_MAIN_TYPES) if (subs.includes(t)) return t;
   return 'Character';
 };
+// The games served from TCGplayer's catalogue: a card's group is read off its
+// TCGplayer card type (card.supertype), which each game words its own way
+// ('Effect Monster', 'Spell Card'...), so the match is by word, in this order.
+const TCGPLAYER_GROUPS = {
+  yugioh: [['Monster', /monster/i], ['Spell', /spell/i], ['Trap', /trap/i]],
+  onepiece: [['Leader', /leader/i], ['Character', /character/i], ['Event', /event/i], ['Stage', /stage/i]],
+  digimon: [['Digi-Egg', /egg/i], ['Digimon', /digimon/i], ['Tamer', /tamer/i], ['Option', /option/i]],
+  fab: [['Hero', /hero/i], ['Equipment', /equipment|weapon/i], ['Attack', /attack/i], ['Defense', /defen[cs]e/i],
+    ['Action', /action/i], ['Instant', /instant/i]],
+  swu: [['Leader', /leader/i], ['Base', /\bbase\b/i], ['Unit', /unit/i], ['Upgrade', /upgrade/i], ['Event', /event/i]],
+};
+const tcgplayerGroup = (deckGame, card) => {
+  const type = `${card.supertype || ''} ${(card.subtypes || []).join(' ')}`;
+  const hit = TCGPLAYER_GROUPS[deckGame].find(([, re]) => re.test(type));
+  return hit ? hit[0] : 'Other';
+};
+
 // The group a card is listed (and charted) under in a deck of the given game.
 export const cardGroup = (deckGame, card) => {
   if (deckGame === 'riftbound') return riftboundGroup(card);
   if (deckGame === 'mtg') return mtgCardType(card);
   if (deckGame === 'lorcana') return lorcanaCardType(card);
+  if (TCGPLAYER_GROUPS[deckGame]) return tcgplayerGroup(deckGame, card);
   let type = card.supertype || 'Pokémon';
   if (type === 'Pokemon') type = 'Pokémon';
   return ['Pokémon', 'Trainer', 'Energy'].includes(type) ? type : 'Pokémon';
 };
 
 // Groups order based on game
-export const groupOrder = (deckGame) => (deckGame === 'riftbound' ? RIFTBOUND_GROUPS : deckGame === 'mtg'
+export const groupOrder = (deckGame) => (TCGPLAYER_GROUPS[deckGame]
+  ? [...TCGPLAYER_GROUPS[deckGame].map(([name]) => name), 'Other']
+  : deckGame === 'riftbound' ? RIFTBOUND_GROUPS : deckGame === 'mtg'
   ? ['Creature', 'Planeswalker', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Battle', 'Land', 'Other']
   : (deckGame === 'lorcana'
     ? ['Character', 'Action', 'Item', 'Location', 'Other']

@@ -634,7 +634,7 @@ async function updateCollectionPrices(force = false) {
     //
     // Driven from collection/deck_cards and joined to card_cache by primary key,
     // which is what keeps the added clause cheap; see #49 for the shape to avoid.
-    const staleClause = `cc.game = 'pokemon' AND cc.language = 'English' AND cc.id NOT LIKE 'pokemontcgapi-%'
+    const staleClause = `cc.game = 'pokemon' AND cc.language = 'English' AND cc.id NOT LIKE 'pokemontcgapi-%' AND cc.id NOT LIKE 'tcgplayer-%'
         AND (cc.last_updated IS NULL OR cc.last_updated <= datetime('now', '-${CACHE_AGE_LIMIT_DAYS} days'))`;
     const cardsInUse = await db.all(`
       SELECT DISTINCT c.card_id FROM collection c

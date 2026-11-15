@@ -6,6 +6,23 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+### Added
+- **Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood and Star Wars: Unlimited.** Search, collect, price, sort, build decks and scan all five. Their cards, sets and TCGplayer prices come from TCGplayer's catalogue through the project's TCGCSV mirror, so a card's id is its TCGplayer product, product links are exact, and every finish is priced (Yu-Gi-Oh! copies are Unlimited or 1st Edition, the others Nonfoil or Foil). All five start switched off: turn on the ones you collect in the setup wizard or Settings → Preferences, and nothing for a game is downloaded until someone on the install opens it. Decks get each game's size and copy limits.
+- **Bindarr's own scan catalogs, updated every week.** Admin → Catalogs → Bindarr's catalogs downloads a ready-to-scan catalog for any scanned game: Magic, Pokémon (English and Japanese), Lorcana, Riftbound and the five new games. They are built weekly by this repository's CI from every card's artwork and published as a GitHub release, so no install has to download a game's worth of images to scan it. After the first download only the week's new cards come down, usually a few hundred kilobytes, checked once a day; every segment is checked against its SHA-256. Rows are Bindarr card ids, so a match always names a card, whether the install has cached it or not. Phones running on their own download the same catalogs. `CATALOG_AUTO_UPDATE=0` stops the daily check and `CATALOG_RELEASE_URL` points it at a mirror.
+- **Pokémon cards TCGdex does not have.** About 6,000 English cards TCGplayer sells (World Championship decks, Prize Pack, League promos, Battle Academy, trainer kits, Base Set Shadowless) and the Japanese sets TCGdex lists without cards (it serves 28 of 204) now come from TCGplayer's catalogue, with TCGplayer prices: they can be searched, collected and scanned. TCGdex cards with no artwork borrow TCGplayer's picture. Which sets TCGdex lacks is worked out weekly with the catalogs, so an install reads one small file and its own TCGCSV cache rather than asking TCGdex. Installs using TCGdex only.
+- **More of the model author's scan catalogs.** Where Bindarr's own list cannot be reached, Admin → Catalogs offers the model author's dated catalogs for Lorcana and the five new games next to Magic and Pokémon, and phones can download them too. Every model and catalog download is pinned to a revision and checked against its SHA-256.
+
+### Changed
+- **TCGdex is the default Pokémon source everywhere.** pokemontcg.io, which shuts down on 1 March 2027, is no longer what a missing or unrecognised setting falls back to, and it is no longer offered to installs that are not already on it. Installs still pinned to it keep it until they run the migration in Admin.
+- **Card art and price data download far less.** TCGdex images are WebP instead of PNG (about a third of the bytes in card grids, a quarter for scan catalogs, with no re-download of an existing catalog). The daily TCGCSV sync reads the mirror's per-category bundles: a few requests a day instead of over a thousand, skipping anything unchanged. A whole-game English Magic catalog build reads Scryfall's bulk file instead of ~950 searches.
+- **Catalog builds embed on worker threads**, so a build no longer stalls the server for hours, and finishes several times sooner on a multi-core machine.
+
+### Fixed
+- **The weekly catalog update rebuilt the whole of Magic every week, forever.** It counted digital-only sets and sets nested under a release as "new", so it never finished catching up; and a catalog built for a few sets grew into a whole-game build. It now builds only the sets released since each catalog was built, for every catalog in turn.
+- **Around 1,000 Magic cards could never be scanned with a local catalog**: Commander tokens, art series and promos nested two levels under their release were never fetched.
+- **Stopping a catalog rebuild no longer shrinks the catalog**, and a card whose image fails to download keeps the vector it had.
+- **pokemontcg.io cards were embedded from their 245px thumbnail**; they now use the full-size image, as TCGdex and Lorcana cards already did.
+
 ## [1.9.0] - 2026-11-09
 
 ### Added

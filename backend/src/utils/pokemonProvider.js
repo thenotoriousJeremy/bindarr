@@ -41,17 +41,22 @@ function decide(setting, lang) {
   // card's name does not supply that language's physical printing or artwork.
   if (setting === POKEMONTCGAPI && ['en', 'ja', 'zh-cn'].includes(languages.toCode(lang))) return POKEMONTCGAPI;
   if (!languages.isEnglish(lang)) return TCGDEX;
-  return setting === TCGDEX ? TCGDEX : POKEMONTCG;
+  // pokemontcg.io only when an install explicitly holds it: the upgrade pin in db.js
+  // writes 'pokemontcg' for installs whose data is numbered by it. Anything else —
+  // missing, unreadable, a typo — is TCGdex, the default for every new install and
+  // the provider that outlives pokemontcg.io's shutdown (POKEMONTCG_SUNSET).
+  return setting === POKEMONTCG ? POKEMONTCG : TCGDEX;
 }
 
-// The configured Pokémon provider. Unreadable settings fall back to
-// pokemontcg.io, which is the column default and the historical behaviour.
+// The configured Pokémon provider. Unreadable settings fall back to TCGdex, the
+// column default since 1.8: pokemontcg.io closed new key registrations and stops
+// serving on POKEMONTCG_SUNSET, so it is never chosen by accident.
 async function configured() {
   try {
     const row = await db.get(`SELECT pokemon_provider FROM app_settings WHERE id = 1`);
-    return [TCGDEX, POKEMONTCGAPI].includes(row?.pokemon_provider) ? row.pokemon_provider : POKEMONTCG;
+    return [POKEMONTCG, POKEMONTCGAPI].includes(row?.pokemon_provider) ? row.pokemon_provider : TCGDEX;
   } catch {
-    return POKEMONTCG;
+    return TCGDEX;
   }
 }
 

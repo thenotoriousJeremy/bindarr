@@ -15,11 +15,17 @@ export { getLanguageNamesForGame, getLanguagesForGame };
 // registry says which (shared/games.json `printings`). The foil price is stored
 // under the 'Holofoil' value, so we keep that stored value and label it "Foil".
 const TWO_FINISH_PRINTINGS = [{ value: 'Normal', label: 'Nonfoil' }, { value: 'Holofoil', label: 'Foil' }];
+// Yu-Gi-Oh! prints by edition, not finish (registry `printings: "edition"`): an
+// Unlimited copy is stored as 'Normal' and priced from price_normal, a 1st Edition
+// one under the existing '1st Edition' value and its own price_1st_edition.
+const EDITION_PRINTINGS = [{ value: 'Normal', label: 'Unlimited' }, { value: '1st Edition', label: '1st Edition' }];
 
 // Printing/finish {value,label} options for a card's game. Value stays within
 // the collection.printing CHECK constraint; only the label is game-specific.
 export function getPrintings(game) {
-  if (gameInfo(String(game || '').toLowerCase())?.printings === 'foil') return TWO_FINISH_PRINTINGS;
+  const printings = gameInfo(String(game || '').toLowerCase())?.printings;
+  if (printings === 'foil') return TWO_FINISH_PRINTINGS;
+  if (printings === 'edition') return EDITION_PRINTINGS;
   return PRINTINGS.map(p => ({ value: p, label: p }));
 }
 
@@ -45,6 +51,7 @@ const PRINTING_KEYS = {
   'Promo': 'promo',
   'Nonfoil': 'nonfoil',
   'Foil': 'foil',
+  'Unlimited': 'unlimited',
 };
 
 export const conditionLabel = (t, condition) => {

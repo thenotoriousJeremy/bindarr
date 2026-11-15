@@ -759,6 +759,24 @@ async function initDb() {
     )
   `);
 
+  // Which sets a local scan catalog has already seen, so the weekly update builds
+  // only sets released SINCE (catalog.js setsBehind). Comparing the provider's set
+  // list against card_cache instead could never settle: it counted digital-only
+  // and unreachable sets forever, and it read every set a scoped catalog left out
+  // as "new", growing a five-set catalog into a whole-game build. `gap_tries`
+  // counts builds that found no upstream data for a new set, so a set announced
+  // before its cards is retried a few times rather than given up on at once.
+  await run(`
+    CREATE TABLE IF NOT EXISTS scan_catalog_state (
+      game TEXT NOT NULL,
+      language TEXT NOT NULL,
+      known_sets TEXT NOT NULL DEFAULT '[]',
+      gap_tries TEXT NOT NULL DEFAULT '{}',
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (game, language)
+    )
+  `);
+
   // Which cards a set holds, as its provider listed them (setListing.js). The
   // cards themselves are in card_cache; this records that the list is COMPLETE,
   // which card_cache cannot say — a set's rows arrive there one search at a time.
@@ -1418,6 +1436,17 @@ async function initDb() {
     await run(`ALTER TABLE card_cache ADD COLUMN image_url_back TEXT`);
   }
 
+  // TCGdex art moved from PNG to WebP (tcgdexApi.imageUrl): the same 245px image
+  // at about a third of the bytes. Rows cached before, or restored from an older
+  // backup, still point at the PNG; both URLs serve, so this is purely bandwidth,
+  // and it is re-run every boot because it is one pass and self-healing. The scan
+  // catalog keeps its vectors across the switch (catalog.js artKey).
+  await run(`
+    UPDATE card_cache
+       SET image_url = substr(image_url, 1, length(image_url) - 4) || '.webp'
+     WHERE image_url LIKE 'https://assets.tcgdex.net/%/low.png'
+  `);
+
   // tcgplayer_catalog originally held cards only (a product with no collector
   // number was skipped as sealed product). Sealed rows now get a row too, so the
   // build needs somewhere to put the game they belong to, their artwork, and a
@@ -1538,7 +1567,35 @@ async function initDb() {
     if (!settings.has('riftbound_prices_swept_at')) {
       await run(`ALTER TABLE app_settings ADD COLUMN riftbound_prices_swept_at DATETIME`);
     }
+    // The games served from TCGplayer's catalogue (tcgcsvGameApi): one sweep for all.
+    if (!settings.has('tcgcsvgames_prices_swept_at')) {
+      await run(`ALTER TABLE app_settings ADD COLUMN tcgcsvgames_prices_swept_at DATETIME`);
+    }
   }
+
+  // Per game served from TCGplayer's catalogue (tcgcsvGameApi.js): whether the
+  // install uses it (its TCGCSV category is only synced once something does), and
+  // which TCGCSV version its card_cache rows were last written from, with a hash
+  // per group so a daily refresh rewrites only the groups whose products changed.
+  await run(`
+    CREATE TABLE IF NOT EXISTS tcgcsv_catalogues (
+      game TEXT PRIMARY KEY,
+      activated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      catalogue_version TEXT,
+      product_hashes TEXT NOT NULL DEFAULT '{}',
+      price_hashes TEXT NOT NULL DEFAULT '{}'
+    )
+  `);
+  // The per-category bundles the mirror publishes (tcgcsvApi.syncFromBundles):
+  // the content hash of each one this install last stored, so an unchanged
+  // bundle is carried into the next version without downloading it again.
+  await run(`
+    CREATE TABLE IF NOT EXISTS tcgcsv_bundles (
+      path TEXT PRIMARY KEY,
+      hash TEXT NOT NULL,
+      data_version TEXT NOT NULL
+    )
+  `);
 
   const collectionCols = await all(`PRAGMA table_info(collection)`);
   if (!collectionCols.some(c => c.name === 'user_id')) {

@@ -5,6 +5,10 @@ const { requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
+// The Pokémon providers an admin may pick. TCGdex is the default; pokemontcg.io
+// stays selectable only for installs still pinned to it until they migrate.
+const POKEMON_PROVIDERS = ['tcgdex', 'pokemontcg', 'pokemontcgapi'];
+
 // --- Version + update check ---
 
 // backend/package.json is what the release workflow bumps, so it is the running
@@ -67,7 +71,9 @@ async function getEffectiveSettings() {
     FROM app_settings WHERE id = 1
   `);
   const public_base_url = (row && row.public_base_url) || process.env.PUBLIC_BASE_URL || '';
-  const pokemon_provider = (row && row.pokemon_provider) || 'pokemontcg';
+  // TCGdex unless the row explicitly holds another provider: pokemontcg.io is only
+  // ever the upgrade pin for installs whose data it numbers (db.js), never a default.
+  const pokemon_provider = POKEMON_PROVIDERS.includes(row && row.pokemon_provider) ? row.pokemon_provider : 'tcgdex';
   const mtg_price_source = row && row.mtg_price_source === 'cardmarket' ? 'cardmarket' : 'tcgplayer';
   const scan_exclude_tokens = !!(row && row.scan_exclude_tokens);
   const scan_exclude_art_cards = !!(row && row.scan_exclude_art_cards);
@@ -154,7 +160,12 @@ router.put('/', requireAdmin, async (req, res) => {
   }
 
   if (pokemon_provider !== undefined) {
-    const want = ['tcgdex', 'pokemontcgapi'].includes(pokemon_provider) ? pokemon_provider : 'pokemontcg';
+    // Refused rather than coerced. A typo used to land on pokemontcg.io, which
+    // re-numbers every Pokémon set on the install behind the admin's back.
+    if (!POKEMON_PROVIDERS.includes(pokemon_provider)) {
+      return res.status(400).json({ error: `Pokémon provider must be one of: ${POKEMON_PROVIDERS.join(', ')}.` });
+    }
+    const want = pokemon_provider;
     if (want === 'pokemontcgapi' && !require('../pokemontcgapi').hasKey()) {
       return res.status(400).json({ error: 'Set POKEMONTCGAPI_KEY on the server before selecting this provider.' });
     }
@@ -166,7 +177,8 @@ router.put('/', requireAdmin, async (req, res) => {
     // the TCGplayer product map resolves scans through set ids it took FROM that
     // table. Both are rebuilt here, in the background — the set walk is one
     // request plus a detail pass, the map is ~30 seconds.
-    if ((before && before.pokemon_provider ? before.pokemon_provider : 'pokemontcg') !== want) {
+    const previous = POKEMON_PROVIDERS.includes(before && before.pokemon_provider) ? before.pokemon_provider : 'tcgdex';
+    if (previous !== want) {
       console.log(`Pokémon provider changed to ${want} — re-syncing sets and the TCGplayer product map.`);
       (async () => {
         try {

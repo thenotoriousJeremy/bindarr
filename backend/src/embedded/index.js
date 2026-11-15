@@ -53,21 +53,21 @@ for (const prefix of ['/api/shared', '/api/admin', '/api/card-art']) {
   }));
 }
 app.use('/api', authenticateToken);
-// Scanning on a phone: the app downloads the models and the published catalogs
-// (frontend/src/device/scanAssets.js), runs milo itself and sends the route an
-// embedding instead of a photo — the route reads a photo with Node's Buffer,
-// which a phone does not have. Until that data is on the device, or for Lorcana,
-// which has no published catalog, the answer is the route's own 503 notBuilt,
-// worded for a phone.
+// Scanning on a phone: the app downloads the models and a catalog per game
+// (frontend/src/device/scanAssets.js: Bindarr's weekly release, or the model
+// author's snapshot), runs milo itself and sends the route an embedding instead
+// of a photo — the route reads a photo with Node's Buffer, which a phone does not
+// have. Until that data is on the device the answer is the route's own 503
+// notBuilt, worded for a phone. Which games have a catalog at all is the
+// release's list, which the app shows; this route cannot know it offline.
 app.post('/api/scan-match', (req, res, next) => {
   const { game = 'pokemon', lang, embedding } = req.body || {};
   const langName = require('../utils/languages').toName(lang);
   if (Array.isArray(embedding) && cvScan.isBuilt(game, langName)) return next();
+  const label = require('../utils/games').get(game)?.label || game;
   res.status(503).json({
     game, lang: langName, candidates: [], verified: false, notBuilt: true, deviceMode: true,
-    error: game === 'lorcana'
-      ? 'There is no downloadable scan catalog for Lorcana. Scanning Lorcana cards needs a Bindarr server.'
-      : 'Download the scan data for this game first: Add Cards → Scan.',
+    error: `Download the ${label} scan data first: Add Cards → Scan.`,
   });
 });
 app.use('/api', require('../routes/collection'));
@@ -214,7 +214,18 @@ module.exports = {
   // Scanning: what can be downloaded (one descriptor table, shared with the
   // server's fetch-models script), where the app's downloaded catalogs come in,
   // and the TCGplayer product map the Pokémon catalog resolves its matches through.
-  scanAssets: { MODELS: require('../utils/modelAssets').MODELS, CATALOGS: require('../utils/modelAssets').CATALOGS },
+  // `release`: where Bindarr's own catalogs are published, and the segment format
+  // the app downloads and applies them with (catalogReleases.js is the server's
+  // side of the same thing).
+  scanAssets: {
+    MODELS: require('../utils/modelAssets').MODELS,
+    CATALOGS: require('../utils/modelAssets').CATALOGS,
+    release: {
+      base: require('../utils/releaseAssets').base(),
+      segments: require('../utils/catalogSegments'),
+      model: require('../utils/miloInput').MODEL_ID,
+    },
+  },
   setScanSource: cvScan.setSource,
   productMap: require('../tcgplayerCatalog'),
   app,

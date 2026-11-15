@@ -53,7 +53,7 @@ console.log('PASS: Magic and Lorcana keep sealed products and their prices, and 
 for (const categoryId of [3, 85]) {
   const products = slimResults(`/tcgplayer/${categoryId}/30/products`, raw(30));
   assert.deepStrictEqual(products, [
-    { productId: 1, name: 'A Card', number: '004/165' },
+    { productId: 1, name: 'A Card', number: '004/165', rarity: 'Rare', imageUrl: 'https://img/1.jpg' },
     ...sealedRows(30),
   ], `Pokémon category ${categoryId} keeps cards (slim) and sealed product`);
   const prices = slimResults(`/tcgplayer/${categoryId}/30/prices`, rawPrices);

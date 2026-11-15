@@ -31,7 +31,8 @@
 // Exit codes: 0 synced (publish), 78 unchanged (skip publish), 1 error, 2 bad
 // arguments. 78 is the old GitHub Actions "neutral" code; any distinct value
 // would do, it only has to be one the workflow can tell apart from failure.
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -46,7 +47,9 @@ export const USER_AGENT = `BindarrMirror/${VERSION} (+https://github.com/thenoto
 
 // The backend's rule for what counts as sealed product, so the mirror and the
 // cache can never disagree about which Magic/Lorcana rows Bindarr needs.
-const { isSealedProduct, SEALED_ONLY_CATEGORIES } = createRequire(import.meta.url)('../../backend/src/utils/tcgcsvSlim.js');
+const {
+  isSealedProduct, SEALED_ONLY_CATEGORIES, slimResults, SLIM_VERSION, BUNDLE_KINDS, bundlePath, INDEX_PATH,
+} = createRequire(import.meta.url)('../../backend/src/utils/tcgcsvSlim.js');
 
 export const EXIT = { SYNCED: 0, ERROR: 1, USAGE: 2, UNCHANGED: 78 };
 
@@ -66,6 +69,9 @@ const REQUEST_TIMEOUT_MS = 30000;
 // join onto --out.
 const ALLOWED_PATHS = [
   /^\/last-updated\.txt$/,
+  // Read once a run, and only when optional categories are configured, to check
+  // each one is the game it was added for (CATEGORY_NAMES).
+  /^\/tcgplayer\/categories$/,
   /^\/tcgplayer\/\d+\/groups$/,
   /^\/tcgplayer\/\d+\/\d+\/(products|prices)$/,
 ];
@@ -164,8 +170,134 @@ async function writeMirrored(outDir, urlPath, body) {
   return body.length;
 }
 
+// --- what to fetch -------------------------------------------------------------
+//
+// Prices move every day; a set's product list mostly does not. So a group's
+// products are re-fetched only when they may have changed, and otherwise the copy
+// already in the published tree is kept (the workflow checks the previous tree out
+// into --out first):
+//   · no copy yet, or a group TCGCSV did not list last time
+//   · the group's modifiedOn moved
+//   · a set published in the last RECENT_DAYS, which fills in for weeks
+//   · and every group once a week regardless (groupId % 7), in case a change
+//     slips past modifiedOn
+// That roughly halves the daily requests, which is the room the optional
+// categories below fit into.
+const RECENT_DAYS = 60;
+const ROTATION_DAYS = 7;
+const DAY_MS = 86400000;
+
+// What each category's TCGplayer name must look like before anything of it is
+// mirrored. Only checked for the optional categories (one extra request): a
+// category id typed wrong would otherwise fill a game with another game's cards
+// for every install that reads the mirror.
+export const CATEGORY_NAMES = {
+  2: /yu-?gi-?oh/i,
+  62: /flesh/i,
+  63: /digimon/i,
+  68: /one ?piece/i,
+  79: /star ?wars/i,
+};
+
+const exists = async (file) => { try { await stat(file); return true; } catch { return false; } };
+const fileOf = (outDir, urlPath) => path.join(outDir, ...urlPath.split('/').filter(Boolean));
+
+async function readEnvelopeFile(outDir, urlPath) {
+  try {
+    return JSON.parse(await readFile(fileOf(outDir, urlPath), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+// groupId -> modifiedOn, from the groups list the previous run published.
+async function previousStamps(outDir, categoryId) {
+  const env = await readEnvelopeFile(outDir, `/tcgplayer/${categoryId}/groups`);
+  return new Map((env && Array.isArray(env.results) ? env.results : []).map(g => [g.groupId, g.modifiedOn ?? null]));
+}
+
+export function productsDue(group, { previous, haveFile, refreshAll, now }) {
+  if (refreshAll || !haveFile || !previous.has(group.groupId)) return true;
+  if ((previous.get(group.groupId) ?? null) !== (group.modifiedOn ?? null)) return true;
+  const published = Date.parse(group.publishedOn || '');
+  if (Number.isFinite(published) && now - published < RECENT_DAYS * DAY_MS) return true;
+  return group.groupId % ROTATION_DAYS === Math.floor(now / DAY_MS) % ROTATION_DAYS;
+}
+
+// --- bundles -------------------------------------------------------------------
+//
+// One file per category and kind, already slim (backend/src/utils/tcgcsvSlim.js,
+// the same rules an instance applies to the per-group files), plus an index of
+// the bundles' hashes. An instance then syncs a category in at most three
+// requests and skips the ones whose hash it already holds (tcgcsvApi.
+// syncFromBundles). The per-group files stay, byte for byte, for every release
+// that predates the bundles and for anyone pointing an install at TCGCSV itself.
+async function writeBundles(outDir, categoryId, version) {
+  const groupsPath = `/tcgplayer/${categoryId}/groups`;
+  const groupsEnv = await readEnvelopeFile(outDir, groupsPath);
+  if (!groupsEnv || !Array.isArray(groupsEnv.results)) return 0;
+  const groups = slimResults(groupsPath, groupsEnv.results);
+  const products = {}, prices = {};
+  for (const g of groups) {
+    const productsPath = `/tcgplayer/${categoryId}/${g.groupId}/products`;
+    const pricesPath = `/tcgplayer/${categoryId}/${g.groupId}/prices`;
+    const prodEnv = await readEnvelopeFile(outDir, productsPath);
+    products[g.groupId] = prodEnv && Array.isArray(prodEnv.results) ? slimResults(productsPath, prodEnv.results) : [];
+    const keep = SEALED_ONLY_CATEGORIES.has(categoryId) ? new Set(products[g.groupId].map(p => p.productId)) : null;
+    const priceEnv = await readEnvelopeFile(outDir, pricesPath);
+    prices[g.groupId] = priceEnv && Array.isArray(priceEnv.results)
+      ? slimResults(pricesPath, priceEnv.results, { keepProductIds: keep }) : [];
+  }
+  // No version or timestamp in the body: a bundle whose rows did not change must be
+  // byte-identical to yesterday's, so its hash in the index is too and an instance
+  // carries it forward without downloading it (most days, every products bundle).
+  // The index names the version; an instance checks each bundle against the
+  // index's hash, which also catches a CDN serving an older copy.
+  void version;
+  let bytes = 0;
+  for (const [kind, results] of [['groups', groups], ['products', products], ['prices', prices]]) {
+    const body = JSON.stringify({ success: true, errors: [], slim: SLIM_VERSION, categoryId, kind, results });
+    bytes += await writeMirrored(outDir, bundlePath(categoryId, kind), Buffer.from(body));
+  }
+  return bytes;
+}
+
+async function writeIndex(outDir, version, categories) {
+  const files = {};
+  for (const categoryId of categories) {
+    for (const kind of BUNDLE_KINDS) {
+      const urlPath = bundlePath(categoryId, kind);
+      try {
+        files[urlPath] = createHash('sha256').update(await readFile(fileOf(outDir, urlPath))).digest('hex').slice(0, 20);
+      } catch { /* a category with no bundle is simply not listed */ }
+    }
+  }
+  const body = JSON.stringify({ version, slim: SLIM_VERSION, generatedAt: new Date().toISOString(), files });
+  return writeMirrored(outDir, INDEX_PATH, Buffer.from(body));
+}
+
+// A group TCGCSV no longer lists leaves its directory behind in a tree that is
+// carried from run to run; remove it, so the tree is exactly the groups listed.
+async function pruneGroups(outDir, categoryId, groupIds) {
+  const dir = fileOf(outDir, `/tcgplayer/${categoryId}`);
+  let entries;
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return 0; }
+  const keep = new Set(groupIds.map(String));
+  let removed = 0;
+  for (const e of entries) {
+    if (e.isDirectory() && /^\d+$/.test(e.name) && !keep.has(e.name)) {
+      await rm(path.join(dir, e.name), { recursive: true, force: true });
+      removed++;
+    }
+  }
+  return removed;
+}
+
 export async function sync(options, log = console) {
-  const { out, categories, base, maxRequests, intervalMs, previousLastUpdated } = options;
+  const {
+    out, categories, optionalCategories = [], base, maxRequests, intervalMs, previousLastUpdated,
+    refreshAllProducts = false, now = Date.now(),
+  } = options;
   const client = new PoliteClient({ base, maxRequests, intervalMs });
   const previous = await readPrevious(previousLastUpdated);
 
@@ -179,9 +311,26 @@ export async function sync(options, log = console) {
     return { status: 'unchanged', lastUpdated: current, requests: client.count };
   }
 
+  // Optional categories are vetted by name first, and dropped (not fatal) when
+  // they do not look like the game they are meant to be.
+  let optional = optionalCategories.filter(c => !categories.includes(c));
+  if (optional.length) {
+    const urlPath = '/tcgplayer/categories';
+    const envelope = parseEnvelope(urlPath, await client.get(urlPath));
+    const names = new Map(envelope.results.map(c => [c && c.categoryId, `${c && c.name} ${c && c.displayName}`]));
+    optional = optional.filter(c => {
+      const ok = names.has(c) && (!CATEGORY_NAMES[c] || CATEGORY_NAMES[c].test(names.get(c)));
+      if (!ok) log.warn(`category ${c} is "${names.get(c) || 'not listed'}", not the game it was added for; skipping it`);
+      return ok;
+    });
+  }
+
   let bytes = 0;
-  const groupsByCategory = [];
-  for (const categoryId of categories) {
+  // Every group list first (one request each), so the budget is known before the
+  // bulk of the run: the core categories must fit, each optional one is added
+  // only while the run still fits under the cap.
+  const plan = [];
+  const fetchGroups = async (categoryId) => {
     const urlPath = `/tcgplayer/${categoryId}/groups`;
     const body = await client.get(urlPath);
     const envelope = parseEnvelope(urlPath, body);
@@ -189,36 +338,68 @@ export async function sync(options, log = console) {
       // Without the group list there is nothing to mirror for this category.
       throw new Error(`${urlPath} failed upstream: ${(envelope.errors || []).join('; ') || 'unknown error'}`);
     }
-    const groupIds = envelope.results.map(g => g && g.groupId);
-    const bad = groupIds.find(id => !Number.isInteger(id) || id <= 0);
+    const groups = envelope.results;
+    const bad = groups.map(g => g && g.groupId).find(id => !Number.isInteger(id) || id <= 0);
     if (bad !== undefined) throw new Error(`${urlPath} has a non-numeric groupId: ${JSON.stringify(bad)}`);
-    groupsByCategory.push({ categoryId, groupIds });
-    bytes += await writeMirrored(out, urlPath, body);
-  }
+    const prev = await previousStamps(out, categoryId);
+    const due = new Set();
+    for (const g of groups) {
+      const haveFile = await exists(fileOf(out, `/tcgplayer/${categoryId}/${g.groupId}/products`));
+      if (productsDue(g, { previous: prev, haveFile, refreshAll: refreshAllProducts, now })) due.add(g.groupId);
+    }
+    return { categoryId, groups, due, body, cost: groups.length + due.size };
+  };
 
-  // Fail before the bulk of the run rather than part-way through it: a sync the
-  // cap would cut short is a wasted few hundred requests against TCGCSV.
-  const groupCount = groupsByCategory.reduce((n, c) => n + c.groupIds.length, 0);
-  const needed = client.count + groupCount * 2;
-  if (needed > maxRequests) {
+  for (const categoryId of categories) plan.push(await fetchGroups(categoryId));
+  const coreNeeded = client.count + plan.reduce((n, p) => n + p.cost, 0);
+  if (coreNeeded > maxRequests) {
+    // Fail before the bulk of the run rather than part-way through it: a sync the
+    // cap would cut short is a wasted few hundred requests against TCGCSV.
     throw new Error(
-      `a full sync needs ${needed} requests (${groupCount} groups), over the cap of ${maxRequests}; stopped after the group lists`
+      `a full sync needs ${coreNeeded} requests (${plan.reduce((n, p) => n + p.groups.length, 0)} groups), ` +
+      `over the cap of ${maxRequests}; stopped after the group lists`
     );
   }
+  const skipped = [];
+  for (const categoryId of optional) {
+    if (client.count + 1 > maxRequests) { skipped.push(categoryId); continue; }
+    const entry = await fetchGroups(categoryId);
+    const needed = client.count + plan.reduce((n, p) => n + p.cost, 0) + entry.cost;
+    if (needed > maxRequests) {
+      skipped.push(categoryId);
+      log.warn(`category ${categoryId} needs ${entry.cost} more requests than today's cap leaves; keeping yesterday's copy`);
+      continue;
+    }
+    plan.push(entry);
+  }
 
-  for (const { categoryId, groupIds } of groupsByCategory) {
+  let groupCount = 0, productFetches = 0;
+  for (const { categoryId, groups, due, body } of plan) {
+    groupCount += groups.length;
+    bytes += await writeMirrored(out, `/tcgplayer/${categoryId}/groups`, body);
+    await pruneGroups(out, categoryId, groups.map(g => g.groupId));
     const sealedOnly = SEALED_ONLY_CATEGORIES.has(categoryId);
-    for (const groupId of groupIds) {
+    for (const { groupId } of groups) {
       let sealedIds = null;   // products before prices, so the prices can follow them
       for (const kind of ['products', 'prices']) {
         const urlPath = `/tcgplayer/${categoryId}/${groupId}/${kind}`;
-        const body = await client.get(urlPath);
-        const envelope = parseEnvelope(urlPath, body);
+        if (kind === 'products' && !due.has(groupId)) {
+          // Kept from the previous run; a sealed-only category's prices still
+          // need to know which products it kept.
+          if (sealedOnly) {
+            const kept = await readEnvelopeFile(out, urlPath);
+            sealedIds = new Set((kept && kept.results || []).map(p => p && p.productId));
+          }
+          continue;
+        }
+        if (kind === 'products') productFetches++;
+        const fetched = await client.get(urlPath);
+        const envelope = parseEnvelope(urlPath, fetched);
         // Mirrored anyway: an instance reading the mirror should see what it
         // would have seen from TCGCSV, not a different answer.
         if (envelope.success === false) log.warn(`${urlPath} reported success: false upstream`);
         if (!sealedOnly) {
-          bytes += await writeMirrored(out, urlPath, body);
+          bytes += await writeMirrored(out, urlPath, fetched);
           continue;
         }
         let results;
@@ -234,14 +415,25 @@ export async function sync(options, log = console) {
     }
   }
 
+  // Bundles for every category the tree holds — a skipped optional category's
+  // too, rebuilt from yesterday's files under today's version, so an instance never
+  // sees an index and a bundle that disagree.
+  const bundled = [...categories, ...optionalCategories.filter(c => !categories.includes(c))];
+  for (const categoryId of bundled) bytes += await writeBundles(out, categoryId, current);
+  bytes += await writeIndex(out, current, bundled);
+
   // Written last, so a tree from a failed run never carries a marker claiming it
   // is complete.
   bytes += await writeMirrored(out, '/last-updated.txt', lastUpdatedBody);
   log.log(
-    `Mirrored TCGCSV ${current}: ${groupCount} groups in categories ${categories.join(',')}, ` +
-    `${client.count} requests, ${(bytes / 1048576).toFixed(1)} MiB.`
+    `Mirrored TCGCSV ${current}: ${groupCount} groups in categories ${plan.map(p => p.categoryId).join(',')}` +
+    `${skipped.length ? ` (skipped ${skipped.join(',')})` : ''}, ${productFetches} product lists re-fetched, ` +
+    `${client.count} requests, ${(bytes / 1048576).toFixed(1)} MiB written.`
   );
-  return { status: 'synced', lastUpdated: current, requests: client.count, groups: groupCount, bytes };
+  return {
+    status: 'synced', lastUpdated: current, requests: client.count, groups: groupCount, bytes,
+    categories: plan.map(p => p.categoryId), skipped, productFetches,
+  };
 }
 
 function positiveInt(name, value, fallback) {
@@ -259,6 +451,11 @@ export function parseOptions(argv) {
       options: {
         out: { type: 'string' },
         categories: { type: 'string', default: '3,85' },
+        // Mirrored only when they fit under the cap after --categories, and only
+        // once TCGCSV's own name for each matches the game (CATEGORY_NAMES).
+        'optional-categories': { type: 'string', default: '' },
+        // Re-fetch every group's products, not just the ones that may have changed.
+        'refresh-products': { type: 'boolean', default: false },
         base: { type: 'string', default: 'https://tcgcsv.com' },
         'max-requests': { type: 'string' },
         'previous-last-updated': { type: 'string' },
@@ -281,9 +478,15 @@ export function parseOptions(argv) {
   }
   const intervalMs = positiveInt('interval-ms', values['interval-ms'], DEFAULT_INTERVAL_MS);
   if (intervalMs < MIN_INTERVAL_MS) throw new UsageError(`--interval-ms may not be below ${MIN_INTERVAL_MS}`);
+  const optional = String(values['optional-categories'] || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (optional.some(c => !/^\d+$/.test(c))) {
+    throw new UsageError('--optional-categories must be comma-separated numeric TCGplayer category ids');
+  }
   return {
     out: path.resolve(values.out),
     categories: categories.map(Number),
+    optionalCategories: optional.map(Number),
+    refreshAllProducts: !!values['refresh-products'],
     base: values.base,
     maxRequests,
     intervalMs,

@@ -33,11 +33,19 @@ const PRODUCT_LINES = {
   riftbound: 'Riftbound League of Legends Trading Card Game',
 };
 
+// Null for a game with no verified product line. It used to fall back to Magic,
+// so a Yu-Gi-Oh! buylist opened Mass Entry on Magic and matched nothing; the page
+// without a product line lets TCGplayer pick by product id or the user choose.
 export function productLine(game, language) {
   const g = String(game || '').toLowerCase();
   if (g === 'pokemon' && /^(ja|japanese)$/i.test(String(language || '').trim())) return 'Pokemon Japan';
-  return PRODUCT_LINES[g] || PRODUCT_LINES.mtg;
+  return PRODUCT_LINES[g] || null;
 }
+
+const productLineQuery = (game, language) => {
+  const line = productLine(game, language);
+  return line ? `productline=${encodeURIComponent(line)}` : '';
+};
 
 const quantityOf = (item) => Math.max(1, parseInt(item && item.quantity, 10) || 1);
 // One line of text. `||` would split the entry and brackets would end the set
@@ -82,11 +90,13 @@ export function buildMassEntry(items, { game, language } = {}) {
   if (!wanted.length) return { url: null, text: '', count: 0 };
   const byId = wanted.every(i => i.productId);
   const entries = byId ? wanted.map(i => `${i.quantity}-${i.productId}`) : text.split('\n');
-  const url = `${MASS_ENTRY_URL}?productline=${encodeURIComponent(productLine(game, language))}`
-    + `&c=${entries.map(e => encodeURIComponent(e)).join('||')}`;
+  const line = productLineQuery(game, language);
+  const url = `${MASS_ENTRY_URL}?${line ? `${line}&` : ''}c=${entries.map(e => encodeURIComponent(e)).join('||')}`;
   return { url: url.length <= MAX_URL_LENGTH ? url : null, text, count: wanted.length };
 }
 
 // The bare page for a product line, for the copy-and-paste fallback.
-export const massEntryPage = (game, language) =>
-  `${MASS_ENTRY_URL}?productline=${encodeURIComponent(productLine(game, language))}`;
+export const massEntryPage = (game, language) => {
+  const line = productLineQuery(game, language);
+  return line ? `${MASS_ENTRY_URL}?${line}` : MASS_ENTRY_URL;
+};

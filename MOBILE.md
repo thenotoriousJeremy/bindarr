@@ -74,21 +74,27 @@ the UI makes is answered in-process.
   session that never expires.
 
 What needs a server, and is hidden or explained in device mode: **share links**,
-**other accounts and SSO**, **server backups**, **custom card art**, and **scanning
-Lorcana cards**. Instance settings (Pokémon data provider, Magic price source,
-refresh interval) move from Admin into Settings.
+**other accounts and SSO**, **server backups** and **custom card art**. Instance
+settings (Pokémon data provider, Magic price source, refresh interval) move from
+Admin into Settings.
 
 ### Scanning on the phone
 
-Magic and Pokémon cards can be scanned after a one-time download (Add Cards → Scan,
-or Settings → This Device): the two models (~8 MB, AGPL-3.0, fetched only when the
-owner presses the button) and that game's published catalog (Magic ~56 MB, Pokémon
-~13 MB), from the same Hugging Face files `backend/scripts/fetch-models.mjs` uses.
-Lorcana has no published catalog; servers build theirs with native image code.
+Cards can be scanned after a one-time download (Add Cards → Scan, or Settings →
+This Device): the two models (~8 MB, AGPL-3.0, fetched only when the owner presses
+the button, from the same pinned, checksummed Hugging Face files
+`backend/scripts/fetch-models.mjs` uses) and that game's catalog. The catalog is
+Bindarr's own, from the weekly `scan-catalogs` release (PROJECT.md, "Published
+catalogs"): Magic ~33 MB, Pokémon ~8 MB, the others smaller, after which the app
+checks once a day at launch and downloads only the new cards. When the release
+cannot be reached, the model author's dated snapshot is downloaded instead (Magic
+~56 MB, Pokémon ~13 MB, Yu-Gi-Oh! ~21 MB; Riftbound has none).
 
 - `frontend/src/device/scanAssets.js` downloads with `@capacitor/file-transfer`
-  into the app's private storage, checks each file's exact size, and reads files
-  back through the WebView's local server rather than across the bridge.
+  into the app's private storage, checks each file's exact size (and a release
+  segment's SHA-256), and reads files back through the WebView's local server
+  rather than across the bridge. Release segments are applied with the backend's
+  own `utils/catalogSegments.js`, handed over by the bundle.
 - `frontend/src/device/scanEngine.js` does the server's half of a scan in the
   WebView: resize the scanner's crop to 448 (or find the corners with cornelius
   and dewarp a whole frame), then run milo with onnxruntime-web.
@@ -96,11 +102,13 @@ Lorcana has no published catalog; servers build theirs with native image code.
   that embedding. The route accepts `embedding` in place of `image`, and
   `cvScan.setSource()` hands it the downloaded catalogs, so the sweep, the
   not-in-catalog gate and naming the card are the server's own code.
-- The Pokémon catalog names cards by TCGplayer product id, so the product map is
-  built from TCGCSV in the background after that download, as on a server.
+- A release catalog names cards by Bindarr card id. The model author's Pokémon
+  snapshot names them by TCGplayer product id, so after that download the product
+  map is built from TCGCSV in the background, as on a server.
 
-Catalogs are dated snapshots: a card printed after one cannot be scanned, and is
-reported as not in the catalog rather than matched to something else.
+A card newer than the catalog cannot be scanned until the next weekly update (a
+snapshot never gets one); it is reported as not in the catalog rather than
+matched to something else.
 
 ### Backups and moving to a server
 

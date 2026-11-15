@@ -232,8 +232,8 @@ const ID = {
   const embed = new URL(catalog.embedUrl(fieldRow));
   assert.strictEqual(embed.searchParams.get('w'), '744');
   assert.ok(/1039x744\.png$/.test(embed.pathname), 'the landscape original, unrotated');
-  assert.strictEqual(catalog.embedUrl({ id: 'tcgdex-en-x-1', image_url: 'https://assets.tcgdex.net/en/x/1/low.png' }),
-    'https://assets.tcgdex.net/en/x/1/high.png', 'the other providers keep their own swaps');
+  assert.strictEqual(catalog.embedUrl({ id: 'tcgdex-en-x-1', image_url: 'https://assets.tcgdex.net/en/x/1/low.webp' }),
+    'https://assets.tcgdex.net/en/x/1/high.webp', 'the other providers keep their own swaps');
   // --- 7b. Set completion lists a Riftbound set from the cached catalogue --------
   const setListing = require('../src/setListing');
   assert.ok(setListing.supports('riftbound'));

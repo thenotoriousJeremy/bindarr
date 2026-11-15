@@ -14,6 +14,9 @@ const fs = require('fs');
 
 process.env.DB_PATH = path.join(os.tmpdir(), `bindarr-tcgcsvgate-${process.pid}.db`);
 process.env.TCGCSV_BASE_URL = 'https://tcgcsv-cache.example.test';
+// The per-group walk is what this file pins; the mirror's bundles, which replace it
+// when the mirror publishes them, are test/tcgcsvbundles.test.js.
+process.env.TCGCSV_BUNDLES = '0';
 const tcgcsv = require('../src/tcgcsvApi');
 const db = require('../src/db');
 

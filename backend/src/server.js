@@ -289,25 +289,48 @@ app.use((req, res, next) => {
 // Deliberately conservative. It only touches catalogs that ALREADY exist — it never
 // creates one, because that is an hours-long job nobody asked for — and it skips
 // entirely while a build is running, since catalog.start refuses a second one
-// anyway. The embed phase reuses every unchanged vector, so the real cost is
-// downloading and embedding only the new cards.
+// anyway.
+//
+// Each update is SCOPED to the sets released since that catalog was built
+// (catalog.setsBehind), so the cost is the new sets' card lists and images and
+// nothing else. It used to rebuild the whole game: ~950 Scryfall requests and a
+// rewrite of every cached Magic card, every week, because the count it went by
+// could never reach zero (digital-only and unreachable sets), and a catalog
+// scoped to a few sets grew into a whole-game build. Every behind catalog is
+// updated in turn, not just the first one found.
+//
+// Runs detached: the weekly job does not wait out hours of builds.
 //
 // ponytail: env var rather than an app_settings column + settings UI + eleven
 // translations. Promote it if users want per-install control from the web UI.
+let shuttingDown = false;   // set by shutdown's stopJobs: start no further builds
 async function autoUpdateCatalogs() {
   if (process.env.CATALOG_AUTO_UPDATE === '0') return;
   const catalog = require('./catalog');
   if (catalog.state()) return;
+  let behind;
   try {
-    for (const c of await catalog.list()) {
-      if (!c.built || !c.newSets) continue;
-      console.log(`catalog: ${c.game}/${c.lang} is ${c.newSets} set(s) behind — updating (CATALOG_AUTO_UPDATE=0 to disable)`);
-      catalog.start(c.game, c.lang);
-      return;   // one at a time; the next tick picks up the next one
-    }
+    behind = await catalog.behindCatalogs();
   } catch (err) {
     console.error('Catalog auto-update check failed:', err.message);
+    return;
   }
+  if (!behind.length) return;
+  (async () => {
+    for (const c of behind) {
+      if (catalog.state() || shuttingDown) return;
+      console.log(`catalog: ${c.game}/${c.lang} is ${c.pending.length} set(s) behind — building just those (CATALOG_AUTO_UPDATE=0 to disable)`);
+      try {
+        catalog.start(c.game, c.lang, { sets: c.pending });
+      } catch (err) {
+        console.error(`Catalog auto-update for ${c.game}/${c.lang} could not start: ${err.message}`);
+        return;
+      }
+      await catalog.whenIdle();
+      // Stopped (by an admin, or by shutdown): leave the rest for next week.
+      if (catalog.lastResult()?.phase === 'cancelled') return;
+    }
+  })().catch(err => console.error('Catalog auto-update failed:', err.message));
 }
 
 // Every game's set list (utils/syncJobs, shared with device mode's embedded/).
@@ -332,6 +355,18 @@ const scheduler = createScheduler({
         await syncSets(true);
         await require('./utils/compartmentSort').loadSetsCache(db);
         await autoUpdateCatalogs();
+      },
+    },
+    {
+      // Bindarr's downloaded scan catalogs (catalogReleases.js): one small manifest
+      // request per installed catalog, then only a delta the install lacks. Daily
+      // because a check that finds nothing costs one request, and an install that
+      // was off on build day then catches up a day later, not a week later.
+      name: 'scan-catalog-releases',
+      every: () => (process.env.CATALOG_AUTO_UPDATE === '0' ? 0 : 24 * HOUR),
+      run: async () => {
+        const r = await require('./catalogReleases').updateInstalled();
+        if (r && (r.downloaded || r.phase === 'error')) console.log(`Scan catalogs: ${r.message}`);
       },
     },
     {
@@ -435,6 +470,7 @@ const shutdown = createShutdown({
     // Between two sweeps, not mid-sweep; a catalog build after its in-flight
     // images, writing what it has (atomically) so a resume reuses all of it.
     stopPriceSweeps();
+    shuttingDown = true;
     require('./catalog').stop();
     notify.stop();
   },

@@ -141,7 +141,7 @@ async function legacyReferences(columns) {
     const c = ident(col.column);
     const rows = await db.all(
       `SELECT ${c} AS id, COUNT(*) AS n FROM ${ident(col.table)}
-        WHERE ${c} IS NOT NULL AND ${['mtg-', 'tcgdex-', 'pokemontcgapi-', 'lorcana-'].map(p => `${c} NOT LIKE '${p}%'`).join(' AND ')}
+        WHERE ${c} IS NOT NULL AND ${idMap.FOREIGN_PREFIXES.map(p => `${c} NOT LIKE '${p}%'`).join(' AND ')}
         GROUP BY ${c}`
     );
     for (const r of rows) if (idMap.isLegacyId(r.id)) add(r.id, col.table, r.n);
@@ -1068,10 +1068,10 @@ async function status() {
   const configured = await pokemonProvider.configured();
   const rows = await db.all(`SELECT c.card_id AS id, c.user_id, COUNT(*) AS n FROM collection c
       JOIN card_cache cc ON cc.id = c.card_id
-     WHERE cc.game = 'pokemon' AND c.card_id NOT LIKE 'tcgdex-%' AND c.card_id NOT LIKE 'pokemontcgapi-%'
+     WHERE cc.game = 'pokemon' AND c.card_id NOT LIKE 'tcgdex-%' AND c.card_id NOT LIKE 'pokemontcgapi-%' AND c.card_id NOT LIKE 'tcgplayer-%'
      GROUP BY c.card_id, c.user_id`);
   const decks = await db.all(`SELECT dc.card_id AS id, COUNT(*) AS n FROM deck_cards dc JOIN decks d ON d.id = dc.deck_id
-     WHERE COALESCE(d.game, 'pokemon') = 'pokemon' AND dc.card_id NOT LIKE 'tcgdex-%' AND dc.card_id NOT LIKE 'pokemontcgapi-%'
+     WHERE COALESCE(d.game, 'pokemon') = 'pokemon' AND dc.card_id NOT LIKE 'tcgdex-%' AND dc.card_id NOT LIKE 'pokemontcgapi-%' AND dc.card_id NOT LIKE 'tcgplayer-%'
      GROUP BY dc.card_id`);
   const legacy = rows.filter(r => idMap.isLegacyId(r.id));
   const legacyDecks = decks.filter(r => idMap.isLegacyId(r.id));

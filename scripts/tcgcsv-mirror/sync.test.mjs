@@ -6,13 +6,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(HERE, 'sync.mjs');
+const { productsDue } = await import('./sync.mjs');
 
 const LAST_UPDATED = '2026-11-06T20:05:50+0000\n';
 const envelope = (results) => JSON.stringify({ totalItems: results.length, success: true, errors: [], results });
@@ -128,7 +130,9 @@ test('a newer timestamp mirrors every path byte for byte, marker last', async ()
     assert.equal(r.code, 0, r.stderr);
 
     const expected = [...routes.keys()].sort();
-    assert.deepEqual(await listFiles(out), expected);
+    // Everything TCGCSV serves, byte for byte; the bundles and their index live
+    // under /bindarr/ beside it (tested below).
+    assert.deepEqual((await listFiles(out)).filter(p => !p.startsWith('/bindarr/')), expected);
     for (const p of expected) {
       const written = await readFile(path.join(out, ...p.split('/').filter(Boolean)));
       assert.ok(written.equals(Buffer.from(routes.get(p).body)), `${p} must be served exactly as TCGCSV sent it`);
@@ -251,5 +255,121 @@ test('sealed-only categories keep just sealed product and its prices', async () 
     // Pokémon stays byte for byte.
     const pokemon = await readFile(path.join(out, 'tcgplayer', '3', '101', 'products'));
     assert.ok(pokemon.equals(Buffer.from(routes.get('/tcgplayer/3/101/products').body)));
+  });
+});
+
+// --- bundles, the products policy, optional categories ------------------------
+
+const read = async (out, p) => JSON.parse(await readFile(path.join(out, ...p.split('/').filter(Boolean)), 'utf8'));
+
+test('publishes slim per-category bundles and an index of their hashes', async () => {
+  await withFixture(fixtureRoutes(), async ({ out, base }) => {
+    const r = await runSync([...base, '--categories', '3,85']);
+    assert.equal(r.code, 0, r.stderr);
+    const index = await read(out, '/bindarr/index.json');
+    assert.equal(index.version, LAST_UPDATED.trim());
+    assert.equal(typeof index.slim, 'number');
+    const paths = Object.keys(index.files).sort();
+    const want = [3, 85].flatMap(c => ['groups', 'prices', 'products'].map(k => `/bindarr/v${index.slim}/${c}/${k}`)).sort();
+    assert.deepEqual(paths, want);
+    for (const p of paths) {
+      const body = await readFile(path.join(out, ...p.split('/').filter(Boolean)));
+      assert.equal(index.files[p], createHash('sha256').update(body).digest('hex').slice(0, 20), `${p} hash`);
+      const bundle = JSON.parse(body);
+      assert.equal(bundle.version, undefined, 'no version in a bundle: unchanged rows must be byte-identical day to day');
+      assert.equal(bundle.slim, index.slim);
+    }
+    const products = await read(out, `/bindarr/v${index.slim}/3/products`);
+    // The fixture's card has no picture, which the slim row records as imageUrl: null.
+    assert.deepEqual(products.results['101'], [{ productId: 1010, name: 'Card 101', number: '1/102', imageUrl: null }],
+      'slim, keyed by group');
+    const prices = await read(out, `/bindarr/v${index.slim}/3/prices`);
+    assert.deepEqual(prices.results['102'], [{ productId: 1020, subTypeName: 'Normal', marketPrice: 1.23, midPrice: null }]);
+  });
+});
+
+test('keeps a group\'s products from the previous run unless they may have changed', async () => {
+  const routes = fixtureRoutes();
+  // Old sets, unchanged since the last run: only their prices are due, apart from
+  // whichever group the weekly rotation picks today.
+  const groups = [
+    { groupId: 101, name: 'Base Set', abbreviation: 'BS', categoryId: 3, publishedOn: '1999-01-09T00:00:00', modifiedOn: '2020-01-01T00:00:00' },
+    { groupId: 102, name: 'Jungle', abbreviation: 'JU', categoryId: 3, publishedOn: '1999-06-16T00:00:00', modifiedOn: '2020-01-01T00:00:00' },
+  ];
+  routes.set('/tcgplayer/3/groups', { body: envelope(groups) });
+  await withFixture(routes, async ({ server, out, base }) => {
+    let r = await runSync([...base, '--categories', '3', '--previous-last-updated', '2026-11-05T20:05:50+0000']);
+    assert.equal(r.code, 0, r.stderr);
+    // A group dropped from TCGCSV's list leaves no directory behind.
+    await mkdir(path.join(out, 'tcgplayer', '3', '999'), { recursive: true });
+    routes.set('/last-updated.txt', { body: '2026-11-07T20:05:50+0000\n', type: 'text/plain' });
+    server.requests.length = 0;
+    r = await runSync([...base, '--categories', '3', '--previous-last-updated', LAST_UPDATED.trim()]);
+    assert.equal(r.code, 0, r.stderr);
+    const prev = new Map(groups.map(g => [g.groupId, g.modifiedOn]));
+    const due = groups.filter(g => productsDue(g, { previous: prev, haveFile: true, refreshAll: false, now: Date.now() }));
+    const fetched = server.requests.map(q => q.path);
+    assert.equal(fetched.filter(p => p.endsWith('/products')).length, due.length, 'only the rotation\'s group re-fetches products');
+    assert.equal(fetched.filter(p => p.endsWith('/prices')).length, 2, 'prices always');
+    const kept = await readFile(path.join(out, 'tcgplayer', '3', '101', 'products'));
+    assert.ok(kept.equals(Buffer.from(routes.get('/tcgplayer/3/101/products').body)), 'a kept file is still byte for byte');
+    assert.deepEqual((await readdir(path.join(out, 'tcgplayer', '3'))).filter(n => /^\d+$/.test(n)).sort(), ['101', '102'],
+      'the delisted group is pruned');
+  });
+});
+
+test('products are due for a new, changed or recently published group', async () => {
+  const now = Date.parse('2026-11-15T00:00:00Z');
+  const day = Math.floor(now / 86400000) % 7;
+  const id = [8, 15, 22, 29, 36, 43, 50].find(n => n % 7 !== day);   // not on today's rotation
+  const prev = new Map([[id, '2020-01-01']]);
+  const old = { groupId: id, modifiedOn: '2020-01-01', publishedOn: '2010-01-01' };
+  assert.equal(productsDue(old, { previous: prev, haveFile: true, now }), false, 'unchanged and old: kept');
+  assert.equal(productsDue({ ...old, modifiedOn: '2026-11-14' }, { previous: prev, haveFile: true, now }), true, 'modifiedOn moved');
+  assert.equal(productsDue({ ...old, groupId: 99 }, { previous: prev, haveFile: true, now }), true, 'a group not listed last time');
+  assert.equal(productsDue({ ...old, publishedOn: '2026-10-20' }, { previous: prev, haveFile: true, now }), true, 'a set still filling in');
+  assert.equal(productsDue(old, { previous: prev, haveFile: false, now }), true, 'no copy yet');
+  assert.equal(productsDue(old, { previous: prev, haveFile: true, refreshAll: true, now }), true, '--refresh-products');
+  const rotating = { ...old, groupId: [7, 8, 9, 10, 11, 12, 13].find(n => n % 7 === day) };
+  assert.equal(productsDue(rotating, { previous: new Map([[rotating.groupId, '2020-01-01']]), haveFile: true, now }), true,
+    'every group once a week');
+});
+
+test('optional categories are checked by name and only taken while they fit the cap', async () => {
+  const routes = fixtureRoutes();
+  routes.set('/tcgplayer/categories', { body: envelope([
+    { categoryId: 3, name: 'Pokemon' }, { categoryId: 68, name: 'One Piece Card Game', displayName: 'One Piece Card Game' },
+    { categoryId: 63, name: 'Dragon Ball Super CCG' },
+  ]) });
+  routes.set('/tcgplayer/68/groups', { body: envelope([{ groupId: 601, name: 'Romance Dawn', abbreviation: 'OP01', categoryId: 68 }]) });
+  routes.set('/tcgplayer/68/601/products', { body: envelope([{
+    productId: 6010, name: 'Monkey.D.Luffy', groupId: 601, imageUrl: 'https://tcgplayer-cdn.tcgplayer.com/product/6010_200w.jpg',
+    extendedData: [{ name: 'Number', value: 'OP01-003' }, { name: 'Rarity', value: 'Leader' },
+      { name: 'Color', value: 'Red;Green' }, { name: 'Description', value: 'x'.repeat(200) }],
+  }]) });
+  routes.set('/tcgplayer/68/601/prices', { body: envelope([
+    { productId: 6010, marketPrice: 3.5, subTypeName: 'Normal' }, { productId: 6010, marketPrice: 40, subTypeName: 'Foil' },
+  ]) });
+  await withFixture(routes, async ({ server, out, base }) => {
+    const r = await runSync([...base, '--categories', '3,85', '--optional-categories', '68,63']);
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(server.requests.some(q => q.path === '/tcgplayer/categories'), 'names are checked');
+    assert.ok(!server.requests.some(q => q.path.startsWith('/tcgplayer/63/')), 'a category that is not the game is never fetched');
+    const index = await read(out, '/bindarr/index.json');
+    const products = await read(out, `/bindarr/v${index.slim}/68/products`);
+    assert.deepEqual(products.results['601'], [{
+      productId: 6010, name: 'Monkey.D.Luffy', number: 'OP01-003', groupId: 601, rarity: 'Leader', ext: { Color: 'Red;Green' },
+    }], 'a catalogue card keeps its short fields, never the rules text or the standard image url');
+    const prices = await read(out, `/bindarr/v${index.slim}/68/prices`);
+    assert.deepEqual(prices.results['601'].map(p => p.subTypeName), ['Normal', 'Foil'], 'every finish with a price');
+  });
+  // A cap that fits the core categories but not the optional one skips it.
+  await withFixture(routes, async ({ server, base }) => {
+    // last-updated + categories + 2 group lists + 3 groups x 2 = 10 for the core, and
+    // 68's group list makes 11; its products and prices would make 13.
+    const r = await runSync([...base, '--categories', '3,85', '--optional-categories', '68', '--max-requests', '11']);
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(!server.requests.some(q => /^\/tcgplayer\/68\/\d+\//.test(q.path)), 'no product or price request for a category that does not fit');
+    assert.match(r.stdout + r.stderr, /skipped 68/);
   });
 });

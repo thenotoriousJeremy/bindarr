@@ -55,7 +55,7 @@ const LANGUAGES_JSON = require('../../shared/languages.json');
     assert.ok(Array.isArray(g.languages) && g.languages.length, `${g.value} lists its languages`);
     for (const c of g.languages) assert.ok(codes.has(c), `${g.value} language ${c} is in shared/languages.json`);
     assert.ok(g.deck && g.deck.defaultFormat && g.deck.defaultSize > 0, `${g.value} has a default deck format`);
-    assert.ok(['pokemon', 'foil'].includes(g.printings), `${g.value} names a printing scheme`);
+    assert.ok(['pokemon', 'foil', 'edition'].includes(g.printings), `${g.value} names a printing scheme`);
     assert.ok(g.value === games.LEGACY_GAME || (g.idPrefixes && g.idPrefixes.length),
       `${g.value} registers an id prefix — only the legacy game may mint bare ids`);
   }
@@ -68,18 +68,18 @@ const LANGUAGES_JSON = require('../../shared/languages.json');
   assert.ok(!languages.isLanguageSupported('lorcana', 'Spanish'));
   assert.strictEqual(languages.getLanguagesForGame('mtg').length, LANGUAGES_JSON.length);
   assert.strictEqual(languages.getLanguagesForGame('').length, LANGUAGES_JSON.length, 'no game means every language');
-  assert.deepStrictEqual(languages.getLanguagesForGame('yugioh'), [], 'an unknown game is printed in nothing');
+  assert.deepStrictEqual(languages.getLanguagesForGame('notagame'), [], 'an unknown game is printed in nothing');
 
   // --- 4. Validation and feature lookups ---------------------------------------
   assert.strictEqual(games.parseGame(undefined), 'pokemon', 'absent still means the legacy default');
   assert.strictEqual(games.parseGame(''), 'pokemon');
   assert.strictEqual(games.parseGame('mtg'), 'mtg');
-  assert.strictEqual(games.parseGame('yugioh'), null, 'unknown is null, for the caller to refuse');
+  assert.strictEqual(games.parseGame('notagame'), null, 'unknown is null, for the caller to refuse');
   assert.strictEqual(games.parseGame('MTG'), null, 'values are exact; the API has always spoken lowercase');
   assert.ok(games.withFeature('scan').includes('lorcana'));
   assert.ok(games.hasFeature('pokemon', 'gradedPrices') && !games.hasFeature('mtg', 'gradedPrices'),
     'only Pokémon has an automatic graded-price source');
-  assert.strictEqual(games.hasFeature('yugioh', 'scan'), false);
+  assert.strictEqual(games.hasFeature('notagame', 'scan'), false);
 
   // --- 5. Set ids lose whichever game prefix they carry -------------------------
   assert.strictEqual(games.bareSetId('mtg-fdn'), 'fdn');
@@ -119,7 +119,7 @@ const LANGUAGES_JSON = require('../../shared/languages.json');
   // ...but a request that merely defaulted to Pokémon rescues nothing.
   assert.strictEqual(cardApi.gameOf('Black Lotus', 'pokemon'), null);
   assert.strictEqual(cardApi.gameOf('garbage'), null);
-  assert.strictEqual(cardApi.gameOf('garbage', 'yugioh'), null, 'an unknown requested game is no help either');
+  assert.strictEqual(cardApi.gameOf('garbage', 'notagame'), null, 'an unknown requested game is no help either');
   assert.strictEqual(cardApi.gameOf('', 'mtg'), 'mtg', 'a row with no id is the game it names');
   assert.strictEqual(cardApi.gameOf(''), null, 'and with neither, nothing');
 
@@ -129,7 +129,7 @@ const LANGUAGES_JSON = require('../../shared/languages.json');
   requests.length = 0;
   assert.strictEqual(await cardApi.getCardById('Black Lotus'), null);
   assert.strictEqual(await cardApi.getCardById('garbage', { game: 'pokemon' }), null);
-  assert.strictEqual(await cardApi.getCardById('yugioh_lob_001', { game: 'yugioh' }), null);
+  assert.strictEqual(await cardApi.getCardById('notagame_lob_001', { game: 'notagame' }), null);
   assert.deepStrictEqual(requests, [], `an unknown id must not reach any provider (saw ${requests.join(', ')})`);
   // A recognised id still goes to its provider: here the network is refused, so
   // the provider's own failure handling answers null — after asking.
@@ -140,7 +140,7 @@ const LANGUAGES_JSON = require('../../shared/languages.json');
   assert.strictEqual(await cardApi.apiForGame('mtg'), require('../src/scryfallApi'));
   assert.strictEqual(await cardApi.apiForGame('lorcana'), require('../src/lorcastApi'));
   assert.ok(await cardApi.apiForGame('pokemon', 'en'), 'Pokémon resolves through pokemonProvider');
-  assert.strictEqual(await cardApi.apiForGame('yugioh'), null, 'an unknown game has no provider');
+  assert.strictEqual(await cardApi.apiForGame('notagame'), null, 'an unknown game has no provider');
 
   console.log('games self-check passed');
   process.exit(0);

@@ -38,6 +38,8 @@ const isMtgId = (id) => String(id || '').startsWith('mtg-');
 const isTcgdexId = (id) => String(id || '').startsWith('tcgdex-');
 const isPokemontcgapiId = id => String(id || '').startsWith('pokemontcgapi-');
 const isLorcanaId = (id) => String(id || '').startsWith('lorcana-');
+// A Pokémon card TCGdex does not have, served from TCGplayer (pokemonTcgplayer.js).
+const isTcgplayerPokemonId = (id) => String(id || '').startsWith('tcgplayer-');
 
 // The game an ID implies, or null when nothing can say.
 //
@@ -63,15 +65,19 @@ function gameOf(id, requestedGame) {
 // The provider module behind each registry `provider` name. Pokémon is not
 // here: it has three providers, and which one owns a card is read off the id
 // (getCardById) or decided by utils/pokemonProvider (apiForGame).
+//
+// `tcgcsv` serves several games from one module (TCGplayer's catalogue), so its
+// loader is handed the game and returns that game's bound surface.
 const PROVIDERS = {
   scryfall: () => scryfallApi,
   lorcast: () => lorcastApi,
   riftcodex: () => require('../riftcodexApi'),
+  tcgcsv: (game) => require('../tcgcsvGameApi').forGame(game),
 };
 const providerOf = (game) => {
   const entry = games.get(game);
   const load = entry && PROVIDERS[entry.provider];
-  return load ? load() : null;
+  return load ? load(game) : null;
 };
 
 // The module that SEARCHES a game, in `lang`. Null for an unknown game, which
@@ -107,6 +113,7 @@ async function getCardById(id, { game, tcgApiKey = '' } = {}) {
   if (g === 'pokemon') {
     if (isPokemontcgapiId(id)) return await require('../pokemontcgapi').getCardById(id);
     if (isTcgdexId(id)) return await tcgdexApi.getCardById(id);
+    if (isTcgplayerPokemonId(id)) return await require('../pokemonTcgplayer').getCardById(id);
     return await tcgApi.getCardById(id, tcgApiKey);
   }
   const provider = providerOf(g);
@@ -135,8 +142,9 @@ async function printingInLanguage(card, language) {
     return await scryfallApi.getPrintingInLang(set, card.number, language).catch(() => null);
   }
   if (g === 'pokemon') {
-    // Regional set numbering cannot be translated by swapping a language code.
-    if (isPokemontcgapiId(card.id)) return null;
+    // Regional set numbering cannot be translated by swapping a language code, and
+    // a TCGplayer-only card exists in exactly one language.
+    if (isPokemontcgapiId(card.id) || isTcgplayerPokemonId(card.id)) return null;
     if (isTcgdexId(card.id)) {
       const match = await tcgdexApi.getPrintingInLang(card.id, language).catch(() => null);
       if (match) return match;
@@ -182,6 +190,6 @@ async function printingInLanguage(card, language) {
 }
 
 module.exports = {
-  isPokemontcgapiId, isMtgId, isTcgdexId, isLorcanaId, gameOf, apiForGame,
+  isPokemontcgapiId, isMtgId, isTcgdexId, isLorcanaId, isTcgplayerPokemonId, gameOf, apiForGame,
   hydrate, getCardById, printingInLanguage,
 };

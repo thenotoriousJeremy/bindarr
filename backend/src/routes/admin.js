@@ -422,6 +422,48 @@ router.get('/catalogs/progress', (req, res) => {
   res.json({ progress: catalog.state(), last: catalog.lastResult() });
 });
 
+// --- Bindarr's own catalogs ---------------------------------------------------
+//
+// Built weekly by this repository's CI and published as release assets
+// (catalogReleases.js): installing one downloads it whole once, updating fetches
+// only the week's delta. The alternative to building here, for every game.
+router.get('/catalog-releases', async (req, res) => {
+  try {
+    res.json(await require('../catalogReleases').status({ fresh: req.query.fresh === '1' }));
+  } catch (e) {
+    console.error('catalog releases status failed:', e.message);
+    res.status(500).json({ error: 'Could not list the downloadable catalogs' });
+  }
+});
+
+// Polled once a second while a download runs: memory only.
+router.get('/catalog-releases/progress', (req, res) => {
+  const releases = require('../catalogReleases');
+  res.json({ progress: releases.state(), last: releases.lastResult() });
+});
+
+// { keys: ['mtg-en', ...] } installs (or brings up to date) those catalogs; no
+// keys updates every installed one.
+router.post('/catalog-releases/download', (req, res) => {
+  const releases = require('../catalogReleases');
+  const keys = Array.isArray((req.body || {}).keys) ? req.body.keys.map(String) : [];
+  try {
+    res.json({ progress: releases.start(keys) });
+  } catch (e) {
+    res.status(409).json({ error: e.message, progress: releases.state() });
+  }
+});
+
+router.delete('/catalog-releases/:key', (req, res) => {
+  const releases = require('../catalogReleases');
+  if (releases.state()) return res.status(409).json({ error: 'a catalog download is running' });
+  try {
+    res.json({ removed: releases.remove(req.params.key) });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 router.get('/backups', (req, res) => {
   res.json({ dir: BACKUP_DIR, backups: listBackups() });
 });

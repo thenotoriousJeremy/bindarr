@@ -57,10 +57,11 @@ function testEnglishFollowsTheSetting() {
 }
 
 function testUnknownSettingIsSafe() {
-  // An unrecognised or missing setting falls back to the column default rather
-  // than to "whatever isn't TCGdex" by accident.
+  // An unrecognised or missing setting falls back to the column default, TCGdex.
+  // pokemontcg.io is only ever an explicit (upgrade-pinned) choice: it shuts down
+  // on POKEMONTCG_SUNSET, so landing on it by accident is the one wrong answer.
   for (const junk of [undefined, null, '', 'nonsense', 0, {}]) {
-    assert.strictEqual(decide(junk, 'en'), POKEMONTCG, `English + ${JSON.stringify(junk)} falls back to pokemontcg.io`);
+    assert.strictEqual(decide(junk, 'en'), TCGDEX, `English + ${JSON.stringify(junk)} falls back to TCGdex`);
     // ...but the language veto still overrides the fallback.
     assert.strictEqual(decide(junk, 'ja'), TCGDEX, `Japanese + ${JSON.stringify(junk)} still uses TCGdex`);
   }

@@ -9,7 +9,7 @@ import { onActivateKey } from '../utils/a11y';
 import { priceText } from '../utils/formatPrice';
 import { useFx } from '../utils/useFx';
 import { totalPrices } from '../utils/convertPrice';
-import { defaultGame, gameOptions, showGamePicker } from '../utils/games';
+import { GAMES, defaultGame, gameOptions, showGamePicker } from '../utils/games';
 import { getLanguagesForGame, displayName } from '../utils/languages';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { printingLabel } from '../utils/cardOptions';
@@ -17,6 +17,10 @@ import { filterCards, isComplete, purchaseList, valueParts } from '../utils/setC
 import { buildMassEntry, massEntryPage } from '../utils/tcgMassEntryUrl';
 import { useTabParam, setTabParam } from '../utils/router';
 import { setParam, parseSetParam } from '../utils/routes';
+
+// Every game's set-id prefix ('mtg-', 'yugioh-'...), stripped for display. From the
+// registry, so a new game's codes do not show up with the prefix on screen.
+const SET_PREFIX_RE = new RegExp(`^(?:${GAMES.map(g => g.setIdPrefix).filter(Boolean).map(p => p.replace(/[^a-z0-9]/gi, '')).join('|')})-`);
 
 // Every card in one set, owned or not (GET /api/set-completion). Shown as
 // Collection's Browse view: pick a game and a set, see every card in it.
@@ -222,7 +226,7 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
     window.open(massEntryPage(data.game, data.lang), '_blank', 'noopener');
   };
 
-  const setCodeShown = data ? String(data.set.id || '').replace(/^(mtg|lorcana|riftbound)-/, '').toUpperCase() : '';
+  const setCodeShown = data ? String(data.set.id || '').replace(SET_PREFIX_RE, '').toUpperCase() : '';
   const art = data ? (data.set.logo_url || data.set.symbol_url) : null;
 
   return (
@@ -273,7 +277,7 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
                 <button key={`mine-${s.set_id}`} type="button" onClick={() => pick({ id: s.set_id, lang: s.lang })}
                   style={{ display: 'flex', width: '100%', gap: '0.5rem', alignItems: 'center', padding: '0.45rem 0.75rem', background: 'none', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', textAlign: 'left', fontSize: '0.82rem' }}>
                   <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.set_name || s.set_id}</span>
-                  <code style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{String(s.set_id).replace(/^(mtg|lorcana|riftbound)-/, '').toUpperCase()}</code>
+                  <code style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{String(s.set_id).replace(SET_PREFIX_RE, '').toUpperCase()}</code>
                   <span style={{ fontSize: '0.68rem', color: 'var(--type-grass)' }}>{t('sets.ownedCards', { count: s.owned })}</span>
                 </button>
               ))}
@@ -282,7 +286,7 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
                 <button key={`all-${s.id}`} type="button" onClick={() => pick({ id: s.id })}
                   style={{ display: 'flex', width: '100%', gap: '0.5rem', alignItems: 'center', padding: '0.45rem 0.75rem', background: 'none', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', textAlign: 'left', fontSize: '0.82rem' }}>
                   <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
-                  <code style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{String(s.id).replace(/^(mtg|lorcana|riftbound)-/, '').toUpperCase()}</code>
+                  <code style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{String(s.id).replace(SET_PREFIX_RE, '').toUpperCase()}</code>
                   {s.release_date && <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{String(s.release_date).slice(0, 4)}</span>}
                 </button>
               ))}

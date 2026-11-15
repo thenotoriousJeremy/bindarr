@@ -200,6 +200,16 @@ async function priceFromTcgcsv(setId, setName, language) {
 
 async function listPokemon(setId, lang, { name } = {}) {
   const code = languages.toCode(lang);
+  // A set TCGdex does not serve, written from TCGplayer (pokemonTcgplayer.js): its
+  // cards are all in card_cache already, so the listing is a read.
+  if (/^tcgp-/i.test(String(setId || ''))) {
+    const rows = await db.all(
+      `SELECT id, set_name FROM card_cache WHERE game = 'pokemon' AND LOWER(set_id) = LOWER(?)
+        ORDER BY CAST(number AS INTEGER), number`, [String(setId)]
+    );
+    if (!rows.length) return null;
+    return { ids: rows.map(r => r.id), set: { id: String(setId), name: rows[0].set_name || String(setId) }, source: 'tcgplayer' };
+  }
   const provider = await pokemonProvider.providerFor(code);
   const id = await pokemonSetId(setId, code, provider, name);
   let listed;

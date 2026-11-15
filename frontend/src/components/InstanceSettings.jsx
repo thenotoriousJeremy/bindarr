@@ -12,7 +12,7 @@ import { useT } from '../utils/i18n';
 function InstanceSettings({ showToast, deviceMode = false }) {
   const { t } = useT();
   const [publicBaseUrl, setPublicBaseUrl] = useState('');
-  const [pokemonProvider, setPokemonProvider] = useState('pokemontcg');
+  const [pokemonProvider, setPokemonProvider] = useState('tcgdex');
   const [mtgPriceSource, setMtgPriceSource] = useState('tcgplayer');
   const [priceRefreshDays, setPriceRefreshDays] = useState(1);
   const [sealedTcgExtra, setSealedTcgExtra] = useState(false);
@@ -21,7 +21,7 @@ function InstanceSettings({ showToast, deviceMode = false }) {
 
   const applySettings = (data) => {
     setPublicBaseUrl(data.public_base_url || '');
-    setPokemonProvider(data.pokemon_provider || 'pokemontcg');
+    setPokemonProvider(data.pokemon_provider || 'tcgdex');
     setMtgPriceSource(data.mtg_price_source || 'tcgplayer');
     setPriceRefreshDays(data.price_refresh_days ?? 1);
     setSealedTcgExtra(!!data.sealed_tcg_extra_enabled);
@@ -120,9 +120,11 @@ function InstanceSettings({ showToast, deviceMode = false }) {
             onChange={(e) => setPokemonProvider(e.target.value)}
             disabled={settingsLoading}
           >
-            <option value="pokemontcg">{t('admin.providerPokemontcg')}</option>
+            {/* TCGdex first: it is the default. pokemontcg.io is listed only so an
+                install still pinned to it shows its real setting until it migrates. */}
             <option value="tcgdex">{t('admin.providerTcgdex')}</option>
             {!deviceMode && <option value="pokemontcgapi">pokemontcgapi.com</option>}
+            {pokemonProvider === 'pokemontcg' && <option value="pokemontcg">{t('admin.providerPokemontcg')}</option>}
           </select>
           <p style={{ margin: '0.4rem 0 0', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
             {t(pokemonProvider === 'pokemontcgapi' ? 'admin.pokemontcgapiHint' : 'admin.pokemonProviderHint')}

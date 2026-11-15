@@ -119,18 +119,26 @@ function hasLocal(game, lang) {
   return fs.existsSync(localBin(game, lang)) && fs.existsSync(localMeta(game, lang));
 }
 
+// A catalog downloaded from Bindarr's own release (catalogReleases.js). Keyed by
+// card ids like a local build, so it counts as one everywhere below.
+function hasBindarr(game, lang) {
+  if (source) return false;
+  return require('./catalogReleases').isInstalled(game, lang || 'English');
+}
+const hasOwn = (game, lang) => hasLocal(game, lang) || hasBindarr(game, lang);
+
 const modelsPresent = () => (source ? source.hasModels()
   : fs.existsSync(path.join(MODEL_DIR, 'cornelius.onnx')) && fs.existsSync(path.join(MODEL_DIR, 'milo.onnx')));
 const publishedPresent = (game) => (source ? source.hasCatalog(game) : fs.existsSync(catalogPath(game)));
 
 function isBuilt(game = 'mtg', lang) {
   if (!modelsPresent()) return false;
-  if (hasLocal(game, lang)) return true;
+  if (hasOwn(game, lang)) return true;
   // No catalog in that language. English can still answer WHICH card it is —
   // the artwork is the same in every language — so the caller may still want
   // this pipeline and re-express the answer afterwards. Only report unbuilt
   // when even English is missing.
-  return hasLocal(game) || publishedPresent(game);
+  return hasOwn(game) || publishedPresent(game);
 }
 
 // The languages this game has a catalog OF ITS OWN in.
@@ -142,7 +150,7 @@ function isBuilt(game = 'mtg', lang) {
 // would be answered by the English catalog and filed as English printings.
 function builtLangs(game = 'mtg') {
   const names = require('./utils/languages').LANGUAGES.map(l => l.name);
-  const out = names.filter(l => hasLocal(game, l));
+  const out = names.filter(l => hasOwn(game, l));
   // English also answers from a published .npz, which is not a local build.
   if (!out.includes('English') && publishedPresent(game)) out.unshift('English');
   return out;
@@ -170,17 +178,20 @@ async function load(game = 'mtg', lang) {
   // Fall back to the English catalog when the requested language has none: the
   // art is identical, so it still identifies the card, and the route re-expresses
   // the answer into the requested language by name.
-  const useLang = hasLocal(game, lang) ? lang : undefined;
+  const useLang = hasOwn(game, lang) ? lang : undefined;
   const key = `${game}${suffix(useLang)}`;
   if (!catalogs[key]) {
     catalogs[key] = (async () => {
       const t0 = Date.now();
       if (source) {
-        const { cat, ids, n, dim } = await source.loadCatalog(game);
+        // `local`: the phone's catalog came from Bindarr's release, keyed by card
+        // ids like a local build, rather than the snapshot's provider ids.
+        const { cat, ids, n, dim, local = false } = await source.loadCatalog(game);
         console.log(`cvScan: ${key} device catalog ${n} x ${dim}d loaded in ${Date.now() - t0} ms`);
-        return { cat, ids, n, dim, local: false, lang: 'English' };
+        return { cat, ids, n, dim, local, lang: 'English' };
       }
       const m = await loadModels();
+      const parts = [];
       if (hasLocal(game, useLang)) {
         const meta = JSON.parse(fs.readFileSync(localMeta(game, useLang), 'utf8'));
         const buf = fs.readFileSync(localBin(game, useLang));
@@ -189,9 +200,16 @@ async function load(game = 'mtg', lang) {
         if (buf.length !== n * dim * 4) {
           throw new Error(`local ${game} catalog is ${buf.length} bytes, expected ${n * dim * 4}`);
         }
-        const cat = new Float32Array(buf.buffer, buf.byteOffset, n * dim);
-        console.log(`cvScan: ${key} LOCAL catalog ${n} x ${dim}d loaded in ${Date.now() - t0} ms`);
-        return { ...m, cat, ids: meta.ids, n, dim, local: true, lang: useLang || "English" };
+        parts.push({ from: 'built here', cat: new Float32Array(buf.buffer, buf.byteOffset, n * dim), ids: meta.ids, n, dim });
+      }
+      if (hasBindarr(game, useLang)) {
+        const got = require('./catalogReleases').load(game, useLang || 'English');
+        if (got) parts.push({ from: `downloaded, generation ${got.generation}`, ...got });
+      }
+      if (parts.length) {
+        const { cat, ids, n, dim } = mergeTables(parts);
+        console.log(`cvScan: ${key} catalog ${n} x ${dim}d (${parts.map(p => `${p.n} ${p.from}`).join(', ')}) loaded in ${Date.now() - t0} ms`);
+        return { ...m, cat, ids, n, dim, local: true, lang: useLang || 'English' };
       }
       const npz = loadNpz(catalogPath(game));
       const [n, dim] = npz.embeddings.shape;
@@ -200,6 +218,37 @@ async function load(game = 'mtg', lang) {
     })().catch((err) => { delete catalogs[key]; throw err; });
   }
   return catalogs[key];
+}
+
+// One table from a catalog built here and the one downloaded from Bindarr's
+// release, when an install has both. Both are keyed by card ids; on an id they
+// share, the row built here wins (it was embedded from this install's own image).
+// A single table is returned as it is.
+function mergeTables(parts) {
+  if (parts.length === 1) return parts[0];
+  const dim = parts[0].dim;
+  const seen = new Set();
+  const rows = [];   // flat pairs: table, row index
+  for (const p of parts) {
+    if (p.dim !== dim) {
+      console.warn(`cvScan: ignoring a ${p.dim}d catalog (${p.from}) beside a ${dim}d one`);
+      continue;
+    }
+    for (let i = 0; i < p.ids.length; i++) {
+      if (seen.has(p.ids[i])) continue;
+      seen.add(p.ids[i]);
+      rows.push(p, i);
+    }
+  }
+  const n = rows.length / 2;
+  const cat = new Float32Array(n * dim);
+  const ids = new Array(n);
+  for (let r = 0; r < n; r++) {
+    const p = rows[r * 2], i = rows[r * 2 + 1];
+    ids[r] = p.ids[i];
+    cat.set(p.cat.subarray(i * dim, (i + 1) * dim), r * dim);
+  }
+  return { cat, ids, n, dim };
 }
 
 // Every catalog one scan should search, best language first.
@@ -652,8 +701,9 @@ async function scoreCards(imageBuffer, game = 'mtg', cards = [], opts = {}) {
 // Evict a cached catalog so a freshly built one takes effect without a restart.
 // The models are untouched — only the embedding table changes on a rebuild.
 function reload(game, lang) {
-  const key = `${game}${suffix(hasLocal(game, lang) ? lang : undefined)}`;
-  delete catalogs[key];
+  // The language's key whatever is on disk now: a removed catalog must stop
+  // answering too, not only a new one start.
+  delete catalogs[`${game}${suffix(lang)}`];
   // A build can turn a game that had no catalog at all into one that does, and
   // the key it would have been cached under differs from the key it now needs.
   delete catalogs[game];
