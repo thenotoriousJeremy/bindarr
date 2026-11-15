@@ -121,8 +121,16 @@ export async function initScanAssets({ MODELS, CATALOGS }) {
   await refresh();
 }
 
+// The descriptors come from modelAssets.js, which pins each file to one Hugging
+// Face commit and records its SHA-256. The phone fetches the same commit and
+// checks the same hash, so it never scans with a file the server would refuse.
+async function sha256Hex(bytes) {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function downloadOne(asset) {
-  const url = `${HF}/${asset.repo}/resolve/main/${asset.file}`;
+  const url = `${HF}/${asset.repo}/resolve/${asset.revision || 'main'}/${asset.file}`;
   const part = `${asset.name}.part`;
   await Filesystem.mkdir({ path: DIR, directory: HOME, recursive: true }).catch(() => {});
   const { uri } = await Filesystem.getUri(at(part));
@@ -140,6 +148,13 @@ async function downloadOne(asset) {
   if (size !== asset.bytes && !(ALSO_OK[asset.name] || []).includes(size)) {
     await Filesystem.deleteFile(at(part)).catch(() => {});
     throw new Error(`${asset.name} downloaded ${size} bytes, expected ${asset.bytes}`);
+  }
+  if (asset.sha256 && globalThis.crypto?.subtle) {
+    const digest = await sha256Hex(await readBytes(part));
+    if (digest !== asset.sha256) {
+      await Filesystem.deleteFile(at(part)).catch(() => {});
+      throw new Error(`${asset.name} has SHA-256 ${digest}, expected ${asset.sha256}`);
+    }
   }
   // Rename into place, so an interrupted download can never pass for a finished one.
   await Filesystem.deleteFile(at(asset.name)).catch(() => {});
