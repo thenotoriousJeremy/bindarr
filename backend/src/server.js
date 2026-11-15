@@ -299,12 +299,13 @@ async function autoUpdateCatalogs() {
   const catalog = require('./catalog');
   if (catalog.state()) return;
   try {
-    for (const c of await catalog.list()) {
-      if (!c.built || !c.newSets) continue;
-      console.log(`catalog: ${c.game}/${c.lang} is ${c.newSets} set(s) behind — updating (CATALOG_AUTO_UPDATE=0 to disable)`);
-      catalog.start(c.game, c.lang);
-      return;   // one at a time; the next tick picks up the next one
-    }
+    // One at a time, the behind catalog built longest ago first, so the games take
+    // turns; a scoped catalog is rebuilt as its own sets (catalog.nextAutoUpdate).
+    const next = catalog.nextAutoUpdate(await catalog.list());
+    if (!next) return;
+    console.log(`catalog: ${next.game}/${next.lang} is ${next.newSets} set(s) behind — updating`
+      + `${next.sets ? ` its ${next.sets.length} set(s)` : ''} (CATALOG_AUTO_UPDATE=0 to disable)`);
+    catalog.start(next.game, next.lang, next.sets ? { sets: next.sets } : {});
   } catch (err) {
     console.error('Catalog auto-update check failed:', err.message);
   }
