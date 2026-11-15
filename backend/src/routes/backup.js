@@ -24,6 +24,18 @@
 // sequences, and every reference between the rows is remapped to match. Columns
 // are copied by name, limited to the ones both the backup and this schema have, so
 // a backup from an older or newer version restores what it can rather than failing.
+// References are the exception: a column holding another row's id is remapped by
+// the restore or written as NULL, never copied. The id is the source install's,
+// so here it names nothing, or some other row; copied, it failed the whole
+// restore on its foreign key wherever it named nothing.
+//
+// Trades and gifts between accounts, and trades recorded after the fact
+// (routes/transfers.js), belong to both accounts, so neither one's backup carries
+// them. A copy's link to the one that brought it in is kept only where this
+// install holds that record as the restoring account's own receipt, which in
+// practice means the same install; anywhere else the copy comes back without it.
+// Deals with people outside Bindarr (routes/externalTransfers.js) are the
+// account's own record, so they travel with it, renumbered like the rest.
 'use strict';
 
 const express = require('express');
@@ -41,8 +53,27 @@ const CHUNK = 500;   // SQLite caps bound parameters per statement
 // A file needing more is refused before the first request, not cut off midway.
 const MAX_CARD_LOOKUPS = 5000;
 
-async function columnsOf(table) {
-  return (await db.all(`PRAGMA table_info(${table})`)).map(c => c.name);
+// The account's deals with people outside Bindarr: whom, what and which way. A
+// backup made before they existed has none of these sections (see the restore).
+const EXTERNAL_TABLES = ['external_contacts', 'external_transactions', 'external_transaction_items'];
+
+// Every table a restore writes.
+const RESTORED_TABLES = ['locations', 'compartments', 'compartment_assignments', 'collection', 'decks',
+  'deck_cards', 'notes', 'card_cache', 'price_history', 'tcgplayer_product', 'sealed_templates',
+  'sealed_template_components', 'sealed_purchases', 'sealed_units', 'card_lists', 'card_list_items',
+  ...EXTERNAL_TABLES];
+
+// What a restore writes to `table`: the columns this schema has (not the id, which
+// is renumbered, except card_cache's, which is the card's own), and which of them
+// hold another row's id. Card ids are left out of those: they name shared card
+// data, which the restore checks for itself before writing a row that names one.
+async function shapeOf(table) {
+  const cols = (await db.all(`PRAGMA table_info(${table})`)).map(c => c.name)
+    .filter(c => c !== 'id' || table === 'card_cache');
+  const refs = (await db.all(`PRAGMA foreign_key_list(${table})`))
+    .filter(fk => fk.table !== 'card_cache')
+    .map(fk => fk.from);
+  return { table, cols, refs };
 }
 
 async function rowsWhereIn(table, column, values) {
@@ -72,6 +103,12 @@ router.get('/backup', async (req, res) => {
     const sealedUnits = await rowsWhereIn('sealed_units', 'purchase_id', sealedPurchases.map(p => p.id));
     const lists = await db.all(`SELECT * FROM card_lists WHERE user_id = ?`, [uid]);
     const listItems = await rowsWhereIn('card_list_items', 'list_id', lists.map(l => l.id));
+    // In the order they were made: a restore renumbers rows in file order, and the
+    // deal history breaks ties between deals made the same second by id.
+    const contacts = await db.all(`SELECT * FROM external_contacts WHERE user_id = ? ORDER BY id`, [uid]);
+    const deals = await db.all(`SELECT * FROM external_transactions WHERE user_id = ? ORDER BY id`, [uid]);
+    const dealItems = (await rowsWhereIn('external_transaction_items', 'transaction_id', deals.map(d => d.id)))
+      .sort((a, b) => a.id - b.id);
 
     // The cards those rows name, so the backup restores onto an install that has
     // never cached them — a new phone, or a server that has never seen this game.
@@ -97,6 +134,7 @@ router.get('/backup', async (req, res) => {
         sealed_templates: sealedTemplates, sealed_template_components: sealedComponents,
         sealed_purchases: sealedPurchases, sealed_units: sealedUnits,
         card_lists: lists, card_list_items: listItems,
+        external_contacts: contacts, external_transactions: deals, external_transaction_items: dealItems,
         card_cache: cards, price_history: priceHistory, tcgplayer_product: products,
       },
     });
@@ -106,15 +144,37 @@ router.get('/backup', async (req, res) => {
   }
 });
 
-// Insert one row with only the columns this schema has, overriding some.
-async function insert(table, cols, row, overrides = {}, verb = 'INSERT') {
-  const values = { ...row, ...overrides };
-  const names = cols.filter(c => c in values);
+// Insert one row with only the columns this schema has (`shape`, from shapeOf),
+// overriding some. A reference the caller does not override would carry the
+// source install's id across, so it is written as NULL (top of this file).
+async function insert(shape, row, overrides = {}, verb = 'INSERT') {
+  const values = { ...row };
+  for (const ref of shape.refs) values[ref] = null;
+  Object.assign(values, overrides);
+  const names = shape.cols.filter(c => c in values);
   const result = await db.run(
-    `${verb} INTO ${table} (${names.join(', ')}) VALUES (${names.map(() => '?').join(', ')})`,
+    `${verb} INTO ${shape.table} (${names.join(', ')}) VALUES (${names.map(() => '?').join(', ')})`,
     names.map(n => values[n])
   );
   return result.lastID;
+}
+
+// A copy's link to the record of how it came in: a trade or gift between two
+// accounts, a trade recorded after the fact, or (from a backup without the
+// account's outside deals, which then stay as they are) one of those deals. Kept
+// when this install holds that record as the restoring account's own receipt;
+// otherwise the id is another install's, or names someone else's trade, and the
+// copy comes back without the link rather than failing the restore over it.
+const RECEIPTS = {
+  transfer: `SELECT 1 FROM user_transfer_items WHERE id = ? AND to_user_id = ?`,
+  historical: `SELECT 1 FROM historical_trade_items WHERE id = ? AND to_user_id = ?`,
+  external: `SELECT 1 FROM external_transaction_items i JOIN external_transactions t ON t.id = i.transaction_id
+              WHERE i.id = ? AND t.user_id = ?`,
+};
+
+async function ownReceipt(kind, id, uid) {
+  if (!Number.isSafeInteger(id)) return null;
+  return (await db.get(RECEIPTS[kind], [id, uid])) ? id : null;
 }
 
 const isBackup = (b) => b && b.format === FORMAT && b.data && typeof b.data === 'object';
@@ -174,6 +234,9 @@ router.post('/backup/restore', async (req, res) => {
   const list = (key) => (Array.isArray(backup.data[key]) ? backup.data[key] : []);
   const uid = req.user.id;
   const trusted = req.user.role === 'admin';
+  // A backup made before outside deals were recorded says nothing about them, so
+  // the account's own stay as they are; one that has them replaces them.
+  const hasDeals = EXTERNAL_TABLES.some(t => Array.isArray(backup.data[t]));
 
   try {
     let fetchedCards = null;
@@ -189,12 +252,8 @@ router.post('/backup/restore', async (req, res) => {
       }
       fetchedCards = await fetchMissingCards(uncached, req.user);
     }
-    const cols = {};
-    for (const t of ['locations', 'compartments', 'compartment_assignments', 'collection', 'decks',
-      'deck_cards', 'notes', 'card_cache', 'price_history', 'tcgplayer_product', 'sealed_templates',
-      'sealed_template_components', 'sealed_purchases', 'sealed_units', 'card_lists', 'card_list_items']) {
-      cols[t] = (await columnsOf(t)).filter(c => c !== 'id' || ['card_cache'].includes(t));
-    }
+    const shape = {};
+    for (const t of RESTORED_TABLES) shape[t] = await shapeOf(t);
     const counts = {};
     const cardKnown = async (id) => !!(await db.get(`SELECT 1 FROM card_cache WHERE id = ?`, [id]));
 
@@ -216,19 +275,19 @@ router.post('/backup/restore', async (req, res) => {
       // Shared card data first, from an admin's file only (top of this file): the
       // collection's card_id references card_cache.
       for (const row of trusted ? list('card_cache') : []) {
-        if (row && row.id) await insert('card_cache', cols.card_cache, row, {}, 'INSERT OR IGNORE');
+        if (row && row.id) await insert(shape.card_cache, row, {}, 'INSERT OR IGNORE');
       }
       for (const row of trusted ? list('price_history') : []) {
-        if (row && row.card_id) await insert('price_history', cols.price_history, row, {}, 'INSERT OR IGNORE');
+        if (row && row.card_id) await insert(shape.price_history, row, {}, 'INSERT OR IGNORE');
       }
       for (const row of trusted ? list('tcgplayer_product') : []) {
-        if (row && row.card_id) await insert('tcgplayer_product', cols.tcgplayer_product, row, {}, 'INSERT OR IGNORE');
+        if (row && row.card_id) await insert(shape.tcgplayer_product, row, {}, 'INSERT OR IGNORE');
       }
 
       // Then out with this account's own rows. Compartments and their filing rules
       // go with their locations (ON DELETE CASCADE); deck cards with their decks;
-      // units with their purchases, components with their templates, items with
-      // their lists.
+      // units with their purchases, components with their templates, list items
+      // with their lists, deal items with their deals.
       await db.run(`DELETE FROM card_lists WHERE user_id = ?`, [uid]);
       await db.run(`DELETE FROM collection WHERE user_id = ?`, [uid]);
       await db.run(`DELETE FROM sealed_purchases WHERE user_id = ?`, [uid]);
@@ -236,21 +295,25 @@ router.post('/backup/restore', async (req, res) => {
       await db.run(`DELETE FROM decks WHERE user_id = ?`, [uid]);
       await db.run(`DELETE FROM notes WHERE user_id = ?`, [uid]);
       await db.run(`DELETE FROM locations WHERE user_id = ?`, [uid]);
+      if (hasDeals) {
+        await db.run(`DELETE FROM external_transactions WHERE user_id = ?`, [uid]);
+        await db.run(`DELETE FROM external_contacts WHERE user_id = ?`, [uid]);
+      }
 
       const locMap = new Map();
       for (const row of list('locations')) {
-        locMap.set(row.id, await insert('locations', cols.locations, row, { user_id: uid }));
+        locMap.set(row.id, await insert(shape.locations, row, { user_id: uid }));
       }
       const compMap = new Map();
       for (const row of list('compartments')) {
         const locationId = locMap.get(row.location_id);
         if (locationId == null) continue;
-        compMap.set(row.id, await insert('compartments', cols.compartments, row, { location_id: locationId }));
+        compMap.set(row.id, await insert(shape.compartments, row, { location_id: locationId }));
       }
       for (const row of list('compartment_assignments')) {
         const compartmentId = compMap.get(row.compartment_id);
         if (compartmentId == null) continue;
-        await insert('compartment_assignments', cols.compartment_assignments, row, { compartment_id: compartmentId }, 'INSERT OR IGNORE');
+        await insert(shape.compartment_assignments, row, { compartment_id: compartmentId }, 'INSERT OR IGNORE');
       }
 
       // Sealed product before the collection, whose copies can name the unit they
@@ -258,17 +321,17 @@ router.post('/backup/restore', async (req, res) => {
       // points at that unit, which only exists once every purchase's units do.
       const templateMap = new Map();
       for (const row of list('sealed_templates')) {
-        templateMap.set(row.id, await insert('sealed_templates', cols.sealed_templates, row, { user_id: uid }));
+        templateMap.set(row.id, await insert(shape.sealed_templates, row, { user_id: uid }));
       }
       for (const row of list('sealed_template_components')) {
         const templateId = templateMap.get(row.template_id);
         if (templateId == null) continue;
         if (row.card_id && !(await cardKnown(row.card_id))) continue;
-        await insert('sealed_template_components', cols.sealed_template_components, row, { template_id: templateId });
+        await insert(shape.sealed_template_components, row, { template_id: templateId });
       }
       const purchaseMap = new Map();
       for (const row of list('sealed_purchases')) {
-        purchaseMap.set(row.id, await insert('sealed_purchases', cols.sealed_purchases, row, {
+        purchaseMap.set(row.id, await insert(shape.sealed_purchases, row, {
           user_id: uid,
           template_id: row.template_id == null ? null : (templateMap.get(row.template_id) ?? null),
           source_unit_id: null,
@@ -285,7 +348,7 @@ router.post('/backup/restore', async (req, res) => {
         if (purchaseId == null) continue;
         const fileOwner = fileOwnerOf.get(row.purchase_id);
         const ownClaim = row.claimed_by_user_id != null && fileOwner != null && Number(row.claimed_by_user_id) === Number(fileOwner);
-        unitMap.set(row.id, await insert('sealed_units', cols.sealed_units, row, {
+        unitMap.set(row.id, await insert(shape.sealed_units, row, {
           purchase_id: purchaseId,
           claimed_by_user_id: ownClaim ? uid : null,
         }));
@@ -293,6 +356,34 @@ router.post('/backup/restore', async (req, res) => {
       for (const row of list('sealed_purchases')) {
         const unitId = row.source_unit_id == null ? null : unitMap.get(row.source_unit_id);
         if (unitId != null) await db.run(`UPDATE sealed_purchases SET source_unit_id = ? WHERE id = ?`, [unitId, purchaseMap.get(row.id)]);
+      }
+
+      // The account's outside deals, after the units their items name and before
+      // the copies, which name the item that brought them in. Which copy an item
+      // gave away or brought in is filled in once the copies are back, below.
+      const contactMap = new Map();
+      const dealMap = new Map();
+      const dealItemMap = new Map();
+      if (hasDeals) {
+        for (const row of list('external_contacts')) {
+          // Names are unique per account, ignoring case: a second "Sam" is the first.
+          const same = await db.get(`SELECT id FROM external_contacts WHERE user_id = ? AND name = ? COLLATE NOCASE`, [uid, row.name]);
+          contactMap.set(row.id, same ? same.id : await insert(shape.external_contacts, row, { user_id: uid }));
+        }
+        for (const row of list('external_transactions')) {
+          dealMap.set(row.id, await insert(shape.external_transactions, row, {
+            user_id: uid,
+            contact_id: row.contact_id == null ? null : (contactMap.get(row.contact_id) ?? null),
+          }));
+        }
+        for (const row of list('external_transaction_items')) {
+          const dealId = dealMap.get(row.transaction_id);
+          if (dealId == null) continue;
+          dealItemMap.set(row.id, await insert(shape.external_transaction_items, row, {
+            transaction_id: dealId,
+            source_sealed_unit_id: row.source_sealed_unit_id == null ? null : (unitMap.get(row.source_sealed_unit_id) ?? null),
+          }));
+        }
       }
 
       // A copy whose card the backup could not supply would break the card_cache
@@ -304,6 +395,7 @@ router.post('/backup/restore', async (req, res) => {
       let skipped = 0;
       let copies = 0;
       const wanted = [];
+      const copyMap = new Map();
       for (const row of list('collection')) {
         const known = await db.get(`SELECT 1 FROM card_cache WHERE id = ?`, [row.card_id]);
         if (!known) { skipped++; continue; }
@@ -311,29 +403,41 @@ router.post('/backup/restore', async (req, res) => {
           wanted.push({ card_id: row.card_id, quantity: row.quantity, notes: row.notes, added_at: row.added_at });
           continue;
         }
-        await insert('collection', cols.collection, row, {
+        copyMap.set(row.id, await insert(shape.collection, row, {
           user_id: uid,
           list_type: 'collection',
           location_id: row.location_id == null ? null : (locMap.get(row.location_id) ?? null),
           compartment_id: row.compartment_id == null ? null : (compMap.get(row.compartment_id) ?? null),
           sealed_unit_id: row.sealed_unit_id == null ? null : (unitMap.get(row.sealed_unit_id) ?? null),
-        });
+          acquired_via_transfer_item_id: await ownReceipt('transfer', row.acquired_via_transfer_item_id, uid),
+          acquired_via_historical_trade_item_id: await ownReceipt('historical', row.acquired_via_historical_trade_item_id, uid),
+          acquired_via_external_item_id: hasDeals
+            ? (row.acquired_via_external_item_id == null ? null : (dealItemMap.get(row.acquired_via_external_item_id) ?? null))
+            : await ownReceipt('external', row.acquired_via_external_item_id, uid),
+        }));
         copies++;
+      }
+      for (const row of list('external_transaction_items')) {
+        const itemId = dealItemMap.get(row.id);
+        const copyId = row.source_collection_id == null ? null : copyMap.get(row.source_collection_id);
+        if (itemId != null && copyId != null) {
+          await db.run(`UPDATE external_transaction_items SET source_collection_id = ? WHERE id = ?`, [copyId, itemId]);
+        }
       }
       const deckMap = new Map();
       for (const row of list('decks')) {
-        deckMap.set(row.id, await insert('decks', cols.decks, row, { user_id: uid }));
+        deckMap.set(row.id, await insert(shape.decks, row, { user_id: uid }));
       }
       for (const row of list('deck_cards')) {
         const deckId = deckMap.get(row.deck_id);
         if (deckId == null || !(await cardKnown(row.card_id))) continue;
-        await insert('deck_cards', cols.deck_cards, row, { deck_id: deckId }, 'INSERT OR IGNORE');
+        await insert(shape.deck_cards, row, { deck_id: deckId }, 'INSERT OR IGNORE');
       }
       // Lists after decks: a deck's missing-cards list points at the deck. Items
       // naming a card the backup could not supply are skipped, as copies are.
       const listMap = new Map();
       for (const row of list('card_lists')) {
-        listMap.set(row.id, await insert('card_lists', cols.card_lists, row, {
+        listMap.set(row.id, await insert(shape.card_lists, row, {
           user_id: uid,
           deck_id: row.deck_id == null ? null : (deckMap.get(row.deck_id) ?? null),
         }));
@@ -342,11 +446,11 @@ router.post('/backup/restore', async (req, res) => {
         const listId = listMap.get(row.list_id);
         if (listId == null) continue;
         if (!(await db.get(`SELECT 1 FROM card_cache WHERE id = ?`, [row.card_id]))) continue;
-        await insert('card_list_items', cols.card_list_items, row, { list_id: listId }, 'INSERT OR IGNORE');
+        await insert(shape.card_list_items, row, { list_id: listId }, 'INSERT OR IGNORE');
       }
       const onWishlist = wanted.length ? await wantCards(uid, wanted) : null;
       for (const row of list('notes')) {
-        await insert('notes', cols.notes, row, { user_id: uid });
+        await insert(shape.notes, row, { user_id: uid });
       }
 
       Object.assign(counts, {
@@ -358,6 +462,7 @@ router.post('/backup/restore', async (req, res) => {
         lists: listMap.size,
         notes: list('notes').length,
         sealed: purchaseMap.size,
+        external_deals: dealMap.size,
         ...(fetchedCards ? { fetched_cards: fetchedCards.fetched } : {}),
       });
     });
