@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Shell scripts run in Linux containers and on CI runners, where a CRLF line
+# ending breaks the shebang. LF in every working copy, Windows included.
+*.sh text eol=lf
