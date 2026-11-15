@@ -24,6 +24,15 @@ globalThis.removeEventListener = () => {};
 globalThis.dispatchEvent = () => true;
 globalThis.location = new URL('https://bindarr.test/');
 globalThis.history = { state: null, length: 1, pushState() {}, replaceState() {}, back() {} };
+// The network under App.jsx's fetch wrapper, which wraps whatever fetch is there
+// when App loads: /api/aborted fails as a cancelled request does, and
+// /api/unreachable as a server that cannot be reached.
+globalThis.fetch = async (input) => {
+  const url = String(input);
+  if (url.includes('/api/aborted')) throw Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
+  if (url.includes('/api/unreachable')) throw new TypeError('fetch failed');
+  return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+};
 
 const USER = { id: 1, username: 'ash', role: 'admin', nav_tabs: null };
 const noop = () => {};
@@ -97,6 +106,17 @@ test('the signed-in app renders with a toast up', async () => {
   } finally {
     signOut();
   }
+});
+
+test('a cancelled request does not put the app offline; an unreachable server does', async () => {
+  await load('/src/App.jsx'); // installs the fetch wrapper
+  const offline = await load('/src/utils/offline.js');
+  await assert.rejects(fetch('/api/aborted'), { name: 'AbortError' });
+  assert.equal(offline.isOffline(), false, 'useApi and the storage loaders abort superseded reads');
+  await assert.rejects(fetch('/api/unreachable'), TypeError);
+  assert.equal(offline.isOffline(), true);
+  await fetch('/api/ok');
+  assert.equal(offline.isOffline(), false, 'an answer from the network clears it');
 });
 
 test('the shared Toast component never renders an object', async () => {

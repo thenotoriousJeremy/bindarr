@@ -26,7 +26,7 @@ import DeckImportDialog from './deck/DeckImportDialog';
 // The deck builder: owns the deck list, the open deck and every handler that
 // changes them, and picks the view the URL asks for. The views and dialogs it
 // draws live in ./deck.
-function DeckBuilder({ showToast, statsTrigger, active = true }) {
+function DeckBuilder({ showToast, statsTrigger, active = true, onUpdate }) {
   const { t } = useT();
   const [decks, setDecks] = useState([]);
   const [activeDeck, setActiveDeck] = useState(null);
@@ -102,13 +102,28 @@ function DeckBuilder({ showToast, statsTrigger, active = true }) {
   // shown after such a change (statsTrigger, held while hidden).
   const shownTrigger = useShownTrigger(statsTrigger, active);
   const lastTrigger = useRef(shownTrigger);
+  const ownBump = useRef(false);
   useEffect(() => {
     if (lastTrigger.current === shownTrigger) return;
     lastTrigger.current = shownTrigger;
+    if (ownBump.current) { ownBump.current = false; return; }
     fetchDecks({ quiet: true });
     if (viewMode === 'detail' && activeDeck) loadDeckDetails(activeDeck.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch on the trigger only
   }, [shownTrigger]);
+
+  // A change made here that the other tabs show (a checkout or return, adding a
+  // deck's cards to the collection): App bumps statsTrigger for them. The bump
+  // comes back here too; `refreshed` says this tab already reloaded what it
+  // needs, so it is not fetched twice.
+  const notifyChanged = (refreshed = false) => {
+    if (!onUpdate) {
+      if (!refreshed && activeDeck) loadDeckDetails(activeDeck.id);
+      return;
+    }
+    ownBump.current = refreshed;
+    onUpdate();
+  };
 
   // Waits for the deck list, which carries the checkout status loadDeckDetails
   // merges in. A deck that will not load (deleted, someone else's) closes again.
@@ -414,6 +429,7 @@ function DeckBuilder({ showToast, statsTrigger, active = true }) {
           setActiveDeck(prev => ({ ...prev, checked_out: 1, checked_out_at: new Date().toISOString() }));
         }
         fetchDecks();
+        notifyChanged(true);
 
         const locRes = await fetch(`/api/decks/${targetDeck.id}/locations`);
         if (locRes.ok) {
@@ -456,6 +472,7 @@ function DeckBuilder({ showToast, statsTrigger, active = true }) {
           setActiveDeck(prev => ({ ...prev, checked_out: 0, checked_out_at: null }));
         }
         fetchDecks();
+        notifyChanged(true);
         if (locData) {
           setCheckoutLocations(locData);
           setCheckoutMode('checkin');
@@ -488,6 +505,7 @@ function DeckBuilder({ showToast, statsTrigger, active = true }) {
         setActiveDeck(prev => ({ ...prev, checked_out: back ? 0 : 1, checked_out_at: back ? null : new Date().toISOString() }));
       }
       fetchDecks();
+      notifyChanged(true);
       showToast(t(checkoutMode === 'checkout' ? 'deck.checkoutCanceled' : 'deck.returnCanceled'));
     } catch (err) {
       console.error(err);
@@ -599,6 +617,7 @@ function DeckBuilder({ showToast, statsTrigger, active = true }) {
           setShowExportModal={setShowExportModal}
           setShowImportModal={setShowImportModal}
           loadDeckDetails={loadDeckDetails}
+          onCollectionChanged={() => notifyChanged(false)}
           checkingOut={checkingOut}
           handleCheckout={handleCheckout}
           handleReturn={handleReturn}

@@ -22,7 +22,7 @@ import {
 export default function DeckEditor({
   activeDeck, deckGame, deckRules, showToast,
   deckDraft, setDeckDraft, handleSaveDeckProperties,
-  openDeck, setShowExportModal, setShowImportModal, loadDeckDetails,
+  openDeck, setShowExportModal, setShowImportModal, loadDeckDetails, onCollectionChanged,
   checkingOut, handleCheckout, handleReturn, startSimulator,
   deckSearchGame, setDeckSearchGame, searchQuery, setSearchQuery, searching, searchResults, handleSearchCards,
   savingCard, atCopyLimit, copyLimitText, handleAddCardToDeck, handleUpdateCardQty, handleToggleCommander,
@@ -201,7 +201,9 @@ export default function DeckEditor({
           >
             <Upload size={14} /> {t('deck.import')}
           </button>
-          <DeckListActions deck={activeDeck} showToast={showToast} onCollectionChanged={() => loadDeckDetails(activeDeck.id)} />
+          {/* Adding the deck's cards changes the collection the other tabs show:
+              DeckBuilder's onCollectionChanged tells App, then reloads this deck. */}
+          <DeckListActions deck={activeDeck} showToast={showToast} onCollectionChanged={onCollectionChanged || (() => loadDeckDetails(activeDeck.id))} />
           {/* Checkout / Return button */}
           {activeDeck.checked_out ? (
             <button

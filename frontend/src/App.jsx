@@ -9,6 +9,7 @@ import { useRouteSync, goToTab, initialTab } from './utils/router';
 import { useT } from './utils/i18n';
 import { useStableCallback } from './utils/useStableCallback';
 import { clearApiCache } from './utils/useApi';
+import { isAbortError } from './utils/request';
 import { isNative, isDeviceMode, setDeviceMode } from './apiBase';
 import { parseOidcReturn, takeVerifier } from './utils/nativeOidc';
 import { isSessionExpired } from './utils/sessionExpiry';
@@ -139,7 +140,10 @@ window.fetch = function (input, options = {}) {
     }
     return response;
   }, err => {
-    if (!isApi) throw err;
+    // A request the page cancelled itself (a newer one replaced it, its view
+    // closed) says nothing about the server: marking it unreachable flashed the
+    // offline banner and refused writes until the next answer came in.
+    if (!isApi || isAbortError(err)) throw err;
     noteApiUnreachable();
     if (!write) throw err;
     window.dispatchEvent(new Event('bindarr_offline_write'));
@@ -617,7 +621,7 @@ function App() {
       case 'sets':
         return <SetCompletion active={active} focusSet={focusSet} statsTrigger={statsTrigger} showToast={showToast} />;
       case 'deckbuilder':
-        return <DeckBuilder active={active} statsTrigger={statsTrigger} showToast={showToast} />;
+        return <DeckBuilder active={active} statsTrigger={statsTrigger} onUpdate={triggerRefresh} showToast={showToast} />;
       case 'lists':
         return <Lists active={active} statsTrigger={statsTrigger} showToast={showToast} />;
       case 'notes':
