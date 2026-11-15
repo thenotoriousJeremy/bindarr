@@ -688,11 +688,22 @@ function testTensors() {
     assert.strictEqual(scanModel.imagenetChw(rgba, scanModel.CORN_SIZE, 4, reused), reused);
     sameArray(reused, was, 'detectWorker 384 path');
   }
-  // Anything but bytes takes the arithmetic, which is the old formula exactly,
-  // out-of-range and fractional values included.
-  const odd = Array.from({ length: 3 * 16 }, (_, i) => [0, 255, 127.5, -3.25, 300, 1e-9][i % 6] + (i % 7) / 3);
-  sameTensor(cvScan.toTensor(odd, 4), OLD_CVSCAN.toTensor(odd, 4), 'plain array');
-  sameTensor(cvScan.toTensor(Float32Array.from(odd), 4), OLD_CVSCAN.toTensor(Float32Array.from(odd), 4), 'Float32Array');
+  // Anything but bytes takes the arithmetic, which is the old formula exactly:
+  // fractional and out-of-range values, and values that normalise to about zero,
+  // where a change far below one float32 step at 1 still shows.
+  const nearZero = OLD_CVSCAN.MEAN.map(m => m * 255);
+  const odd = (channels) => {
+    const a = [];
+    for (let p = 0; p < 64; p++) {
+      for (let c = 0; c < channels; c++) {
+        a.push(p < 8 ? (nearZero[c] ?? 255) + (p - 4) * 1e-6 : [0, 255, 127.5, -3.25, 300, 1e-9, 0.5, 254.5][p % 8] + (p % 7) / 3);
+      }
+    }
+    return a;
+  };
+  sameTensor(cvScan.toTensor(odd(3), 8), OLD_CVSCAN.toTensor(odd(3), 8), 'plain array');
+  sameTensor(cvScan.toTensor(Float32Array.from(odd(3)), 8), OLD_CVSCAN.toTensor(Float32Array.from(odd(3)), 8), 'Float32Array');
+  sameArray(scanModel.imagenetChw(odd(4), 8, 4), OLD_SCANTENSOR.rgbaToChw(odd(4), 8), 'plain RGBA array');
   // A short buffer: the missing pixels are NaN either way.
   const short = noise(100);
   sameTensor(cvScan.toTensor(short, 8), OLD_CVSCAN.toTensor(short, 8), 'short buffer');
