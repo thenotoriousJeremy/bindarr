@@ -21,21 +21,27 @@ class Refusal extends Error {
 
 // 2. Get User's Collection
 //
-// One row per physical entry, newest first. Two optional knobs exist for the
-// collection grid, which at 20,000 rows spent seconds downloading and parsing a
-// response it mostly did not draw:
+// One row per physical entry, newest first. Optional knobs exist for the
+// collection grid and Storage, which at 20,000 rows spent seconds downloading
+// and parsing a response they mostly did not draw:
 //
 //   fields=grid      only the columns a tile, the grid's filters and its sort
 //                    read: no notes, slab cert, marketplace links, container
 //                    labels or purchase details. The card popup asks for the
 //                    full row when it opens (GET /collection/:id).
+//   fields=storage   what Storage draws a container and its Unsorted queue with:
+//                    the grid's card columns less rules text and sealed links,
+//                    plus where a copy sits (compartment_id, location_id,
+//                    position) and what was paid for it.
+//   location_id      one container's copies (its id), or `none`: the copies in
+//                    no container, Storage's Unsorted queue.
 //   limit, offset    one page, with the unpaged total in X-Total-Count. Order is
 //                    added_at DESC then id DESC, so rows added in the same second
 //                    (a bulk add) still have one fixed order, and consecutive
 //                    pages never repeat or skip a row.
 //
-// Without either, the response is what it always was: every row, every column.
-// Storage, sealed and the deck builder all read it that way.
+// Without any, the response is what it always was: every row, every column.
+// The deck builder still reads it that way.
 const COLLECTION_FULL_COLUMNS = `
         c.id as entry_id,
         c.card_id,
@@ -176,6 +182,49 @@ const COLLECTION_GRID_COLUMNS = `
         cc.price_currency,
         cc.game`;
 const GRID_PRICE_INPUTS = ['market_value', 'price_normal', 'price_holofoil', 'price_reverse_holofoil', 'price_1st_edition'];
+// What Storage draws, files and sorts by: the grid's card columns less the ones
+// only the grid's Scryfall-syntax search and sealed filter read (rules text,
+// stats, the sealed link), plus the slot a copy sits in and the "paid" its
+// focused card shows (CompartmentView). The card popup reads the full row.
+const COLLECTION_STORAGE_COLUMNS = `
+        c.id as entry_id,
+        c.card_id,
+        c.quantity,
+        c.condition,
+        c.printing,
+        c.language,
+        c.location_id,
+        c.compartment_id,
+        c.position,
+        c.added_at,
+        c.is_trade,
+        c.favorite,
+        c.list_type,
+        c.grader,
+        c.grade,
+        c.purchase_price,
+        c.market_value,
+        cc.name,
+        cc.printed_name,
+        cc.supertype,
+        cc.subtypes,
+        cc.types,
+        cc.cmc,
+        cc.color_identity,
+        cc.rarity,
+        cc.set_id,
+        cc.set_name,
+        cc.number,
+        cc.image_url,
+        cc.orientation,
+        cc.price_trend,
+        cc.price_normal,
+        cc.price_holofoil,
+        cc.price_reverse_holofoil,
+        cc.price_1st_edition,
+        cc.price_currency,
+        cc.game`;
+const COLUMN_SETS = { grid: COLLECTION_GRID_COLUMNS, storage: COLLECTION_STORAGE_COLUMNS };
 
 // Owner-scoped: every write checks that a link names the user's own unit, but
 // the read does not rely on that. A row pointing at another user's unit gets no
@@ -226,11 +275,16 @@ async function listCollection(req, res) {
     const listType = req.query.list_type || 'collection';
     const isTrade = req.query.is_trade;
     const compId = req.query.compartment_id;
+    const locationId = req.query.location_id;
     const game = req.query.game;
-    const grid = req.query.fields === 'grid';
-    if (req.query.fields !== undefined && !grid) {
-      return res.status(400).json({ error: 'fields must be "grid" when given' });
+    const fields = req.query.fields;
+    if (fields !== undefined && !Object.prototype.hasOwnProperty.call(COLUMN_SETS, fields)) {
+      return res.status(400).json({ error: 'fields must be "grid" or "storage" when given' });
     }
+    if (locationId !== undefined && locationId !== 'none' && !/^\d+$/.test(String(locationId))) {
+      return res.status(400).json({ error: 'location_id must be a container id or "none"' });
+    }
+    const slim = fields !== undefined;
 
     const paged = req.query.limit !== undefined || req.query.offset !== undefined;
     const limit = readPagingInt(req.query.limit, COLLECTION_PAGE_MAX);
@@ -250,6 +304,13 @@ async function listCollection(req, res) {
       filterSql += ` AND c.compartment_id = ?`;
       filterParams.push(compId);
     }
+    // A container that is not the user's simply holds none of their copies.
+    if (locationId === 'none') {
+      filterSql += ` AND c.location_id IS NULL`;
+    } else if (locationId !== undefined) {
+      filterSql += ` AND c.location_id = ?`;
+      filterParams.push(Number(locationId));
+    }
     // The deck builder has always sent ?game= and been handed every game back.
     // A card cached before multi-game support carries no game, and every one of
     // those is Pokémon, the same default the clients apply to item.game.
@@ -259,12 +320,12 @@ async function listCollection(req, res) {
     }
 
     const query = `
-      SELECT ${grid ? COLLECTION_GRID_COLUMNS : COLLECTION_FULL_COLUMNS}
+      SELECT ${slim ? COLUMN_SETS[fields] : COLLECTION_FULL_COLUMNS}
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
-      ${grid ? '' : `LEFT JOIN locations l ON c.location_id = l.id
+      ${slim ? '' : `LEFT JOIN locations l ON c.location_id = l.id
       LEFT JOIN compartments cp ON c.compartment_id = cp.id`}
-      ${COLLECTION_SEALED_JOINS}
+      ${fields === 'storage' ? '' : COLLECTION_SEALED_JOINS}
       ${filterSql}
       ORDER BY c.added_at DESC, c.id DESC
       ${paged ? 'LIMIT ? OFFSET ?' : ''}
@@ -282,7 +343,7 @@ async function listCollection(req, res) {
     }
 
     const alloc = await checkedOutAllocation(req.user.id);
-    res.json(formatCollectionRows(rows, alloc, grid));
+    res.json(formatCollectionRows(rows, alloc, slim));
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to fetch collection' });

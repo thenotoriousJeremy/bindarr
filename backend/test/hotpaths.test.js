@@ -2,6 +2,7 @@
 //
 //   - a page of the collection list (newest first) reads an index in order instead
 //     of sorting the whole collection for every page;
+//   - Storage's read of one container, or of Unsorted, does the same;
 //   - deleting a copy reads the schema's foreign keys once, not every time (it was
 //     some 40 statements for one card);
 //   - the boot-time backfill of the product map's NULL games looks those rows up
@@ -37,6 +38,23 @@ async function collectionPage() {
   assert.ok(steps.some(s => /idx_collection_user_list_added/.test(s)), `a collection page reads the list index: ${steps.join(' | ')}`);
   assert.ok(!steps.some(s => /TEMP B-TREE FOR ORDER BY/.test(s)), `and needs no sort: ${steps.join(' | ')}`);
   console.log('PASS: a collection page is read in index order');
+}
+
+// Storage's reads (DATA-18): one container's copies, and the ones in no container.
+// They read the user's own stretch of the list index, in order, like a page: no
+// scan of the table and no sort. That is why there is no (user_id, location_id)
+// index: SQLite prefers this one for the order, and would never read that one.
+async function storageReads() {
+  for (const where of ['c.location_id = ?', 'c.location_id IS NULL']) {
+    const steps = await plan(`
+      SELECT c.id FROM collection c JOIN card_cache cc ON c.card_id = cc.id
+       WHERE c.user_id = ? AND c.list_type = ? AND ${where}
+       ORDER BY c.added_at DESC, c.id DESC`, where.includes('?') ? [1, 'collection', 2] : [1, 'collection']);
+    assert.ok(steps.some(s => /SEARCH c USING INDEX idx_collection_user_list_added \(user_id=\? AND list_type=\?\)/.test(s)),
+      `${where} reads the user's stretch of an index: ${steps.join(' | ')}`);
+    assert.ok(!steps.some(s => /SCAN c\b|TEMP B-TREE/.test(s)), `${where}: no table scan, no sort: ${steps.join(' | ')}`);
+  }
+  console.log("PASS: Storage's container and Unsorted reads are index reads of the user's copies");
 }
 
 async function trashSchemaWalk() {
@@ -79,6 +97,7 @@ async function catalogBackfill() {
 async function main() {
   await db.initDb();
   await collectionPage();
+  await storageReads();
   await trashSchemaWalk();
   await catalogBackfill();
 }

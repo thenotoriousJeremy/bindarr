@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createLatestLoader, applyCardPatch, createCardStore, readCardPatch,
+  createLatestLoader, applyCardPatch, createCardStore, readCardPatch, readShownCards, shownOnly,
+  shownCardsUrls, unsortedCardsUrl, containerCardsUrl,
   evictedText, applyAllText, importContainerText,
 } from './storageQueries.js';
 
@@ -116,14 +117,62 @@ test('readCardPatch reads each compartment and entry once, and a deleted entry a
   const urls = [];
   const fetchImpl = async (url) => {
     urls.push(url);
-    if (url === '/api/collection?compartment_id=10') return answer([row(1, 10)]);
+    if (url === '/api/collection?compartment_id=10&fields=storage') return answer([row(1, 10)]);
     if (url === '/api/collection/4') return answer(row(4, 10));
     if (url === '/api/collection/5') return answer({ error: 'Collection entry not found' }, 404);
     throw new Error(`unexpected ${url}`);
   };
   const patch = await readCardPatch({ compartments: [10, 10, null], entries: [4, 5, 4] }, { fetchImpl });
-  assert.deepEqual(urls.sort(), ['/api/collection/4', '/api/collection/5', '/api/collection?compartment_id=10']);
+  assert.deepEqual(urls.sort(), ['/api/collection/4', '/api/collection/5', '/api/collection?compartment_id=10&fields=storage']);
   assert.deepEqual(patch, { compartments: [10], entries: [4, 5], rows: [row(1, 10), row(4, 10)] });
+});
+
+// Storage reads what it shows (DATA-18): Unsorted and the open container, slim.
+test('a whole load reads Unsorted and the open container, never the whole collection', async () => {
+  const urls = [];
+  const fetchImpl = async (url) => {
+    urls.push(url);
+    if (url === '/api/collection?location_id=none&fields=storage') return answer([row(1, null)]);
+    if (url === '/api/collection?location_id=7&fields=storage') return answer([row(2, 70, { location_id: 7 })]);
+    throw new Error(`unexpected ${url}`);
+  };
+  assert.deepEqual((await readShownCards(7, { fetchImpl })).map(c => c.entry_id), [1, 2]);
+  assert.deepEqual(urls, ['/api/collection?location_id=none&fields=storage', '/api/collection?location_id=7&fields=storage']);
+  urls.length = 0;
+  assert.deepEqual((await readShownCards(null, { fetchImpl })).map(c => c.entry_id), [1], 'no container open: Unsorted alone');
+  assert.deepEqual(urls, ['/api/collection?location_id=none&fields=storage']);
+  assert.deepEqual(shownCardsUrls(3), [unsortedCardsUrl(), containerCardsUrl(3)]);
+});
+
+test('opening another container swaps its copies in and keeps Unsorted', async () => {
+  const fetchImpl = async (url) => {
+    if (url === '/api/collection?location_id=8&fields=storage') return answer([row(5, 80, { location_id: 8 })]);
+    throw new Error(`unexpected ${url}`);
+  };
+  const patch = await readCardPatch({ container: 8 }, { fetchImpl });
+  assert.deepEqual(patch, { compartments: [], entries: [], rows: [row(5, 80, { location_id: 8 })], container: 8 });
+  const cards = [row(1, null), row(2, 70, { location_id: 7 }), { entry_id: 3, compartment_id: null, location_id: 7 }];
+  const next = applyCardPatch(cards, patch);
+  assert.deepEqual(next.map(c => c.entry_id).sort(), [1, 5], "the last container's copies leave with it, a pocketless one too");
+  const closed = applyCardPatch(next, await readCardPatch({ container: null }, { fetchImpl }));
+  assert.deepEqual(closed.map(c => c.entry_id), [1], 'no container open: Unsorted alone, and nothing is read');
+});
+
+test('a patch never leaves a copy of a container that is not open', () => {
+  const cards = [row(1, null), row(2, 70, { location_id: 7 }), row(9, 90, { location_id: 9 })];
+  assert.deepEqual(shownOnly(cards, 7).map(c => c.entry_id), [1, 2]);
+  assert.deepEqual(shownOnly(cards, null).map(c => c.entry_id), [1]);
+  assert.deepEqual(shownOnly(cards, '9').map(c => c.entry_id), [1, 9], 'an id from the URL is a string');
+});
+
+test('run() keeps only the newest of several-request reads', async () => {
+  const first = deferred();
+  const loader = createLatestLoader();
+  const a = loader.run(() => first.promise);
+  const b = loader.run(async () => ['new']);
+  first.resolve(['old']);
+  assert.deepEqual(await b, { data: ['new'] });
+  assert.deepEqual(await a, { stale: true });
 });
 
 test('readCardPatch fails when a compartment cannot be read, so the caller reads everything', async () => {
