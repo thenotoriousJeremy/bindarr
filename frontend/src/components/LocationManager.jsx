@@ -30,7 +30,7 @@ import { FilingGuidePanel, FilingBar } from './storage/FilingGuide';
 // Only opened from a binder's page bar, so it is its own chunk, not Storage's.
 const BinderArtworkEditor = lazyWithReload(() => import('./BinderArtworkEditor'));
 
-function LocationManager({ active = true, statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, focusEntryId }) {
+function LocationManager({ active = true, statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, focusEntryId, onProposeTrade, onViewTrade }) {
   const { t } = useT();
   const [locations, setLocations] = useState([]);
   const [activeLocationId, setActiveLocationId] = useState(null);
@@ -1668,6 +1668,8 @@ function LocationManager({ active = true, statsTrigger, onUpdate, showToast, sel
         onClose={() => setInspectorCard(null)}
         onUpdate={onUpdate}
         showToast={showToast}
+        onProposeTrade={onProposeTrade}
+        onViewTrade={onViewTrade}
       />
     </div>
     </DndContext>

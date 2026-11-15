@@ -29,7 +29,7 @@ import Price from './Price';
 // is only needed once a card is clicked.
 const CardInspectorModal = lazyWithReload(() => import('./CardInspectorModal'));
 
-function Dashboard({ active = true, statsTrigger, onNavigate, onOpenSet, setSelectedLocationId, setFocusEntryId, onUpdate, showToast }) {
+function Dashboard({ active = true, statsTrigger, onNavigate, onOpenSet, setSelectedLocationId, setFocusEntryId, onUpdate, showToast, onProposeTrade, onViewTrade }) {
   const { t, locale } = useT();
   // Money and dates follow the interface language, not the browser's: a user who
   // picked German sees 1.234,56 and 3.8.2026 even on an en-US browser.
@@ -482,6 +482,8 @@ function Dashboard({ active = true, statsTrigger, onNavigate, onOpenSet, setSele
             onClose={() => setInspectorCard(null)}
             onUpdate={onUpdate}
             showToast={showToast}
+            onProposeTrade={onProposeTrade}
+            onViewTrade={onViewTrade}
             onViewStorage={(card) => {
               if (setSelectedLocationId) setSelectedLocationId(card.location_id || 'unsorted');
               if (setFocusEntryId) setFocusEntryId(card.entry_id || card.id);

@@ -12,6 +12,7 @@ import { useStableCallback } from './utils/useStableCallback';
 import { clearApiCache } from './utils/useApi';
 import { isAbortError } from './utils/request';
 import { isNative, isDeviceMode, setDeviceMode } from './apiBase';
+import { offersTradeShortcuts } from './utils/tradeAccess';
 import { parseOidcReturn, takeVerifier } from './utils/nativeOidc';
 import { isSessionExpired } from './utils/sessionExpiry';
 import { loadStoredUser, saveStoredUser } from './utils/storedUser';
@@ -168,6 +169,8 @@ function App() {
   const [selectedLocationId, setSelectedLocationId] = useState(null);
   const [focusEntryId, setFocusEntryId] = useState(null);
   const [selectedCardFilter, setSelectedCardFilter] = useState('');
+  const [transferLaunch, setTransferLaunch] = useState(null);
+  const [transferHistoryFocus, setTransferHistoryFocus] = useState(null);
   // utils/toast.js holds it, so the login screen and the app draw the same one.
   const toast = useSyncExternalStore(subscribeToast, getToast, getToast);
   const [statsTrigger, setStatsTrigger] = useState(0);
@@ -187,6 +190,7 @@ function App() {
   // the same commit that activates it.
   const [mountedTabs, setMountedTabs] = useState([activeTab]);
   if (!mountedTabs.includes(activeTab)) setMountedTabs([...mountedTabs, activeTab]);
+  const transferActionSequenceRef = useRef(0);
 
   // The page itself (window) is the scroller, shared by every tab, so each
   // tab's offset is read as you leave it (showTab, before the DOM changes — a
@@ -215,6 +219,8 @@ function App() {
     setMountedTabs(['dashboard']);
     setFocusSet(null);
     setLastCollectionView('collection');
+    setTransferLaunch(null);
+    setTransferHistoryFocus(null);
     wishlist.reset();
     scrollByTabRef.current = {};
   };
@@ -228,6 +234,40 @@ function App() {
     if (tab !== activeTab) goToTab(tab);
   });
   const openSet = useCallback((target) => { setFocusSet({ ...target }); goTab('sets'); }, [goTab]);
+  const openTradeComposer = useStableCallback(card => {
+    if (!card?.entry_id) return;
+    setTransferLaunch({
+      entryId: card.entry_id,
+      requestId: ++transferActionSequenceRef.current
+    });
+    goTab('add-cards');
+  });
+  const openSealedTradeComposer = useStableCallback(unit => {
+    if (!unit?.id) return;
+    setTransferLaunch({
+      type: 'sealed',
+      unitId: unit.id,
+      requestId: ++transferActionSequenceRef.current
+    });
+    goTab('add-cards');
+  });
+
+  const openTradeHistory = useStableCallback(focus => {
+    if (!focus?.type || focus.id == null) return;
+    setTransferHistoryFocus({
+      ...focus,
+      requestId: ++transferActionSequenceRef.current
+    });
+    goTab('add-cards');
+  });
+
+  const clearTransferLaunch = useStableCallback(requestId => {
+    setTransferLaunch(current => current?.requestId === requestId ? null : current);
+  });
+
+  const clearTradeHistoryFocus = useStableCallback(requestId => {
+    setTransferHistoryFocus(current => current?.requestId === requestId ? null : current);
+  });
 
   // Detect public share route on load
   const [shareToken] = useState(() => {
@@ -344,6 +384,28 @@ function App() {
       if (listener) listener.remove();
     };
   }, [t, showToast]);
+
+  // Upgrade profiles cached before login responses included the user ID.
+  useEffect(() => {
+    if (!token || !user || user.id != null) return;
+    let active = true;
+    fetch('/api/auth/me')
+      .then(async response => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Failed to refresh user profile');
+        if (!data.user || data.user.id == null) throw new Error('Authenticated profile did not include a user ID');
+        return data.user;
+      })
+      .then(profile => {
+        if (!active) return;
+        setUser(profile);
+        saveStoredUser(profile);
+      })
+      .catch(error => {
+        if (active) console.error('Failed to refresh user profile:', error);
+      });
+    return () => { active = false; };
+  }, [token, user]);
 
   useEffect(() => {
     if (toast) {
@@ -569,6 +631,12 @@ function App() {
   // Settings (see InstanceSettings).
   const deviceMode = isDeviceMode();
   const showAdmin = user.role === 'admin' && !deviceMode;
+  // "Propose trade" on a card or sealed unit starts an offer to another member,
+  // and a phone on its own has none (utils/tradeAccess). Its deals with people
+  // outside Bindarr are still under Add/Remove Cards > Trades & Gifts.
+  const tradeShortcuts = offersTradeShortcuts({ deviceMode });
+  const proposeCardTrade = tradeShortcuts ? openTradeComposer : undefined;
+  const proposeSealedTrade = tradeShortcuts ? openSealedTradeComposer : undefined;
   const barTabs = navBarTabs(user.nav_tabs, { activeTab });
   const litTab = litNavTab(activeTab, barTabs);
   // What the bar leaves out, under More (utils/navTabs.js).
@@ -598,9 +666,11 @@ function App() {
     const active = tab === activeTab;
     switch (tab === 'admin' && !showAdmin ? 'dashboard' : tab) {
       case 'dashboard':
-        return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} onProposeTrade={proposeCardTrade} onViewTrade={openTradeHistory} />;
       case 'add-cards':
-        return <AddCards active={active} onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab} />;
+        return <AddCards active={active} user={user} onAddSuccess={triggerRefresh} onUpdateUser={handleUpdateUser} showToast={showToast} setActiveTab={goTab}
+          transferLaunch={transferLaunch} transferHistoryFocus={transferHistoryFocus}
+          onInitialOfferHandled={clearTransferLaunch} onHistoryFocusHandled={clearTradeHistoryFocus} />;
       case 'collection':
         return (
           <CollectionList
@@ -614,6 +684,8 @@ function App() {
             onNavigate={goTab}
             setSelectedLocationId={setSelectedLocationId}
             setFocusEntryId={setFocusEntryId}
+            onProposeTrade={proposeCardTrade}
+            onViewTrade={openTradeHistory}
           />
         );
       case 'storage':
@@ -627,6 +699,8 @@ function App() {
             setSelectedLocationId={setSelectedLocationId}
             focusEntryId={focusEntryId}
             setFocusEntryId={setFocusEntryId}
+            onProposeTrade={proposeCardTrade}
+            onViewTrade={openTradeHistory}
           />
         );
       case 'sets':
@@ -638,13 +712,13 @@ function App() {
       case 'notes':
         return <Notes active={active} showToast={showToast} />;
       case 'sealed':
-        return <SealedList active={active} statsTrigger={statsTrigger} showToast={showToast} />;
+        return <SealedList active={active} statsTrigger={statsTrigger} showToast={showToast} onProposeTrade={proposeSealedTrade} />;
       case 'settings':
         return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} onLeaveDevice={handleLeaveDevice} onDataChanged={handleDataChanged} />;
       case 'admin':
         return <AdminPanel user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
       default:
-        return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} onProposeTrade={proposeCardTrade} onViewTrade={openTradeHistory} />;
     }
   };
 
