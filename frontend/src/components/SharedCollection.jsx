@@ -1,4 +1,4 @@
-import { Suspense, useState, useEffect, useMemo } from 'react';
+import { Suspense, useState, useEffect, useMemo, useCallback, memo } from 'react';
 import { Search, Trophy, Compass, Library, ShieldAlert, Sparkles, X, MapPin, SlidersHorizontal } from 'lucide-react';
 import Logo from './Logo';
 import RiotNotice from './RiotNotice';
@@ -6,6 +6,7 @@ import Price from './Price';
 import { PRINTINGS, conditionLabel, printingLabel } from '../utils/cardOptions';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import Modal from './Modal';
+import VirtualGrid from './VirtualGrid';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { displayName } from '../utils/languages';
 import CardImage from './CardImage';
@@ -13,6 +14,7 @@ import { useT } from '../utils/i18n';
 import { onActivateKey } from '../utils/a11y';
 import { apiErrorText } from '../utils/apiError';
 import { lazyNamed } from '../utils/lazyWithReload';
+import { CHART_PALETTE, typeChartColor } from '../utils/dashboardColors';
 import ChartFallback from './charts/ChartFallback';
 
 // The plots are code-split (charts/SharedCharts), so a visitor sees the numbers
@@ -20,19 +22,6 @@ import ChartFallback from './charts/ChartFallback';
 const sharedCharts = () => import('./charts/SharedCharts');
 const SharedSetBars = lazyNamed(sharedCharts, 'SharedSetBars');
 const SharedDonut = lazyNamed(sharedCharts, 'SharedDonut');
-
-const COLORS = [
-  '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
-  '#ec4899', '#14b8a6', '#f43f5e', '#a855f7', '#6366f1'
-];
-
-const TYPE_COLORS = {
-  'Grass': '#4ade80', 'Fire': '#f87171', 'Water': '#60a5fa', 'Lightning': '#facc15',
-  'Psychic': '#c084fc', 'Fighting': '#f97316', 'Darkness': '#475569', 'Metal': '#94a3b8',
-  'Dragon': '#a855f7', 'Fairy': '#f472b6', 'Colorless': '#cbd5e1',
-  'White': '#fef08a', 'Blue': '#3b82f6', 'Black': '#334155', 'Red': '#ef4444',
-  'Green': '#10b981', 'Land': '#d97706'
-};
 
 // Same Sort By options as the owner's collection view (CollectionList), minus
 // the owner-only 'favorite'/'added' notions. 'qty-desc' isn't a card-order
@@ -52,10 +41,43 @@ const SORT_CRITERIA = {
   'language-asc': [{ by: 'language', dir: 'asc' }, { by: 'name', dir: 'asc' }],
 };
 
-function typeColor(name, i) {
-  const key = Object.keys(TYPE_COLORS).find(k => k.toLowerCase() === String(name).toLowerCase());
-  return key ? TYPE_COLORS[key] : COLORS[i % COLORS.length];
-}
+// One card of the public grid. Memoized, with props that are the row itself or
+// stable, so a scroll mounting new rows (VirtualGrid) or a keystroke in the
+// search leaves the tiles already on screen alone.
+const SharedTile = memo(function SharedTile({ card, shareLocations, onOpen, t }) {
+  const rarity = (card.rarity || '').toLowerCase();
+  const isUltra = rarity.includes('rare') || rarity.includes('secret') || rarity.includes('promo') || rarity.includes('ultra');
+  return (
+    <div className="tcg-card tilt-card-wrapper" role="button" tabIndex={0} onClick={() => onOpen(card)} onKeyDown={onActivateKey(() => onOpen(card))}>
+      <div className={`tcg-card-inner ${isUltra ? 'rarity-glow-ultra' : ''}`}>
+        <CardImage card={card} className="tcg-card-image" loading="lazy" />
+        {getFoilOverlayClass(card.printing) && (
+          <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
+        )}
+        {getPrintingBadgeLabel(card.printing, t) && (
+          <span style={{ position: 'absolute', top: '6px', left: '6px', fontSize: '0.6rem', fontWeight: 800, padding: '2px 5px', borderRadius: '3px', zIndex: 6, ...getPrintingBadgeStyle(card.printing) }}>
+            {getPrintingBadgeLabel(card.printing, t)}
+          </span>
+        )}
+        {card.quantity > 1 && (
+          <div className="tcg-card-quantity-tag">x{card.quantity}</div>
+        )}
+      </div>
+      <div className="tcg-card-info">
+        <div className="tcg-card-name">{displayName(card)}</div>
+        <div className="tcg-card-meta">
+          <span style={{ fontSize: '0.7rem' }}>{card.set_name} • #{card.number}</span>
+          <span className="tcg-card-price"><Price value={card.price_trend} currency={card.price_currency} /></span>
+        </div>
+        {shareLocations && card.location && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+            <MapPin size={11} /> {card.location}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
 
 function SharedCollection({ shareToken }) {
   const { t, locale } = useT();
@@ -156,6 +178,12 @@ function SharedCollection({ shareToken }) {
     return Object.values(groups);
   }, [filteredCollection, stackCards, stackByCondition, stackByPrinting]);
 
+  // The grid draws only the rows near the viewport (VirtualGrid): a public
+  // collection of thousands of cards was rendered whole, image tags and all.
+  const renderTile = useCallback((card) => (
+    <SharedTile key={card.entry_id} card={card} shareLocations={shareLocations} onOpen={setActiveCard} t={t} />
+  ), [shareLocations, t]);
+
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '80vh' }}>
@@ -186,8 +214,8 @@ function SharedCollection({ shareToken }) {
   const { owner, stats } = data;
   const { summary, types, rarities, sets = [] } = stats;
 
-  const typeChartData = types.map((entry, i) => ({ name: entry.name, value: entry.value, color: typeColor(entry.name, i) }));
-  const rarityChartData = rarities.map((r, i) => ({ ...r, fill: COLORS[i % COLORS.length] }));
+  const typeChartData = types.map((entry, i) => ({ name: entry.name, value: entry.value, color: typeChartColor(entry.name, i) }));
+  const rarityChartData = rarities.map((r, i) => ({ ...r, fill: CHART_PALETTE[i % CHART_PALETTE.length] }));
 
   const handleTabChange = (type) => {
     setListType(type);
@@ -297,7 +325,7 @@ function SharedCollection({ shareToken }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '1.25rem' }}>
             {topValuable.map((card) => (
               <div key={card.entry_id} role="button" tabIndex={0} onClick={() => setActiveCard(card)} onKeyDown={onActivateKey(() => setActiveCard(card))} className="dashboard-card-clickable"
-                style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', cursor: 'pointer' }}>
+                style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', background: 'var(--surface-1)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', cursor: 'pointer' }}>
                 <CardImage card={card} style={{ width: '48px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '5px', boxShadow: '0 2px 6px rgba(0,0,0,0.4)' }} />
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   <div style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-strong)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{displayName(card)}</div>
@@ -395,51 +423,12 @@ function SharedCollection({ shareToken }) {
           {t('collection.noMatches')}
         </div>
       ) : (
-        <div className="card-grid">
-          {processedCollection.map(card => {
-            const rarity = (card.rarity || '').toLowerCase();
-            const isUltra = rarity.includes('rare') || rarity.includes('secret') || rarity.includes('promo') || rarity.includes('ultra');
-            return (
-              <div key={card.entry_id} className="tcg-card tilt-card-wrapper" role="button" tabIndex={0} onClick={() => setActiveCard(card)} onKeyDown={onActivateKey(() => setActiveCard(card))}>
-                <div className={`tcg-card-inner ${isUltra ? 'rarity-glow-ultra' : ''}`}>
-                  <CardImage card={card} className="tcg-card-image" loading="lazy" />
-                  {getFoilOverlayClass(card.printing) && (
-                    <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
-                  )}
-                  {getPrintingBadgeLabel(card.printing, t) && (
-                    <span style={{ position: 'absolute', top: '6px', left: '6px', fontSize: '0.6rem', fontWeight: 800, padding: '2px 5px', borderRadius: '3px', zIndex: 6, ...getPrintingBadgeStyle(card.printing) }}>
-                      {getPrintingBadgeLabel(card.printing, t)}
-                    </span>
-                  )}
-                  {card.quantity > 1 && (
-                    <div className="tcg-card-quantity-tag">x{card.quantity}</div>
-                  )}
-                </div>
-                <div className="tcg-card-info">
-                  <div className="tcg-card-name">{displayName(card)}</div>
-                  <div className="tcg-card-meta">
-                    <span style={{ fontSize: '0.7rem' }}>{card.set_name} • #{card.number}</span>
-                    <span className="tcg-card-price"><Price value={card.price_trend} currency={card.price_currency} /></span>
-                  </div>
-                  {shareLocations && card.location && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
-                      <MapPin size={11} /> {card.location}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <VirtualGrid items={processedCollection} renderItem={renderTile} className="card-grid" />
       )}
 
       {/* Read-only Card Detail Modal */}
       {activeCard && (
-        <Modal onClose={() => setActiveCard(null)} label={activeCard.name} overlayStyle={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999, padding: '1rem'
-        }} className="glass-panel" style={{ maxWidth: '680px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '2rem', display: 'flex', flexWrap: 'wrap', gap: '2rem', position: 'relative' }}>
+        <Modal onClose={() => setActiveCard(null)} label={activeCard.name} className="glass-panel" style={{ maxWidth: '680px', width: '100%', maxHeight: '90vh', overflowY: 'auto', overscrollBehavior: 'contain', padding: '2rem', display: 'flex', flexWrap: 'wrap', gap: '2rem', position: 'relative' }}>
             <button className="btn btn-secondary btn-icon-only" onClick={() => setActiveCard(null)} aria-label={t('common.close')} style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}>
               <X size={16} />
             </button>
@@ -464,7 +453,7 @@ function SharedCollection({ shareToken }) {
                   <div style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--text-strong)' }}>x{activeCard.quantity}</div>
                 </div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'var(--surface-1)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}><strong>{t('shared.cardDetails')}</strong></div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.8rem' }}>
                   <span style={{ color: 'var(--text-muted)' }}>{t('inspector.specSupertype')}</span> <span style={{ color: 'var(--text-strong)' }}>{activeCard.supertype}</span>
