@@ -1,0 +1,83 @@
+name: Scan tests
+
+# The scan unit tests need the ONNX models, which no runner has: in test.yml they
+# exit 77 and are reported as SKIP, so real model and catalog code never runs in
+# CI. Once a week, and on demand, this fetches the models and the published
+# fallback catalogs (scripts/fetch-models.mjs, about 80 MB from Hugging Face,
+# cached between runs) and runs those tests against them.
+#
+# fastdetector has to run here: with the models present, a skip means the fetch
+# or the test broke. clientcrop also needs captured camera frames
+# (data/scan-debug) and scanfloor a locally built Japanese Pokémon catalog;
+# neither exists in CI, so those two may still report SKIP, as a notice.
+on:
+  schedule:
+    - cron: '41 5 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scan-tests
+  cancel-in-progress: false
+
+env:
+  # onnxruntime-node's install script otherwise downloads ~245 MB of CUDA
+  # libraries; these tests run on the CPU like the server does.
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+
+jobs:
+  scan:
+    name: Scan tests with the models
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install
+        working-directory: backend
+        run: npm ci
+
+      # Keyed on the descriptor table (names, sources, byte sizes), so changing a
+      # model or catalog there fetches again. A restored file of the right size is
+      # left alone by fetch-models.mjs.
+      - name: Restore models and catalogs
+        uses: actions/cache@v6
+        with:
+          path: backend/data/models
+          key: scan-models-${{ hashFiles('backend/src/utils/modelAssets.js') }}
+
+      - name: Fetch models and catalogs
+        working-directory: backend
+        run: node scripts/fetch-models.mjs --catalogs
+
+      - name: Scan tests
+        working-directory: backend
+        run: |
+          status=0
+          for t in fastdetector clientcrop scanfloor; do
+            set +e
+            node "test/$t.test.js"
+            code=$?
+            set -e
+            case "$code" in
+              0) echo "PASS: $t" ;;
+              77)
+                if [ "$t" = fastdetector ]; then
+                  echo "::error::$t skipped although the models were fetched"
+                  status=1
+                else
+                  echo "::notice::$t skipped: it needs more than the models (see this workflow's header)"
+                fi
+                ;;
+              *) echo "::error::$t failed (exit $code)"; status=1 ;;
+            esac
+          done
+          exit "$status"
