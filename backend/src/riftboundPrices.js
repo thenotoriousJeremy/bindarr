@@ -22,7 +22,7 @@
 // price_trend prefers the Normal quote and falls back to the Foil one.
 const db = require('./db');
 const tcgcsv = require('./tcgcsvApi');
-const { recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
+const { recordPrice, shouldSweepPrices, markPricesSwept, WISHLIST_CARDS_SQL } = require('./utils/priceHelpers');
 
 const CATEGORY_ID = 89;
 const GAME = 'riftbound';
@@ -99,14 +99,17 @@ async function updateCollectionPrices(force = false) {
 
     // Every listed card, not only owned ones: the requests are per group either
     // way, and a card being browsed is worth a price too. History is recorded for
-    // owned and decked cards only — it is what the trend charts are for, and a
-    // point per catalogue card per day would be most of price_history.
+    // owned, decked and wishlisted cards only — it is what the trend charts and
+    // price alerts read, and a point per catalogue card per day would be most of
+    // price_history.
     const cards = await db.all(
       `SELECT id, tcgplayer_product_id FROM card_cache WHERE game = ? AND tcgplayer_product_id IS NOT NULL`, [GAME]
     );
     const tracked = new Set((await db.all(
       `SELECT card_id FROM collection WHERE game = ? UNION SELECT dc.card_id FROM deck_cards dc
-        JOIN card_cache cc ON cc.id = dc.card_id WHERE cc.game = ?`, [GAME, GAME]
+        JOIN card_cache cc ON cc.id = dc.card_id WHERE cc.game = ?
+       UNION SELECT w.card_id FROM (${WISHLIST_CARDS_SQL}) w JOIN card_cache cc ON cc.id = w.card_id WHERE cc.game = ?`,
+      [GAME, GAME, GAME]
     )).map(r => r.card_id));
 
     let priced = 0;

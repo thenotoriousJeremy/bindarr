@@ -25,7 +25,7 @@
 // which it is good at. This module supplies prices and product ids only.
 const axios = require('axios');
 const db = require('./db');
-const { recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
+const { recordPrice, shouldSweepPrices, markPricesSwept, WISHLIST_CARDS_SQL } = require('./utils/priceHelpers');
 const { normId, normName, numberKey } = require('./utils/setCatalogueMatch');
 const metrics = require('./utils/metrics');
 const { slimResults, SEALED_ONLY_CATEGORY } = require('./utils/tcgcsvSlim');
@@ -753,14 +753,14 @@ function pricesByProduct(rows) {
 // The (set, language) pairs to price, newest-largest first.
 //
 // `scope` decides how much of the cache is worth a request:
-//   'owned' — sets the user actually holds cards from, which is what the daily
-//             sweep needs. One TCGCSV request per set, so this is the difference
-//             between ~30 requests and ~670.
+//   'owned' — sets the user actually holds cards from (or has in a deck, or on a
+//             wishlist), which is what the daily sweep needs. One TCGCSV request
+//             per set, so this is the difference between ~30 requests and ~670.
 //   'all'   — every cached set. For the one-off backfill.
 async function setsToPrice(scope = 'owned') {
   const owned = `
     WHERE cc.game = 'pokemon' AND cc.id IN (
-      SELECT card_id FROM collection UNION SELECT card_id FROM deck_cards
+      SELECT card_id FROM collection UNION SELECT card_id FROM deck_cards UNION ${WISHLIST_CARDS_SQL}
     )`;
   const rows = await db.all(`
     SELECT cc.set_id, cc.set_name, cc.language, COUNT(*) AS n

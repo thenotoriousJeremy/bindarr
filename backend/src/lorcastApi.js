@@ -1,5 +1,5 @@
 const db = require('./db');
-const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
+const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept, WISHLIST_CARDS_SQL } = require('./utils/priceHelpers');
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
 const { cacheNormalizedCards } = require('./utils/cardCache');
@@ -312,6 +312,9 @@ async function updateCollectionPrices(force = false) {
       UNION
       SELECT DISTINCT d.card_id, cc.id FROM deck_cards d
       JOIN card_cache cc ON d.card_id = cc.id WHERE cc.game = 'lorcana'
+      UNION
+      SELECT DISTINCT w.card_id, cc.id FROM (${WISHLIST_CARDS_SQL}) w
+      JOIN card_cache cc ON w.card_id = cc.id WHERE cc.game = 'lorcana'
     `);
     if (cards.length === 0) return;
     if (!force && !(await shouldSweepPrices('lorcana'))) {

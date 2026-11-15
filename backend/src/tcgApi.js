@@ -1,5 +1,5 @@
 const db = require('./db');
-const { parseCardRow, recordStoredPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
+const { parseCardRow, recordStoredPrice, shouldSweepPrices, markPricesSwept, WISHLIST_CARDS_SQL } = require('./utils/priceHelpers');
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
 const { cacheNormalizedCards } = require('./utils/cardCache');
@@ -629,8 +629,9 @@ async function updateCollectionPrices(force = false) {
     // pokemontcg.io about an "mtg-" id would just 404. English only — non-English
     // Pokémon rows come from TCGdex and are swept by its own updateCollectionPrices.
     //
-    // Driven from collection/deck_cards and joined to card_cache by primary key,
-    // which is what keeps the added clause cheap; see #49 for the shape to avoid.
+    // Driven from collection/deck_cards (and the wishlists, which price alerts
+    // watch) and joined to card_cache by primary key, which is what keeps the
+    // added clause cheap; see #49 for the shape to avoid.
     const staleClause = `cc.game = 'pokemon' AND cc.language = 'English' AND cc.id NOT LIKE 'pokemontcgapi-%'
         AND (cc.last_updated IS NULL OR cc.last_updated <= datetime('now', '-${CACHE_AGE_LIMIT_DAYS} days'))`;
     const cardsInUse = await db.all(`
@@ -639,6 +640,9 @@ async function updateCollectionPrices(force = false) {
       UNION
       SELECT DISTINCT d.card_id FROM deck_cards d
       JOIN card_cache cc ON d.card_id = cc.id WHERE ${staleClause}
+      UNION
+      SELECT DISTINCT w.card_id FROM (${WISHLIST_CARDS_SQL}) w
+      JOIN card_cache cc ON w.card_id = cc.id WHERE ${staleClause}
     `);
 
     if (!cardsInUse.length) {

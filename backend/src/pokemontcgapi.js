@@ -9,7 +9,7 @@ const { cacheNormalizedCards } = require('./utils/cardCache');
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
 const { sameNumber } = require('./utils/setCatalogueMatch');
-const { parseCardRow, parseSqliteUtc, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
+const { parseCardRow, parseSqliteUtc, recordPrice, shouldSweepPrices, markPricesSwept, WISHLIST_CARDS_SQL } = require('./utils/priceHelpers');
 const { createProviderClient, USER_AGENT } = require('./utils/providerClient');
 
 const BASE = 'https://api.pokemontcgapi.com/v1';
@@ -368,14 +368,15 @@ async function getCardById(id, { refresh = false } = {}) {
 // Then, within a due sweep, only cards whose stored price is actually stale are
 // asked about: never priced (a listing row that entered the collection while the
 // quota was exhausted), or older than PRICE_AGE_DAYS. A card refreshed yesterday
-// costs nothing today. Owned and decked cards only; a browsed card is never paid for.
+// costs nothing today. Owned, decked and wishlisted cards only; a browsed card is
+// never paid for.
 async function updateCollectionPrices() {
   const provider = require('./utils/pokemonProvider');
   if (!hasKey() || await provider.configured() !== provider.POKEMONTCGAPI) return;
   if (!await shouldSweepPrices('pokemontcgapi')) return;
   try {
     const owned = await db.all(`SELECT id FROM card_cache WHERE id LIKE 'pokemontcgapi-%'
-      AND id IN (SELECT card_id FROM collection UNION SELECT card_id FROM deck_cards)
+      AND id IN (SELECT card_id FROM collection UNION SELECT card_id FROM deck_cards UNION ${WISHLIST_CARDS_SQL})
       AND (price_trend IS NULL OR last_updated IS NULL OR last_updated <= datetime('now', '-${PRICE_AGE_DAYS} days'))`);
     if (!owned.length) {
       await markPricesSwept('pokemontcgapi');

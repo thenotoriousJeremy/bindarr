@@ -10,7 +10,7 @@
 // { cards, total } of card_cache-shaped rows, so routes/collection.js can pick a
 // provider and treat the answer identically.
 const db = require('./db');
-const { parseCardRow, recordStoredPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
+const { parseCardRow, recordStoredPrice, shouldSweepPrices, markPricesSwept, WISHLIST_CARDS_SQL } = require('./utils/priceHelpers');
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
 const { cacheNormalizedCards } = require('./utils/cardCache');
@@ -611,6 +611,9 @@ async function updateCollectionPrices(force = false) {
       UNION
       SELECT DISTINCT d.card_id AS id FROM deck_cards d
       JOIN card_cache cc ON d.card_id = cc.id WHERE cc.game = 'pokemon' AND cc.language != 'English'
+      UNION
+      SELECT DISTINCT w.card_id AS id FROM (${WISHLIST_CARDS_SQL}) w
+      JOIN card_cache cc ON w.card_id = cc.id WHERE cc.game = 'pokemon' AND cc.language != 'English'
     `);
     const owned = rows.filter(r => idLanguage(r.id));
     if (owned.length === 0) return;
