@@ -4,11 +4,12 @@
 // detectWorker.js and detectResult.js), and device mode's scan on the phone
 // (frontend/src/device/scanEngine.js).
 //
-// The published catalogs were embedded with exactly this preprocessing, and a
-// change to it does not fail: a different constant, rounding or interpolation
-// quietly shifts every embedding, and the accuracy it costs is not measured
-// anywhere. backend/test/scanshared.test.js pins everything here to the copies
-// it replaced, bit for bit.
+// Every catalog a scan is matched against was embedded with fixed preprocessing
+// (a local build through this very module, in catalog.js), and a change here
+// does not fail: a different constant, rounding or interpolation quietly shifts
+// every embedding, and the accuracy it costs is not measured anywhere.
+// backend/test/scanshared.test.js pins everything here to the copies it
+// replaced, bit for bit.
 //
 // A plain ES module with no Node or DOM API in it: the backend require()s it
 // (Node 22.12+), and the app and its device-mode backend bundle it.

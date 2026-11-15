@@ -483,7 +483,7 @@ export function minAreaRect(pts) {
 // as the 8 coefficients of the 3x3 homography (h22 fixed at 1).
 //
 // A zero pivot means the source points do not span a plane: three in a line, or
-// two on one spot. What happens then is the caller's choice, and the two callers
+// two on one spot. What happens then is the caller's choice, and the callers
 // have always chosen differently, so it is an option rather than a fix:
 //
 //   default              the pivot becomes 1e-12 and a (meaningless) transform
