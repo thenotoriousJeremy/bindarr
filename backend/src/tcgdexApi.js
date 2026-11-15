@@ -11,7 +11,7 @@
 // provider and treat the answer identically.
 const axios = require('axios');
 const db = require('./db');
-const { parseCardRow, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
+const { parseCardRow, recordStoredPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
 const { cacheNormalizedCards } = require('./utils/cardCache');
@@ -128,6 +128,22 @@ function normalizeCard(card, lang) {
 
 const cacheCards = (cards, opts) => cacheNormalizedCards(cards, 'pokemon', opts);
 
+// Rows as card_cache now holds them, in the order asked for. Every path that
+// re-caches a card answers with this rather than with the card it just
+// normalized: cacheNormalizedCards keeps a TCGCSV price, product id and links over
+// what TCGdex sent (see utils/cardCache), so the fresh card is not what was
+// stored, and handing it on showed and recorded a price the row does not have.
+async function storedCards(ids) {
+  const out = new Map();
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const rows = await db.all(`SELECT * FROM card_cache WHERE id IN (${chunk.map(() => '?').join(',')})`, chunk);
+    for (const r of rows) out.set(r.id, parseCardRow(r));
+  }
+  return ids.map(id => out.get(id)).filter(Boolean);
+}
+const storedCard = async (id) => (await storedCards([id]))[0] || null;
+
 // Fill in a row cached from a set brief (name/number/image only). Safe to call for
 // any TCGdex id: it no-ops when the row already has full card data.
 //
@@ -149,15 +165,17 @@ async function hydrateCard(id) {
   // when it looks fresh, which is the case this function exists to break out of.
   const card = normalizeCard(await fetchFullCard(code, providerId(id)), code);
   await cacheCards([card]);
-  return card;
+  return storedCard(card.id);
 }
 
 // Run `fn` over `items` at most HYDRATE_CONCURRENCY at a time, dropping failures.
-async function mapLimited(items, fn) {
+// `strict` lets a failure through instead, for a caller that has to tell "TCGdex
+// is down" from "nothing matched".
+async function mapLimited(items, fn, { strict = false } = {}) {
   const out = [];
   for (let i = 0; i < items.length; i += HYDRATE_CONCURRENCY) {
     const batch = await Promise.all(
-      items.slice(i, i + HYDRATE_CONCURRENCY).map(it => fn(it).catch(() => null))
+      items.slice(i, i + HYDRATE_CONCURRENCY).map(it => (strict ? fn(it) : fn(it).catch(() => null)))
     );
     out.push(...batch.filter(Boolean));
   }
@@ -177,12 +195,21 @@ const fetchFullCard = (lang, id) => client.get(`/${lang}/cards/${encodeURICompon
 // `paged` says whether TCGdex already applied our page window. A set browse gets
 // the whole set in one response and is sliced locally; a name search is paged
 // server-side so we never pull (or hydrate) more than one page.
+//
+// A set this language does not have (404) adds nothing; any other failure is
+// thrown, so the search can say TCGdex is unavailable. Dropping those as well
+// made an outage answer "no results", which reads as "no such card".
 async function searchBriefs(lang, name, setList, page, limit) {
   if (setList.length) {
     const perSet = await mapLimited(setList, async (set) => {
-      const { data } = await client.get(`/${lang}/sets/${encodeURIComponent(set)}`);
-      return data.cards || [];
-    });
+      try {
+        const { data } = await client.get(`/${lang}/sets/${encodeURIComponent(set)}`);
+        return data.cards || [];
+      } catch (e) {
+        if (e.response && e.response.status === 404) return [];
+        throw e;
+      }
+    }, { strict: true });
     return { briefs: perSet.flat(), paged: false };
   }
   if (!name) return { briefs: [], paged: true };
@@ -278,10 +305,15 @@ async function runSearch(nameQuery = '', numberQuery = '', setQuery = '', scope 
     // Only the requested page gets hydrated — one request per card, so paging is
     // what keeps a 210-card set browse from becoming 210 requests at once.
     const window = paged ? matched.slice(0, limit) : matched.slice(offset, offset + limit);
-    const full = await mapLimited(window, b => fetchFullCard(code, b.id));
+    let lastError = null;
+    const full = await mapLimited(window, b => fetchFullCard(code, b.id).catch((e) => { lastError = e; throw e; }));
+    // Briefs listed and not one card fetched is an outage, not an empty result:
+    // let it reach the handler below, which serves the cache or says so.
+    if (!full.length && lastError) throw lastError;
+    if (full.length < window.length) console.warn(`TCGdex search (${code}): ${window.length - full.length} of ${window.length} cards could not be fetched.`);
     const cards = full.map(c => normalizeCard(c, code));
     if (cards.length > 0) await cacheCards(cards);
-    return cards;
+    return storedCards(cards.map(c => c.id));
   } catch (error) {
     console.error(`TCGdex search failed (${code}):`, error.message);
     // Same rule as the other providers: serve the cache before admitting defeat,
@@ -307,7 +339,7 @@ function refreshInBackground(code, rows) {
         return normalizeCard(raw, code);
       });
       if (fresh.length) await cacheCards(fresh);
-      for (const card of fresh) await recordPrice(card.id, card.price_trend);
+      for (const card of fresh) await recordStoredPrice(card.id);
     } catch (e) {
       console.error('TCGdex background refresh failed:', e.message);
     }
@@ -348,7 +380,7 @@ async function getCardById(id) {
   try {
     const card = normalizeCard(await fetchFullCard(code, providerId(id)), code);
     await cacheCards([card]);
-    return card;
+    return storedCard(card.id);
   } catch (e) {
     console.error(`TCGdex card ${id} lookup failed:`, e.message);
   }
@@ -568,7 +600,7 @@ async function updateCollectionPrices(force = false) {
     // place rows added before English names were learned can catch up. One extra
     // request each, once: afterwards the row no longer qualifies.
     await mapLimited(fresh, learnEnglishName);
-    for (const card of fresh) await recordPrice(card.id, card.price_trend);
+    for (const card of fresh) await recordStoredPrice(card.id);
     await markPricesSwept('tcgdex');
     console.log(`TCGdex price update complete: ${fresh.length} priced.`);
   } catch (err) {

@@ -30,30 +30,59 @@ const CHUNK = 50;
 
 const num = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
 
-// Upsert, not INSERT OR REPLACE. REPLACE deletes the row and inserts a new one, so
-// every column this list does NOT name is silently reset to its default — which
-// already cost price_1st_edition (written by tcgcsvApi, never by a provider) on every
-// re-cache, and would cost the English name learned below the same way.
-const SET_CLAUSE = COLUMNS
-  .filter(c => c !== 'id' && c !== 'name')
-  .map(c => `${c} = excluded.${c}`)
-  .join(', ');
-
 // The columns a price sweep owns, for a provider that has no prices of its own.
 // RiftCodex carries none, so its catalogue re-caches with every one of these
-// null — and the upsert above would write those nulls over every price the
+// null — and the upsert below would write those nulls over every price the
 // Riftbound sweep found, emptying it on each weekly refresh with nothing in the
 // logs. `keepPrices` keeps the stored value wherever the incoming one is null.
 const PRICE_COLUMNS = new Set([
   'price_trend', 'price_normal', 'price_holofoil', 'price_reverse_holofoil',
   'price_avg1', 'price_avg7', 'price_avg30', 'price_source',
 ]);
-const KEEP_PRICES_SET_CLAUSE = COLUMNS
+
+// What a later write must not take away, whatever provider sends it.
+//
+// A TCGdex set brief, a TCGdex search hit and a pokemontcg.io page all carry less
+// than the row they land on: no TCGplayer product id (the TCGCSV map wrote it),
+// often no marketplace link, and their own Cardmarket price in place of the
+// TCGplayer one TCGCSV wrote. Upserting them as they came reset a priced card's
+// product id to null and its USD price to a EUR one, on every catalog build and
+// every search. The rules live here rather than with each caller so that no
+// caller can forget them:
+//
+//   · product id and links: an incoming null keeps what is stored.
+//   · prices TCGCSV wrote (price_source 'tcgcsv' or 'tcgcsv-en', see
+//     tcgcsvApi.priceSet) belong to the TCGCSV sweep. A provider's own price
+//     never replaces them: every price column it writes, source and currency
+//     included, stays as TCGCSV left it, so a row never mixes the two.
+//   · `opts.incomplete` rows (below) never overwrite a stored row at all.
+const KEEP_KNOWN = new Set(['tcgplayer_product_id', 'tcgplayer_url', 'cardmarket_url']);
+const TCGCSV_SOURCES = `('tcgcsv', 'tcgcsv-en')`;
+const TCGCSV_OWNED = new Set([
+  'price_trend', 'price_normal', 'price_holofoil', 'price_reverse_holofoil', 'price_currency', 'price_source',
+]);
+
+function assignment(c, keepPrices) {
+  let value = keepPrices && PRICE_COLUMNS.has(c) ? `COALESCE(excluded.${c}, card_cache.${c})` : `excluded.${c}`;
+  if (KEEP_KNOWN.has(c)) value = `COALESCE(excluded.${c}, card_cache.${c})`;
+  if (TCGCSV_OWNED.has(c)) {
+    value = `CASE WHEN card_cache.price_source IN ${TCGCSV_SOURCES}
+      AND COALESCE(excluded.price_source, '') NOT IN ${TCGCSV_SOURCES}
+      THEN card_cache.${c} ELSE ${value} END`;
+  }
+  return `${c} = ${value}`;
+}
+
+// Upsert, not INSERT OR REPLACE. REPLACE deletes the row and inserts a new one, so
+// every column this list does NOT name is silently reset to its default — which
+// already cost price_1st_edition (written by tcgcsvApi, never by a provider) on every
+// re-cache, and would cost the English name learned below the same way.
+const setClauseFor = (keepPrices) => COLUMNS
   .filter(c => c !== 'id' && c !== 'name')
-  .map(c => (PRICE_COLUMNS.has(c)
-    ? `${c} = COALESCE(excluded.${c}, card_cache.${c})`
-    : `${c} = excluded.${c}`))
+  .map(c => assignment(c, keepPrices))
   .join(', ');
+const SET_CLAUSE = setClauseFor(false);
+const KEEP_PRICES_SET_CLAUSE = setClauseFor(true);
 
 // `name` is the one column an incoming row can be WORSE at. A non-English TCGdex
 // card carries its localized name in both `name` and `printed_name` because TCGdex
@@ -72,12 +101,17 @@ const NAME_CLAUSE = `name = CASE
 // carries only id/name/number/image, no rarity, types or prices. Such a row is
 // stamped as already-stale so every freshness check in the app treats it as
 // needing a refetch, instead of it looking current forever and showing a real
-// card with $0.00 and the wrong rarity.
+// card with $0.00 and the wrong rarity. It also never overwrites a row that is
+// already stored: whatever is there, a hydrated card or an earlier brief, knows
+// at least as much as a brief does.
 //
 // `opts.keepPrices`: the provider carries no prices; see PRICE_COLUMNS above.
 async function cacheNormalizedCards(cards, game, opts = {}) {
   const stamp = opts.incomplete ? `'1970-01-01 00:00:00'` : 'CURRENT_TIMESTAMP';
   const setClause = opts.keepPrices ? KEEP_PRICES_SET_CLAUSE : SET_CLAUSE;
+  const onConflict = opts.incomplete
+    ? 'DO NOTHING'
+    : `DO UPDATE SET ${NAME_CLAUSE}, ${setClause}, last_updated = ${stamp}`;
   const rowSql = `(${COLUMNS.map(() => '?').join(', ')}, ${stamp})`;
   const rows = (cards || []).filter(c => c && c.id);
   for (let i = 0; i < rows.length; i += CHUNK) {
@@ -108,7 +142,7 @@ async function cacheNormalizedCards(cards, game, opts = {}) {
     await db.run(
       `INSERT INTO card_cache (${COLUMNS.join(', ')}, last_updated)
        VALUES ${chunk.map(() => rowSql).join(', ')}
-       ON CONFLICT(id) DO UPDATE SET ${NAME_CLAUSE}, ${setClause}, last_updated = ${stamp}`,
+       ON CONFLICT(id) ${onConflict}`,
       params
     );
   }
