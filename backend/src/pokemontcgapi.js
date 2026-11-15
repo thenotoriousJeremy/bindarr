@@ -10,7 +10,7 @@ const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
 const { sameNumber } = require('./utils/setCatalogueMatch');
 const { parseCardRow, parseSqliteUtc, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
-const metrics = require('./utils/metrics');
+const { createProviderClient, USER_AGENT } = require('./utils/providerClient');
 
 const BASE = 'https://api.pokemontcgapi.com/v1';
 const PREFIX = 'pokemontcgapi-';
@@ -30,17 +30,28 @@ const CARD_INCLUDE = 'images,prices,translations';
 // have the sweep pick cards getCardById then refuses to refresh.
 const PRICE_AGE_DAYS = 3;
 const REGIONS = { en: 'WEST', ja: 'JP', 'zh-cn': 'CN' };
-const client = axios.create({
-  baseURL: BASE, timeout: 15000, maxRedirects: 0,
-  headers: { Accept: 'application/json', 'User-Agent': `Bindarr/${require('../package.json').version}` },
-  validateStatus: status => status === 200 || status === 304,
+// A 429 pauses every request for its Retry-After — at least a minute, up to a day,
+// since a metered provider's 429 is usually the day's credits — and every caller
+// fails fast meanwhile (utils/providerClient). Not serialized: the response cache
+// below is what keeps the request count down.
+const pokemontcgapi = createProviderClient({
+  name: 'pokemontcgapi',
+  label: 'pokemontcgapi.com',
+  client: axios.create({
+    baseURL: BASE, timeout: 15000, maxRedirects: 0,
+    headers: { Accept: 'application/json', 'User-Agent': USER_AGENT },
+    validateStatus: status => status === 200 || status === 304,
+  }),
+  serial: false,
+  defaultCooldownMs: 60000,
+  minCooldownMs: 60000,
+  maxCooldownMs: DAY,
 });
-metrics.instrumentAxiosClient(client, 'pokemontcgapi');
+const { client } = pokemontcgapi;
 const hasKey = () => !!(process.env.POKEMONTCGAPI_KEY || '').trim();
 const providerId = id => String(id || '').replace(/^pokemontcgapi-/, '');
 const quote = value => `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 const pending = new Map();
-let pausedUntil = 0;
 
 // Follow only cursors, never an arbitrary URL returned by an upstream. The API
 // key belongs to this origin alone; redirects are disabled for the same reason.
@@ -97,11 +108,11 @@ async function request(path, params = {}, ttl = DAY) {
   const work = (async () => {
     const cached = await db.get('SELECT * FROM pokemontcgapi_cache WHERE request = ?', [cacheKey]);
     if (cached && Date.now() - cached.fetched_at < ttl) return JSON.parse(cached.body);
-    if (Date.now() < pausedUntil) throw new Error('UPSTREAM_UNAVAILABLE');
+    if (pokemontcgapi.coolingDown()) throw new Error('UPSTREAM_UNAVAILABLE');
     try {
-      const response = await client.get(path, {
+      const response = await pokemontcgapi.get(path, {
         params, headers: { 'X-Api-Key': key, ...(cached?.etag ? { 'If-None-Match': cached.etag } : {}) },
-      });
+      }, { interactive: true });
       if (response.status === 304 && !cached) throw new Error('UPSTREAM_UNAVAILABLE');
       const body = response.status === 304 ? JSON.parse(cached.body) : response.data;
       if (!body || typeof body !== 'object') throw new Error('UPSTREAM_UNAVAILABLE');
@@ -111,13 +122,8 @@ async function request(path, params = {}, ttl = DAY) {
       await trimResponseCache();
       return body;
     } catch (error) {
+      // A 429 has already paused the client for its Retry-After (above).
       const status = error.response?.status;
-      if (status === 429) {
-        const retry = error.response.headers?.['retry-after'];
-        const seconds = Number(retry);
-        const delay = retry && Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retry) - Date.now();
-        pausedUntil = Date.now() + Math.max(60000, Number.isFinite(delay) ? delay : 60000);
-      }
       // Do not propagate Axios errors: their config carries X-Api-Key, and
       // several route handlers log the whole error object.
       throw new Error(status === 404 ? 'CARD_NOT_FOUND' : status === 401 ? 'POKEMONTCGAPI_KEY_INVALID' : 'UPSTREAM_UNAVAILABLE');
