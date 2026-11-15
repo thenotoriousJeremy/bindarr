@@ -109,36 +109,40 @@ const CLOCK_SKEW_SECONDS = 60;
 //             review and was none.
 //
 // Throws on the first failure; the caller turns that into an oidc_error redirect.
+// Each error carries `oidcCode`, the fixed code that redirect uses: the message
+// itself names claim values the IdP sent and belongs in the log, not a URL.
+const tokenError = (message, oidcCode) => Object.assign(new Error(message), { oidcCode });
+
 function validateIdTokenClaims(claims, { issuer, clientId, nonce, now = Date.now() } = {}) {
   if (!claims || typeof claims !== 'object' || !Object.keys(claims).length) {
-    throw new Error('OIDC provider returned no ID token. The authorization code flow requires one.');
+    throw tokenError('OIDC provider returned no ID token. The authorization code flow requires one.', 'id_token_missing');
   }
 
   const strip = (v) => String(v || '').replace(/\/+$/, '');
   if (issuer && strip(claims.iss) !== strip(issuer)) {
-    throw new Error(`OIDC ID token was issued by "${claims.iss}", not by the configured issuer.`);
+    throw tokenError(`OIDC ID token was issued by "${claims.iss}", not by the configured issuer.`, 'id_token_rejected');
   }
 
   // aud is a string, or an array when the IdP issues to several clients at once.
   const audiences = Array.isArray(claims.aud) ? claims.aud.map(String) : [String(claims.aud || '')];
   if (clientId && !audiences.includes(clientId)) {
-    throw new Error('OIDC ID token was not issued for this client.');
+    throw tokenError('OIDC ID token was not issued for this client.', 'id_token_rejected');
   }
   // With more than one audience the spec requires azp, and requires it to be us.
   if (audiences.length > 1 && claims.azp && String(claims.azp) !== clientId) {
-    throw new Error('OIDC ID token was authorized for a different client.');
+    throw tokenError('OIDC ID token was authorized for a different client.', 'id_token_rejected');
   }
 
   const exp = Number(claims.exp);
   if (!Number.isFinite(exp)) {
-    throw new Error('OIDC ID token has no expiry.');
+    throw tokenError('OIDC ID token has no expiry.', 'id_token_rejected');
   }
   if (exp * 1000 + CLOCK_SKEW_SECONDS * 1000 < now) {
-    throw new Error('OIDC ID token has expired. Please try logging in again.');
+    throw tokenError('OIDC ID token has expired. Please try logging in again.', 'id_token_expired');
   }
 
   if (nonce && String(claims.nonce || '') !== String(nonce)) {
-    throw new Error('OIDC ID token nonce does not match this login attempt.');
+    throw tokenError('OIDC ID token nonce does not match this login attempt.', 'nonce_mismatch');
   }
 
   return claims;
@@ -316,8 +320,11 @@ function isValidNativeChallenge(challenge) {
  *
  * `webBindingHash` is the web login's counterpart: the hash of the cookie that
  * ties it to the browser that started it (see createWebBinding), sealed as wb.
+ *
+ * `setup` says the setup code was given for a fresh install (routes/auth.js), so
+ * this sign-in may create the owner account; sealed as su.
  */
-async function buildAuthorizationUrl(req, { nativeChallenge, webBindingHash } = {}) {
+async function buildAuthorizationUrl(req, { nativeChallenge, webBindingHash, setup } = {}) {
   const discovery = await getDiscovery();
   const clientId = getClientId();
   if (!clientId) {
@@ -337,7 +344,8 @@ async function buildAuthorizationUrl(req, { nativeChallenge, webBindingHash } = 
     n: nonce,
     ru: redirectUri,
     ...(nativeChallenge ? { nat: 1, nc: nativeChallenge } : {}),
-    ...(webBindingHash ? { wb: webBindingHash } : {})
+    ...(webBindingHash ? { wb: webBindingHash } : {}),
+    ...(setup ? { su: 1 } : {})
   });
 
   const url = new URL(discovery.authorization_endpoint);
@@ -373,7 +381,7 @@ function parseJwtPayload(token) {
 async function exchangeCode({ code, stateToken, req }) {
   const stateData = verifyStateToken(stateToken);
   if (!stateData) {
-    throw new Error('Invalid or expired OIDC state token. Please try logging in again.');
+    throw tokenError('Invalid or expired OIDC state token. Please try logging in again.', 'state_invalid');
   }
 
   const discovery = await getDiscovery();

@@ -722,6 +722,11 @@ if (metrics.prometheusEnabled) {
   });
 }
 
+// A fresh install's owner account is claimed with a one-time setup code
+// (routes/auth.js). It goes to the log once the database can say no account
+// exists; a failed start is handled above and says nothing here.
+dbInit.then(() => authRoutes.announceSetupCode(), () => {});
+
 httpServer = app.listen(PORT, '0.0.0.0', async () => {
   console.log(`=========================================`);
   console.log(`Bindarr Server running on port ${PORT}`);
