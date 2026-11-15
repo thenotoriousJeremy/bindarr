@@ -187,3 +187,15 @@ test('a sealed unit that came as a gift says so in its details', async () => {
   });
   assert.match(html, /Received as a gift from Misty/);
 });
+
+test('Settings carries the trade-offers switch next to sharing', async () => {
+  const { default: Settings } = await load('/src/components/Settings.jsx');
+  const props = { onUpdateUser: noop, showToast: noop, onLeaveDevice: noop, onDataChanged: noop };
+  const tradesSwitch = (html) => (html.match(/<input[^>]*aria-label="Let other members send me trade offers"[^>]*>/) || [''])[0];
+  const on = tradesSwitch(render(Settings, { ...props, user: ME }));
+  assert.match(on, /type="checkbox"/);
+  assert.match(on, /checked=""/);
+  const off = tradesSwitch(render(Settings, { ...props, user: { ...ME, trades_enabled: 0 } }));
+  assert.ok(off, 'there whether on or off');
+  assert.doesNotMatch(off, /checked=""/);
+});
