@@ -112,10 +112,23 @@ function unavailable(name) {
   };
 }
 
+// A version 4 UUID, as Node's randomUUID makes one: the trash names each batch
+// of deleted copies with one. WebCrypto's own randomUUID only arrived in iOS
+// 15.4 and the app supports 15.0, so without it the same 122 random bits are
+// laid out by hand (RFC 9562 section 5.4).
+function randomUUID() {
+  if (typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  const b = randomBytes(16);
+  b[6] = (b[6] & 0x0f) | 0x40;   // version 4
+  b[8] = (b[8] & 0x3f) | 0x80;   // the RFC's variant
+  const hex = encode(b, 'hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 module.exports = {
   randomBytes,
   timingSafeEqual,
-  randomUUID: () => globalThis.crypto.randomUUID(),
+  randomUUID,
   createHash,
   createHmac: unavailable('createHmac'),
   pbkdf2Sync: unavailable('pbkdf2Sync'),

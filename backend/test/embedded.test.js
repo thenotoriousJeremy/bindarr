@@ -281,6 +281,18 @@ async function testDeviceScan() {
   assert.strictEqual(lorcana.status, 503);
   assert.match(lorcana.json.error, /Lorcana/);
 
+  // The data is on the phone but milo would not run (frontend/src/device/runtime.js
+  // sends embedError): that is not "download the scan data" (MOB-04).
+  const { embedding, ...photoless } = body;
+  assert.ok(embedding);
+  const failed = await call('POST', '/api/scan-match', { body: { ...photoless, embedError: 'no WebAssembly SIMD' } });
+  assert.strictEqual(failed.status, 503);
+  assert.strictEqual(failed.json.scanFailed, true);
+  assert.ok(!failed.json.notBuilt, 'a failed embedding is not reported as missing scan data');
+  assert.match(failed.json.error, /SIMD/);
+  // With no catalog for the game, downloading it IS the fix, failure or not.
+  const notBuilt = await call('POST', '/api/scan-match', { body: { ...photoless, game: 'pokemon', embedError: 'x' } });
+  assert.strictEqual(notBuilt.json.notBuilt, true);
 }
 
 // Deleting moves a copy to the trash on the phone as on a server, so the trash
@@ -312,6 +324,46 @@ async function testTrashOnDevice() {
   assert.strictEqual((await call('GET', '/api/collection/trash')).json.batches.length, 0);
 }
 
+// The trash names each batch with a UUID, and WebCrypto's randomUUID only arrived
+// in iOS 15.4; the app supports 15.0 (MOB-16).
+function testRandomUuidWithoutWebCrypto() {
+  const shim = require('../src/embedded/shims/crypto');
+  const native = shim.randomUUID();
+  const webCrypto = globalThis.crypto;
+  webCrypto.randomUUID = undefined;   // an own property shadowing the method
+  try {
+    const seen = new Set();
+    for (let i = 0; i < 200; i++) {
+      const id = shim.randomUUID();
+      assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, id);
+      seen.add(id);
+    }
+    assert.strictEqual(seen.size, 200);
+  } finally {
+    delete webCrypto.randomUUID;
+  }
+  assert.match(native, /^[0-9a-f-]{36}$/);
+  assert.strictEqual(typeof globalThis.crypto.randomUUID, 'function', 'the real one is back');
+}
+
+// notify.emit queues with setImmediate, which a WebView lacks (MOB-05).
+async function testGlobalsForAWebView() {
+  const { installGlobals } = require('../src/embedded/globals');
+  const view = {};
+  installGlobals(view);
+  assert.deepStrictEqual(view.process, { env: {} });
+  const ran = await new Promise((resolve) => view.setImmediate((a, b) => resolve([a, b]), 1, 2));
+  assert.deepStrictEqual(ran, [1, 2], 'setImmediate runs its callback with its arguments');
+  const cancelled = view.setImmediate(() => assert.fail('cleared'));
+  view.clearImmediate(cancelled);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  // Where there is one already (Node here), it is left alone.
+  const node = { setImmediate, process };
+  installGlobals(node);
+  assert.strictEqual(node.setImmediate, setImmediate);
+  assert.strictEqual(node.process, process);
+}
+
 async function main() {
   try {
     testRouterMatching();
@@ -324,6 +376,8 @@ async function main() {
     await testServerOnlyRoutes();
     await testDeviceScan();
     await testTrashOnDevice();
+    testRandomUuidWithoutWebCrypto();
+    await testGlobalsForAWebView();
   } finally {
     await cleanup();
   }

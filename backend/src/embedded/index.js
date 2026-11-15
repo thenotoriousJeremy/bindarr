@@ -16,21 +16,59 @@
 // Node modules a phone lacks swapped per ./aliases.js.
 'use strict';
 
+// The Node globals a WebView lacks, before any module reads them (./globals.js).
+require('./globals').installGlobals(globalThis);
+
 // The few settings the bundled modules read from a server's environment at load
 // time. DB_PATH is a name, not a path: the SQLite plugin decides where it lives.
 // CV_MODEL_DIR only has to be set so nothing falls back to __dirname; the fs stub
 // holds no models whatever it is. The pre-migration snapshot (db.js) is a VACUUM
 // INTO a server's BACKUP_DIR, which a phone does not have; its backup is the full
 // export in Settings.
-if (typeof process === 'undefined') globalThis.process = { env: {} };
 const DEVICE_ENV = { DB_PATH: 'bindarr.db', CV_MODEL_DIR: '/device/models', BINDARR_SKIP_PRE_MIGRATION_SNAPSHOT: '1' };
 for (const [key, value] of Object.entries(DEVICE_ENV)) {
   if (process.env[key] === undefined) process.env[key] = value;
 }
 
+// TCGCSV on a phone (MOB-09). A server syncs it daily, and once a Pokémon card is
+// owned each new TCGCSV version is every Pokémon group again: well over a
+// thousand requests, over whatever connection the phone has. So the switch a
+// server uses to turn the sync off (tcgcsvApi.syncIfUpdated reads it on every
+// call) stays on here, and syncTcgcsv() below lifts it for two moments only: the
+// weekly check, and the product-map build the Pokémon scan download starts. The
+// hourly price sweep prices from whatever version is cached, which is what it
+// does on a server when a sync fails. A switch someone else set (a test, a
+// developer) is theirs, and is left alone.
+const TCGCSV_SWITCH = 'BINDARR_DISABLE_TCGCSV_SYNC';
+const ownsTcgcsvSwitch = process.env[TCGCSV_SWITCH] === undefined;
+if (ownsTcgcsvSwitch) process.env[TCGCSV_SWITCH] = '1';
+
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
+const { inTransaction } = require('async_hooks');
+const { createUnitLock } = require('./units');
+
+// Turns at the database: one for each request, and for each background job that
+// opens transactions (./units.js has why). Taken before any route module loads,
+// so every caller of db.withTransaction goes through the version below.
+const lock = createUnitLock();
+const background = (name, job) => lock.run({ name, background: true }, job);
+
+// A transaction outside any turn is background work this file did not start
+// (nothing else runs code here), and it takes a turn for as long as it is open,
+// so a request cannot start in the middle of it. Inside a turn, it belongs to
+// the unit holding the lock; a background unit first lets a queued request go.
+// A transaction already open makes this one a savepoint, as db.js decides.
+const baseWithTransaction = db.withTransaction;
+db.withTransaction = async function withTransaction(fn) {
+  if (inTransaction()) return baseWithTransaction(fn);
+  const unit = lock.holder();
+  if (!unit) return background('transaction', () => baseWithTransaction(fn));
+  if (unit.background) await lock.yieldTurn(unit);
+  return baseWithTransaction(fn);
+};
+
 const scryfallApi = require('../scryfallApi');
 const { authenticateToken } = require('../middleware/auth');
 const { hashSessionToken } = require('../utils/authHelpers');
@@ -48,11 +86,20 @@ app.use('/api', authenticateToken);
 // embedding instead of a photo — the route reads a photo with Node's Buffer,
 // which a phone does not have. Until that data is on the device, or for Lorcana,
 // which has no published catalog, the answer is the route's own 503 notBuilt,
-// worded for a phone.
+// worded for a phone. With the data there but the model failing to run on this
+// phone (embedError, from frontend/src/device/runtime.js), it says that instead:
+// downloading the data again would not help.
 app.post('/api/scan-match', (req, res, next) => {
-  const { game = 'pokemon', lang, embedding } = req.body || {};
+  const { game = 'pokemon', lang, embedding, embedError } = req.body || {};
   const langName = require('../utils/languages').toName(lang);
-  if (Array.isArray(embedding) && cvScan.isBuilt(game, langName)) return next();
+  const built = cvScan.isBuilt(game, langName);
+  if (Array.isArray(embedding) && built) return next();
+  if (embedError && built) {
+    return res.status(503).json({
+      game, lang: langName, candidates: [], verified: false, scanFailed: true, deviceMode: true,
+      error: `Scanning failed on this phone: ${String(embedError).slice(0, 200)}`,
+    });
+  }
   res.status(503).json({
     game, lang: langName, candidates: [], verified: false, notBuilt: true, deviceMode: true,
     error: game === 'lorcana'
@@ -110,89 +157,234 @@ async function deviceState(key, value) {
 }
 
 const HOUR = 60 * 60 * 1000;
-const WEEK = 7 * 24 * HOUR;
+const DAY = 24 * HOUR;
+const WEEK = 7 * DAY;
+
+// Whether the job behind a device_state clock is due, `every` ms after it last ran.
+const due = async (key, every) => Date.now() - (Number(await deviceState(key)) || 0) >= every;
 
 // server.js refreshes the set tables on a weekly timer. An app is opened and
 // closed all day and would never live to see that timer fire, so the date of the
 // last forced refresh is kept, and whichever launch finds it a week old does one.
 async function refreshSets() {
-  const last = Number(await deviceState('sets_refreshed_at')) || 0;
-  const due = Date.now() - last > WEEK;
-  await syncSets(due);
-  if (due) await deviceState('sets_refreshed_at', Date.now());
+  const forced = await due('sets_refreshed_at', WEEK);
+  await syncSets(forced);
+  if (forced) await deviceState('sets_refreshed_at', Date.now());
   await require('../utils/compartmentSort').loadSetsCache(db);
+}
+
+// The TCGCSV sync with the switch lifted (top of this file). tcgcsvApi reads the
+// switch synchronously when the call starts, so it is lifted for exactly that
+// call: anything else that asks meanwhile still prices from the cache.
+function syncTcgcsv(context, options) {
+  const tcgcsv = require('../tcgcsvApi');
+  if (!ownsTcgcsvSwitch) return tcgcsv.syncIfUpdatedSafely(context, options);
+  delete process.env[TCGCSV_SWITCH];
+  try {
+    return tcgcsv.syncIfUpdatedSafely(context, options);
+  } finally {
+    process.env[TCGCSV_SWITCH] = '1';
+  }
+}
+
+// Weekly. The clock moves only once something was actually synced or checked: a
+// phone with no Pokémon card yet asks again next time (one indexed read), and a
+// failed sync is retried at the next launch or hourly check.
+async function weeklyTcgcsv() {
+  if (!(await due('tcgcsv_synced_at', WEEK))) return;
+  const result = await syncTcgcsv('the device weekly sync');
+  if (result && !result.skipped && !result.disabled) await deviceState('tcgcsv_synced_at', Date.now());
+}
+
+// Deleted cards past their 30 days in the trash (utils/collectionTrash.js), as
+// server.js's daily trash-purge job.
+async function dailyTrashPurge() {
+  if (!(await due('trash_purged_at', DAY))) return;
+  const removed = await background('trash purge', () => require('../utils/collectionTrash').purgeExpiredTrash());
+  await deviceState('trash_purged_at', Date.now());
+  if (removed) console.log(`Trash: removed ${removed} card(s) deleted more than 30 days ago.`);
+}
+
+// Exchange rates, as the server's fx-rates job: hourly asks, at most one ECB fetch
+// a day (fxRates.refreshIfDue keeps that clock in the database). Its write is a
+// transaction, so it runs as a background unit, with the lock let go for the fetch.
+function refreshFx() {
+  if (process.env.BINDARR_DISABLE_FX_SYNC === '1') return Promise.resolve();
+  const fx = require('../fxRates');
+  const fetchXml = () => require('axios').get(fx.ECB_URL, {
+    timeout: 15000,
+    responseType: 'text',
+    headers: { 'User-Agent': fx.USER_AGENT, Accept: 'application/xml, text/xml' },
+  }).then(res => res.data);
+  return background('exchange rates', (unit) => fx.refreshIfDue({ fetchXml: () => lock.outside(unit, fetchXml) }))
+    .then((result) => { if (result && result.error) console.warn('FX refresh failed:', result.error); })
+    .catch(err => console.warn('FX refresh failed:', err.message));
+}
+
+// The Pokémon product map (tcgplayerCatalog), which the Pokémon scan download
+// starts and a provider switch in Settings restarts. Its build writes one
+// transaction per TCGCSV group, from the cached TCGCSV data, for a minute or two
+// on a phone; so it runs as a background unit, yielding to requests between
+// groups (db.withTransaction above). Its network comes first, outside the lock:
+// the TCGCSV data it is built from, and TCGdex's Japanese set list, which tcgdexApi
+// keeps in memory for the build to read.
+const productMap = require('../tcgplayerCatalog');
+const startProductMapBuild = productMap.start;
+const productMapSummary = productMap.summary;
+// The build waiting for its data or its turn; reported as its progress, so the
+// scan setup screen keeps showing (and polling) it as it would a running build.
+let productMapQueued = null;
+productMap.start = function startOnDevice(game = 'pokemon') {
+  if (productMapQueued || productMap.state()) throw new Error('the product map is already building');
+  productMapQueued = { game, phase: 'queued', done: 0, total: 0, rows: 0, message: '' };
+  (async () => {
+    await syncTcgcsv('product map', { explicit: true });
+    if (game === 'pokemon') await require('../tcgdexApi').listSets('ja').catch(() => {});
+    await background('product map', async () => {
+      productMapQueued = null;
+      startProductMapBuild(game);
+      while (productMap.state()) await new Promise(resolve => setTimeout(resolve, 250));
+    });
+  })()
+    .catch(err => console.error('product map build failed:', err.message))
+    .finally(() => { productMapQueued = null; });
+  return { ...productMapQueued };
+};
+productMap.summary = async function summaryOnDevice(game = 'pokemon') {
+  const summary = await productMapSummary(game);
+  if (!summary.progress && productMapQueued && productMapQueued.game === game) return { ...summary, progress: { ...productMapQueued } };
+  return summary;
+};
+
+// One upkeep step. Each is caught on its own, so a launch with no network still
+// purges the trash.
+async function step(name, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`Device ${name} failed:`, err.message);
+  }
 }
 
 // What server.js does once the database is up, minus everything that exists for
 // scanning or for other machines (catalog warm-up, session purge, server backups).
 // Never awaited by a request: the app is usable while the set lists download.
+// Stacked rows are split by initDb itself (db.splitStackedRows), as on a server.
 async function warmUp() {
-  try {
-    const { splitStackedEntries } = require('../utils/collectionHelpers');
-    await splitStackedEntries(db);
-    await refreshSets();
-    // The TCGCSV cache that sealed-product search and Pokémon prices read, as
-    // server.js refreshes it at startup. Safe: it logs and gives up on failure.
-    await require('../tcgcsvApi').syncIfUpdatedSafely('device startup');
-  } catch (err) {
-    console.error('Device warm-up failed:', err.message);
-  }
+  await step('set refresh', refreshSets);
+  await step('TCGCSV sync', weeklyTcgcsv);
+  await step('trash purge', dailyTrashPurge);
+}
+
+// The background jobs' timers, so stop() can clear every one of them.
+const timers = new Set();
+let backgroundOn = false;
+
+function every(ms, fn) {
+  timers.add(setInterval(fn, ms));
+}
+
+function after(ms, fn) {
+  const t = setTimeout(() => { timers.delete(t); fn(); }, ms);
+  timers.add(t);
+}
+
+function startBackground() {
+  if (backgroundOn) return;
+  backgroundOn = true;
+  warmUp();
   // Prices on the server's cadence: soon after launch, then hourly while the app
   // stays open. Each provider decides for itself whether it is due.
-  setTimeout(sweepPrices, 30000);
-  setInterval(sweepPrices, HOUR);
-  // Exchange rates, as the server's fx-rates job: hourly asks, at most one ECB
-  // fetch a day (fxRates.refreshIfDue keeps that clock in the database).
-  const refreshFx = () => require('../fxRates').refreshIfDue().catch(err => console.warn('FX refresh failed:', err.message));
+  after(30000, sweepPrices);
+  every(HOUR, sweepPrices);
   refreshFx();
-  setInterval(refreshFx, HOUR);
+  every(HOUR, refreshFx);
+  // The weekly TCGCSV sync and the daily trash purge keep their clocks in
+  // device_state, for an app left open across days.
+  every(HOUR, () => step('upkeep', async () => {
+    await weeklyTcgcsv();
+    await dailyTrashPurge();
+  }));
+}
+
+// Leaving device mode for a server: the jobs stop with it (MOB-05). Work already
+// running finishes; nothing new is started until start() is called again.
+function stop() {
+  for (const t of timers) {
+    clearTimeout(t);
+    clearInterval(t);
+  }
+  timers.clear();
+  backgroundOn = false;
 }
 
 let booted = null;
 
-// Idempotent: the first call opens the database, migrates it, and makes sure the
-// owner and their session exist; every later call returns the same promise.
-// Resolves { token } — the bearer credential for handle().
-//
-// options.background: false skips the network jobs (set sync, price sweeps).
-function start({ background = true } = {}) {
+// Opens the database, migrates it, and makes sure the owner and their session
+// exist, once; every later call returns the same promise. A failed boot (no
+// SQLite plugin, a corrupt file) must be retryable: the next call tries again
+// instead of replaying the same rejection forever.
+function boot() {
   if (!booted) {
     booted = (async () => {
       await db.initDb();
       await scryfallApi.loadPriceSource();
       const userId = await ensureOwner();
       const token = await ensureSession(userId);
-      if (background) warmUp();
       return { token };
     })();
-    // A failed boot (no SQLite plugin, a corrupt file) must be retryable: the next
-    // call tries again instead of replaying the same rejection forever.
     booted.catch(() => { booted = null; });
   }
   return booted;
 }
 
+// Resolves { token } — the bearer credential for handle(). Idempotent.
+//
+// options.background: false skips the network jobs (set sync, price sweeps). With
+// it (the default), the jobs start if they are not running, which after stop()
+// is how they come back.
+async function start({ background: withJobs = true } = {}) {
+  const session = await boot();
+  if (withJobs) startBackground();
+  return session;
+}
+
 // request: { method, url, headers, body } — url is path + query, body the raw
 // string fetch() was given. Resolves { status, headers, body }; never rejects.
-async function handle(request) {
+// options.signal: aborting it while the request is still waiting for its turn
+// drops it (status 499); once it runs, it runs to the end.
+async function handle(request, { signal } = {}) {
   try {
-    await start();
+    await boot();
   } catch (err) {
     console.error('Device backend failed to start:', err);
     return { status: 503, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: 'The on-device database could not be opened.' }) };
   }
-  return dispatch(app, request);
+  const unit = { name: `${request.method || 'GET'} ${request.url}`, background: false };
+  try {
+    await lock.acquire(unit, { signal });
+  } catch {
+    return { status: 499, headers: {}, body: '', aborted: true };
+  }
+  try {
+    return await dispatch(app, request);
+  } finally {
+    lock.release(unit);
+  }
 }
 
 module.exports = {
   start,
+  stop,
   handle,
+  // Background work that opens transactions takes its turn through this.
+  background,
   setDriver: require('sqlite3').setDriver,
   // Scanning: what can be downloaded (one descriptor table, shared with the
   // server's fetch-models script), where the app's downloaded catalogs come in,
   // and the TCGplayer product map the Pokémon catalog resolves its matches through.
   scanAssets: { MODELS: require('../utils/modelAssets').MODELS, CATALOGS: require('../utils/modelAssets').CATALOGS },
   setScanSource: cvScan.setSource,
-  productMap: require('../tcgplayerCatalog'),
+  productMap,
   app,
 };
