@@ -123,7 +123,6 @@ function normalizeCard(raw, lang = 'English') {
     price_avg1: null,
     price_avg7: null,
     price_avg30: null,
-    price_1st_edition: null,
     price_currency: 'USD',
     price_source: 'lorcast',
     cmc: cost,

@@ -32,6 +32,10 @@ const SHARPNESS_GATE = 0.02;
 // Cosine at which a match is confident enough to auto-fill. Correct matches on
 // the eval sample sat at 0.55-0.95; the one confident wrong answer sat at 0.88,
 // so the margin below does the work this number cannot.
+//
+// The scan route uses both to break ties between printings of one artwork
+// (scanCandidates.breakPrintingTies): above STRONG_SIM the CARD is known, and
+// same-art candidates within STRONG_MARGIN of the top are the printing in doubt.
 const STRONG_SIM = 0.55;
 const STRONG_MARGIN = 0.04;
 // "Nothing here is your card." A sweep always returns its nearest row, so a card
@@ -150,15 +154,11 @@ function builtLangs(game = 'mtg') {
 
 function loadModels() {
   if (!models) {
-    const cornPath = path.join(MODEL_DIR, 'cornelius.onnx');
-    const isFastWeb = fs.existsSync(cornPath) && fs.statSync(cornPath).size < 4000000;
     models = Promise.all([
-      ort.InferenceSession.create(cornPath, SESSION_OPTS),
+      ort.InferenceSession.create(path.join(MODEL_DIR, 'cornelius.onnx'), SESSION_OPTS),
       ort.InferenceSession.create(path.join(MODEL_DIR, 'milo.onnx'), SESSION_OPTS),
-    ]).then(([corn, milo]) => {
-      corn.isFastWeb = isFastWeb;
-      return { corn, milo };
-    }).catch((err) => { models = null; throw err; });
+    ]).then(([corn, milo]) => ({ corn, milo }))
+      .catch((err) => { models = null; throw err; });
   }
   return models;
 }

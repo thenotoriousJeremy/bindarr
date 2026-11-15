@@ -6,7 +6,7 @@ const languages = require('../../utils/languages');
 const games = require('../../utils/games');
 const { searchLimiter } = require('../../middleware/auth');
 const { parseSetList } = require('../../utils/setQuery');
-const { toEmbedding, resolveCandidates, isUnresolvedPublished } = require('../../scanCandidates');
+const { toEmbedding, resolveCandidates, isUnresolvedPublished, breakPrintingTies } = require('../../scanCandidates');
 
 // 1b. Identify a scanned card image by visual-feature match.
 // Which sets the scanner can actually answer for, and how completely.
@@ -82,6 +82,17 @@ async function scanMatch(req, res) {
     result.candidates = await resolveCandidates(result.candidates, {
       game, langName, tcgApiKey: req.user.tcg_api_key,
     });
+
+    // Reprints that share their art score within noise of each other: when the
+    // card is clear and the printing is not, put the likeliest printing first and
+    // say so (scanCandidates.breakPrintingTies). A match flagged as not in the
+    // catalog has no card to be sure of, so it is left as ranked.
+    const ties = result.notInCatalog ? { candidates: result.candidates, ambiguousPrinting: false }
+      : await breakPrintingTies(result.candidates, {
+        game, langName, userId: req.user.id, strongSim: cvScan.STRONG_SIM, strongMargin: cvScan.STRONG_MARGIN,
+      });
+    result.candidates = ties.candidates;
+    result.ambiguousPrinting = ties.ambiguousPrinting;
 
     // See isUnresolvedPublished: a ready-made Pokémon catalog hit that this
     // install has no way to name. An install-state problem, and it says so.
