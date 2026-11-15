@@ -488,17 +488,31 @@ async function syncIfUpdated({ explicit = false } = {}) {
   if (process.env.BINDARR_DISABLE_TCGCSV_SYNC === '1') {
     return { updated: false, disabled: true };
   }
-  if (syncPromise) return syncPromise;
-  const categories = await demandedCategories({ explicit });
-  if (!categories.length) {
-    if (!noDemandLogged) {
-      console.log('TCGCSV sync skipped: nothing on this instance needs TCGCSV prices yet (no Pokémon cards or sealed purchases).');
-      noDemandLogged = true;
-    }
-    return { updated: false, skipped: 'no-demand', requests: 0 };
+  if (syncPromise) {
+    if (!explicit || syncPromise.explicit) return syncPromise;
+    // An admin's explicit sync arriving while an on-demand one runs: that run may
+    // have found nothing demanded, so wait for it and then sync as asked. Whatever
+    // it already stored is reused, so this costs no request twice.
+    await syncPromise.catch(() => {});
+    return syncIfUpdated({ explicit });
   }
-  noDemandLogged = false;
-  const running = runSync(categories);
+  // Claimed before the first await. The demand check below awaits the database,
+  // and when the claim came after it, the scheduler and a settings change could
+  // both get past the check above and run two syncs side by side, each asking
+  // the mirror for every path.
+  const running = (async () => {
+    const categories = await demandedCategories({ explicit });
+    if (!categories.length) {
+      if (!noDemandLogged) {
+        console.log('TCGCSV sync skipped: nothing on this instance needs TCGCSV prices yet (no Pokémon cards or sealed purchases).');
+        noDemandLogged = true;
+      }
+      return { updated: false, skipped: 'no-demand', requests: 0 };
+    }
+    noDemandLogged = false;
+    return runSync(categories);
+  })();
+  running.explicit = explicit;
   syncPromise = running;
   try {
     return await running;
