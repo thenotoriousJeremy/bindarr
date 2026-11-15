@@ -144,9 +144,17 @@ function mapRow(row, { defaultGame = 'pokemon', mtgFile = false } = {}) {
     printing: (finish !== undefined && printingFrom(finish)) || graded.printing || 'Normal',
     language: languages.toName(col('language', 'lang')),
     purchase_price: parsePrice(col('purchaseprice', 'pricebought', 'pricepaid')),
-    game: gameFrom(col('game', 'productline')) || gameOfId(cardId) || (mtgFile ? 'mtg' : null) || defaultGame
+    game: gameFrom(col('game', 'productline')) || gameOfId(cardId) || (mtgFile ? 'mtg' : null) || defaultGame,
+    // Bindarr's own column for the list a copy was on, which a wishlist row says.
+    list_type: col('listtype'),
   };
 }
+
+// A row naming a card its owner wants rather than holds: one that says it was on
+// the wishlist, as the collection's old wishlist rows did (in a JSON file made
+// from GET /collection, or a CSV with a List Type column). Imported onto the
+// default Wishlist, never as copies (routes/importExport.js).
+const isWishlistRow = (item) => !!item && squash(item.list_type) === 'wishlist';
 
 const STRATEGIES = {
   // Every .csv the Settings page uploads lands here (it sends format 'csv'), so
@@ -278,5 +286,6 @@ module.exports = {
   parsePrice,
   parseThirdPartyCSV,
   parseDecklistLine,
-  parseManaboxText
+  parseManaboxText,
+  isWishlistRow
 };

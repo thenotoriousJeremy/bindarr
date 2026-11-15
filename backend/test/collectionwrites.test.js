@@ -184,10 +184,11 @@ async function validation() {
   }
   const row = await db.get(`SELECT list_type, game, purchase_price FROM collection WHERE id = ?`, [entry]);
   assert.deepStrictEqual(row, { list_type: 'collection', game: 'pokemon', purchase_price: null }, 'nothing refused was stored');
-  const good = await api('PUT', `/collection/${entry}`, { list_type: 'wishlist', game: 'mtg', purchase_price: '2.50' });
+  // (list_type 'wishlist' is an older app's "move to wishlist": wishlistunified.test.js.)
+  const good = await api('PUT', `/collection/${entry}`, { list_type: 'collection', game: 'mtg', purchase_price: '2.50' });
   assert.strictEqual(good.status, 200);
   assert.deepStrictEqual(await db.get(`SELECT list_type, game, purchase_price FROM collection WHERE id = ?`, [entry]),
-    { list_type: 'wishlist', game: 'mtg', purchase_price: 2.5 });
+    { list_type: 'collection', game: 'mtg', purchase_price: 2.5 });
   assert.strictEqual((await api('POST', '/collection', { card_id: 'val', list_type: 'trade-binder' })).status, 400, 'an add checks list_type');
   assert.strictEqual((await api('POST', '/collection', { card_id: 'val', purchase_price: -5 })).status, 400, 'an add checks purchase_price');
 

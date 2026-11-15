@@ -9,6 +9,7 @@ const { recordPrice } = require('../../utils/priceHelpers');
 const { rebalanceCompartments } = require('../../utils/compartmentSort');
 const { placeCopies, describePlacement } = require('../../utils/collectionHelpers');
 const { readQuantity } = require('../../utils/requestBounds');
+const { wantCards } = require('../../utils/defaultWishlist');
 const { AddCardError, GRADERS, CONDITIONS, PRINTINGS, LIST_TYPES, readPurchasePrice, ownsSealedUnit } = require('./shared');
 
 // The provider-facing half of an add: hydrate a thin cached row, fetch an
@@ -108,6 +109,9 @@ function checkAddBody(body) {
   };
 }
 
+// A copy is always on the collection: an add that says list_type 'wishlist' wants
+// the card rather than holds it, and the routes below send it to the default
+// Wishlist instead (wantInstead), never here.
 async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
   const {
     card_id,
@@ -115,7 +119,6 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
     printing = 'Normal',
     language = 'English',
     location_id = null,
-    list_type = 'collection',
     is_trade = 0,
     game = 'pokemon',
     grader = 'Raw',
@@ -193,11 +196,11 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
           card_id, user_id, quantity, condition, printing, language, purchase_price,
           location_id, compartment_id, position, is_trade, list_type, game,
           grader, grade, cert_number, sealed_unit_id
-        ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 'collection', ?, ?, ?, ?, ?)
       `, [
         cardId, req.user.id, condition, printing, language, purchasePrice,
         place.compartment_id ? (place.location_id ?? location_id) : null, place.compartment_id, place.compartment_id ? place.position : 0,
-        is_trade ? 1 : 0, list_type, effectiveGame,
+        is_trade ? 1 : 0, effectiveGame,
         grader, gradeValue, certValue, sealedUnitId
       ]);
       lastInsertedId = result.lastID;
@@ -225,9 +228,22 @@ async function addCardToCollection(user, body, { resolvedCard = null } = {}) {
   });
 }
 
+// An add asking for list_type 'wishlist' (the API took it before wanted cards
+// moved to the Lists feature): the card goes on the default Wishlist, with the
+// quantity asked for as the copies wanted, and no collection row is made. The
+// answer keeps an add's shape, with no ids since nothing was added.
+async function wantInstead(user, body) {
+  const { qty } = checkAddBody(body);
+  const { cardId } = await resolveCardForAdd(user, body);
+  const { missing } = await wantCards(user.id, [{ card_id: cardId, quantity: qty }]);
+  if (missing.length) throw new AddCardError(404, `Card ID ${cardId} not found.`, 'card_not_found');
+  return { message: 'Card added to your wishlist', wishlisted: true, id: null, ids: [], placement: null, container_full: false, rule_rejected: false, unplaced: 0 };
+}
+
 // 3. Add Card to Collection
 async function addCard(req, res) {
   try {
+    if (req.body && req.body.list_type === 'wishlist') return res.status(200).json(await wantInstead(req.user, req.body));
     res.status(200).json(await addCardToCollection(req.user, req.body));
   } catch (error) {
     if (error instanceof AddCardError) {
@@ -282,6 +298,26 @@ async function bulkAdd(req, res) {
     } catch (error) {
       failure(card_id, error);
     }
+  }
+  // A bulk add to the wishlist (see wantInstead): the cards go on the default
+  // Wishlist, and no copies are made.
+  if (shared.list_type === 'wishlist') {
+    try {
+      const { missing } = await db.withTransaction(() => wantCards(req.user.id,
+        ready.map(({ resolvedCard }) => ({ card_id: resolvedCard.cardId, quantity: qty.value }))));
+      for (const { card_id, resolvedCard } of ready) {
+        if (missing.includes(resolvedCard.cardId)) failure(card_id, new AddCardError(404, `Card ID ${card_id} not found.`, 'card_not_found'));
+        else added.push({ card_id, id: null });
+      }
+    } catch (error) {
+      console.error('Bulk add to the wishlist failed:', error);
+      return res.status(500).json({ error: 'Failed to add cards', code: 'add_failed' });
+    }
+    return res.status(added.length || !failed.length ? 200 : failed[0].status).json({
+      message: `Added ${added.length} card${added.length === 1 ? '' : 's'} to your wishlist.${failed.length ? ` ${failed.length} failed.` : ''}`,
+      added: added.length,
+      failed,
+    });
   }
   // Then every add in one transaction, sequentially — placement resolves against
   // the rows already inserted — and each in its own savepoint, so a card that fails

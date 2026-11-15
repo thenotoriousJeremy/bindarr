@@ -289,21 +289,32 @@ async function main() {
   await card('mtg-a', 'Black Lotus');
   await card('mtg-b', 'Llanowar Elves');
   await card('mtg-w', 'Wished Card');
+  await card('mtg-old-wish', 'Old Wishlist Row');
   await card('mtg-bob', 'Bob Card');
   await own(alice, 'mtg-a');
   await own(alice, 'mtg-b');
-  await own(alice, 'mtg-w', 'wishlist');
+  // Wanted is the Lists Wishlist the hearts fill (WEB-03). A collection row left on
+  // the retired collection wishlist is no longer a source: it is neither owned nor
+  // on a list, and initDb moves every such row onto the Wishlist at boot.
+  const hearts = (await db.run(
+    `INSERT INTO card_lists (user_id, name, kind, is_default) VALUES (?, 'Wishlist', 'wishlist', 1)`, [alice]
+  )).lastID;
+  await db.run(`INSERT INTO card_list_items (list_id, card_id) VALUES (?, 'mtg-w')`, [hearts]);
+  await own(alice, 'mtg-old-wish', 'wishlist');
   await own(bob, 'mtg-bob');
   await price('mtg-a', 100);
   await price('mtg-b', 2);
   await price('mtg-w', 20);
+  await price('mtg-old-wish', 20);
   await price('mtg-bob', 10);
 
   received.length = 0;
   await notify.checkPriceMoves();
   await notify.flush();
   assert.strictEqual(received.length, 0, 'the first look only sets baselines');
-  assert.strictEqual((await db.get(`SELECT COUNT(*) n FROM notification_price_state WHERE user_id = ?`, [alice])).n, 3);
+  assert.deepStrictEqual(
+    (await db.all(`SELECT card_id FROM notification_price_state WHERE user_id = ? ORDER BY card_id`, [alice])).map(r => r.card_id),
+    ['mtg-a', 'mtg-b', 'mtg-w'], 'owned cards and the Wishlist are watched; an old collection wishlist row is not');
 
   await price('mtg-a', 130);   // +30%
   await price('mtg-b', 2.1);   // +5%, 10¢: neither

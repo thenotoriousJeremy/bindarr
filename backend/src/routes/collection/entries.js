@@ -11,7 +11,7 @@ const { compartmentLabel, rebalanceCompartmentByScheme } = require('../../utils/
 const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, reconcileIdenticalRows, setTileQuantity, tileMembers, ownedLocation, ownedCompartment } = require('../../utils/collectionHelpers');
 const { readQuantity } = require('../../utils/requestBounds');
 const { trashEntries } = require('../../utils/collectionTrash');
-const { conflictingSealedLinks, GRADERS, CONDITIONS, PRINTINGS, LIST_TYPES, readPurchasePrice, ownsSealedUnit, cardIdForLanguage } = require('./shared');
+const { conflictingSealedLinks, GRADERS, CONDITIONS, PRINTINGS, LIST_TYPES, moveCopiesToWishlist, readPurchasePrice, ownsSealedUnit, cardIdForLanguage } = require('./shared');
 
 // A refusal decided inside updateEntry's transaction: thrown so the transaction
 // rolls back, answered with its own status and body.
@@ -343,6 +343,14 @@ async function updateEntry(req, res) {
     // game nothing groups it with.
     if (list_type !== undefined && !LIST_TYPES.includes(list_type)) {
       return res.status(400).json({ error: `Invalid list_type. One of: ${LIST_TYPES.join(', ')}` });
+    }
+    // An older app moving this copy to the wishlist: the card goes on the default
+    // Wishlist and the copy to the trash (shared.moveCopiesToWishlist). What else
+    // the request says is about the copy, which is gone, so it is not applied.
+    if (list_type === 'wishlist') {
+      const moved = await moveCopiesToWishlist([entry.id], req.user.id);
+      if (moved.trashed === 0) return res.status(422).json({ error: 'This card could not be put on your wishlist.', code: 'wishlist_failed' });
+      return res.json({ message: 'Card moved to your wishlist', wishlisted: moved.cards, trash_batch: moved.batchId });
     }
     if (game !== undefined && !games.isGame(game)) return res.status(400).json({ error: 'Invalid game' });
     const price = purchase_price === undefined ? null : readPurchasePrice(purchase_price);

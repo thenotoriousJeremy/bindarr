@@ -97,16 +97,24 @@ router.get('/', async (req, res) => {
     // TCGplayer's too; Pokémon's comes from the TCGCSV group the listing matched.
     if (game === 'mtg') set.tcgplayer_set_code = String(set.id).toUpperCase();
 
-    // The user's copies, wishlist included (marked, not counted). Pokémon reads
-    // every copy of the game and lets buildCompletion match the set by id or name,
-    // so copies filed under the other provider's numbering of the same set still
+    // The user's copies, and the cards on any of their wishlists (the lists of
+    // kind 'wishlist', routes/lists.js: marked, not counted). Pokémon reads every
+    // row of the game and lets buildCompletion match the set by id or name, so
+    // cards filed under the other provider's numbering of the same set still
     // count; Magic and Lorcana codes are the same everywhere, so SQL narrows them.
     const narrow = game === 'pokemon' ? '' : 'AND LOWER(cc.set_id) = LOWER(?)';
+    const params = game === 'pokemon' ? [req.user.id, game] : [req.user.id, game, set.id];
     const owned = await db.all(
-      `SELECT c.quantity, c.printing, c.list_type, cc.set_id, cc.set_name, cc.number
+      `SELECT c.quantity, c.printing, cc.set_id, cc.set_name, cc.number
          FROM collection c JOIN card_cache cc ON cc.id = c.card_id
-        WHERE c.user_id = ? AND cc.game = ? ${narrow}`,
-      game === 'pokemon' ? [req.user.id, game] : [req.user.id, game, set.id]
+        WHERE c.user_id = ? AND c.list_type = 'collection' AND cc.game = ? ${narrow}`,
+      params
+    );
+    const wanted = await db.all(
+      `SELECT cc.set_id, cc.set_name, cc.number
+         FROM card_list_items i JOIN card_lists l ON l.id = i.list_id JOIN card_cache cc ON cc.id = i.card_id
+        WHERE l.user_id = ? AND l.kind = 'wishlist' AND cc.game = ? ${narrow}`,
+      params
     );
 
     res.json({
@@ -115,7 +123,7 @@ router.get('/', async (req, res) => {
       set,
       fetched_at: listing.fetched_at,
       stale: !!listing.stale,
-      ...buildCompletion({ game, set, cards, owned }),
+      ...buildCompletion({ game, set, cards, owned, wanted }),
     });
   } catch (error) {
     console.error(`Set completion failed for ${game || '?'} ${setId}:`, error.message);

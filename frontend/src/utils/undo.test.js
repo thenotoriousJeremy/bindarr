@@ -55,6 +55,14 @@ test('undoResult says when copies could not go back to their slot', () => {
   assert.deepEqual(undoResult(placement, { ok: true, data: { restored: 1, unplaced: 0 } }), { key: 'undo.done', values: {} });
 });
 
+test('undoResult says when a restored wishlist row went back on the Wishlist', () => {
+  const trash = { kind: 'trash', batch: 'b' };
+  assert.deepEqual(undoResult(trash, { ok: true, data: { restored: 0, unsorted: 0, wishlisted: 2 } }),
+    { key: 'undo.wishlisted', values: { count: 2 } }, 'not "Restored 0 cards"');
+  assert.deepEqual(undoResult(trash, { ok: true, data: { restored: 3, unsorted: 0, wishlisted: 1 } }),
+    { key: 'undo.restoredSomeWishlisted', values: { count: 3, wishlisted: 1 } });
+});
+
 test('undoToast gives no button without an undo', () => {
   assert.equal(undoToast(null, { showToast: () => {}, t: k => k }), undefined);
   assert.equal(typeof undoToast({ kind: 'trash', batch: 'b' }, { showToast: () => {}, t: k => k }).onAction, 'function');

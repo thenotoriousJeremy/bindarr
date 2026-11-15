@@ -246,7 +246,9 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice, onDataChanged 
       });
       const result = await response.json().catch(() => ({}));
       if (response.ok) {
-        showToast(t('settings.restoreOk', { cards: result.cards, locations: result.locations, decks: result.decks }));
+        const restored = t('settings.restoreOk', { cards: result.cards, locations: result.locations, decks: result.decks });
+        // An older backup's wishlist rows are wanted cards: they went on the Wishlist.
+        showToast(result.wishlisted > 0 ? `${restored} ${t('settings.restoreWishlisted', { count: result.wishlisted })}` : restored);
         dataChanged();
       } else {
         showToast(t('settings.restoreFailed', { error: apiErrorText(t, result, 'settings.unknownError') }));

@@ -975,6 +975,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
       {recentScans.length > 0 && (
         <RecentScans
           recentSelect={recentSelect} setRecentScans={setRecentScans} recentScans={recentScans} activateRecent={stable.activateRecent}
+          showToast={showToast}
         />
       )}
 

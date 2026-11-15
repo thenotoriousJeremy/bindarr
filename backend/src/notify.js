@@ -241,26 +241,17 @@ async function prefsFor(userId) {
   return { ...DEFAULT_PREFS, ...(row || {}) };
 }
 
-// Is the card-lists feature's wishlist table here? It lands on its own branch, so
-// this code works with or without it.
-async function hasCardLists() {
-  const row = await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'card_list_items'`);
-  return !!row;
-}
-
 // Every card this user owns or (optionally) wants, with its latest recorded price
-// and the price they were last told about.
+// and the price they were last told about. Wanted means on any of their lists of
+// kind 'wishlist' (routes/lists.js), the default Wishlist the hearts fill among
+// them; the collection holds owned copies only (utils/wishlistMigration.js).
 async function watchedCards(userId, includeWishlist) {
   const sources = [`SELECT card_id, 'owned' AS source FROM collection WHERE user_id = ? AND COALESCE(list_type, 'collection') = 'collection'`];
   const params = [userId];
   if (includeWishlist) {
-    sources.push(`SELECT card_id, 'wishlist' FROM collection WHERE user_id = ? AND list_type = 'wishlist'`);
+    sources.push(`SELECT i.card_id, 'wishlist' FROM card_list_items i JOIN card_lists l ON l.id = i.list_id
+                   WHERE l.user_id = ? AND l.kind = 'wishlist'`);
     params.push(userId);
-    if (await hasCardLists()) {
-      sources.push(`SELECT i.card_id, 'wishlist' FROM card_list_items i JOIN card_lists l ON l.id = i.list_id
-                     WHERE l.user_id = ? AND l.kind = 'wishlist'`);
-      params.push(userId);
-    }
   }
   // MIN(source) picks 'owned' over 'wishlist' for a card that is both.
   return db.all(`

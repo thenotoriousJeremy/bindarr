@@ -11,7 +11,7 @@ const { allocateSealedUnitCost } = require('../../utils/sealedCostAllocation');
 const { unitCardProgress } = require('../../utils/sealedContents');
 const { getOwnedUnit } = require('../../utils/sealedOwnership');
 const { trashEntries } = require('../../utils/collectionTrash');
-const { conflictingSealedLinks, cardIdForLanguage, LIST_TYPES, CONDITIONS, PRINTINGS } = require('./shared');
+const { conflictingSealedLinks, cardIdForLanguage, moveCopiesToWishlist, LIST_TYPES, CONDITIONS, PRINTINGS } = require('./shared');
 
 // 5b. Bulk actions
 const BULK_ACTIONS = ['delete', 'move', 'trade', 'untrade', 'list_type', 'condition', 'printing', 'language', 'purchase_split', 'add_to_deck', 'set_sealed_unit', 'link_sealed_unit'];
@@ -163,8 +163,19 @@ async function bulkAction(req, res) {
       return res.json({ message: `Updated ${changes} card(s)`, affected: changes });
     }
 
+    // Only older apps send this: the current one adds to the Wishlist (lists.js)
+    // and leaves the copies alone. "Move to wishlist" puts the cards on the
+    // default Wishlist and the copies in the trash (shared.moveCopiesToWishlist);
+    // "move to collection" has nothing to do, every copy being in it already.
     if (action === 'list_type') {
       if (!LIST_TYPES.includes(value)) return res.status(400).json({ error: 'Invalid list_type' });
+      if (value === 'wishlist') {
+        const { cards, trashed, batchId } = await moveCopiesToWishlist(ids, req.user.id);
+        return res.json({
+          message: `Put ${cards} card(s) on your wishlist; ${trashed} cop${trashed === 1 ? 'y' : 'ies'} moved to the trash`,
+          affected: trashed, wishlisted: cards, trash_batch: batchId,
+        });
+      }
       const changes = await db.withTransaction(() => updateOwned('list_type = ?', [value], ids, req.user.id));
       return res.json({ message: `Moved ${changes} card(s) to ${value}`, affected: changes });
     }

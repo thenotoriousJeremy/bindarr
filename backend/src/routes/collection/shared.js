@@ -5,6 +5,8 @@ const db = require('../../db');
 const cardApi = require('../../utils/cardApi');
 const tcgdexApi = require('../../tcgdexApi');
 const { getOwnedUnit } = require('../../utils/sealedOwnership');
+const { wantCards } = require('../../utils/defaultWishlist');
+const { trashEntries } = require('../../utils/collectionTrash');
 
 // In chunks of ids: a selection can be the whole collection, past SQLite's limit
 // on bound variables for one IN (...).
@@ -60,9 +62,34 @@ const GRADERS = ['Raw', 'PSA', 'BGS', 'CGC', 'SGC', 'TAG'];
 // a value outside them fails at the INSERT/UPDATE, which surfaced as a 500.
 const CONDITIONS = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged'];
 const PRINTINGS = ['Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition', 'Promo'];
-// The two lists a copy can be on. Both are still accepted until the collection
-// wishlist and the Lists feature's default wishlist are merged.
+// What a request may say for list_type. Every copy is 'collection': wanted cards
+// live on the Lists feature's default Wishlist (utils/defaultWishlist.js), not in
+// the collection. 'wishlist' is still accepted because older apps send it to move
+// a copy to the wishlist; moveCopiesToWishlist below is what that means now.
 const LIST_TYPES = ['collection', 'wishlist'];
+
+// An older app setting list_type 'wishlist' on copies the user holds: "I want
+// this card, I don't have it". The card goes on the default Wishlist and the
+// copies go to the trash, where they can be restored for 30 days, so nothing is
+// silently lost. A copy whose card cannot go on a list (card_cache lost it) stays
+// where it is. One transaction. Resolves { cards, trashed, batchId }.
+async function moveCopiesToWishlist(entryIds, userId) {
+  const ids = [...new Set((entryIds || []).map(n => parseInt(n, 10)).filter(Number.isInteger))];
+  return db.withTransaction(async () => {
+    const rows = [];
+    for (let i = 0; i < ids.length; i += 500) {
+      const part = ids.slice(i, i + 500);
+      rows.push(...await db.all(
+        `SELECT id, card_id FROM collection WHERE id IN (${part.map(() => '?').join(',')}) AND user_id = ?`,
+        [...part, userId]
+      ));
+    }
+    if (rows.length === 0) return { cards: 0, trashed: 0, batchId: null };
+    const { added, merged, missing } = await wantCards(userId, rows.map(r => ({ card_id: r.card_id, quantity: 1 })));
+    const { batchId, trashed } = await trashEntries(rows.filter(r => !missing.includes(r.card_id)).map(r => r.id), userId);
+    return { cards: added + merged, trashed, batchId };
+  });
+}
 
 // What was paid for a copy: a finite amount of 0 or more, or null when the field
 // is blank. Anything else is refused rather than stored as text in a REAL column,
@@ -100,6 +127,7 @@ module.exports = {
   CONDITIONS,
   PRINTINGS,
   LIST_TYPES,
+  moveCopiesToWishlist,
   readPurchasePrice,
   ownsSealedUnit,
   cardIdForLanguage,

@@ -29,6 +29,7 @@
 const express = require('express');
 const db = require('../db');
 const cardApi = require('../utils/cardApi');
+const { wantCards } = require('../utils/defaultWishlist');
 
 const router = express.Router();
 
@@ -296,16 +297,28 @@ router.post('/backup/restore', async (req, res) => {
 
       // A copy whose card the backup could not supply would break the card_cache
       // foreign key; it is skipped and counted rather than failing the restore.
+      //
+      // A backup from before the collection's wishlist was retired holds wanted
+      // cards as rows with list_type 'wishlist'. Those are not copies: they go on
+      // the default Wishlist below, once the backup's own lists are back.
       let skipped = 0;
+      let copies = 0;
+      const wanted = [];
       for (const row of list('collection')) {
         const known = await db.get(`SELECT 1 FROM card_cache WHERE id = ?`, [row.card_id]);
         if (!known) { skipped++; continue; }
+        if (row.list_type === 'wishlist') {
+          wanted.push({ card_id: row.card_id, quantity: row.quantity, notes: row.notes, added_at: row.added_at });
+          continue;
+        }
         await insert('collection', cols.collection, row, {
           user_id: uid,
+          list_type: 'collection',
           location_id: row.location_id == null ? null : (locMap.get(row.location_id) ?? null),
           compartment_id: row.compartment_id == null ? null : (compMap.get(row.compartment_id) ?? null),
           sealed_unit_id: row.sealed_unit_id == null ? null : (unitMap.get(row.sealed_unit_id) ?? null),
         });
+        copies++;
       }
       const deckMap = new Map();
       for (const row of list('decks')) {
@@ -331,12 +344,14 @@ router.post('/backup/restore', async (req, res) => {
         if (!(await db.get(`SELECT 1 FROM card_cache WHERE id = ?`, [row.card_id]))) continue;
         await insert('card_list_items', cols.card_list_items, row, { list_id: listId }, 'INSERT OR IGNORE');
       }
+      const onWishlist = wanted.length ? await wantCards(uid, wanted) : null;
       for (const row of list('notes')) {
         await insert('notes', cols.notes, row, { user_id: uid });
       }
 
       Object.assign(counts, {
-        cards: list('collection').length - skipped,
+        cards: copies,
+        ...(onWishlist ? { wishlisted: onWishlist.added + onWishlist.merged } : {}),
         skipped,
         locations: locMap.size,
         decks: deckMap.size,

@@ -9,7 +9,8 @@
 //     in the same set, whatever its language: a Japanese copy of FDN #1 is FDN #1.
 //     Matching by number rather than card id is also what survives a provider
 //     switch, where the same card has a different id (sv1-1 vs tcgdex-en-sv01-001).
-//   · Wishlist rows do not count as owned.
+//   · A card on one of the user's wishlists is marked `wishlisted`, matched the
+//     same way, and does not count as owned.
 //   · A price that is not known is not zero. Missing value is summed only over
 //     cards with a price, per currency (Scryfall and TCGplayer quote USD, TCGdex
 //     and Cardmarket EUR — adding the two would be a number in no currency), and
@@ -64,34 +65,41 @@ function knownVariants(card) {
     .map(v => ({ printing: v.printing, price: known(card[v.column]) }));
 }
 
-// The user's copies of this set, by collector number.
-//
-// `rows` are collection rows joined to card_cache (set_id, set_name, number,
-// quantity, printing, list_type). A row belongs to the set when its set id or name
-// matches it under the same three keys the scan catalogue joins providers with —
-// only Pokémon gets the name key, because only Pokémon has two providers that
-// number the same set differently (sv1 / sv01, sv3pt5 / sv03.5, where only the name
-// "151" agrees). Magic and Lorcana set codes are the same everywhere.
-function ownedByNumber(rows, set, game) {
+// The rows of `rows` that belong to this set, each with its number key. A row
+// belongs to the set when its set id or name matches it under the same three
+// keys the scan catalogue joins providers with — only Pokémon gets the name key,
+// because only Pokémon has two providers that number the same set differently
+// (sv1 / sv01, sv3pt5 / sv03.5, where only the name "151" agrees). Magic and
+// Lorcana set codes are the same everywhere.
+function inSet(rows, set, game) {
   const match = matcher([{ id: set.id, name: game === 'pokemon' ? set.name : null }]);
+  return (rows || [])
+    .filter(r => match(r.set_id, game === 'pokemon' ? r.set_name : null))
+    .map(r => ({ row: r, key: numberKey(r.number) }))
+    .filter(r => r.key);
+}
+
+// The user's copies of this set, by collector number. `rows` are owned copies
+// (collection rows joined to card_cache: set_id, set_name, number, quantity,
+// printing). A row still on the collection's retired wishlist (list_type
+// 'wishlist', utils/wishlistMigration.js) is no copy and does not count.
+function ownedByNumber(rows, set, game) {
   const out = new Map();
-  for (const r of rows || []) {
-    if (!match(r.set_id, game === 'pokemon' ? r.set_name : null)) continue;
-    const key = numberKey(r.number);
-    if (!key) continue;
-    const entry = out.get(key) || { quantity: 0, printings: {}, wishlist: 0 };
+  for (const { row: r, key } of inSet(rows, set, game)) {
+    if (r.list_type === 'wishlist') continue;
+    const entry = out.get(key) || { quantity: 0, printings: {} };
     const qty = Math.max(1, parseInt(r.quantity, 10) || 1);
-    if (r.list_type === 'wishlist') {
-      entry.wishlist += qty;
-    } else {
-      entry.quantity += qty;
-      const p = r.printing || 'Normal';
-      entry.printings[p] = (entry.printings[p] || 0) + qty;
-    }
+    entry.quantity += qty;
+    const p = r.printing || 'Normal';
+    entry.printings[p] = (entry.printings[p] || 0) + qty;
     out.set(key, entry);
   }
   return out;
 }
+
+// The collector numbers of this set the user wants: `rows` are the cards on their
+// wishlists (card_list_items joined to card_cache: set_id, set_name, number).
+const wantedNumbers = (rows, set, game) => new Set(inSet(rows, set, game).map(r => r.key));
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
@@ -126,14 +134,16 @@ function variantEntries(card) {
     : [{ owned: card.owned > 0, price: card.price, currency: card.price_currency }];
 }
 
-// The whole answer for one set. `cards` are card_cache rows in listing order.
-function buildCompletion({ game, set, cards, owned }) {
+// The whole answer for one set. `cards` are card_cache rows in listing order;
+// `owned` the user's copies, `wanted` the cards on their wishlists.
+function buildCompletion({ game, set, cards, owned, wanted = [] }) {
   const byNumber = ownedByNumber(owned, set, game);
+  const wantedKeys = wantedNumbers(wanted, set, game);
   const withVariants = VARIANT_GAMES.has(game);
   let hasVariantData = false;
 
   const out = (cards || []).map(card => {
-    const own = byNumber.get(numberKey(card.number)) || { quantity: 0, printings: {}, wishlist: 0 };
+    const own = byNumber.get(numberKey(card.number)) || { quantity: 0, printings: {} };
     let variants = [];
     if (withVariants) {
       const listed = knownVariants(card);
@@ -160,7 +170,7 @@ function buildCompletion({ game, set, cards, owned }) {
       tcgplayer_product_id: card.tcgplayer_product_id || null,
       owned: own.quantity,
       owned_printings: own.printings,
-      wishlisted: own.wishlist > 0,
+      wishlisted: wantedKeys.has(numberKey(card.number)),
       variants,
     };
   }).sort((a, b) => compareNumbers(a.number, b.number));
@@ -176,4 +186,4 @@ function buildCompletion({ game, set, cards, owned }) {
   };
 }
 
-module.exports = { numberKey, compareNumbers, knownVariants, ownedByNumber, summarize, buildCompletion, VARIANTS };
+module.exports = { numberKey, compareNumbers, knownVariants, ownedByNumber, wantedNumbers, summarize, buildCompletion, VARIANTS };
