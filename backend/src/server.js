@@ -178,13 +178,12 @@ app.use(helmet({
         'https://cards.lorcast.io', 'https://media.rarebit.app', 'https://cmsassets.rgpub.io',
         'https://tcgplayer-cdn.tcgplayer.com'
       ],
-      // index.html loads Antonio, Outfit and Plus Jakarta Sans from Google Fonts,
-      // which is two separate origins: the stylesheet comes from fonts.googleapis
-      // .com and the .woff2 files it then references come from fonts.gstatic.com.
+      // The webfonts are self-hosted (frontend/src/fonts.css, files in
+      // public/fonts), so neither styles nor fonts come from another origin.
       // 'unsafe-inline' because React renders a few <style> blocks (the scanner and
       // the deck builder); style cannot run script, so it is the cheap one to allow.
-      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-      fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      fontSrc: ["'self'", 'data:'],
       objectSrc: ["'none'"],
       upgradeInsecureRequests: null
     }
