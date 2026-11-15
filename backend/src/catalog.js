@@ -39,6 +39,35 @@ const suffix = (lang) => (!lang || lang === 'en' || lang === 'English' ? '' : `-
 const binPath = (game, lang) => path.join(MODEL_DIR, `milo-${game}${suffix(lang)}-local.bin`);
 const metaPath = (game, lang) => path.join(MODEL_DIR, `milo-${game}${suffix(lang)}-local.json`);
 
+// A catalog's meta file, parsed once per version of the file. list() reads it for
+// every catalog on every poll (the panel polls each second during a build) and
+// setCounts on every scanner open; the Magic one is several megabytes of ids and
+// took ~100 ms to parse each time. Keyed by size and mtime, which a rebuild's
+// rename changes, so a new catalog is read the moment it lands. Null when there
+// is no such catalog or it cannot be read.
+const metaCache = new Map();   // path -> { mtimeMs, size, meta }
+function readMeta(game, lang) {
+  const file = metaPath(game, lang);
+  let stat;
+  try { stat = fs.statSync(file); } catch { metaCache.delete(file); return null; }
+  const hit = metaCache.get(file);
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit.meta;
+  try {
+    const meta = JSON.parse(fs.readFileSync(file, 'utf8'));
+    metaCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, meta });
+    return meta;
+  } catch {
+    metaCache.delete(file);
+    return null;
+  }
+}
+
+// What a catalog was built from: the set ids of a scoped build (lowercased, the
+// union of every scoped build added to it), or null for the whole game. A catalog
+// written before builds recorded this has no `scope`, and is taken as whole-game,
+// which is how it was treated then.
+const scopeOf = (meta) => (meta && Array.isArray(meta.scope) && meta.scope.length ? meta.scope : null);
+
 // One build at a time. Two concurrent builds would fight over the same provider
 // rate limits and the same single-threaded ONNX session, and finish later than
 // running them in sequence.
@@ -86,23 +115,45 @@ async function claimedFor(game, lang) {
   }
 }
 
-// How many sets exist that this install has no cards for at all — a newly released
-// set, in other words. The weekly refresh keeps the set list current (server.js
-// calls fetchAndCacheSets with force), so a release surfaces here on its own.
+// The sets a whole-game build of (game, lang) walks: cardSets.listAllSets, the
+// build's own list, with its exclusions (MTG's digital and child sets, Pokémon
+// Pocket) and in the provider's own id scheme. Cached briefly, because list() asks
+// for every built catalog on every poll and a pokemontcg.io install answers this
+// with a live request. An empty answer (provider unreachable) is not cached.
+const UNIVERSE_TTL_MS = 30 * 60 * 1000;
+const universeCache = new Map();   // `${game}|${lang}` -> { at, sets }
+async function setUniverse(game, lang) {
+  const key = `${game}|${lang}`;
+  const hit = universeCache.get(key);
+  if (hit && Date.now() - hit.at < UNIVERSE_TTL_MS) return hit.sets;
+  const sets = (await cardSets.listAllSets(game, lang)).map(s => String(s).toLowerCase()).filter(Boolean);
+  if (sets.length) universeCache.set(key, { at: Date.now(), sets });
+  return sets;
+}
+
+// How many sets a build of this catalog would walk that this install has no cards
+// for at all — a newly released set, in other words. The weekly refresh keeps the
+// set lists current (server.js), so a release surfaces here on its own.
 //
-// The comparison has to be done in the SAME id namespace as card_cache, and that
-// differs per game, which is the whole reason this is not one query:
+// The denominator is the build's own set list (setUniverse above). It used to be
+// the `sets` table, or for Pokémon whatever TCGdex or pokemontcgapi listed, and
+// both counted sets a build skips on purpose: ~100 digital Magic sets, Magic's
+// child sets (folded into their parents), Pokémon Pocket — and on a pokemontcg.io
+// install TCGdex's ids (sv01) against cached pokemontcg.io ones (sv1). So the
+// number never reached 0, and the weekly auto-update rebuilt a game every week.
 //
-//   MTG — the `sets` table stores ids prefixed ("mtg-fdn") while card_cache stores
-//   the bare Scryfall code ("fdn"). Comparing them raw reports every set as new;
-//   the first version of this function did exactly that and claimed 1047 of 1047.
+// `scope`: a scoped catalog (scopeOf) is behind only on the sets it was built
+// from. A set released since is not one of them, and an auto-update of a scoped
+// catalog must not grow it into a whole-game build.
 //
-//   Pokemon — the `sets` table is pokemontcg.io's numbering (base1, gym1) while
-//   card_cache holds whichever provider cached the card, usually TCGdex (A1,
-//   me02.5). There is no reliable mapping between them, so the set table cannot
-//   answer this at all: ask the provider that owns the ids instead.
-async function newSetCount(game, lang = 'English') {
+// Compared in JS against one pass over card_cache, in the same id scheme: the set
+// list is the provider's, card_cache is too, and a prefixed id ("lorcana-1",
+// "riftbound-ogn") meets its bare code. A correlated query here once re-scanned
+// card_cache per set and took 28 s on the single connection (#49).
+async function newSetCount(game, lang = 'English', { scope = null } = {}) {
   try {
+    const universe = await setUniverse(game, lang);
+    if (!universe.length) return null;
     // Sets a build already found to have no usable data upstream. Counting them as
     // "not built yet" told the user to build sets that cannot be built: measured on
     // a real install, ALL 46 uncached English Pokemon sets were of this kind
@@ -111,51 +162,22 @@ async function newSetCount(game, lang = 'English') {
     const gaps = new Set((await db.all(
       `SELECT set_id FROM set_data_gaps WHERE game = ? AND language = ?`, [game, lang]
     ).catch(() => [])).map(r => String(r.set_id).toLowerCase()));
-
-    if (game === 'pokemon') {
-      const provider = await pokemonProvider.providerFor(lang) === pokemonProvider.POKEMONTCGAPI
-        ? require('./pokemontcgapi') : require('./tcgdexApi');
-      const sets = await provider.listSets(lang);
-      if (!sets.length) return null;
-      const cached = new Set((await db.all(
-        `SELECT DISTINCT LOWER(set_id) sid FROM card_cache WHERE game = 'pokemon' AND language = ?`,
-        [lang]
-      )).map(r => r.sid));
-      return sets.filter(s => (s.total || s.printed_total || 0) > 0
-        && !cached.has(String(s.id).toLowerCase())
-        && !gaps.has(String(s.id).toLowerCase())).length;
-    }
     // Scoped to the language, or a Spanish catalog would be measured against the
-    // ENGLISH cache and report whatever English happens to be missing: measured
-    // 98 for both mtg/English and mtg/Spanish while the Spanish cache held 1,205
-    // cards against English's 103,656.
-    //
-    // Compared in JS, exactly like the Pokemon branch above, and for the same
-    // reason it has to be: the id namespaces differ, so the test needs LOWER() on
-    // both sides and an OR between the prefixed and the bare form. Neither side can
-    // use idx_card_cache_set_num, so as a correlated NOT EXISTS this re-scanned the
-    // WHOLE of card_cache once per set. Measured against 1,047 MTG sets and 126k
-    // cached rows: 9.6s with 50 sets uncached, 28s with 400 — on the single sqlite3
-    // connection, so every other request in the app queues behind it. That is why
-    // one Admin page load 504'd and took Users and the dashboard down with it (#49).
-    // It only ever ran once an MTG catalog was built, because list() asks for
-    // newSets only when `built` — which is why deleting the milo-mtg-local files
-    // "fixed" it. One pass over each table instead: same answer, ~80ms.
-    const cached = new Set((await db.all(
-      `SELECT DISTINCT LOWER(set_id) sid FROM card_cache WHERE game = ? AND language = ?`,
-      [game, lang]
-    )).map(r => r.sid));
-    const rows = await db.all(
-      `SELECT id FROM sets WHERE game = ? AND COALESCE(total, 0) > 0`, [game]
-    );
-    // The `sets` table prefixes ids ("mtg-fdn", "lorcana-tfc") while card_cache
-    // holds the bare code ("fdn"). Both forms are checked, which is what the OR in
-    // the old query did — dropping either one reports every set as new.
-    const bare = (id) => games.bareSetId(String(id).toLowerCase());
-    return rows.filter(r =>
-      !gaps.has(bare(r.id))
-      && !cached.has(String(r.id).toLowerCase())
-      && !cached.has(bare(r.id))).length;
+    // ENGLISH cache and report whatever English happens to be missing.
+    const cached = new Set();
+    for (const r of await db.all(
+      `SELECT DISTINCT LOWER(set_id) sid FROM card_cache WHERE game = ? AND language = ?`, [game, lang]
+    )) {
+      if (!r.sid) continue;
+      cached.add(r.sid);
+      cached.add(games.bareSetId(r.sid));
+    }
+    const bare = (id) => games.bareSetId(id);
+    const inScope = scope ? new Set(scope.flatMap(s => [String(s).toLowerCase(), bare(String(s).toLowerCase())])) : null;
+    return universe.filter(s =>
+      (!inScope || inScope.has(s) || inScope.has(bare(s)))
+      && !gaps.has(s) && !gaps.has(bare(s))
+      && !cached.has(s) && !cached.has(bare(s))).length;
   } catch {
     return null;
   }
@@ -178,12 +200,15 @@ async function list() {
       const lang = l.language || 'English';
       let built = null;
       try {
-        if (fs.existsSync(metaPath(game, lang))) {
-          const meta = JSON.parse(fs.readFileSync(metaPath(game, lang), 'utf8'));
+        const meta = readMeta(game, lang);
+        if (meta) {
           built = {
             rows: meta.ids.length,
             builtAt: meta.builtAt,
             bytes: fs.statSync(binPath(game, lang)).size,
+            // The sets a scoped catalog covers, or null for the whole game: what
+            // the auto-update rebuilds (server.js autoUpdateCatalogs).
+            scope: scopeOf(meta),
           };
         }
       } catch { built = null; }
@@ -210,7 +235,7 @@ async function list() {
         // to have fallen behind, and asking anyway cost a provider round-trip per
         // language on a list() the panel polls every second during a build — which
         // made this function take longer than its own 120s test harness allowed.
-        newSets: built ? await newSetCount(game, lang) : null,
+        newSets: built ? await newSetCount(game, lang, { scope: built.scope }) : null,
         // The published fallback still answers when nothing local is built.
         published: !built && cvScan.isBuilt(game, lang),
       });
@@ -260,9 +285,8 @@ async function listLanguages(game = 'pokemon') {
     const h = have.get(name) || { cached: 0, withArt: 0 };
     let built = null;
     try {
-      if (fs.existsSync(metaPath(game, name))) {
-        built = { rows: JSON.parse(fs.readFileSync(metaPath(game, name), 'utf8')).ids.length };
-      }
+      const meta = readMeta(game, name);
+      if (meta) built = { rows: meta.ids.length };
     } catch { built = null; }
     out.push({ game, lang: name, code: l.code, sets: sets.length, claimed, cached: h.cached, withArt: h.withArt, built });
   }
@@ -293,9 +317,8 @@ async function setCounts(game, lang = 'English') {
   );
   let embedded = null;
   try {
-    if (fs.existsSync(metaPath(game, lang))) {
-      embedded = new Set(JSON.parse(fs.readFileSync(metaPath(game, lang), 'utf8')).ids);
-    }
+    const meta = readMeta(game, lang);
+    if (meta) embedded = new Set(meta.ids);
   } catch { embedded = null; }
 
   const sets = {};
@@ -416,53 +439,14 @@ function embedUrl(row) {
 }
 
 // --- phase 2 -----------------------------------------------------------------
-async function embedPhase(job) {
-  // A scoped build embeds only the chosen sets' cards. The catalog it writes is
-  // still the whole table, because the vectors for every OTHER set are MERGED back
-  // in below — without that, "build Bloomburrow" would silently delete the
-  // Foundations vectors built last week, since this phase writes exactly the rows
-  // it embedded.
-  const scoped = job.sets && job.sets.length;
-  const setFilter = scoped ? job.sets.flatMap(s => {
-    const bare = games.bareSetId(s);
-    return [bare, `${job.game}-${bare}`];
-  }) : [];
-  const rows = await db.all(
-    `SELECT id, image_url FROM card_cache
-      WHERE game = ? AND language = ? AND image_url IS NOT NULL AND image_url != ''
-        ${scoped ? `AND LOWER(set_id) IN (${setFilter.map(() => '?').join(',')})` : ''}
-      ORDER BY id`,
-    scoped ? [job.game, job.lang, ...setFilter.map(s => String(s).toLowerCase())] : [job.game, job.lang]
-  );
-  job.phase = 'embed';
-  job.total = rows.length;
-  job.done = 0;
-  if (!rows.length) return { built: 0, reused: 0, failed: 0, wrote: false };
 
-  // Resume: keep every embedding whose source image has not changed.
-  let prev = null;
-  try {
-    if (fs.existsSync(metaPath(job.game, job.lang))) {
-      const meta = JSON.parse(fs.readFileSync(metaPath(job.game, job.lang), 'utf8'));
-      const buf = fs.readFileSync(binPath(job.game, job.lang));
-      const vecs = new Map();
-      for (let i = 0; i < meta.ids.length; i++) {
-        vecs.set(meta.ids[i], new Float32Array(buf.buffer, buf.byteOffset + i * meta.dim * 4, meta.dim));
-      }
-      prev = { vecs, srcs: new Map(Object.entries(meta.srcs || {})) };
-    }
-  } catch { prev = null; }
-
+// What turns an image URL into an embedding: a download and a milo forward pass.
+// `start(…, { embedder })` swaps it, which is how the tests drive a whole build
+// without a model file or a network.
+async function defaultEmbedder() {
   const session = await ort.InferenceSession.create(path.join(MODEL_DIR, 'milo.onnx'), {
     intraOpNumThreads: 1, interOpNumThreads: 1, executionMode: 'sequential',
   });
-
-  const ids = [], vecs = [], srcs = {};
-  let built = 0, reused = 0, failed = 0;
-  const queue = rows.slice();
-  const inflight = new Map();
-  const CONCURRENCY = 8;
-
 
   const imageProvider = (url) => {
     const host = new URL(url).hostname.toLowerCase();
@@ -480,78 +464,167 @@ async function embedPhase(job) {
   };
 
   // Scryfall's image CDN rejects a request with no User-Agent — 400, not 403, which
-  // reads like a bad URL. Version comes from package.json rather than a literal: the
-  // one in tcgcsvApi said 1.6.1 through two releases.
+  // reads like a bad URL. The shared one (utils/providerClient), whose version comes
+  // from package.json rather than a literal.
   const HEADERS = {
-    'User-Agent': `Bindarr/${require('../package.json').version} (+https://github.com/thenotoriousJeremy/bindarr)`,
+    'User-Agent': require('./utils/providerClient').USER_AGENT,
     Accept: 'image/*',
   };
-  const fetchOne = async (row) => {
-    const url = embedUrl(row);
-    const provider = imageProvider(url);
-    const startedAt = performance.now();
-    let status = 500;
-    try {
-      const res = await fetch(url, {
-        signal: AbortSignal.timeout(30000),
-        headers: HEADERS,
-      });
-      status = res.status;
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return Buffer.from(await res.arrayBuffer());
-    } finally {
-      metrics.recordProviderCall(provider, startedAt, status, 'card_image');
-    }
+  return {
+    async fetch(url) {
+      const provider = imageProvider(url);
+      const startedAt = performance.now();
+      let status = 500;
+      try {
+        const res = await fetch(url, {
+          signal: AbortSignal.timeout(30000),
+          headers: HEADERS,
+        });
+        status = res.status;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return Buffer.from(await res.arrayBuffer());
+      } finally {
+        metrics.recordProviderCall(provider, startedAt, status, 'card_image');
+      }
+    },
+    async embed(buf) {
+      const { data } = await sharp(buf).resize(SIZE, SIZE, { fit: 'fill' })
+        .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      const out = await session.run({ image: toTensor(data) });
+      return out.embedding.data;
+    },
   };
+}
+
+// The previous catalog for this (game, language), as id -> vector and id -> the
+// url each was embedded from, plus the scope it recorded; null when there is none.
+function readPrev(game, lang) {
+  try {
+    const meta = readMeta(game, lang);
+    if (!meta) return null;
+    const buf = fs.readFileSync(binPath(game, lang));
+    const vecs = new Map();
+    for (let i = 0; i < meta.ids.length; i++) {
+      vecs.set(meta.ids[i], new Float32Array(buf.buffer, buf.byteOffset + i * meta.dim * 4, meta.dim));
+    }
+    return { vecs, srcs: new Map(Object.entries(meta.srcs || {})), scope: scopeOf(meta) };
+  } catch {
+    return null;
+  }
+}
+
+async function embedPhase(job) {
+  // A scoped build embeds only the chosen sets' cards. The catalog it writes is
+  // still the whole table, because the vectors for every OTHER set are MERGED back
+  // in below — without that, "build Bloomburrow" would silently delete the
+  // Foundations vectors built last week, since this phase writes exactly the rows
+  // it embedded.
+  const scoped = job.sets && job.sets.length;
+  const setFilter = scoped ? job.sets.flatMap(s => {
+    const bare = games.bareSetId(s);
+    return [bare, `${job.game}-${bare}`];
+  }) : [];
+  const rows = await db.all(
+    `SELECT id, image_url, image_url_back FROM card_cache
+      WHERE game = ? AND language = ? AND image_url IS NOT NULL AND image_url != ''
+        ${scoped ? `AND LOWER(set_id) IN (${setFilter.map(() => '?').join(',')})` : ''}
+      ORDER BY id`,
+    scoped ? [job.game, job.lang, ...setFilter.map(s => String(s).toLowerCase())] : [job.game, job.lang]
+  );
+  // One task per face to embed. A double-faced Magic card's back is its own row,
+  // `{id}_back`, the shape the published catalog uses and cvScan already folds
+  // back onto the card: only the front was embedded here, so a back photographed
+  // with a locally built catalog matched nothing.
+  const tasks = [];
+  for (const row of rows) {
+    tasks.push({ id: row.id, url: embedUrl(row) });
+    if (row.image_url_back) tasks.push({ id: `${row.id}_back`, url: embedUrl({ ...row, image_url: row.image_url_back }) });
+  }
+  job.phase = 'embed';
+  job.total = tasks.length;
+  job.done = 0;
+  if (!tasks.length) return { built: 0, reused: 0, failed: 0, wrote: false };
+
+  // Resume: keep every embedding whose source image has not changed.
+  const prev = readPrev(job.game, job.lang);
+
+  const embedder = job.embedder || await defaultEmbedder();
+
+  const ids = [], vecs = [], srcs = {};
+  let built = 0, reused = 0, failed = 0;
+  const queue = tasks.slice();
+  const inflight = new Map();
+  const CONCURRENCY = 8;
+
   // Download ahead while the CPU embeds: the network is the slow half and the
   // model is single-threaded, so overlapping them is most of the wall clock.
   const pump = () => {
     while (inflight.size < CONCURRENCY && queue.length && !job.cancelled) {
-      const row = queue.shift();
+      const task = queue.shift();
       // Resume compares the url that was EMBEDDED, not the one card_cache holds:
       // raising the resolution above has to invalidate every vector built from the
       // old one, and a row whose art was re-uploaded still has to rebuild.
-      if (prev && prev.vecs.has(row.id) && prev.srcs.get(row.id) === embedUrl(row)) {
-        ids.push(row.id); vecs.push(prev.vecs.get(row.id)); srcs[row.id] = embedUrl(row);
+      if (prev && prev.vecs.has(task.id) && prev.srcs.get(task.id) === task.url) {
+        ids.push(task.id); vecs.push(prev.vecs.get(task.id)); srcs[task.id] = task.url;
         reused++; job.done++;
         continue;
       }
-      inflight.set(row.id, fetchOne(row).then(buf => ({ row, buf }), err => ({ row, err })));
+      inflight.set(task.id, embedder.fetch(task.url).then(buf => ({ task, buf }), err => ({ task, err })));
     }
   };
 
   pump();
   while (inflight.size) {
     const settled = await Promise.race(inflight.values());
-    inflight.delete(settled.row.id);
+    inflight.delete(settled.task.id);
     if (settled.err) failed++;
     else {
       try {
-        const { data } = await sharp(settled.buf).resize(SIZE, SIZE, { fit: 'fill' })
-          .removeAlpha().raw().toBuffer({ resolveWithObject: true });
-        const out = await session.run({ image: toTensor(data) });
-        vecs.push(out.embedding.data);
-        ids.push(settled.row.id);
-        srcs[settled.row.id] = embedUrl(settled.row);
+        vecs.push(await embedder.embed(settled.buf));
+        ids.push(settled.task.id);
+        srcs[settled.task.id] = settled.task.url;
         built++;
       } catch { failed++; }
     }
     job.done++;
-    job.message = `${built + reused}/${rows.length}`;
+    job.message = `${built + reused}/${tasks.length}`;
     pump();
   }
 
-  if (scoped && prev) {
+  // What the previous catalog had and this run did not embed: carried forward,
+  // so no build ever leaves the catalog smaller than it found it.
+  //
+  //   · A scoped build carries every other set's vectors (keptFromPrev).
+  //   · Any build carries the vector of a card it did not reach — stopped, or shut
+  //     down mid-build (shutdown cancels a running build), or an image download
+  //     that failed. This used to happen for scoped builds only, so stopping a
+  //     whole-game rebuild wrote the part it had done over the whole catalog: a
+  //     40-card catalog came back as 8, and every card not yet reached silently
+  //     stopped scanning. Its stored url is the old one, so the next build sees it
+  //     as changed and embeds it again.
+  //   · An unscoped build does NOT carry a card that has left card_cache: it walked
+  //     every row for the language, and a vector with no card behind it can win a
+  //     scan and then resolve to nothing.
+  if (prev) {
+    const listed = scoped ? null : new Set(rows.map(r => r.id));
     for (const { id, vec, src } of keptFromPrev(prev, ids)) {
+      if (listed && !listed.has(String(id).replace(/_back$/, ''))) continue;
       ids.push(id); vecs.push(vec);
       if (src) srcs[id] = src;
       reused++;
     }
   }
 
-  // A cancelled build still writes what it has: the partial catalog is valid and
-  // resuming later reuses all of it. Refusing to write would throw away the work.
+  // A cancelled build still writes what it has (and what it kept): the catalog is
+  // valid and resuming later reuses all of it.
   if (!vecs.length) return { built, reused, failed, wrote: false };
+  // What this catalog covers, for list() and the auto-update: the union of every
+  // scoped build added to it, or null once it is (or was) a whole-game build.
+  let scope = null;
+  if (scoped) {
+    if (!prev) scope = [...job.sets].sort();
+    else if (prev.scope) scope = [...new Set([...prev.scope, ...job.sets])].sort();
+  }
   const dim = vecs[0].length;
   const bin = Buffer.allocUnsafe(vecs.length * dim * 4);
   vecs.forEach((v, i) => Buffer.from(v.buffer, v.byteOffset, dim * 4).copy(bin, i * dim * 4));
@@ -561,7 +634,7 @@ async function embedPhase(job) {
   fs.writeFileSync(binPath(job.game, job.lang) + '.tmp', bin);
   fs.writeFileSync(metaPath(job.game, job.lang) + '.tmp', JSON.stringify({
     dim, ids, srcs, game: job.game, lang: job.lang,
-    model: 'milo1', builtAt: new Date().toISOString(),
+    model: 'milo1', builtAt: new Date().toISOString(), scope,
   }));
   fs.renameSync(binPath(job.game, job.lang) + '.tmp', binPath(job.game, job.lang));
   fs.renameSync(metaPath(job.game, job.lang) + '.tmp', metaPath(job.game, job.lang));
@@ -580,6 +653,8 @@ function start(game, lang = 'English', opts = {}) {
     sets: (opts.sets || []).map(s => String(s).trim().toLowerCase()).filter(Boolean),
     phase: 'starting', done: 0, total: 0, message: '',
     startedAt: Date.now(), cancelled: false,
+    // Tests only: { fetch(url) -> Buffer, embed(Buffer) -> Float32Array }.
+    embedder: opts.embedder || null,
   };
   current = job;
   (async () => {
@@ -611,4 +686,21 @@ function start(game, lang = 'English', opts = {}) {
 let last = null;
 const lastResult = () => last;
 
-module.exports = { list, listLanguages, setCounts, newSetCount, keptFromPrev, embedUrl, start, stop, state, lastResult, binPath, metaPath, GAMES };
+// Which catalog the auto-update (server.js) rebuilds now, from list(), or null.
+//
+// One at a time, and of those behind, the one built longest ago. Taking the first
+// behind one meant Pokémon every week — it is first in the registry, and its count
+// never settled — so Magic, Lorcana and Riftbound were never updated at all.
+// Oldest-built-first rotates through them, and across restarts too, since a
+// rebuild moves its catalog to the back of the line. A scoped catalog is rebuilt
+// as its scope: rebuilt whole, a few sets the user chose became the whole game.
+function nextAutoUpdate(catalogs) {
+  const behind = (catalogs || [])
+    .filter(c => c.built && c.newSets > 0)
+    .sort((a, b) => String(a.built.builtAt || '').localeCompare(String(b.built.builtAt || '')));
+  const c = behind[0];
+  if (!c) return null;
+  return { game: c.game, lang: c.lang, newSets: c.newSets, sets: c.built.scope || null };
+}
+
+module.exports = { list, listLanguages, setCounts, newSetCount, nextAutoUpdate, keptFromPrev, embedUrl, start, stop, state, lastResult, binPath, metaPath, GAMES };

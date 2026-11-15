@@ -15,6 +15,7 @@ const tcgplayerCatalog = require('./tcgplayerCatalog');
 const languages = require('./utils/languages');
 const pokemonProvider = require('./utils/pokemonProvider');
 const { parseCardRow } = require('./utils/priceHelpers');
+const { normName } = require('./utils/setCatalogueMatch');
 
 // Which Pokémon provider answers a scan's language.
 //
@@ -42,11 +43,9 @@ function toEmbedding(value) {
 
 // Collector numbers as both providers can agree on. TCGdex zero-pads ('013')
 // where pokemontcg.io and TCGplayer do not ('13'), and letters have to survive
-// ('TG12', 'SWSH284') or every promo in a set collides into one key.
-const sameNumber = (a, b) => {
-  const norm = (n) => String(n == null ? '' : n).trim().toLowerCase().replace(/^0+(?=\d)/, '');
-  return !!norm(a) && norm(a) === norm(b);
-};
+// ('TG12', 'SWSH284') or every promo in a set collides into one key. The rule is
+// shared (utils/setCatalogueMatch.numberKey).
+const { sameNumber } = require('./utils/setCatalogueMatch');
 
 // A scanned Pokémon card, expressed in the language being scanned.
 //
@@ -168,7 +167,11 @@ async function resolveCandidate(cand, i, { game, langName, tcgApiKey }) {
     const hint = { ...cand, name: p.name, set: p.set_id || p.group_name, number: p.number };
     if (p.name) {
       const { cards } = await lorcastApi.searchCards({ name: p.name, number: p.number, limit: 5 }).catch(() => ({ cards: [] }));
-      const card = (cards || []).find(c => sameNumber(c.number, p.number)) || cards?.[0];
+      // The card with the product's number, or none. Falling back to the first
+      // result named it with full confidence, which is a guess; no published
+      // Lorcana catalog exists today, so this path waits for one, and it must
+      // refuse rather than file a wrong card when it does run.
+      const card = (cards || []).find(c => sameNumber(c.number, p.number));
       if (card) {
         await db.run(
           `INSERT OR REPLACE INTO tcgplayer_product (card_id, product_id, category_id, confidence, matched_at)
@@ -275,6 +278,85 @@ function resolveCandidates(candidates, ctx) {
   return Promise.all(candidates.map((cand, i) => resolveCandidate(cand, i, ctx)));
 }
 
+// Which artwork a named candidate is, as far as card_cache can say: Scryfall's
+// oracle id when there is one (every printing of the card), else the game and the
+// normalized name. Reprints that share their art embed to near-identical vectors,
+// so between two of them the cosine score is noise. Null when nothing names it.
+function artworkKey(cand, game) {
+  const card = cand.card || null;
+  if (card && card.illustration_id) return `ill:${card.illustration_id}`;
+  if (card && card.oracle_id) return `oracle:${card.oracle_id}`;
+  const name = card ? (card.name || card.printed_name) : cand.name;
+  return name ? `${game}:${normName(name)}` : null;
+}
+
+// Break ties between reprints with the same art (PROV-10).
+//
+// The scanner ranks by cosine alone, and printings that share an illustration
+// score within noise of each other, so which one came first was close to random:
+// exact-printing accuracy sat near 76% while the right CARD was found far more
+// often. When the top candidate is a confident identification (STRONG_SIM) and
+// others of the same artwork sit within STRONG_MARGIN of it, those are re-ordered
+// by what is likely to be in the user's hand:
+//
+//   1. a printing the user already owns,
+//   2. then one in the language being scanned,
+//   3. then the newest set,
+//
+// and the original score order after that. Candidates of other artwork keep their
+// places after the group. `ambiguousPrinting` says the printing, not the card, is
+// what is uncertain, so the client can offer the alternatives instead of filing
+// the first. Scores are left as they were.
+async function breakPrintingTies(candidates, { game, langName, userId, strongSim = 0.55, strongMargin = 0.04 } = {}) {
+  const list = candidates || [];
+  const top = list[0];
+  if (!top || !(top.score >= strongSim)) return { candidates: list, ambiguousPrinting: false };
+  const key = artworkKey(top, game);
+  if (!key) return { candidates: list, ambiguousPrinting: false };
+  const group = list.filter(c => c.score >= top.score - strongMargin && artworkKey(c, game) === key);
+  if (group.length < 2) return { candidates: list, ambiguousPrinting: false };
+
+  const ids = group.map(c => (c.card && c.card.id) || c.cardId).filter(Boolean);
+  const owned = new Set();
+  const released = new Map();
+  if (ids.length) {
+    const marks = ids.map(() => '?').join(',');
+    if (userId) {
+      for (const r of await db.all(
+        `SELECT DISTINCT card_id FROM collection WHERE user_id = ? AND card_id IN (${marks})`, [userId, ...ids]
+      )) owned.add(r.card_id);
+    }
+    const setIds = [...new Set(group.flatMap(c => {
+      const sid = String((c.card && c.card.set_id) || c.set || '').toLowerCase();
+      return sid ? [sid, `${game}-${sid}`] : [];
+    }))];
+    if (setIds.length) {
+      for (const r of await db.all(
+        `SELECT LOWER(id) AS id, release_date FROM sets WHERE LOWER(id) IN (${setIds.map(() => '?').join(',')})`, setIds
+      )) released.set(r.id, String(r.release_date || '').replace(/-/g, '/'));
+    }
+  }
+  const wantLang = languages.toName(langName);
+  const facts = (c) => {
+    const id = (c.card && c.card.id) || c.cardId;
+    const sid = String((c.card && c.card.set_id) || c.set || '').toLowerCase();
+    return {
+      owned: owned.has(id) ? 1 : 0,
+      lang: c.card && languages.toName(c.card.language) === wantLang ? 1 : 0,
+      date: released.get(sid) || released.get(`${game}-${sid}`) || '',
+    };
+  };
+  const order = new Map(list.map((c, i) => [c, i]));
+  const ranked = group.map(c => ({ c, f: facts(c) })).sort((a, b) =>
+    (b.f.owned - a.f.owned)
+    || (b.f.lang - a.f.lang)
+    || (b.f.date.localeCompare(a.f.date))
+    || (order.get(a.c) - order.get(b.c))
+  ).map(x => x.c);
+  const inGroup = new Set(group);
+  return { candidates: [...ranked, ...list.filter(c => !inGroup.has(c))], ambiguousPrinting: true };
+}
+
 // The ready-made Pokémon catalog identified something and NONE of it could be
 // named. That is a install-state problem, not a bad photo, and it has to say so.
 //
@@ -305,4 +387,5 @@ module.exports = {
   resolveCandidate,
   resolveCandidates,
   isUnresolvedPublished,
+  breakPrintingTies,
 };

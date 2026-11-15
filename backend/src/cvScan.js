@@ -32,6 +32,10 @@ const SHARPNESS_GATE = 0.02;
 // Cosine at which a match is confident enough to auto-fill. Correct matches on
 // the eval sample sat at 0.55-0.95; the one confident wrong answer sat at 0.88,
 // so the margin below does the work this number cannot.
+//
+// The scan route uses both to break ties between printings of one artwork
+// (scanCandidates.breakPrintingTies): above STRONG_SIM the CARD is known, and
+// same-art candidates within STRONG_MARGIN of the top are the printing in doubt.
 const STRONG_SIM = 0.55;
 const STRONG_MARGIN = 0.04;
 // "Nothing here is your card." A sweep always returns its nearest row, so a card
@@ -150,15 +154,11 @@ function builtLangs(game = 'mtg') {
 
 function loadModels() {
   if (!models) {
-    const cornPath = path.join(MODEL_DIR, 'cornelius.onnx');
-    const isFastWeb = fs.existsSync(cornPath) && fs.statSync(cornPath).size < 4000000;
     models = Promise.all([
-      ort.InferenceSession.create(cornPath, SESSION_OPTS),
+      ort.InferenceSession.create(path.join(MODEL_DIR, 'cornelius.onnx'), SESSION_OPTS),
       ort.InferenceSession.create(path.join(MODEL_DIR, 'milo.onnx'), SESSION_OPTS),
-    ]).then(([corn, milo]) => {
-      corn.isFastWeb = isFastWeb;
-      return { corn, milo };
-    }).catch((err) => { models = null; throw err; });
+    ]).then(([corn, milo]) => ({ corn, milo }))
+      .catch((err) => { models = null; throw err; });
   }
   return models;
 }
@@ -331,18 +331,22 @@ async function detectAndDewarp(session, imageBuffer) {
   const { data: rgb, info } = await sharp(imageBuffer)
     .resize({ width: 1200, withoutEnlargement: true })
     .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  // The corner model's input and the no-card fallback are resampled from those
+  // same pixels. Each used to decode the whole photo again — two or three
+  // decodes of a phone camera's JPEG per scan, for one image.
+  const decoded = () => sharp(rgb, { raw: { width: info.width, height: info.height, channels: 3 } });
 
-  const { data: small } = await sharp(imageBuffer)
+  const { data: small } = await decoded()
     .resize(CORN_SIZE, CORN_SIZE, { fit: 'fill' })
-    .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    .raw().toBuffer({ resolveWithObject: true });
 
   const out = await session.run({ image: toTensor(small, CORN_SIZE) });
   const corners = out.corners.data;
   const sharpness = out.sharpness ? out.sharpness.data[0] : 1;
 
   if (!(sharpness > SHARPNESS_GATE)) {
-    const { data } = await sharp(imageBuffer).resize(EMBED_SIZE, EMBED_SIZE, { fit: 'fill' })
-      .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const { data } = await decoded().resize(EMBED_SIZE, EMBED_SIZE, { fit: 'fill' })
+      .raw().toBuffer({ resolveWithObject: true });
     return { rgb: data, detected: false, sharpness };
   }
 
@@ -358,8 +362,8 @@ async function detectAndDewarp(session, imageBuffer) {
   ];
   const M = perspectiveTransform(src, dst);
   if (!M) {
-    const { data } = await sharp(imageBuffer).resize(EMBED_SIZE, EMBED_SIZE, { fit: 'fill' })
-      .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const { data } = await decoded().resize(EMBED_SIZE, EMBED_SIZE, { fit: 'fill' })
+      .raw().toBuffer({ resolveWithObject: true });
     return { rgb: data, detected: false, sharpness };
   }
   return {
@@ -665,5 +669,7 @@ function reloadModels() {
   models = null;
 }
 
-module.exports = { match, load, loadAll, isBuilt, builtLangs, reload, reloadModels, scoreCards, setSource, STRONG_SIM, STRONG_MARGIN, GAP_FLOOR };
+module.exports = { match, load, loadAll, isBuilt, builtLangs, reload, reloadModels, scoreCards, setSource, STRONG_SIM, STRONG_MARGIN, GAP_FLOOR,
+  // For tests, which drive it with a stand-in corner model.
+  detectAndDewarp };
 

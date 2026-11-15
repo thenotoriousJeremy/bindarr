@@ -4,6 +4,7 @@ import CardImage from './CardImage';
 import CardImageZoom from './CardImageZoom';
 import AddToListSelect from './AddToListSelect';
 import WishlistHeart, { AddSelectedToWishlist } from './WishlistHeart';
+import UnpublishedSetsNotice from './UnpublishedSetsNotice';
 import { useT } from '../utils/i18n';
 import { onActivateKey } from '../utils/a11y';
 import { priceText } from '../utils/formatPrice';
@@ -305,6 +306,7 @@ export default function SetCompletion({ focusSet, statsTrigger, showToast }) {
           </div>
         )}
       </div>
+      <UnpublishedSetsNotice game={game} lang={lang} />
 
       {!target && !loading && (
         <div className="glass-panel" style={{ textAlign: 'center', padding: '2.5rem 1.5rem', color: 'var(--text-secondary)' }}>

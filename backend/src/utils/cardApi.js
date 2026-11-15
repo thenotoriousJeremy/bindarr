@@ -33,6 +33,7 @@ const tcgdexApi = require('../tcgdexApi');
 const lorcastApi = require('../lorcastApi');
 const languages = require('./languages');
 const games = require('./games');
+const { sameNumber } = require('./setCatalogueMatch');
 
 const isMtgId = (id) => String(id || '').startsWith('mtg-');
 const isTcgdexId = (id) => String(id || '').startsWith('tcgdex-');
@@ -146,11 +147,7 @@ async function printingInLanguage(card, language) {
       const langCode = languages.toCode(language);
       const res = await tcgdexApi.searchCards({ set: card.set_id, number: card.number, lang: langCode }).catch(() => null);
       if (res && res.cards && res.cards.length) {
-        const found = res.cards.find(c => {
-          const a = String(c.number || '').replace(/^0+/, '');
-          const b = String(card.number || '').replace(/^0+/, '');
-          return a === b || c.number === card.number;
-        });
+        const found = res.cards.find(c => sameNumber(c.number, card.number));
         if (found) return found;
       }
     }

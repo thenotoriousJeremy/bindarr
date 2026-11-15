@@ -79,13 +79,22 @@ async function updateCollectionPrices(force = false) {
     }
 
     const quotes = new Map();
+    let missing = 0;
     for (const group of groups) {
       try {
         quotesByProduct(await tcgcsv.getPrices(CATEGORY_ID, group.groupId), quotes);
       } catch (err) {
         if (!tcgcsv.isCacheMissError(err)) throw err;
+        missing++;
         console.warn(`Riftbound prices: group ${group.groupId} is not cached; its cards keep their prices.`);
       }
+    }
+    // Not one group's prices to read is the same as the category not being cached
+    // at all (above): nothing was priced, so the sweep is not done, and marking it
+    // so would skip a whole interval in silence.
+    if (groups.length && missing === groups.length) {
+      console.warn(`Skipping Riftbound price update: no TCGCSV category ${CATEGORY_ID} prices are cached yet.`);
+      return { priced: 0, skipped: 'not cached' };
     }
 
     // Every listed card, not only owned ones: the requests are per group either
@@ -125,6 +134,9 @@ async function updateCollectionPrices(force = false) {
     return { priced, unquoted };
   } catch (err) {
     console.error('Error during Riftbound price update:', err.message);
+    // The same report every other sweep makes on the way out; without it a broken
+    // Riftbound sweep was visible only in the server log.
+    require('./notify').emit({ type: 'price_sweep_failed', source: 'riftbound', error: err.message });
     return { priced: 0, error: err.message };
   }
 }
