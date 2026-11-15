@@ -1,6 +1,8 @@
 const express = require('express');
 const db = require('../db');
 const cardApi = require('../utils/cardApi');
+const games = require('../utils/games');
+const { deckAvailability } = require('../utils/deckAllocation');
 const { parseCardRow } = require('../utils/priceHelpers');
 const {
   LIST_KINDS, CONDITIONS, parseQuantity, evaluateItems, summarize, sameCard,
@@ -13,10 +15,9 @@ const {
 // ids cannot be probed.
 const router = express.Router();
 
-// The games a list can be scoped to: whatever the backend already enumerates.
-// Lazy so loading this module does not pull in the scan stack. The game
-// registry replaces catalog.GAMES; this is the one line that has to follow it.
-const knownGames = () => require('../catalog').GAMES;
+// The games a list can be scoped to are the registry's (utils/games), not the
+// scan catalog's: a game is listable whether or not it can be scanned, and
+// checking one never loads the scan stack.
 
 const NAME_MAX = 120;
 const NOTES_MAX = 2000;
@@ -39,7 +40,7 @@ function listFields(body, { creating }) {
   }
   if (body.game !== undefined) {
     const game = body.game === null || body.game === '' || body.game === 'any' ? null : body.game;
-    if (game !== null && !knownGames().includes(game)) return { error: 'Invalid game' };
+    if (game !== null && !games.isGame(game)) return { error: 'Invalid game' };
     values.game = game;
   }
   if (body.notes !== undefined) values.notes = cleanText(body.notes, NOTES_MAX);
@@ -311,10 +312,70 @@ router.delete('/lists/:id', async (req, res) => {
 
 // --- Items ---
 
-// Add a card. A card already on the list merges: the quantities add up, capped
-// at the 9999 ceiling, so "add to list" twice means two copies wanted.
+// One card onto a list, merging into the item already there: the quantities
+// add up, capped at the 9999 ceiling, and only the fields that were sent change.
+const mergeItem = (listId, cardId, qty, values) => db.run(
+  `INSERT INTO card_list_items (list_id, card_id, quantity_wanted, any_printing, condition_min, language, notes)
+   VALUES (?, ?, ?, ?, ?, ?, ?)
+   ON CONFLICT(list_id, card_id) DO UPDATE SET
+     quantity_wanted = MIN(9999, quantity_wanted + excluded.quantity_wanted),
+     any_printing = COALESCE(?, any_printing),
+     condition_min = CASE WHEN ? THEN excluded.condition_min ELSE condition_min END,
+     language = CASE WHEN ? THEN excluded.language ELSE language END,
+     notes = CASE WHEN ? THEN excluded.notes ELSE notes END`,
+  [listId, cardId, qty, values.any_printing ?? 0, values.condition_min ?? null, values.language ?? null, values.notes ?? '',
+    values.any_printing ?? null, 'condition_min' in values ? 1 : 0, 'language' in values ? 1 : 0, 'notes' in values ? 1 : 0]
+);
+
+// Many cards at once ({ card_ids: [...] }: the bulk bars, a set's selection),
+// each merged as one card is. Every card is looked up first -- a write
+// transaction must not wait on a provider -- and then all of them are written
+// in one transaction. A card that cannot go on the list (no provider knows it,
+// or it is from another game) is reported in `failed`, with the first refusal
+// as `error`, and the rest are added anyway. Nothing added at all is a 400.
+async function addItems(req, res) {
+  const body = req.body || {};
+  const raw = body.card_ids;
+  if (!Array.isArray(raw) || raw.length === 0) return res.status(400).json({ error: 'card_ids must be a non-empty list' });
+  if (raw.length > BULK_MAX) return res.status(400).json({ error: `At most ${BULK_MAX} cards at a time` });
+  if (raw.some(id => typeof id !== 'string' || !id.trim() || id.length > 200)) {
+    return res.status(400).json({ error: 'card_ids must be card id strings' });
+  }
+  const qty = body.quantity_wanted === undefined ? 1 : parseQuantity(body.quantity_wanted);
+  if (qty === null) return res.status(400).json({ error: 'quantity_wanted must be a whole number from 1 to 9999' });
+  const { error, values } = itemFields(body);
+  if (error) return res.status(400).json({ error });
+  const ids = [...new Set(raw.map(id => id.trim()))];
+  try {
+    const list = await ownList(req.params.id, req.user.id);
+    if (!list) return res.status(404).json({ error: 'List not found' });
+    const accepted = [];
+    const failed = [];
+    let refusal = null;
+    for (const cardId of ids) {
+      const card = await ensureCard(cardId, req.user);
+      let why = null;
+      if (!card) why = `Card ${cardId} not found on any card provider.`;
+      else if (list.game && (card.game || cardApi.gameOf(card.id)) !== list.game) why = `This list only takes ${list.game} cards.`;
+      if (why) { failed.push(cardId); refusal = refusal || why; } else accepted.push(cardId);
+    }
+    if (accepted.length === 0) return res.status(400).json({ error: refusal, added: 0, failed });
+    await db.withTransaction(async () => {
+      for (const cardId of accepted) await mergeItem(list.id, cardId, qty, values);
+      await touch(list.id);
+    });
+    res.status(201).json({ added: accepted.length, failed, error: refusal });
+  } catch (err) {
+    console.error('lists: bulk add failed', err);
+    res.status(500).json({ error: 'Failed to add cards to list' });
+  }
+}
+
+// Add a card ({ card_id }), or many ({ card_ids }, above). A card already on the
+// list merges, so "add to list" twice means two copies wanted.
 router.post('/lists/:id/items', async (req, res) => {
   const body = req.body || {};
+  if (body.card_ids !== undefined) return addItems(req, res);
   const cardId = typeof body.card_id === 'string' ? body.card_id.trim() : '';
   if (!cardId) return res.status(400).json({ error: 'card_id is required' });
   const qty = body.quantity_wanted === undefined ? 1 : parseQuantity(body.quantity_wanted);
@@ -330,18 +391,7 @@ router.post('/lists/:id/items', async (req, res) => {
     if (list.game && cardGame !== list.game) {
       return res.status(400).json({ error: `This list only takes ${list.game} cards.` });
     }
-    await db.run(
-      `INSERT INTO card_list_items (list_id, card_id, quantity_wanted, any_printing, condition_min, language, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(list_id, card_id) DO UPDATE SET
-         quantity_wanted = MIN(9999, quantity_wanted + excluded.quantity_wanted),
-         any_printing = COALESCE(?, any_printing),
-         condition_min = CASE WHEN ? THEN excluded.condition_min ELSE condition_min END,
-         language = CASE WHEN ? THEN excluded.language ELSE language END,
-         notes = CASE WHEN ? THEN excluded.notes ELSE notes END`,
-      [list.id, cardId, qty, values.any_printing ?? 0, values.condition_min ?? null, values.language ?? null, values.notes ?? '',
-        values.any_printing ?? null, 'condition_min' in values ? 1 : 0, 'language' in values ? 1 : 0, 'notes' in values ? 1 : 0]
-    );
+    await mergeItem(list.id, cardId, qty, values);
     await touch(list.id);
     const item = await db.get(`SELECT * FROM card_list_items WHERE list_id = ? AND card_id = ?`, [list.id, cardId]);
     res.status(201).json(item);
@@ -398,18 +448,15 @@ router.delete('/lists/:id/items/:itemId', async (req, res) => {
 
 // --- Deck actions ---
 
-// The copies a deck needs that the collection does not hold, counted the way
-// the deck view counts them (GET /decks/:id owned_qty: exact printing,
-// list_type 'collection'). decks.js keeps that inline in its SQL, so it is
-// restated here rather than reached into.
-async function deckShortfall(deckId, userId) {
-  return db.all(
-    `SELECT dc.card_id, dc.quantity AS required,
-            (SELECT COALESCE(SUM(c.quantity), 0) FROM collection c
-              WHERE c.card_id = dc.card_id AND c.user_id = ? AND c.list_type = 'collection') AS owned
-       FROM deck_cards dc WHERE dc.deck_id = ?`,
-    [userId, deckId]
-  );
+// The copies a deck needs that the collection does not hold, counted exactly as
+// the deck page counts them (GET /decks/:id missing_qty): utils/deckAllocation's
+// plan, so a deck that accepts any printing counts the user's other printings,
+// and a copy another checked-out deck holds is not there to be used.
+async function deckShortfall(deck, userId) {
+  const availability = await deckAvailability(deck, userId);
+  return [...availability.values()]
+    .map(p => ({ card_id: p.card.card_id, missing: Math.min(9999, p.need) }))
+    .filter(r => r.missing > 0);
 }
 
 const ownDeck = (deckId, userId) =>
@@ -422,9 +469,7 @@ router.post('/decks/:id/missing-list', async (req, res) => {
   try {
     const deck = await ownDeck(req.params.id, req.user.id);
     if (!deck) return res.status(404).json({ error: 'Deck not found' });
-    const short = (await deckShortfall(deck.id, req.user.id))
-      .map(r => ({ card_id: r.card_id, missing: Math.min(9999, r.required - r.owned) }))
-      .filter(r => r.missing > 0);
+    const short = await deckShortfall(deck, req.user.id);
 
     let listId;
     let created = false;
