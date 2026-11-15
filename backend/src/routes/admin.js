@@ -169,32 +169,22 @@ router.get('/users', async (req, res) => {
       ORDER BY username ASC
     `);
 
-    // Fetch stats for each user
-    const usersWithStats = [];
-    for (const u of users) {
-      const stats = await db.get(`
-        SELECT COUNT(c.id) as unique_cards, SUM(c.quantity) as total_cards,
-          SUM(c.quantity * CASE
-            WHEN c.printing = 'Holofoil' AND cc.price_holofoil IS NOT NULL AND cc.price_holofoil > 0 THEN cc.price_holofoil
-            WHEN c.printing = 'Reverse Holofoil' AND cc.price_reverse_holofoil IS NOT NULL AND cc.price_reverse_holofoil > 0 THEN cc.price_reverse_holofoil
-            WHEN c.printing = 'Normal' AND cc.price_normal IS NOT NULL AND cc.price_normal > 0 THEN cc.price_normal
-            WHEN c.printing = '1st Edition' AND cc.price_1st_edition IS NOT NULL AND cc.price_1st_edition > 0 THEN cc.price_1st_edition
-            ELSE cc.price_trend
-          END) as total_value
-        FROM collection c
-        JOIN card_cache cc ON c.card_id = cc.id
-        WHERE c.user_id = ?
-      `, [u.id]);
-
-      usersWithStats.push({
+    // The same counts and value as the dashboard and /metrics, from one grouped
+    // query (utils/collectionMetrics): owned copies only (wishlist rows left
+    // out), a graded copy at its own value, and every currency converted into
+    // one reporting unit rather than added together.
+    const metrics = await getCollectionMetrics(db);
+    const statsById = new Map(metrics.users.map(u => [u.id, u]));
+    res.json(users.map((u) => {
+      const stats = statsById.get(u.id) || {};
+      return {
         ...u,
-        total_cards: stats.total_cards || 0,
-        unique_cards: stats.unique_cards || 0,
-        total_value: parseFloat((stats.total_value || 0).toFixed(2))
-      });
-    }
-
-    res.json(usersWithStats);
+        total_cards: Number(stats.total_cards || 0),
+        unique_cards: Number(stats.unique_cards || 0),
+        total_value: Number(stats.total_value || 0),
+        value_currency: metrics.valueCurrency,
+      };
+    }));
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to retrieve users list' });
