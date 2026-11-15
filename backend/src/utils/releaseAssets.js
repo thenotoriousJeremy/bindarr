@@ -12,8 +12,9 @@
 'use strict';
 
 const DEFAULT_BASE = 'https://github.com/thenotoriousJeremy/bindarr/releases/download/scan-catalogs';
-const base = () => String(process.env.CATALOG_RELEASE_URL || DEFAULT_BASE).replace(/\/+$/, '');
 const disabled = () => String(process.env.CATALOG_RELEASE_URL || '').trim().toLowerCase() === 'off';
+// `off` switches downloads off; it is not an address, so the base stays the default.
+const base = () => String((!disabled() && process.env.CATALOG_RELEASE_URL) || DEFAULT_BASE).replace(/\/+$/, '');
 // Bindarr's own name (utils/providerClient), as every other outbound request has.
 const USER_AGENT = require('./providerClient').USER_AGENT;
 
