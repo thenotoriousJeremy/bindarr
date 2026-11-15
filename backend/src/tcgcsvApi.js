@@ -26,7 +26,7 @@
 const axios = require('axios');
 const db = require('./db');
 const { recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
-const { normId, normName, fold } = require('./utils/setCatalogueMatch');
+const { normId, normName, numberKey } = require('./utils/setCatalogueMatch');
 const metrics = require('./utils/metrics');
 const { slimResults, SEALED_ONLY_CATEGORY } = require('./utils/tcgcsvSlim');
 
@@ -654,14 +654,11 @@ function buildGroupMatcher(groupsByCategory) {
 // A card number as both sides can agree on.
 //
 // TCGplayer writes '004/102' where TCGdex writes '4', and TCGplayer's own newer
-// sets use bare numbers with letter suffixes ('TG12', 'SV107'). So: take the part
-// before the slash, then drop leading zeros from the digit run while KEEPING any
-// letters — 'TG12' and 'SWSH284' are numbers too, and stripping their letters
-// would collide every promo in a set into one key.
-function normNumber(n) {
-  const head = String(n == null ? '' : n).split('/')[0].trim();
-  return fold(head).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^0+(?=\d)/, '');
-}
+// sets use bare numbers with letter suffixes ('TG12', 'SV107'). The shared rule
+// (setCatalogueMatch.numberKey) takes the part before the slash and drops padding
+// zeros while KEEPING any letters — 'TG12' and 'SWSH284' are numbers too, and
+// stripping their letters would collide every promo in a set into one key.
+const normNumber = numberKey;
 
 // Cached products carry the slim `number`; a raw TCGCSV product carries it in
 // extendedData. Both are accepted so a caller can hand either.

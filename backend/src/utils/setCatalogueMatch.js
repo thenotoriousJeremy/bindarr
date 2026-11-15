@@ -45,6 +45,29 @@ const unpadId = (s) => normId(s).replace(/([a-z])0+(\d)/g, '$1$2');
 
 const normName = (s) => fold(s).toLowerCase().replace(/[^a-z0-9]/g, '');
 
+// A collector number as every source can agree on it — the one rule for comparing
+// numbers, which eight modules used to write for themselves, each a little
+// differently. A key for comparison, never for display.
+//
+//   TCGplayer '004/165', pokemontcg.io '4', TCGdex '004'     -> '4'
+//   'TG01' and 'TG1', 'SV001' and 'SV1', 'GG01' and 'gg1'    -> 'tg1', 'sv1', 'gg1'
+//   '#4', ' 15_A1 ', '15A1'                                  -> '4', '15a1', '15a1'
+//
+// So: the part before a '/total', no '#', no separators or case, and no zeros
+// padding a digit run, whether it starts the number or follows a letter. Letters
+// and symbols are kept, never stripped: '28a' is not card 28, 'TG12' and 'SV12'
+// are different cards of one set, and Unown '?' and '!' are cards too.
+function numberKey(raw) {
+  const head = fold(String(raw == null ? '' : raw)).toLowerCase().split('/')[0].trim().replace(/^#/, '');
+  return head.replace(/[\s_.-]+/g, '').replace(/^0+(?=\d)/, '').replace(/([a-z])0+(?=\d)/g, '$1');
+}
+
+// Two numbers name the same card. A blank names nothing, so never matches.
+const sameNumber = (a, b) => {
+  const key = numberKey(a);
+  return key !== '' && key === numberKey(b);
+};
+
 // Index `rows` (anything with .id and .name) under all three keys at once.
 function index(rows, { idOf = (r) => r.id, nameOf = (r) => r.name } = {}) {
   const byId = new Map(), byUnpad = new Map(), byName = new Map();
@@ -76,4 +99,4 @@ function matcher(rows, opts) {
   };
 }
 
-module.exports = { matcher, index, normId, unpadId, normName, fold };
+module.exports = { matcher, index, normId, unpadId, normName, fold, numberKey, sameNumber };

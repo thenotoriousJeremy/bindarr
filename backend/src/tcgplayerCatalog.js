@@ -89,7 +89,11 @@ function displayNumber(raw) {
 // Nullable on purpose. A group with no match still gets its row, and the scan falls
 // back to the group's own name — which the card APIs accept as `set.name` — so an
 // unmatched group degrades to a slightly looser lookup instead of no answer.
-const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+//
+// The shared name key, which folds accents before dropping what is not a-z0-9. A
+// copy of its own here did not, so 'Pokémon GO' keyed as 'pokmongo' against a
+// provider's 'pokemongo' and the group went unmatched.
+const { normName } = setCatalogueMatch;
 
 // Non-Pokémon games: one TCGCSV category, no English/Japanese split, so none of
 // buildGroupMatcher's language-preferred-category logic applies (it is wired to

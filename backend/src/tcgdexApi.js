@@ -17,6 +17,7 @@ const cardSearchSql = require('./utils/cardSearchSql');
 const { cacheNormalizedCards } = require('./utils/cardCache');
 const languages = require('./utils/languages');
 const { pruneStaleSets } = require('./utils/setCatalogue');
+const { sameNumber } = require('./utils/setCatalogueMatch');
 const metrics = require('./utils/metrics');
 
 const API_BASE_URL = 'https://api.tcgdex.net/v2';
@@ -229,17 +230,10 @@ async function searchBriefs(lang, name, setList, page, limit) {
   return { briefs: data || [], paged: true };
 }
 
-const numberMatches = (localId, wanted) => {
-  const a = String(localId ?? '').trim();
-  const bRaw = String(wanted ?? '').trim();
-  if (!bRaw) return true;
-  const match = bRaw.match(/^#?([A-Z0-9★\-]+)(?:\s*\/\s*[A-Z0-9★\-]+)?$/i);
-  const b = match ? match[1] : bRaw;
-  if (a === bRaw || a === b || a.replace(/^0+/, '') === b.replace(/^0+/, '')) return true;
-  const na = parseInt(a, 10);
-  const nb = parseInt(b, 10);
-  return Number.isFinite(na) && Number.isFinite(nb) && na === nb;
-};
+// No number asked for matches everything; otherwise the shared collector-number
+// rule (utils/setCatalogueMatch). It used to fall back to parseInt, which took
+// '4a' for card 4.
+const numberMatches = (localId, wanted) => !String(wanted ?? '').trim() || sameNumber(localId, wanted);
 
 // Same options object as tcgApi/scryfallApi — see the note there.
 async function searchCards({

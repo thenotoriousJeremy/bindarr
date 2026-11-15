@@ -66,11 +66,9 @@ function cardsOf(payload) {
 }
 
 // Collector numbers are written both ways: our card_cache says '20', the provider
-// says '20/75', and a promo is 'XY29' on both. Compare on the part before the
-// slash, without leading zeros or case.
-function normalizeNumber(n) {
-  return String(n ?? '').split('/')[0].replace(/^0+/, '').trim().toLowerCase();
-}
+// says '20/75', and a promo is 'XY29' on both. Compared by the shared rule: the
+// part before the slash, without padding zeros or case.
+const normalizeNumber = require('./utils/setCatalogueMatch').numberKey;
 
 // Pick the card we actually asked about. With a collector number this is exact;
 // without one it only accepts an unambiguous single result, because pricing the

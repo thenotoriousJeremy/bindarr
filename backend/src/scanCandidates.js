@@ -42,11 +42,9 @@ function toEmbedding(value) {
 
 // Collector numbers as both providers can agree on. TCGdex zero-pads ('013')
 // where pokemontcg.io and TCGplayer do not ('13'), and letters have to survive
-// ('TG12', 'SWSH284') or every promo in a set collides into one key.
-const sameNumber = (a, b) => {
-  const norm = (n) => String(n == null ? '' : n).trim().toLowerCase().replace(/^0+(?=\d)/, '');
-  return !!norm(a) && norm(a) === norm(b);
-};
+// ('TG12', 'SWSH284') or every promo in a set collides into one key. The rule is
+// shared (utils/setCatalogueMatch.numberKey).
+const { sameNumber } = require('./utils/setCatalogueMatch');
 
 // A scanned Pokémon card, expressed in the language being scanned.
 //

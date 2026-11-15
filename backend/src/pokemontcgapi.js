@@ -8,6 +8,7 @@ const languages = require('./utils/languages');
 const { cacheNormalizedCards } = require('./utils/cardCache');
 const { parseSetList } = require('./utils/setQuery');
 const cardSearchSql = require('./utils/cardSearchSql');
+const { sameNumber } = require('./utils/setCatalogueMatch');
 const { parseCardRow, parseSqliteUtc, recordPrice, shouldSweepPrices, markPricesSwept } = require('./utils/priceHelpers');
 const metrics = require('./utils/metrics');
 
@@ -290,7 +291,7 @@ async function searchCards({ name = '', number = '', set = '', scope = 'database
       const normalized = rows.filter(c => c.print_region === REGIONS[code]).map(normalizeCard);
       await cacheListedCards(normalized);
       for (const card of normalized) {
-        if (!number || card.number === number || (/^\d+$/.test(number) && /^\d+$/.test(card.number) && Number(card.number) === Number(number))) matches.push(card);
+        if (!number || sameNumber(card.number, number)) matches.push(card);
       }
       if (matches.length >= offset + limit) return { cards: matches.slice(offset, offset + limit), total: null };
     }
