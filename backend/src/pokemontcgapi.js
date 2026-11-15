@@ -55,6 +55,37 @@ function nextCursor(body, path) {
   return next.searchParams.get('cursor');
 }
 
+// The response cache, bounded separately from card_cache, which holds the durable
+// card identity: eviction only means re-fetching a page later. By count AND by
+// size, newest kept first. A count alone let it hold 1,024 whole responses — a
+// 250-card page is hundreds of kilobytes — in the main database, which every
+// backup copies. The newest response is always kept, however large.
+//
+// Trimmed every TRIM_EVERY writes rather than on each one: finding the oldest rows
+// reads every row's record, and the bound only has to hold roughly.
+const MAX_CACHED_RESPONSES = 1024;
+const MAX_CACHED_BYTES = 64 * 1024 * 1024;
+const TRIM_EVERY = 16;
+let writesSinceTrim = TRIM_EVERY;   // trim on the first write after a start
+async function trimResponseCache({ force = false } = {}) {
+  if (!force && ++writesSinceTrim < TRIM_EVERY) return;
+  writesSinceTrim = 0;
+  try {
+    // octet_length reads the size from the record header, not the body.
+    await db.run(`DELETE FROM pokemontcgapi_cache WHERE request IN (
+      SELECT request FROM (
+        SELECT request,
+               ROW_NUMBER() OVER (ORDER BY fetched_at DESC) AS n,
+               SUM(octet_length(body)) OVER (ORDER BY fetched_at DESC ROWS UNBOUNDED PRECEDING) AS bytes
+          FROM pokemontcgapi_cache)
+       WHERE n > ? OR (n > 1 AND bytes > ?))`, [MAX_CACHED_RESPONSES, MAX_CACHED_BYTES]);
+  } catch {
+    // An SQLite without window functions or octet_length: the count bound alone.
+    await db.run(`DELETE FROM pokemontcgapi_cache WHERE request IN (
+      SELECT request FROM pokemontcgapi_cache ORDER BY fetched_at DESC LIMIT -1 OFFSET ${MAX_CACHED_RESPONSES})`);
+  }
+}
+
 async function request(path, params = {}, ttl = DAY) {
   const key = (process.env.POKEMONTCGAPI_KEY || '').trim();
   if (!key) throw new Error('POKEMONTCGAPI_KEY_REQUIRED');
@@ -77,10 +108,7 @@ async function request(path, params = {}, ttl = DAY) {
       await db.run(`INSERT INTO pokemontcgapi_cache (request, body, etag, fetched_at) VALUES (?, ?, ?, ?)
         ON CONFLICT(request) DO UPDATE SET body = excluded.body, etag = excluded.etag, fetched_at = excluded.fetched_at`,
       [cacheKey, JSON.stringify(body), response.status === 304 ? cached.etag : response.headers.etag || null, Date.now()]);
-      // Bound the response cache separately from card_cache, which holds the
-      // durable card identity. Eviction only means re-fetching a page later.
-      await db.run(`DELETE FROM pokemontcgapi_cache WHERE request IN (
-        SELECT request FROM pokemontcgapi_cache ORDER BY fetched_at DESC LIMIT -1 OFFSET 1024)`);
+      await trimResponseCache();
       return body;
     } catch (error) {
       const status = error.response?.status;
@@ -372,6 +400,7 @@ async function refreshPrices(ids) {
 }
 
 module.exports = { client, hasKey, providerId, normalizeCard, extractPrices, cacheCards, listSets, fetchAndCacheSets,
+  trimResponseCache, MAX_CACHED_RESPONSES, MAX_CACHED_BYTES,
   // getSetCards is the name tcgdexApi lists a set under too, for callers holding either client.
   getCardsBySet, getSetCards: getCardsBySet, searchCards, getCardById, hydrateCard, updateCollectionPrices, refreshPrices,
   LIST_INCLUDE, CARD_INCLUDE };
