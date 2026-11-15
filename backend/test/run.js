@@ -48,11 +48,19 @@ if (!files.length) {
   process.exit(1);
 }
 
+// The environment CI gives them. BINDARR_DISABLE_TCGCSV_SYNC, which a developer
+// sets in their shell for the servers they boot by hand, switches off the very
+// sync the TCGCSV tests drive through a mock adapter; the tests that boot
+// anything else set it themselves.
+const testEnv = { ...process.env };
+delete testEnv.BINDARR_DISABLE_TCGCSV_SYNC;
+
 const failed = [];
 const skipped = [];
 for (const file of files) {
   const started = Date.now();
   const { status, signal, error } = spawnSync(process.execPath, [path.join(TEST_DIR, file)], {
+    env: testEnv,
     stdio: 'inherit',
     timeout: FILE_TIMEOUT_MS,
     killSignal: 'SIGKILL',
