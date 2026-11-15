@@ -71,6 +71,12 @@
   --radius-sm: 8px;
   --radius-md: 16px;
   --radius-lg: 24px;
+
+  /* Dialogs (.modal-overlay): above the pinned phone tab bar (1000) and the
+     sticky header (900), below the toast (2000). A dialog opened from another
+     stacks over it by document order, so one value serves every dialog. */
+  --z-modal: 1050;
+  --overlay-backdrop: rgba(0, 0, 0, 0.7);
 }
 
 /* ------------------------------------------------------------------ THEMES */
@@ -883,12 +889,20 @@ button, input, select, textarea {
   }
 }
 
-/* Shared full-screen modal backdrop. Safe-area padding keeps the centered
-   dialog clear of the notch/status bar and home indicator inside the Capacitor
-   webview (full-bleed, unlike a mobile browser). Each modal keeps its own
-   inline background/blur/z-index; this only supplies the padding + box-sizing.
-   On desktop the env() insets are 0, so it collapses to a flat 1rem. */
+/* Shared full-screen modal backdrop (Modal.jsx's default overlayClassName):
+   position, dim, centring and the one dialog z-index, so a dialog needs no
+   overlayStyle. Safe-area padding keeps the centered dialog clear of the
+   notch/status bar and home indicator inside the Capacitor webview
+   (full-bleed, unlike a mobile browser). On desktop the env() insets are 0,
+   so it collapses to a flat 1rem. */
 .modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-backdrop);
   box-sizing: border-box;
   padding:
     max(1rem, max(env(safe-area-inset-top, 0px), var(--sat, 0px)))
