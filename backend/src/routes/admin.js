@@ -254,20 +254,12 @@ router.put('/users/:id', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    if (password !== undefined) {
-      if (typeof password !== 'string' || password.length < 8) {
-        return res.status(400).json({ error: 'Password must be at least 8 characters' });
-      }
-      const newHash = db.hashPassword(password);
-      await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, id]);
-      // A reset happens because the old password was forgotten or got out, so
-      // every session made with it goes too. An admin resetting their OWN password
-      // here keeps the session doing it, the same as a change from Settings.
-      await revokeSessions(targetUser.id, {
-        exceptTokenHash: targetUser.id === req.user.id ? req.sessionTokenHash : null
-      });
+    // Every field is checked before anything is written. The password used to be
+    // saved (and the user signed out everywhere) before the role was even looked
+    // at, so an edit refused for its role still changed the password.
+    if (password !== undefined && (typeof password !== 'string' || password.length < 8)) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
-
     if (role !== undefined) {
       if (role !== 'member' && role !== 'admin') {
         return res.status(400).json({ error: 'Invalid role' });
@@ -276,8 +268,23 @@ router.put('/users/:id', async (req, res) => {
       if (parseInt(id, 10) === req.user.id && role !== 'admin') {
         return res.status(400).json({ error: 'You cannot demote yourself from Administrator role.' });
       }
-      await db.run(`UPDATE users SET role = ? WHERE id = ?`, [role, id]);
     }
+
+    const newHash = password !== undefined ? await hashPassword(password) : null;
+    await db.withTransaction(async () => {
+      if (newHash) {
+        await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, id]);
+        // A reset happens because the old password was forgotten or got out, so
+        // every session made with it goes too. An admin resetting their OWN password
+        // here keeps the session doing it, the same as a change from Settings.
+        await revokeSessions(targetUser.id, {
+          exceptTokenHash: targetUser.id === req.user.id ? req.sessionTokenHash : null
+        });
+      }
+      if (role !== undefined) {
+        await db.run(`UPDATE users SET role = ? WHERE id = ?`, [role, id]);
+      }
+    });
 
     res.json({ message: 'User updated successfully' });
   } catch (error) {
