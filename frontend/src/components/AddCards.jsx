@@ -5,18 +5,23 @@ import CardSearch from './CardSearch';
 import SlabLookup from './SlabLookup';
 import { useT } from '../utils/i18n';
 import { isDeviceMode } from '../apiBase';
+import { lazyWithReload } from '../utils/lazyWithReload';
 
 // Device mode only, so a server-mode build never loads the download manager.
 const DeviceScanSetup = lazy(() => import('./DeviceScanSetup'));
-const TransferManager = lazy(() => import('./TransferManager'));
+// Its own chunk: most visits to this tab are to add cards.
+const TransferManager = lazyWithReload(() => import('./transfers/TransferManager'));
 
 // `active` is false while another tab is showing: the tab stays mounted so the
 // chosen mode and search survive, but the scanner is unmounted so the camera
-// (and its detection loop) never runs behind a hidden tab.
+// (and its detection loop) never runs behind a hidden tab. Trades & Gifts (the
+// second section) is on a phone in device mode too, for deals recorded with
+// people outside Bindarr; trading with members needs a server.
 function AddCards({
   active = true,
   user,
   onAddSuccess,
+  onUpdateUser,
   showToast,
   setActiveTab,
   initialMode = 'scan',
@@ -131,7 +136,11 @@ function AddCards({
         <Suspense fallback={null}>
           <TransferManager
             user={user}
+            active={active}
+            deviceMode={deviceMode}
             showToast={showToast}
+            onUpdateUser={onUpdateUser}
+            onCollectionChanged={onAddSuccess}
             initialOffer={transferLaunch}
             historyFocus={transferHistoryFocus}
             onInitialOfferHandled={onInitialOfferHandled}

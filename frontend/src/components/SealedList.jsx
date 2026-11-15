@@ -4,6 +4,7 @@ import { Plus, Package, ChevronDown, ChevronUp, Unlock, Lock, Trash2, X, Pencil,
 import { useT } from '../utils/i18n';
 import { gameLabel, gameOptions } from '../utils/games';
 import { formatPrice } from '../utils/formatPrice';
+import { receivedFromText } from '../utils/transferView';
 import { printingLabel } from '../utils/cardOptions';
 import { useLongPress } from '../utils/useLongPress';
 import { useApi } from '../utils/useApi';
@@ -380,6 +381,9 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, onProposeTrade, 
     }
   };
 
+  // A purchase that came from another member says so from its transfer fields;
+  // the server no longer writes "Transfer from X" into store and notes.
+  const receivedFrom = receivedFromText(t, purchase);
   const total = purchase.unit_price == null ? null : Number(purchase.unit_price) * Number(purchase.quantity);
   const unopenedMarketValue = purchase.market_value == null ? null : purchase.market_value * (purchase.sealed_count || 0);
   const hasSealedUnits = (purchase.sealed_count || 0) > 0;
@@ -575,6 +579,11 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, onProposeTrade, 
                     : t('sealed.unboxedNote')}
                 </div>
               )}
+              {receivedFrom && (
+                <div className="sealed-purchase-card-secondary" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                  {receivedFrom}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -647,9 +656,9 @@ function PurchaseCard({ purchase, onChanged, onEdit, showToast, onProposeTrade, 
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
                 {gameLabel(purchase.game)} · {purchase.sealed_type || t('sealed.otherType')} · {t('sealed.quantity')}: {purchase.quantity}
               </div>
-              {(purchase.store || purchase.purchase_date) && (
+              {(purchase.store || purchase.purchase_date || receivedFrom) && (
                 <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                  {[purchase.store, purchase.purchase_date].filter(Boolean).join(' · ')}
+                  {[receivedFrom, purchase.store, purchase.purchase_date].filter(Boolean).join(' · ')}
                 </div>
               )}
             </div>
@@ -737,6 +746,9 @@ function SealedList({ showToast, active = true, statsTrigger, onProposeTrade }) 
     const searchable = [
       purchase.product_name, purchase.set_name, purchase.sealed_type, purchase.store,
       purchase.notes, purchase.contents_note, ...(purchase.expansions || []),
+      // Who it came from, when it came from another member: findable by name, as
+      // it was when the server wrote it into the store.
+      purchase.acquired_transfer_partner,
     ].filter(Boolean).join(' ').toLocaleLowerCase();
     if (query && !searchable.includes(query)) return false;
     if (gameFilter && purchase.game !== gameFilter) return false;

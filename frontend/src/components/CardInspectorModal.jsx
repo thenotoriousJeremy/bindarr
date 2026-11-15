@@ -26,6 +26,9 @@ import { apiErrorText } from '../utils/apiError';
 import { LatestRequest, isAbortError } from '../utils/request';
 import { bulkResultText } from '../utils/bulkResult';
 import { localizedPreview, savedPrintingFields } from '../utils/inspectorCard';
+import { canOpenTradeHistory } from '../utils/tradeAccess';
+import { receivedFromText } from '../utils/transferView';
+import { isDeviceMode } from '../apiBase';
 
 // MTG color identity pip colors (WUBRG), approximating the printed mana colors.
 const MTG_COLOR_BG = {
@@ -49,6 +52,54 @@ function getSlotNumber(c) {
     return Math.floor(c.position) + 1;
   }
   return null;
+}
+
+// Where this copy came from, when it came by trade or gift: from another member
+// (acquired_transfer_*), from someone outside Bindarr (acquired_external_*), or
+// recorded after the fact (acquired_historical_trade_*). Each line can open the
+// record in Trades & Gifts, where this device keeps it: a phone in device mode
+// holds only the deals made outside Bindarr (utils/tradeAccess). Opening one
+// closes the popup, as "Propose trade" does: left open in the tab behind, it
+// would keep its keyboard trap over the page shown instead.
+function TradeProvenance({ card, onViewTrade, onClose }) {
+  const { t } = useT();
+  const unknown = t('transfer.unknownUser');
+  const lines = [
+    card.acquired_transfer_id != null && {
+      type: 'internal',
+      id: card.acquired_transfer_id,
+      text: receivedFromText(t, { ...card, acquired_transfer_type: card.acquired_transfer_type === 'gift' ? 'gift' : 'trade' }),
+    },
+    card.acquired_external_transaction_id != null && {
+      type: 'external',
+      id: card.acquired_external_transaction_id,
+      text: receivedFromText(t, { ...card, acquired_external_transaction_type: card.acquired_external_transaction_type === 'gift' ? 'gift' : 'trade' }, { outside: true }),
+    },
+    card.acquired_historical_trade_id != null && {
+      type: 'historical',
+      id: card.acquired_historical_trade_id,
+      text: t('inspector.historicalTrade', { user: card.acquired_historical_trade_partner || unknown }),
+    },
+  ].filter(Boolean);
+  if (!lines.length) return null;
+  const deviceMode = isDeviceMode();
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', background: 'var(--surface-1)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.75rem' }}>
+      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
+        {t('inspector.tradeProvenance')}
+      </div>
+      {lines.map(line => (
+        <div key={line.type} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{line.text}</span>
+          {onViewTrade && canOpenTradeHistory(line.type, { deviceMode }) && (
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => { onViewTrade({ type: line.type, id: line.id }); onClose?.(); }}>
+              {t('inspector.viewTradeHistory')}
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // Shared card detail popup used by Dashboard, CollectionList and LocationManager.
@@ -848,57 +899,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               )}
 
               <UsedInDecks cardId={activeCard.card_id || activeCard.id} />
-              {(activeCard.acquired_transfer_id != null || activeCard.acquired_external_transaction_id != null || activeCard.acquired_historical_trade_id != null) && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.75rem' }}>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
-                    {t('inspector.tradeProvenance')}
-                  </div>
-                  {activeCard.acquired_transfer_id != null && (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                        {t('inspector.internalTransfer', {
-                          type: t(activeCard.acquired_transfer_type === 'gift' ? 'transfer.gift' : 'transfer.trade'),
-                          user: activeCard.acquired_transfer_partner || t('transfer.unknownUser')
-                        })}
-                      </span>
-                      {onViewTrade && (
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onViewTrade({ type: 'internal', id: activeCard.acquired_transfer_id })}>
-                          {t('inspector.viewTradeHistory')}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  {activeCard.acquired_external_transaction_id != null && (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                        {t('inspector.externalTransfer', {
-                          type: t(activeCard.acquired_external_transaction_type === 'gift' ? 'transfer.gift' : 'transfer.trade'),
-                          user: activeCard.acquired_external_contact || t('transfer.unknownUser')
-                        })}
-                      </span>
-                      {onViewTrade && (
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onViewTrade({ type: 'external', id: activeCard.acquired_external_transaction_id })}>
-                          {t('inspector.viewTradeHistory')}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  {activeCard.acquired_historical_trade_id != null && (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                        {t('inspector.historicalTrade', {
-                          user: activeCard.acquired_historical_trade_partner || t('transfer.unknownUser')
-                        })}
-                      </span>
-                      {onViewTrade && (
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onViewTrade({ type: 'historical', id: activeCard.acquired_historical_trade_id })}>
-                          {t('inspector.viewTradeHistory')}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
+              <TradeProvenance card={activeCard} onViewTrade={onViewTrade} onClose={onClose} />
 
               {onProposeTrade && activeCard.list_type !== 'wishlist' && activeCard.entry_id != null && (
                 <button
