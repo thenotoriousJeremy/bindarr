@@ -1682,6 +1682,24 @@ async function initDb() {
     await run(`ALTER TABLE users ADD COLUMN nav_tabs TEXT`);
   }
 
+  // API keys are stored as their SHA-256 (utils/authHelpers.hashApiKey, the same
+  // digest a session token gets), so a copy of this file or an admin backup holds
+  // no key that reads anyone's collection. Keys made before that are hashed in
+  // place and keep working; the 'sha256:' prefix marks a row as done, as it does
+  // for sessions below. Each key is unique, so its hash is too.
+  const plainApiKeys = await all(
+    `SELECT id, api_key FROM users WHERE api_key IS NOT NULL AND api_key <> '' AND api_key NOT LIKE 'sha256:%'`
+  );
+  if (plainApiKeys.length) {
+    await withTransaction(async () => {
+      for (const { id, api_key: key } of plainApiKeys) {
+        const hashed = `sha256:${crypto.createHash('sha256').update(String(key)).digest('hex')}`;
+        await run(`UPDATE users SET api_key = ? WHERE id = ?`, [hashed, id]);
+      }
+    });
+    console.log(`Hashed ${plainApiKeys.length} stored API key(s).`);
+  }
+
   // Session tokens are stored as their SHA-256 (utils/authHelpers.hashSessionToken),
   // so a copy of this file holds nothing that signs anyone in. Rows from before
   // that hold the token itself; hash them in place so nobody is signed out by the

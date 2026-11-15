@@ -36,9 +36,11 @@ async function authenticateToken(req, res, next) {
     // Not a session? It may be an API key — a long-lived credential for scripts
     // and dashboards (issue #33). What makes that safe to hand out is the GET-only
     // rule below: a leaked key exposes the collection, it cannot edit or delete it.
+    // Keys are stored as the same SHA-256 a session is (authHelpers.hashApiKey),
+    // so the hash already computed above is what names the row.
     let viaApiKey = false;
     if (!session) {
-      session = await db.get(`SELECT u.id AS user_id, ${columns} FROM users u WHERE u.api_key = ?`, [token]);
+      session = await db.get(`SELECT u.id AS user_id, ${columns} FROM users u WHERE u.api_key = ?`, [tokenHash]);
       if (session) {
         if (req.method !== 'GET') {
           return res.status(403).json({ error: 'API keys are read-only. Use a login session for this request.' });

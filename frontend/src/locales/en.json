@@ -1563,6 +1563,8 @@
   "settings.accessRotate": "Replace Key",
   "settings.accessRevoke": "Revoke",
   "settings.accessNone": "No API key yet.",
+  "settings.accessIsSet": "An API key is set. It cannot be shown again: replace it to get a new one.",
+  "settings.accessShownOnce": "Copy this key now. It is shown only this once; if it is lost, replace it.",
   "settings.accessCreated": "API key created.",
   "settings.accessRevoked": "API key revoked.",
   "settings.accessConfirmRotate": "Replace the current API key? Anything using the old one stops working.",

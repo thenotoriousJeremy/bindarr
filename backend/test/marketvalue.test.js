@@ -23,7 +23,7 @@ const db = require('../src/db');
 const { resolveCardPrice } = require('../src/utils/priceHelpers');
 const gradedPrices = require('../src/gradedPrices');
 const { authenticateToken } = require('../src/middleware/auth');
-const { hashSessionToken } = require('../src/utils/authHelpers');
+const { hashSessionToken, hashApiKey } = require('../src/utils/authHelpers');
 
 // Recorded from the live API. Two shapes matter and both appear here: an exact
 // `tcgPlayerId` lookup answers with `data` as a single OBJECT, a search answers
@@ -103,7 +103,8 @@ async function runAuth(token, method = 'GET') {
   assert.strictEqual(resolveCardPrice(row), 300, 'clearing the value returns the card to its provider price');
 
   // --- 3. The API key is read-only --------------------------------------------
-  await db.run(`UPDATE users SET api_key = 'bnd_testkey' WHERE id = ?`, [user.id]);
+  // Stored as its hash, as POST /api/auth/api-key stores it.
+  await db.run(`UPDATE users SET api_key = ? WHERE id = ?`, [hashApiKey('bnd_testkey'), user.id]);
 
   const readOk = await runAuth('bnd_testkey', 'GET');
   assert.ok(readOk.passed, 'a GET authenticates with an API key');

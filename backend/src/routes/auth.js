@@ -450,28 +450,27 @@ router.get('/me', authenticateToken, (req, res) => {
   res.json({ user: { id: req.user.id, ...sessionUser(req.user), oidc_sub: req.user.oidc_sub } });
 });
 
-// The read-only API key itself, for Settings to show on request. Viewable again
-// after it is made on purpose (see POST below), but only when asked for, so it
-// never sits in the user object the SPA stores. A login session only, like the
-// rest of account management. Stored as-is rather than hashed for the same
-// reason: a hash could not be shown again.
+// The API key used to be readable again here, which meant storing it as-is: a
+// copy of the database, or an admin backup, then held a working key to every
+// collection that had one. It is stored hashed now (authHelpers.hashApiKey) and
+// shown once, by the POST that makes it. An older client asking for it is told so.
 router.get('/api-key', authenticateToken, (req, res) => {
-  if (req.user.via_api_key) {
-    return res.status(403).json({ error: 'Use a login session to view the API key.' });
-  }
   res.set('Cache-Control', 'no-store');
-  res.json({ api_key: req.user.api_key || null });
+  res.status(410).json({
+    error: 'An API key is shown only once, when it is created. Replace the key to get a new one.',
+    code: 'api_key_shown_once'
+  });
 });
 
 // Issue (or rotate) this account's read-only API key — issue #33: a finance
-// tracker needs a credential that outlives a login session. POST returns the key
-// in full; it is also readable later from GET /api-key, deliberately, because a
-// key that can only be seen once is a key people rotate until they catch it, and
-// read-only is what keeps that acceptable.
+// tracker needs a credential that outlives a login session. The response is the
+// only time the key is ever shown: only its hash is kept. Losing it means
+// replacing it, which read-only is what keeps cheap.
 router.post('/api-key', authenticateToken, async (req, res) => {
   try {
     const key = `bnd_${crypto.randomBytes(24).toString('hex')}`;
-    await db.run(`UPDATE users SET api_key = ? WHERE id = ?`, [key, req.user.id]);
+    await db.run(`UPDATE users SET api_key = ? WHERE id = ?`, [hashApiKey(key), req.user.id]);
+    res.set('Cache-Control', 'no-store');
     res.json({ api_key: key });
   } catch (error) {
     console.error(error);
