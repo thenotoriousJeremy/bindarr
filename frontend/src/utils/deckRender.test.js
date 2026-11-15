@@ -4,21 +4,9 @@
 // names its own game.
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { fileURLToPath } from 'node:url';
-import { createServer } from 'vite';
+import { installBrowserGlobals, startRenderer } from './renderHarness.js';
 
-const storage = new Map();
-globalThis.window = globalThis;
-globalThis.localStorage = {
-  getItem: (k) => (storage.has(k) ? storage.get(k) : null),
-  setItem: (k, v) => { storage.set(k, String(v)); },
-  removeItem: (k) => { storage.delete(k); },
-  clear: () => storage.clear(),
-};
-globalThis.addEventListener = () => {};
-globalThis.removeEventListener = () => {};
-globalThis.location = new URL('https://bindarr.test/');
-globalThis.history = { state: null, length: 1, pushState() {}, replaceState() {}, back() {} };
+installBrowserGlobals();
 
 const noop = () => {};
 let vite;
@@ -30,20 +18,13 @@ const render = (Component, props) => renderToString(React.createElement(Componen
 // adjacent text with <!-- --> comments, which are not on screen.
 const text = (html) => html.replace(/<!--.*?-->/g, '').replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ');
 
+let renderer;
 before(async () => {
-  vite = await createServer({
-    root: fileURLToPath(new URL('../..', import.meta.url)),
-    configFile: false,
-    logLevel: 'silent',
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-    optimizeDeps: { noDiscovery: true, include: [] },
-  });
-  React = await import('react');
-  ({ renderToString } = await import('react-dom/server'));
+  renderer = await startRenderer();
+  ({ vite, React, renderToString } = renderer);
 });
 
-after(async () => { await vite?.close(); });
+after(async () => { await renderer?.close(); });
 
 const DECKS = [
   { id: 1, name: 'Ink Tide', game: 'lorcana', total_cards: 12, target_size: 60, category: 'Casual', description: '', created_at: '2026-01-02T00:00:00Z' },

@@ -4,21 +4,9 @@
 // renderSmoke.test.js renders the views.
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { fileURLToPath } from 'node:url';
-import { createServer } from 'vite';
+import { installBrowserGlobals, startRenderer } from './renderHarness.js';
 
-const storage = new Map();
-globalThis.window = globalThis;
-globalThis.localStorage = {
-  getItem: (k) => (storage.has(k) ? storage.get(k) : null),
-  setItem: (k, v) => { storage.set(k, String(v)); },
-  removeItem: (k) => { storage.delete(k); },
-  clear: () => storage.clear(),
-};
-globalThis.addEventListener = () => {};
-globalThis.removeEventListener = () => {};
-globalThis.location = new URL('https://bindarr.test/');
-globalThis.history = { state: null, length: 1, pushState() {}, replaceState() {}, back() {} };
+installBrowserGlobals();
 
 const noop = () => {};
 let vite;
@@ -26,20 +14,13 @@ let React;
 let renderToString;
 const h = (...args) => React.createElement(...args);
 
+let renderer;
 before(async () => {
-  vite = await createServer({
-    root: fileURLToPath(new URL('../..', import.meta.url)),
-    configFile: false,
-    logLevel: 'silent',
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-    optimizeDeps: { noDiscovery: true, include: [] },
-  });
-  React = await import('react');
-  ({ renderToString } = await import('react-dom/server'));
+  renderer = await startRenderer();
+  ({ vite, React, renderToString } = renderer);
 });
 
-after(async () => { await vite?.close(); });
+after(async () => { await renderer?.close(); });
 
 test('the selection bar counts the selection and offers select all, clear and done', async () => {
   const { default: SelectionBar, BarDivider } = await vite.ssrLoadModule('/src/components/SelectionBar.jsx');
