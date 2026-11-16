@@ -1,0 +1,57 @@
+{
+ "groups": [
+  { "groupId": 24832, "name": "Legacy", "abbreviation": "LGC", "publishedOn": "2027-01-29T00:00:00", "isSupplemental": false },
+  { "groupId": 24819, "name": "Radiance", "abbreviation": "RAD", "publishedOn": "2026-10-23T00:00:00", "isSupplemental": false },
+  { "groupId": 24560, "name": "Unleashed", "abbreviation": "UNL", "publishedOn": "2026-05-08T00:00:00", "isSupplemental": false },
+  { "groupId": 24502, "name": "Riftbound Worlds Bundle 2025", "abbreviation": "RWB", "publishedOn": "2025-10-28T00:00:00", "isSupplemental": false }
+ ],
+ "products": {
+  "24502": [
+   { "productId": 672073, "name": "Bandle Tree", "number": "278a/298", "rarity": "Promo" },
+   { "productId": 722659, "name": "Bandle Tree (Oversized)", "number": "278a/298", "rarity": "Promo" }
+  ],
+  "24560": [
+   { "productId": 685521, "name": "Vi, Piltover Enforcer (Overnumbered)", "number": "229/219", "rarity": "Showcase" },
+   { "productId": 685522, "name": "Vi, Piltover Enforcer (Signature)", "number": "229*/219", "rarity": "Showcase" }
+  ],
+  "24819": [
+   { "productId": 711362, "name": "Radiance - Booster Pack", "number": null, "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/711362_200w.jpg", "groupId": 24819 },
+   { "productId": 722279, "name": "Blade of the Exile", "number": "150/167", "rarity": "Epic" },
+   { "productId": 722281, "name": "Calm Rune", "number": "R02", "rarity": "Common" },
+   { "productId": 722294, "name": "Ekko, Ingenious", "number": "061/167", "rarity": "Rare" },
+   { "productId": 722295, "name": "Ekko, Ingenious (Alternate Art)", "number": "061a/167", "rarity": "Showcase" },
+   { "productId": 722313, "name": "Kai'Sa, Rebel (K/DA Special Art Card)", "number": "SP4/005", "rarity": "Showcase" },
+   { "productId": 724641, "name": "Jarvan IV, Exemplar of Demacia (Signature)", "number": "179*/167", "rarity": "Showcase", "imageUrl": null },
+   { "productId": 724664, "name": "Aphelios, Exalted (Heartsteel Signature)", "number": "179*/167", "rarity": "Showcase", "imageUrl": null },
+   { "productId": 728142, "name": "Bomb // Gold", "number": "T02 // T05", "rarity": "Common" }
+  ],
+  "24832": [
+   { "productId": 712806, "name": "Legacy - Booster Display", "number": null, "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/712806_200w.jpg", "groupId": 24832 },
+   { "productId": 712807, "name": "Legacy - Booster Pack", "number": null, "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/712807_200w.jpg", "groupId": 24832 }
+  ]
+ },
+ "prices": {
+  "24502": [
+   { "productId": 672073, "subTypeName": "Foil", "marketPrice": 94.04, "midPrice": 94.52 },
+   { "productId": 722659, "subTypeName": "Foil", "marketPrice": 40, "midPrice": 39.98 }
+  ],
+  "24560": [
+   { "productId": 685521, "subTypeName": "Foil", "marketPrice": 69.9, "midPrice": 82.44 },
+   { "productId": 685522, "subTypeName": "Foil", "marketPrice": 648.46, "midPrice": 670 }
+  ],
+  "24819": [
+   { "productId": 711362, "subTypeName": "Normal", "marketPrice": 4.91, "midPrice": 5.49 },
+   { "productId": 722279, "subTypeName": "Foil", "marketPrice": 20.24, "midPrice": 33.59 },
+   { "productId": 722281, "subTypeName": "Normal", "marketPrice": 0.09, "midPrice": 0.15 },
+   { "productId": 722294, "subTypeName": "Foil", "marketPrice": 0.15, "midPrice": 0.25 },
+   { "productId": 722295, "subTypeName": "Foil", "marketPrice": 0.99, "midPrice": 2 },
+   { "productId": 722313, "subTypeName": "Foil", "marketPrice": 16, "midPrice": 20 },
+   { "productId": 724641, "subTypeName": "Foil", "marketPrice": 300.24, "midPrice": 439.99 },
+   { "productId": 724664, "subTypeName": "Foil", "marketPrice": 406.05, "midPrice": 405.04 },
+   { "productId": 728142, "subTypeName": "Normal", "marketPrice": 0.13, "midPrice": 0.17 }
+  ],
+  "24832": [
+   { "productId": 712806, "subTypeName": "Normal", "marketPrice": 149.73, "midPrice": 149.63 }
+  ]
+ }
+}

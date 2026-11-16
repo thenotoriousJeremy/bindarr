@@ -1,13 +1,15 @@
 // TCGplayer prices for Riftbound, from TCGCSV category 89.
 //
 // RiftCodex has no prices, but every card it lists names its TCGplayer product
-// (`tcgplayer_id`, kept as card_cache.tcgplayer_product_id), so the join here is
-// by that product id and nothing else: no set matching, no number matching, no
-// names. That is not caution for its own sake. Riftbound printings share numbers
-// with products worth very different amounts — an OPP promo and its Metal
-// printing carry one collector number and differ about a hundredfold — and a
-// number key would price one off the other with a straight face. A card with no
-// product, or whose product TCGCSV does not quote, is left exactly as it is.
+// (`tcgplayer_id`, kept as card_cache.tcgplayer_product_id), and so does every
+// card of a set RiftCodex lacks, written from this category (riftboundTcgplayer.js).
+// So the join here is by that product id and nothing else: no set matching, no
+// number matching, no names. That is not caution for its own sake. Riftbound
+// printings share numbers with products worth very different amounts — an OPP
+// promo and its Metal printing carry one collector number and differ about a
+// hundredfold — and a number key would price one off the other with a straight
+// face. A card with no product, or whose product TCGCSV does not quote, is left
+// exactly as it is.
 //
 // The data comes through tcgcsvApi's daily sync and its cache, never a request of
 // this module's own: category 89 rides the same pacing, the same 403 cooldown and
@@ -62,6 +64,11 @@ async function updateCollectionPrices(force = false) {
     // A failed or paused sync (network, 5xx, the 403 cooldown) leaves the last
     // complete version in the cache, and yesterday's prices beat none.
     await tcgcsv.syncIfUpdatedSafely('Riftbound price update');
+    // The cards of the sets RiftCodex lacks come from that same data
+    // (riftboundTcgplayer.js): a card TCGplayer listed since is written before the
+    // sweep below prices it. They are an addition; failing them fails no price.
+    await require('./riftboundTcgplayer').ensure({ sync: false })
+      .catch(e => console.warn(`Riftbound: the TCGplayer rows for sets RiftCodex lacks were not refreshed: ${e.message}`));
     if (!force && !(await shouldSweepPrices(GAME))) {
       return { priced: 0, skipped: 'swept recently' };
     }

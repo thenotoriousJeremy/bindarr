@@ -247,14 +247,18 @@ const riftboundId = (setId) => `riftbound-${String(setId || '').trim().toLowerCa
 
 // The whole RiftCodex catalogue is cached at once (riftcodexApi), so a set's
 // listing is a read of that cache — fetching the catalogue first if nothing is
-// cached. English only: RiftCodex has no other language. TCGplayer's group
-// abbreviations ARE Riftbound's set codes (UNL, OGN), so Mass Entry gets the code.
+// cached — and so are the sets RiftCodex lacks, written from TCGplayer
+// (riftboundTcgplayer.js). English only: RiftCodex has no other language.
+// TCGplayer's group abbreviations ARE Riftbound's set codes (UNL, OGN), so Mass
+// Entry gets the code; a set written from TCGplayer gets TCGplayer's own, which
+// for 'RXK/DA' is not the set's code.
 async function listRiftbound(setId) {
   const riftcodexApi = require('./riftcodexApi');
   const id = riftboundId(setId);
   const cards = await riftcodexApi.getCardsBySet(id);
   if (!cards.length) return null;
   const row = await db.get(`SELECT name, release_date, ptcgo_code, total FROM sets WHERE id = ?`, [id]);
+  const abbreviation = await require('./riftboundTcgplayer').tcgplayerAbbreviation(id).catch(() => null);
   return {
     ids: cards.map(c => c.id),
     set: {
@@ -262,7 +266,7 @@ async function listRiftbound(setId) {
       name: (row && row.name) || cards[0].set_name || id,
       release_date: (row && row.release_date) || '',
       total: (row && row.total) || cards.length,
-      tcgplayer_set_code: (row && row.ptcgo_code) || id.slice('riftbound-'.length).toUpperCase(),
+      tcgplayer_set_code: abbreviation || (row && row.ptcgo_code) || id.slice('riftbound-'.length).toUpperCase(),
     },
     source: 'riftcodex',
   };

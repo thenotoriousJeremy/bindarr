@@ -1,0 +1,99 @@
+{
+ "PR": [
+  {
+   "id": "69bc5befd308c64675ca89be",
+   "name": "Bandle Tree",
+   "riftbound_id": "pr-278a-298",
+   "tcgplayer_id": "672073",
+   "collector_number": 278,
+   "attributes": { "energy": null, "might": null, "power": null },
+   "classification": { "type": "Battlefield", "supertype": null, "rarity": "Promo", "domain": ["Colorless"] },
+   "text": { "rich": "<p>You may hide an additional card here.</p>", "plain": "You may hide an additional card here.", "flavour": null },
+   "set": { "set_id": "PR", "label": "Riftbound Promotional Cards" },
+   "media": {
+    "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/538f93a34006c4afaddb890cbc75b4db222f1783-1038x744.png?accountingTag=RB",
+    "artist": "Kudos Productions",
+    "accessibility_text": "Riftbound Battlefield: Bandle Tree. You may hide an additional card here."
+   },
+   "tags": [],
+   "orientation": "landscape",
+   "metadata": { "clean_name": "Bandle Tree", "updated_on": "2026-07-10T22:45:16.195970+00:00", "alternate_art": false, "overnumbered": false, "signature": false },
+   "new": false
+  }
+ ],
+ "RAD_SET": {
+  "id": "6b1000000000000000000000",
+  "name": "Radiance",
+  "set_id": "RAD",
+  "card_count": 4,
+  "tcgplayer_id": "24819",
+  "cardmarket_id": null,
+  "published_on": "2026-10-23T00:00:00"
+ },
+ "RAD": [
+  {
+   "id": "6b1000000000000000000001",
+   "name": "Ekko - Ingenious",
+   "riftbound_id": "rad-061-167",
+   "tcgplayer_id": "722294",
+   "collector_number": 61,
+   "attributes": { "energy": 3, "might": 4, "power": null },
+   "classification": { "type": "Unit", "supertype": "Champion", "rarity": "Rare", "domain": ["Mind"] },
+   "text": { "rich": "", "plain": "", "flavour": null },
+   "set": { "set_id": "RAD", "label": "Radiance" },
+   "media": { "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/test-rad-061-744x1039.png?accountingTag=RB", "artist": null, "accessibility_text": "" },
+   "tags": ["Ekko", "Zaun"],
+   "orientation": "portrait",
+   "metadata": { "clean_name": "Ekko Ingenious", "updated_on": "2026-11-20T00:00:00+00:00", "alternate_art": false, "overnumbered": false, "signature": false },
+   "new": true
+  },
+  {
+   "id": "6b1000000000000000000002",
+   "name": "Ekko - Ingenious (Alternate Art)",
+   "riftbound_id": "rad-061a-167",
+   "tcgplayer_id": "722295",
+   "collector_number": 61,
+   "attributes": { "energy": 3, "might": 4, "power": null },
+   "classification": { "type": "Unit", "supertype": "Champion", "rarity": "Showcase", "domain": ["Mind"] },
+   "text": { "rich": "", "plain": "", "flavour": null },
+   "set": { "set_id": "RAD", "label": "Radiance" },
+   "media": { "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/test-rad-061a-744x1039.png?accountingTag=RB", "artist": null, "accessibility_text": "" },
+   "tags": ["Ekko", "Zaun"],
+   "orientation": "portrait",
+   "metadata": { "clean_name": "Ekko Ingenious Alternate Art", "updated_on": "2026-11-20T00:00:00+00:00", "alternate_art": true, "overnumbered": false, "signature": false },
+   "new": true
+  },
+  {
+   "id": "6b1000000000000000000003",
+   "name": "Calm Rune",
+   "riftbound_id": "rad-r02",
+   "tcgplayer_id": "722281",
+   "collector_number": 2,
+   "attributes": { "energy": null, "might": null, "power": null },
+   "classification": { "type": "Rune", "supertype": "Basic", "rarity": "Common", "domain": ["Calm"] },
+   "text": { "rich": "", "plain": "", "flavour": null },
+   "set": { "set_id": "RAD", "label": "Radiance" },
+   "media": { "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/test-rad-r02-744x1039.png?accountingTag=RB", "artist": null, "accessibility_text": "" },
+   "tags": [],
+   "orientation": "portrait",
+   "metadata": { "clean_name": "Calm Rune", "updated_on": "2026-11-20T00:00:00+00:00", "alternate_art": false, "overnumbered": false, "signature": false },
+   "new": true
+  },
+  {
+   "id": "6b1000000000000000000004",
+   "name": "Jarvan IV - Exemplar of Demacia (Signature)",
+   "riftbound_id": "rad-179*-167",
+   "tcgplayer_id": "724641",
+   "collector_number": 179,
+   "attributes": { "energy": null, "might": null, "power": null },
+   "classification": { "type": "Legend", "supertype": null, "rarity": "Showcase", "domain": ["Body", "Order"] },
+   "text": { "rich": "", "plain": "", "flavour": null },
+   "set": { "set_id": "RAD", "label": "Radiance" },
+   "media": { "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/test-rad-179-744x1039.png?accountingTag=RB", "artist": null, "accessibility_text": "" },
+   "tags": ["Jarvan IV"],
+   "orientation": "portrait",
+   "metadata": { "clean_name": "Jarvan IV Exemplar of Demacia Signature", "updated_on": "2026-11-20T00:00:00+00:00", "alternate_art": false, "overnumbered": false, "signature": true },
+   "new": true
+  }
+ ]
+}

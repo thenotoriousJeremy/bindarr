@@ -273,8 +273,12 @@ async function refreshCatalogue(game, { force = false } = {}) {
 // The sync is replaceable: on a phone (embedded/index.js) the TCGCSV switch is off
 // between its weekly syncs, so the plain one would do nothing and a game switched
 // on would stay empty for up to a week.
+//
+// Riftbound's TCGplayer fallback (riftboundTcgplayer.js) fills its category in
+// through the same one, for the same reason.
 let firstUseSync = (context) => tcgcsv.syncIfUpdatedSafely(context);
 const setFirstUseSync = (fn) => { firstUseSync = fn; };
+const runFirstUseSync = (context) => firstUseSync(context);
 const inflight = new Map();
 function ensureCatalogue(game) {
   if (!isTcgcsvGame(game)) return Promise.resolve(null);
@@ -469,7 +473,7 @@ function forGame(game) {
 }
 
 module.exports = {
-  setFirstUseSync,
+  setFirstUseSync, runFirstUseSync,
   forGame, isTcgcsvGame, tcgcsvGames, categoryOf, activated, cardIdFor, productIdOf,
   setCodes, displayNumber, quotesByProduct, finishOf, normalizeProduct, priceColumns, writePrices, hashOf,
   refreshCatalogue, ensureCatalogue, searchCards, getCardById, listSetCodes, getCardsBySet,

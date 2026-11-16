@@ -12,6 +12,11 @@
 // the weekly set refresh in server.js — and only on an install that has used
 // Riftbound at all. Startup asks RiftCodex for nothing.
 //
+// The sets RiftCodex does not have yet (Radiance, when this was written) come from
+// TCGplayer's catalogue under ids of this same shape (riftboundTcgplayer.js), and
+// every read here brings those rows up to date first. When a refresh brings one of
+// those sets, RiftCodex's rows take it over.
+//
 // CARD IDS are `riftbound-` plus the card's riftbound_id, which is its printed
 // code: set, collector number WITH the printing suffix, set size —
 // 'unl-229*-219' is the signature printing of UNL 229, 'unl-116a-219' an
@@ -330,8 +335,15 @@ function refreshCatalogue() {
     const sets = await fetchAllPages('/sets');
     const cards = normalizeCatalogue(await fetchAllPages('/cards'));
     if (!cards.length) throw new Error('RiftCodex returned no cards');
+    // The sets RiftCodex lacks are written from TCGplayer (riftboundTcgplayer.js).
+    // It is told which sets RiftCodex serves before these rows are cached, so none
+    // of its writes lands in one after, and a set RiftCodex has just added is handed
+    // over once they are: the ids the two share are RiftCodex's rows by then.
+    const fallback = require('./riftboundTcgplayer');
+    await fallback.noteRiftcodex(cards);
     await cacheCards(cards);
     await cacheSets(sets, cards);
+    await fallback.takeOver(cards);
     lastRefreshAt = Date.now();
     console.log(`Riftbound: cached ${cards.length} cards in ${new Set(cards.map(c => c.set_id)).size} sets from RiftCodex.`);
     return cards.length;
@@ -371,6 +383,14 @@ async function fetchAndCacheSets(force = false) {
 }
 
 // --- reading ----------------------------------------------------------------------------
+
+// The rows for the sets RiftCodex lacks, brought up to date from the TCGCSV cache
+// (riftboundTcgplayer.ensure). They are an addition: a failure here never fails the
+// read it comes before.
+const withFallback = (opts) => require('./riftboundTcgplayer').ensure(opts).catch((e) => {
+  console.warn(`Riftbound: the TCGplayer rows for sets RiftCodex lacks are unavailable: ${e.message}`);
+  return null;
+});
 
 // Set tokens as typed ('UNL', 'unl', 'Unleashed') or as stored ('riftbound-unl').
 const setTokens = (list) => list.flatMap(t => {
@@ -412,6 +432,7 @@ async function searchCards({
   }
 
   await ensureCatalogue();
+  await withFallback();
   const where = ['cc.game = ?'];
   const params = [GAME];
   const parts = [
@@ -442,6 +463,11 @@ async function getCardById(cardId) {
   const cached = await db.get(`SELECT * FROM card_cache WHERE id = ?`, [cardId]);
   if (cached) return parseCardRow(cached);
   if (!parseCardId(cardId)) return null;
+  // A card of a set RiftCodex lacks that this install has not written yet (a scan
+  // matched it from a downloaded catalog): written from the TCGCSV cache, no request.
+  await withFallback({ sync: false });
+  const written = await db.get(`SELECT * FROM card_cache WHERE id = ?`, [cardId]);
+  if (written) return parseCardRow(written);
   // The catalogue is cached whole, so an id that is not in it is either newer
   // than the last refresh or not a card at all. Refresh at most hourly for this.
   if (Date.now() - lastRefreshAt < MISS_REFRESH_MS) return null;
@@ -455,16 +481,19 @@ async function getCardById(cardId) {
   return row ? parseCardRow(row) : null;
 }
 
-// Set codes in release order, for the catalog builder's walk.
+// Set codes in release order, for the catalog builder's walk: RiftCodex's, and the
+// ones served from TCGplayer.
 async function listSetCodes() {
   await ensureCatalogue();
+  await withFallback({ waitForSync: true });
   const rows = await db.all(`SELECT id, ptcgo_code FROM sets WHERE game = ? ORDER BY release_date ASC`, [GAME]);
   return rows.map(r => String(r.ptcgo_code || r.id.slice(SET_PREFIX.length)).toLowerCase());
 }
 
-// One set's cached cards, for the catalog builder.
+// One set's cached cards, for the catalog builder and the set's listing.
 async function getCardsBySet(setCode) {
   await ensureCatalogue();
+  await withFallback({ waitForSync: true });
   const sid = `${SET_PREFIX}${String(setCode || '').toLowerCase().replace(/^riftbound-/, '')}`;
   const rows = await db.all(
     `SELECT * FROM card_cache WHERE game = ? AND LOWER(set_id) = ? ORDER BY CAST(number AS INTEGER), number`,
@@ -481,6 +510,7 @@ module.exports = {
   encodeCode,
   decodeCode,
   numberOf,
+  hasPrintingMarker,
   normalizeCard,
   normalizeCatalogue,
   displayImageUrl,

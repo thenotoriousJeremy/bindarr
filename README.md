@@ -274,7 +274,11 @@ is fetched the first time anything needs a Riftbound card, cached, and refreshed
 weekly — and never on an install that has not used Riftbound. Card art is
 hotlinked from Riot's own CDN (`cmsassets.rgpub.io`); none is bundled. Prices are
 TCGplayer market prices via TCGCSV (category 89), matched by each card's TCGplayer
-product id. Scanning works once a Riftbound catalog is built in Admin → Catalogs;
+product id. Sets TCGplayer sells that RiftCodex has not added yet (Radiance, when
+this was written) come from that same TCGplayer data, with TCGplayer's names,
+numbers, rarities and pictures, under the ids RiftCodex will give them; when
+RiftCodex adds a set, its cards take over without anyone's collection changing.
+Scanning works once a Riftbound catalog is built in Admin → Catalogs;
 battlefields are matched as printed, in landscape. Riftbound decks are checked
 against Riot's construction rules (one Champion Legend, a 40+ Main Deck with the
 Chosen Champion, three of a card, twelve runes, three different battlefields,
@@ -472,7 +476,7 @@ Daily is what the free providers publish, so leave it there unless you have a re
 
 ### TCGCSV data sync
 
-Bindarr downloads TCGCSV data (from the project's mirror, below) and stores it in the local SQLite database; app and catalog operations use that cache instead of fetching data for each request. At startup and during scheduled work, Bindarr checks TCGCSV's `last-updated.txt` no more than once every 24 hours and only downloads a new dataset when the timestamp advances. A new dataset is staged until the full sync succeeds, so the last complete cache remains available if a refresh fails, and price refreshes keep using it. Only the Pokémon categories (3 and 85) are synced, plus Riftbound (89) when a collection or list holds a Riftbound card, each of Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood and Star Wars: Unlimited once someone on the install opens that game (their whole card list comes from TCGCSV), and Magic (1) and Lorcana (71) sealed product when an admin turns that on. From the mirror's bundles that is at most three requests per category per new dataset, usually one; walking TCGCSV's own layout it is about 1 + 2 × (number of sets). Only the fields Bindarr reads are stored. A set that TCGCSV answers with a 404 or an error is recorded as empty rather than blocking the sync; a dataset that still has not completed after 24 hours is abandoned and `last-updated.txt` is checked again.
+Bindarr downloads TCGCSV data (from the project's mirror, below) and stores it in the local SQLite database; app and catalog operations use that cache instead of fetching data for each request. At startup and during scheduled work, Bindarr checks TCGCSV's `last-updated.txt` no more than once every 24 hours and only downloads a new dataset when the timestamp advances. A new dataset is staged until the full sync succeeds, so the last complete cache remains available if a refresh fails, and price refreshes keep using it. Only the Pokémon categories (3 and 85) are synced, plus Riftbound (89) once someone on the install has used Riftbound (it carries the sets RiftCodex lacks as well as prices), each of Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood and Star Wars: Unlimited once someone on the install opens that game (their whole card list comes from TCGCSV), and Magic (1) and Lorcana (71) sealed product when an admin turns that on. From the mirror's bundles that is at most three requests per category per new dataset, usually one; walking TCGCSV's own layout it is about 1 + 2 × (number of sets). Only the fields Bindarr reads are stored. A set that TCGCSV answers with a 404 or an error is recorded as empty rather than blocking the sync; a dataset that still has not completed after 24 hours is abandoned and `last-updated.txt` is checked again.
 
 Outbound requests are serialized and spaced by at least 100 ms. If TCGCSV returns HTTP 403, Bindarr logs the response and pauses further TCGCSV requests for 24 hours.
 
