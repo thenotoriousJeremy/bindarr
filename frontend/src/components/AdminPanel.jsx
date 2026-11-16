@@ -4,7 +4,6 @@ import AdminMetricsPanel from './AdminMetricsPanel';
 import Modal from './Modal';
 import CatalogPanel from './CatalogPanel';
 import InstanceSettings from './InstanceSettings';
-import SetupWizard from './SetupWizard';
 import PokemonMigrationBanner from './PokemonMigrationBanner';
 import { currencySymbol } from '../utils/formatPrice';
 import { saveFile } from '../utils/saveFile';
@@ -17,12 +16,13 @@ const formatBytes = (n) => {
   return `${(n / Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${u[i]}`;
 };
 
-function AdminPanel({ user, onUpdateUser, showToast }) {
+// onRunSetup opens App's setup wizard. Admin used to draw a wizard of its own, and
+// App's opened over it as soon as a key was saved in it.
+function AdminPanel({ showToast, onRunSetup }) {
   const { t, locale } = useT();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterText, setFilterText] = useState('');
-  const [showWizard, setShowWizard] = useState(false);
 
   // Add User Form States
   const [newUsername, setNewUsername] = useState('');
@@ -303,14 +303,6 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
   );
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {showWizard && (
-        <SetupWizard 
-          user={user} 
-          onUpdateUser={onUpdateUser} 
-          showToast={showToast} 
-          onClose={() => setShowWizard(false)} 
-        />
-      )}
       {/* Header Info */}
       <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
@@ -318,15 +310,17 @@ function AdminPanel({ user, onUpdateUser, showToast }) {
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{t('admin.subtitle')}</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          {onRunSetup && (
           <button 
             type="button" 
             className="btn btn-secondary btn-sm" 
-            onClick={() => setShowWizard(true)}
+            onClick={onRunSetup}
             style={{ padding: '0.5rem 1rem', height: '34px', fontSize: '0.8rem', border: '1px solid var(--border-glass)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
           >
             <Sparkles size={14} style={{ color: 'var(--accent-yellow)' }} />
             {t('admin.runSetupWizard')}
           </button>
+          )}
 
           <button 
             type="button" 

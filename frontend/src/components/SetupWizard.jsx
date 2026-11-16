@@ -1,12 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Cpu, Download, Check, X, Layers, KeyRound, MapPin, Trash2, Pencil,
   ArrowLeft, ArrowRight, Camera, Database, Swords, LayoutDashboard, Settings as SettingsIcon,
-  Languages,
+  Languages, Library, ListChecks, Package,
 } from 'lucide-react';
 import { GAMES, enabledGames, setGameEnabled, defaultGame, gameLabel } from '../utils/games';
 import { containerTypeKey } from '../utils/cardOptions';
 import { LOCALES, localeName, useT } from '../utils/i18n';
+import { SETUP_STEPS as STEPS, resumeStep, pokemonTcgKeyApplies, keysToSave } from '../utils/setupWizard';
 import Modal from './Modal';
 
 // The games the registry starts switched off (shared/games.json defaultEnabled).
@@ -32,23 +33,40 @@ const OFF_BY_DEFAULT = GAMES.filter(g => g.defaultEnabled === false);
 //
 // Completion lives on the server (app_settings.setup_complete), not in
 // localStorage, so an admin who starts on a laptop and finishes on a phone is not
-// asked twice, and an admin who closes halfway is picked up where they left off
-// after the next login.
+// asked twice. So does the step it is on (app_settings.setup_step, saved on every
+// move), so an admin who closes halfway is picked up where they left off after the
+// next login, on any device.
+//
+// App.jsx holds the one instance: it opens it at login while setup is unfinished,
+// and Admin's "Run Setup Wizard" asks App to open it rather than drawing its own,
+// so there is never a second wizard on top of the first.
 
 // The three container types a first-run admin is most likely to own. The rest are
 // in Storage's own create form, which also asks about layout and sorting.
 const NEW_LOCATION_TYPES = ['Binder', 'Box', 'Deck Box'];
-const STEPS = ['language', 'cards', 'scanning', 'keys', 'storage', 'tour'];
 
-const markComplete = () => fetch('/api/settings', {
+const putSettings = (body) => fetch('/api/settings', {
   method: 'PUT',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ setup_complete: true }),
+  body: JSON.stringify(body),
 });
 
-export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) {
+export default function SetupWizard({ user, onUpdateUser, onClose, showToast, initialStep = 0 }) {
   const { t, locale, setLocale } = useT();
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(() => Math.min(Math.max(0, Number(initialStep) || 0), STEPS.length - 1));
+  // Step saves go out one after another, so a quick Next, Next cannot land out of
+  // order and leave the server on the earlier step. Finishing joins the same queue.
+  const stepSaves = useRef(Promise.resolve());
+  const saveProgress = (body) => {
+    stepSaves.current = stepSaves.current
+      .then(() => putSettings(body))
+      .catch(() => { /* worst case, the wizard reopens a step early */ });
+    return stepSaves.current;
+  };
+  // The install's Pokémon provider, which decides whether the pokemontcg.io key
+  // box is shown at all (utils/setupWizard.js). Unknown until settings load.
+  const [pokemonProvider, setPokemonProvider] = useState(null);
+  const showTcgKey = pokemonTcgKeyApplies(pokemonProvider);
 
   // Step 2: scanning
   const [engine, setEngine] = useState(null);
@@ -60,15 +78,14 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
 
   // Step 3: optional provider keys. Write-only, as in Settings: the server says
   // whether each is saved (user.has_*), never what it is, so these hold only what
-  // is typed now, and an empty box keeps the saved key.
+  // is typed now, and an empty box keeps the saved key. Whatever is typed is saved
+  // on the way out of the step (goTo, finish, close), not only by its button.
   const [tcgKey, setTcgKey] = useState('');
   const [psaToken, setPsaToken] = useState('');
   const [gradedKey, setGradedKey] = useState('');
   const [savingKeys, setSavingKeys] = useState(false);
-  const typedKeys = Object.fromEntries(
-    [['tcg_api_key', tcgKey], ['psa_api_token', psaToken], ['graded_price_api_key', gradedKey]]
-      .filter(([, value]) => value.trim())
-  );
+  const typedKeys = keysToSave({ tcg: tcgKey, psa: psaToken, graded: gradedKey }, { pokemonTcg: showTcgKey });
+  const hasTypedKeys = Object.keys(typedKeys).length > 0;
 
   // Step 4: storage
   const [locations, setLocations] = useState([]);
@@ -97,7 +114,13 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
     .then(rows => setLocations(Array.isArray(rows) ? rows : []))
     .catch(() => { /* the storage step degrades to its create form */ });
 
-  useEffect(() => { load(); loadLocations(); }, []);
+  // Once: the provider does not change while the wizard is open.
+  const loadProvider = () => fetch('/api/settings')
+    .then(r => r.ok ? r.json() : null)
+    .then(s => setPokemonProvider(s?.pokemon_provider || null))
+    .catch(() => { /* the keys step leaves the pokemontcg.io box out */ });
+
+  useEffect(() => { load(); loadLocations(); loadProvider(); }, []);
 
   // Poll while a download runs, from whatever step the user is on: these are tens
   // of megabytes, and a bar that stops moving is the only way to tell a stalled
@@ -128,8 +151,12 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
     } catch (e) { showToast?.(e.message); }
   };
 
+  // True when there is nothing left unsaved: nothing was typed, or it saved. A
+  // failed save says why and returns false, and Next, Back, Done and Skip stay
+  // put, so a typed key is never dropped without a word. Clearing the box is the
+  // way past.
   const saveKeys = async () => {
-    if (!Object.keys(typedKeys).length) return;
+    if (!hasTypedKeys) return true;
     setSavingKeys(true);
     try {
       const r = await fetch('/api/auth/settings', {
@@ -142,8 +169,28 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
       onUpdateUser?.(j.user);
       setTcgKey(''); setPsaToken(''); setGradedKey('');
       showToast?.(t('setup.keys.saved'));
-    } catch (e) { showToast?.(e.message); }
-    finally { setSavingKeys(false); }
+      return true;
+    } catch (e) {
+      showToast?.(e.message);
+      return false;
+    } finally { setSavingKeys(false); }
+  };
+
+  // Every way off a step goes through here, so leaving the keys step saves what is
+  // typed in it, and the server learns which step to reopen at.
+  const goTo = async (next) => {
+    if (savingKeys || !(await saveKeys())) return;
+    setStep(next);
+    saveProgress({ setup_step: STEPS[next] });
+  };
+
+  // The close button, Escape and phone Back: a typed key is saved on the way out,
+  // and the wizard closes even if that fails (the toast says the key was not
+  // saved), so it can never trap anyone. Still unfinished, the next login reopens
+  // it on this step, which was saved when it was reached.
+  const close = async () => {
+    if (!savingKeys) await saveKeys();
+    onClose();
   };
 
   const addLocation = async () => {
@@ -184,8 +231,10 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
     } catch (e) { showToast?.(e.message); }
   };
 
+  // Done and Skip setup: marked finished for good, after any typed key is saved.
   const finish = async () => {
-    try { await markComplete(); } catch { /* worst case, the wizard offers itself again */ }
+    if (savingKeys || !(await saveKeys())) return;
+    await saveProgress({ setup_complete: true, setup_step: '' });   // a failure: the wizard offers itself again
     onClose();
   };
 
@@ -457,14 +506,18 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
         title={t('setup.keys.title')}
         sub={t('setup.keys.sub')}
       />
-      <div>
-        <div style={label}>{t('setup.keys.tcgTitle')}</div>
-        <p style={{ ...body, fontSize: '0.74rem', margin: '0.2rem 0 0.35rem' }}>
-          {t('setup.keys.tcgBody', { from: 1000, to: 20000 })}
-          {' '}<A href="https://dev.pokemontcg.io/">dev.pokemontcg.io</A>
-        </p>
-        <input type="password" value={tcgKey} onChange={(e) => setTcgKey(e.target.value)} style={input} placeholder={user?.has_tcg_api_key ? t('settings.keyReplacePlaceholder') : t('setup.keys.pasteKey')} />
-      </div>
+      {/* Only where it does something: an install still pinned to pokemontcg.io.
+          TCGdex, the default since 1.8, needs no key, so the box is left out. */}
+      {showTcgKey && (
+        <div>
+          <div style={label}>{t('setup.keys.tcgTitle')}</div>
+          <p style={{ ...body, fontSize: '0.74rem', margin: '0.2rem 0 0.35rem' }}>
+            {t('setup.keys.tcgBody', { from: 1000, to: 20000 })}
+            {' '}<A href="https://dev.pokemontcg.io/">{t('settings.apiKeyGetOne')}</A>
+          </p>
+          <input type="password" value={tcgKey} onChange={(e) => setTcgKey(e.target.value)} style={input} placeholder={user?.has_tcg_api_key ? t('settings.keyReplacePlaceholder') : t('setup.keys.pasteKey')} />
+        </div>
+      )}
       <div>
         <div style={label}>{t('setup.keys.psaTitle')}</div>
         <p style={{ ...body, fontSize: '0.74rem', margin: '0.2rem 0 0.35rem' }}>
@@ -481,9 +534,12 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
         </p>
         <input type="password" value={gradedKey} onChange={(e) => setGradedKey(e.target.value)} style={input} placeholder={user?.has_graded_price_api_key ? t('settings.keyReplacePlaceholder') : t('setup.keys.pasteKey')} />
       </div>
-      <button className="btn btn-primary btn-sm" onClick={saveKeys} disabled={savingKeys || !Object.keys(typedKeys).length} style={{ alignSelf: 'flex-start' }}>
-        {savingKeys ? t('setup.keys.saving') : t('setup.keys.save')}
-      </button>
+      <div>
+        <button className="btn btn-primary btn-sm" onClick={saveKeys} disabled={savingKeys || !hasTypedKeys}>
+          {savingKeys ? t('setup.keys.saving') : t('setup.keys.save')}
+        </button>
+        <p style={{ ...body, fontSize: '0.74rem', marginTop: '0.35rem' }}>{t('setup.keys.savedOnLeave')}</p>
+      </div>
     </>
   );
 
@@ -572,6 +628,16 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
         <Tip icon={<Database size={15} />} title={t('nav.collection')}>
           {t('setup.tour.collection')}
         </Tip>
+        {/* Collection's other views (CollectionViews.jsx), each also a tab of its own. */}
+        <Tip icon={<Library size={15} />} title={t('nav.browse')}>
+          {t('setup.tour.browse')}
+        </Tip>
+        <Tip icon={<ListChecks size={15} />} title={t('nav.lists')}>
+          {t('setup.tour.lists')}
+        </Tip>
+        <Tip icon={<Package size={15} />} title={t('nav.sealed')}>
+          {t('setup.tour.sealed')}
+        </Tip>
         <Tip icon={<MapPin size={15} />} title={t('nav.storage')}>
           {t('setup.tour.storage')}
         </Tip>
@@ -592,7 +658,7 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
   const last = step === STEPS.length - 1;
 
   return (
-    <Modal onClose={onClose} label={t('setup.dialogLabel')} closeOnBackdrop={false} style={{
+    <Modal onClose={close} label={t('setup.dialogLabel')} closeOnBackdrop={false} style={{
         width: '100%', maxWidth: 580, maxHeight: '90vh', display: 'flex', flexDirection: 'column',
         padding: '1.25rem', background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)',
         borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-glow)',
@@ -610,7 +676,7 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
               {t(`setup.step.${STEPS[step]}`)} · {t('setup.stepCount', { step: step + 1, total: STEPS.length })}
             </span>
           </div>
-          <button type="button" onClick={onClose} aria-label={t('common.close')}
+          <button type="button" onClick={close} aria-label={t('common.close')}
             style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
             <X size={18} />
           </button>
@@ -621,15 +687,15 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
-          <button className="btn btn-secondary btn-sm" onClick={finish}>{t('setup.skip')}</button>
+          <button className="btn btn-secondary btn-sm" onClick={finish} disabled={savingKeys}>{t('setup.skip')}</button>
           <div style={{ display: 'flex', gap: '0.4rem' }}>
             {step > 0 && (
-              <button className="btn btn-secondary btn-sm" onClick={() => setStep(s => s - 1)}
+              <button className="btn btn-secondary btn-sm" onClick={() => goTo(step - 1)} disabled={savingKeys}
                 style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                 <ArrowLeft size={13} /> {t('common.back')}
               </button>
             )}
-            <button className="btn btn-primary btn-sm" onClick={() => last ? finish() : setStep(s => s + 1)}
+            <button className="btn btn-primary btn-sm" onClick={() => last ? finish() : goTo(step + 1)} disabled={savingKeys}
               style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
               {last ? t('setup.done') : t('common.next')} <ArrowRight size={13} />
             </button>
@@ -639,20 +705,20 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
   );
 }
 
-// Whether this install still owes its admin the wizard. One server-side flag, so
-// the answer is the same in every browser and survives a cleared localStorage.
+// Whether this install still owes its admin the wizard, and at which step: null
+// when it is finished or skipped, otherwise the step it was closed on. Server-side,
+// so the answer is the same in every browser and survives a cleared localStorage.
 //
 // Lives beside the wizard rather than in its own module because it is the question
 // "should the wizard open", and App.jsx is the only caller. Same trade utils/i18n
 // .jsx makes for its non-component exports.
 // eslint-disable-next-line react-refresh/only-export-components
-export async function setupNeeded() {
+export async function setupResumeStep() {
   try {
     const r = await fetch('/api/settings');
-    if (!r.ok) return false;   // not logged in, or the API is unhappy: say nothing
-    const s = await r.json();
-    return !s.setup_complete;
+    if (!r.ok) return null;   // not logged in, or the API is unhappy: say nothing
+    return resumeStep(await r.json());
   } catch {
-    return false;
+    return null;
   }
 }
