@@ -155,6 +155,16 @@ export function tcgplayerCardName(name) {
   return foldName([s, ...keep].join(' ').replace(/\s+/g, ' '));
 }
 
+// The Gundam Card Game limits copies by card NUMBER (GD01-001), not by name: a
+// dozen different Units are all called "Gundam". A parallel printing keeps its
+// number; a card without one falls back to its name. Resources fill the separate
+// 10-card resource deck and have no copy limit.
+const gundamCardKey = (card) => {
+  const number = String((card && card.number) || '').trim().toUpperCase();
+  return number || tcgplayerCardName(card && card.name);
+};
+const isGundamResource = (card) => /\bresource\b/i.test(String((card && card.supertype) || ''));
+
 // The champion a Legend or champion unit belongs to: the name before its title,
 // else its first tag.
 function rbChampion(card) {
@@ -354,6 +364,16 @@ export const DECK_GAMES = {
     anyPrinting: true,
     formats: [{ name: 'Premier' }, { name: 'Twin Suns' }, { name: 'Casual' }],
   },
+  gundam: {
+    // 50 in the main deck, at most 4 of a card number; the 10-card resource deck
+    // rides in the same list. The two-colour limit is not checked.
+    rules: { size: { min: 50 }, copies: 4 },
+    unlimited: isGundamResource,
+    copyKey: gundamCardKey,
+    sameCard: (a, b) => gundamCardKey(a) === gundamCardKey(b),
+    anyPrinting: true,
+    formats: [{ name: 'Standard' }, { name: 'Casual' }],
+  },
 };
 
 // A game this table does not know yet still gets the copy limit every game here
@@ -524,15 +544,19 @@ export function deckWarnings({ game, format, cards }) {
     if (max != null && total > max) warnings.push({ code: 'size_max', max, actual: total });
   }
 
-  // Copies are counted by name, across every printing of it.
-  const byName = new Map();
+  // Copies are counted per card as the game defines one, across every printing of
+  // it: by name (copyKey's default), by name less TCGplayer's printing suffix for
+  // the TCGplayer-catalogue games, by card number for Gundam. The same key the
+  // server enforces additions with (utils/deckRules.validateDeckAddition), so a
+  // warning never disagrees with what an add was allowed to do.
+  const byCard = new Map();
   for (const c of list) {
-    const key = foldName(c.name);
-    const seen = byName.get(key);
+    const key = copyKey(c, game);
+    const seen = byCard.get(key);
     if (seen) seen.count += Number(c.quantity);
-    else byName.set(key, { card: c, count: Number(c.quantity) });
+    else byCard.set(key, { card: c, count: Number(c.quantity) });
   }
-  for (const { card, count } of byName.values()) {
+  for (const { card, count } of byCard.values()) {
     const limit = copyLimit(card, rules);
     if (count > limit) warnings.push({ code: 'copy_limit', name: card.name, count, limit });
   }

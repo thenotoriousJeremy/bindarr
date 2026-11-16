@@ -61,6 +61,10 @@ function rarities() {
   assert.deepStrictEqual(names(sortCards(onepiece, [{ by: 'rarity', dir: 'desc' }])),
     ['Treasure Rare', 'Secret Rare', 'Special Card', 'Super Rare', 'Leader', 'Rare', 'Uncommon', 'Common'],
     "One Piece's rarities sort rarest first");
+  // "Legend Rare" is not "Legendary": it used to read as plain Rare.
+  const gundam = ['Common', 'Legend Rare', 'Rare', 'Uncommon', 'Promo'].map(r => ({ name: r, rarity: r }));
+  assert.deepStrictEqual(names(sortCards(gundam, [{ by: 'rarity', dir: 'desc' }])),
+    ['Legend Rare', 'Promo', 'Rare', 'Uncommon', 'Common'], "Gundam's rarities sort rarest first");
   console.log('PASS: rarity ranks cover Lorcana, Riftbound and the TCGplayer-catalogue games, the rest unchanged');
 }
 

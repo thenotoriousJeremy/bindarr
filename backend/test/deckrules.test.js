@@ -241,6 +241,34 @@ async function testRuleTable() {
       assert.strictEqual(R.sameCard(tailor, { card_id: 'l2', name: 'Mickey Mouse - Brave Little Tailor' }, 'lorcana', true), true);
       assert.strictEqual(R.sameCard(tailor, { card_id: 'l3', name: 'Mickey Mouse - True Friend' }, 'lorcana', true), false);
     }],
+    // --- Gundam: the copy limit is per card NUMBER, and Resources are exempt ---
+    ['Gundam: two Units both called Gundam are different cards; a parallel is the same card', () => {
+      const unit = (number, extra = {}) => ({ id: `gundam-${number}`, name: 'Gundam', number, supertype: 'Unit', subtypes: [], game: 'gundam', ...extra });
+      const resource = { id: 'gundam-res', name: 'Resource', number: 'R-001', supertype: 'Resource', subtypes: [], game: 'gundam' };
+      const deck = (cards) => R.deckWarnings({ game: 'gundam', format: 'Standard', cards });
+      // `n` more cards, four of each of as many Zaku numbers as it takes.
+      const filler = (n) => Array.from({ length: Math.ceil(n / 4) }, (_, i) =>
+        inDeck(unit(`GD01-${100 + i}`, { name: 'Zaku II' }), Math.min(4, n - i * 4)));
+      // 4 + 4 of two different "Gundam" Units, 42 more and the 10-card resource deck: legal.
+      assert.deepStrictEqual(deck([inDeck(unit('GD01-001'), 4), inDeck(unit('GD01-008'), 4),
+        ...filler(42), inDeck(resource, 10)]), []);
+      // A fifth GD01-001, the parallel printing included, is one too many.
+      assert.deepStrictEqual(deck([inDeck(unit('GD01-001'), 3), inDeck(unit('gd01-001', { id: 'gundam-p', name: 'Gundam (Parallel)' }), 2),
+        ...filler(45)]), [{ code: 'copy_limit', name: 'Gundam', count: 5, limit: 4 }]);
+      assert.deepStrictEqual(deck([inDeck(unit('GD01-001'), 4)]), [{ code: 'size_min', min: 50, actual: 4 }]);
+      assert.strictEqual(R.sameCard({ card_id: 'gundam-1', name: 'Gundam', number: 'GD01-001' },
+        { card_id: 'gundam-2', name: 'Gundam (Parallel)', number: 'GD01-001' }, 'gundam', true), true);
+      assert.strictEqual(R.sameCard({ card_id: 'gundam-1', name: 'Gundam', number: 'GD01-001' },
+        { card_id: 'gundam-3', name: 'Gundam', number: 'GD01-008' }, 'gundam', true), false);
+      assert.deepStrictEqual([R.defaultFormat('gundam'), R.defaultTargetSize('gundam', 'Standard')], ['Standard', 50]);
+    }],
+    ['Yu-Gi-Oh!: warnings count printings that differ only by suffix as one card, as additions do', () => {
+      const dm = (id, name) => ({ id, name, supertype: 'Normal Monster', subtypes: [], game: 'yugioh' });
+      const w = R.deckWarnings({ game: 'yugioh', format: 'Advanced', cards: [
+        inDeck(dm('yugioh-1', 'Dark Magician'), 2), inDeck(dm('yugioh-2', 'Dark Magician (Alternate Art)'), 2),
+        inDeck(dm('yugioh-3', 'Pot of Greed'), 36)] });
+      assert.deepStrictEqual(w.filter(x => x.code === 'copy_limit').map(x => [x.count, x.limit]), [[4, 3], [36, 3]]);
+    }],
     ['Pokémon is always exact, whatever the deck says', () => {
       assert.strictEqual(R.sameCard({ card_id: 'p1', name: 'Pikachu' }, { card_id: 'p2', name: 'Pikachu' }, 'pokemon', true), false);
       assert.deepStrictEqual([R.supportsAnyPrinting('pokemon'), R.defaultAnyPrinting('pokemon')], [false, false]);

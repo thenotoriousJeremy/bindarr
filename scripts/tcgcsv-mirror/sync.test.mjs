@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(HERE, 'sync.mjs');
-const { productsDue } = await import('./sync.mjs');
+const { productsDue, CATEGORY_NAMES } = await import('./sync.mjs');
 
 const LAST_UPDATED = '2026-11-06T20:05:50+0000\n';
 const envelope = (results) => JSON.stringify({ totalItems: results.length, success: true, errors: [], results });
@@ -339,6 +339,17 @@ test('products are due for a new, changed or recently published group', async ()
   const rotating = { ...old, groupId: [7, 8, 9, 10, 11, 12, 13].find(n => n % 7 === day) };
   assert.equal(productsDue(rotating, { previous: new Map([[rotating.groupId, '2020-01-01']]), haveFile: true, now }), true,
     'every group once a week');
+});
+
+test('the name check of each optional category takes its own game and no other', () => {
+  // TCGplayer's names, as its categories list words them.
+  const names = { 2: 'YuGiOh', 62: 'Flesh & Blood TCG', 63: 'Digimon Card Game', 68: 'One Piece Card Game',
+    79: 'Star Wars: Unlimited', 86: 'Gundam Card Game' };
+  for (const [id, re] of Object.entries(CATEGORY_NAMES)) {
+    for (const [other, name] of Object.entries(names)) {
+      assert.equal(re.test(name), other === id, `category ${id} against "${name}"`);
+    }
+  }
 });
 
 test('optional categories are checked by name and only taken while they fit the cap', async () => {

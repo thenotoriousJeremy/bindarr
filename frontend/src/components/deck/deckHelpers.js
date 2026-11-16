@@ -88,6 +88,9 @@ const TCGPLAYER_GROUPS = {
   fab: [['Hero', /hero/i], ['Equipment', /equipment|weapon/i], ['Attack', /attack/i], ['Defense', /defen[cs]e/i],
     ['Action', /action/i], ['Instant', /instant/i]],
   swu: [['Leader', /leader/i], ['Base', /\bbase\b/i], ['Unit', /unit/i], ['Upgrade', /upgrade/i], ['Event', /event/i]],
+  // Resources are the separate 10-card resource deck, kept in the same list.
+  gundam: [['Unit', /unit/i], ['Pilot', /pilot/i], ['Command', /command/i], ['Base', /\bbase\b/i],
+    ['Resource', /resource/i]],
 };
 const tcgplayerGroup = (deckGame, card) => {
   const type = `${card.supertype || ''} ${(card.subtypes || []).join(' ')}`;

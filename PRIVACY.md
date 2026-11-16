@@ -55,7 +55,7 @@ details. Each is governed by its own privacy policy.
 | Lorcast | `api.lorcast.com` | Disney Lorcana cards, sets and prices | Search terms, set and card ids; price refreshes for the Lorcana cards you own |
 | RiftCodex | `api.riftcodex.com` | The Riftbound card list, downloaded whole on first use and refreshed weekly | Nothing beyond the request |
 | MTGJSON | `mtgjson.com` | Preconstructed Magic decks and Secret Lair drops, when you browse or import them | Which deck |
-| TCGplayer prices, through the project's TCGCSV mirror | `raw.githubusercontent.com` (GitHub) | Daily price files, so installs never contact TCGCSV themselves; the card lists of the games served from TCGplayer's catalogue (Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood, Star Wars: Unlimited) once one is switched on, and of the Pokémon cards TCGdex lacks | Which price files are downloaded follows the sets your collection and lists hold (and sealed products, if enabled); no card list. `TCGCSV_BASE_URL` can point it elsewhere |
+| TCGplayer prices, through the project's TCGCSV mirror | `raw.githubusercontent.com` (GitHub) | Daily price files, so installs never contact TCGCSV themselves; the card lists of the games served from TCGplayer's catalogue (Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood, Star Wars: Unlimited, Gundam) once one is switched on, and of the Pokémon cards TCGdex lacks | Which price files are downloaded follows the sets your collection and lists hold (and sealed products, if enabled); no card list. `TCGCSV_BASE_URL` can point it elsewhere |
 
 Price refreshes name the cards you own, by id or by set and number; quantities,
 conditions, prices paid and storage locations never go with them.
