@@ -34,11 +34,12 @@ for (const [key, value] of Object.entries(DEVICE_ENV)) {
 // owned each new TCGCSV version is every Pokémon group again: well over a
 // thousand requests, over whatever connection the phone has. So the switch a
 // server uses to turn the sync off (tcgcsvApi.syncIfUpdated reads it on every
-// call) stays on here, and syncTcgcsv() below lifts it for two moments only: the
-// weekly check, and the product-map build the Pokémon scan download starts. The
-// hourly price sweep prices from whatever version is cached, which is what it
-// does on a server when a sync fails. A switch someone else set (a test, a
-// developer) is theirs, and is left alone.
+// call) stays on here, and syncTcgcsv() below lifts it for three moments only:
+// the weekly check, the product-map build the Pokémon scan download starts, and
+// the first use of a game served from TCGplayer's catalogue. The hourly price
+// sweep prices from whatever version is cached, which is what it does on a server
+// when a sync fails. A switch someone else set (a test, a developer) is theirs,
+// and is left alone.
 const TCGCSV_SWITCH = 'BINDARR_DISABLE_TCGCSV_SYNC';
 const ownsTcgcsvSwitch = process.env[TCGCSV_SWITCH] === undefined;
 if (ownsTcgcsvSwitch) process.env[TCGCSV_SWITCH] = '1';
@@ -186,9 +187,42 @@ async function dailySetCheck() {
   await require('../utils/compartmentSort').loadSetsCache(db);
 }
 
+// Each TCGCSV sync the phone makes is a background unit (./units.js), like the
+// product map's build: its reads and writes take turns with requests, and its
+// downloads go out with the turn let go (lock.outside), as the exchange-rate fetch
+// does, so no request is queued behind the mirror. tcgcsvApi makes every request
+// through its client's get(), wrapped here for that: while a sync unit holds the
+// turn, a request lets it go for as long as the download takes.
+let tcgcsvSyncUnit = null;
+const tcgcsvClient = require('../tcgcsvApi').client;
+const getOverTheNetwork = tcgcsvClient.get;
+tcgcsvClient.get = function getOutsideTheTurn(...args) {
+  const send = () => getOverTheNetwork.apply(this, args);
+  const unit = tcgcsvSyncUnit;
+  return unit && lock.holder() === unit ? lock.outside(unit, send) : send();
+};
+
+// One sync unit at a time, in the order asked. Two at once would deadlock:
+// syncIfUpdated hands a second caller the run already going, and a second unit
+// waiting on that run while holding the turn would never let the first back in.
+let tcgcsvTurns = Promise.resolve();
+function inTcgcsvTurn(name, job) {
+  const run = tcgcsvTurns.then(() => background(name, async (unit) => {
+    tcgcsvSyncUnit = unit;
+    try {
+      return await job(unit);
+    } finally {
+      tcgcsvSyncUnit = null;
+    }
+  }));
+  tcgcsvTurns = run.catch(() => {});
+  return run;
+}
+
 // The TCGCSV sync with the switch lifted (top of this file). tcgcsvApi reads the
 // switch synchronously when the call starts, so it is lifted for exactly that
-// call: anything else that asks meanwhile still prices from the cache.
+// call: anything else that asks meanwhile still prices from the cache. Called
+// only inside a TCGCSV turn (inTcgcsvTurn).
 function syncTcgcsv(context, options) {
   const tcgcsv = require('../tcgcsvApi');
   if (!ownsTcgcsvSwitch) return tcgcsv.syncIfUpdatedSafely(context, options);
@@ -212,12 +246,22 @@ async function syncTcgcsvForTheWeek(context, options) {
 
 // A game served from TCGplayer's catalogue (Yu-Gi-Oh!, One Piece...) switched on
 // for the first time syncs its category now, with the switch lifted, instead of
-// staying empty until the weekly sync (tcgcsvGameApi.setFirstUseSync).
-require('../tcgcsvGameApi').setFirstUseSync((context) => syncTcgcsvForTheWeek(context));
+// staying empty until the weekly sync (tcgcsvGameApi.setFirstUseSync). Not inside
+// the request that asked, which would hold every other request through the sync
+// and the thousands of card rows written after it: the catalogue is brought up to
+// date in a TCGCSV turn of its own, while the request answers from the cache and
+// says so (tcgcsvGameApi.setBackgroundUpdates). The first-use sync runs inside
+// that turn, so it is the plain call here, not a turn of its own.
+const tcgcsvGames = require('../tcgcsvGameApi');
+tcgcsvGames.setFirstUseSync((context) => syncTcgcsvForTheWeek(context));
+tcgcsvGames.setBackgroundUpdates((game, update) => inTcgcsvTurn(`${game} catalogue`, () => update()));
 
 async function weeklyTcgcsv() {
   if (!(await due('tcgcsv_synced_at', WEEK))) return;
-  await syncTcgcsvForTheWeek('the device weekly sync');
+  // Asked again in its turn: a sync queued ahead of it may have been this week's.
+  await inTcgcsvTurn('TCGCSV weekly sync', async () => {
+    if (await due('tcgcsv_synced_at', WEEK)) await syncTcgcsvForTheWeek('the device weekly sync');
+  });
 }
 
 // Deleted cards past their 30 days in the trash (utils/collectionTrash.js), as
@@ -249,9 +293,10 @@ function refreshFx() {
 // starts and a provider switch in Settings restarts. Its build writes one
 // transaction per TCGCSV group, from the cached TCGCSV data, for a minute or two
 // on a phone; so it runs as a background unit, yielding to requests between
-// groups (db.withTransaction above). Its network comes first, outside the lock:
-// the TCGCSV data it is built from, and TCGdex's Japanese set list, which tcgdexApi
-// keeps in memory for the build to read.
+// groups (db.withTransaction above). Its data comes first: the TCGCSV data it is
+// built from, synced in a TCGCSV turn (downloads outside the lock), then TCGdex's
+// Japanese set list, outside the lock, which tcgdexApi keeps in memory for the
+// build to read.
 const productMap = require('../tcgplayerCatalog');
 const startProductMapBuild = productMap.start;
 const productMapSummary = productMap.summary;
@@ -262,7 +307,7 @@ productMap.start = function startOnDevice(game = 'pokemon') {
   if (productMapQueued || productMap.state()) throw new Error('the product map is already building');
   productMapQueued = { game, phase: 'queued', done: 0, total: 0, rows: 0, message: '' };
   (async () => {
-    await syncTcgcsvForTheWeek('product map', { explicit: true });
+    await inTcgcsvTurn('product map data', () => syncTcgcsvForTheWeek('product map', { explicit: true }));
     if (game === 'pokemon') await require('../tcgdexApi').listSets('ja').catch(() => {});
     await background('product map', async () => {
       productMapQueued = null;

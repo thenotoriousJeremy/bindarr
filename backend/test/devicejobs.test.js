@@ -12,12 +12,14 @@ const { embedded, db, cleanup } = loadEmbedded('devicejobs', { ownTcgcsvSwitch: 
 const tcgcsv = require('../src/tcgcsvApi');
 const tcgdex = require('../src/tcgdexApi');
 
-// What the device asked TCGCSV for, and with the switch in which position.
+// What the device asked TCGCSV for, and with the switch in which position. A
+// test that needs the sync to do something sets syncImpl.
 const syncCalls = [];
 let syncResult = { updated: false, skipped: 'no-demand', requests: 0 };
+let syncImpl = null;
 tcgcsv.syncIfUpdatedSafely = async (context, options) => {
   syncCalls.push({ context, options, switch: process.env.BINDARR_DISABLE_TCGCSV_SYNC });
-  return syncResult;
+  return syncImpl ? syncImpl(context, options) : syncResult;
 };
 tcgdex.listSets = async () => [];
 
@@ -47,6 +49,13 @@ async function until(what, check, ms = 3000) {
     await sleep(20);
   }
 }
+
+// Resolves with the promise's value, or 'still waiting' after `ms`.
+const within = (promise, ms) => {
+  let timer;
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve('still waiting'), ms); });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+};
 
 // Every game's set table already filled and refreshed this week, so the launch's
 // set step reads the database and asks no provider anything.
@@ -106,8 +115,9 @@ async function testStopAndRestart() {
   assert.deepStrictEqual(await syncIfUpdated(), { updated: false, disabled: true });
 }
 
-// The Pokémon product map builds as a background unit: its data first, outside
-// the turn, then its transactions in turn with requests (MOB-02, MOB-09).
+// The Pokémon product map builds as a background unit: its data first, in a
+// TCGCSV turn of its own, then its transactions in turn with requests (MOB-02,
+// MOB-09).
 async function seedTcgcsvCache() {
   await db.run(`UPDATE app_settings SET tcgcsv_data_version = 'v1' WHERE id = 1`);
   const rows = {
@@ -145,8 +155,9 @@ async function testProductMapIsABackgroundUnit() {
   assert.strictEqual(queued.phase, 'queued');
   assert.throws(() => embedded.productMap.start('pokemon'), /already building/);
   await sleep(100);
-  assert.deepStrictEqual(syncCalls.map(c => [c.context, c.switch, !!(c.options && c.options.explicit)]),
-    [['product map', undefined, true]], 'its TCGCSV data is fetched first, before its turn');
+  // Its sync writes the TCGCSV cache, so it waits its turn rather than writing
+  // under a request (its downloads let the turn go again: testFirstUse...).
+  assert.deepStrictEqual(syncCalls, [], 'its TCGCSV sync does not run under the request holding the turn');
   assert.strictEqual((await embedded.productMap.summary('pokemon')).progress.phase, 'queued',
     'reported as building while it waits, so the scan screen keeps polling');
   assert.strictEqual((await db.get(`SELECT COUNT(*) n FROM tcgplayer_catalog`)).n, 0, 'nothing written during the request');
@@ -154,11 +165,87 @@ async function testProductMapIsABackgroundUnit() {
   release.open();
   await request;
   await until('the product map', async () => !(await embedded.productMap.summary('pokemon')).progress);
+  assert.deepStrictEqual(syncCalls[0] && [syncCalls[0].context, syncCalls[0].switch, !!(syncCalls[0].options && syncCalls[0].options.explicit)],
+    ['product map', undefined, true], 'its TCGCSV data is synced first, explicitly, with the switch lifted');
   assert.strictEqual((await db.get(`SELECT COUNT(*) n FROM tcgplayer_catalog WHERE game = 'pokemon'`)).n, 3);
   // The build's own sync call, inside its turn, met the switch and did not wait on
   // the network (the spy saw it with the switch on).
   assert.deepStrictEqual(syncCalls.slice(1).map(c => c.switch), ['1']);
   assert.ok(Date.now() - Number(await state('tcgcsv_synced_at')) < 60 * 1000, 'the product map sync counts as this week\'s');
+}
+
+// A game served from TCGplayer's catalogue, opened for the first time: its
+// category is synced and its cards written in a TCGCSV turn of their own, while
+// the request that asked answers at once from the cache and says the list is
+// still coming. The download goes out with the turn let go, so the app is not
+// queued behind it, and a later request finds the cards (MOB-02, MOB-09).
+const YGO = 2;   // its TCGplayer category (shared/games.json)
+async function testFirstUseIsABackgroundUnit() {
+  const downloading = gate();
+  const download = gate();
+  tcgcsv.client.defaults.adapter = async (config) => {
+    downloading.open();
+    await download.promise;
+    return { data: 'v1', status: 200, statusText: 'OK', headers: {}, config };
+  };
+  syncCalls.length = 0;
+  syncImpl = async () => {
+    // The download, through tcgcsvApi's own client as the real sync makes it...
+    await tcgcsv.client.get('/last-updated.txt');
+    // ...then the category into the cached version, in one transaction.
+    await db.withTransaction(async () => {
+      const put = (p, rows) => db.run(
+        `INSERT OR REPLACE INTO tcgcsv_cache (path, data_version, results_json) VALUES (?, 'v1', ?)`, [p, JSON.stringify(rows)]);
+      await put(`/tcgplayer/${YGO}/groups`, [{ groupId: 501, name: 'Legend of Blue Eyes White Dragon', abbreviation: 'LOB', publishedOn: '2002-03-08' }]);
+      await put(`/tcgplayer/${YGO}/501/products`, [{ productId: 5011, name: 'Dark Magician', number: 'LOB-005' }]);
+      await put(`/tcgplayer/${YGO}/501/prices`, [{ productId: 5011, subTypeName: 'Unlimited', marketPrice: 30 }]);
+    });
+    return { updated: true, dataVersion: 'v1' };
+  };
+
+  const first = await within(call('GET', '/api/search?game=yugioh&name=Dark'), 2000);
+  assert.notStrictEqual(first, 'still waiting', 'the search answers without waiting for the sync');
+  assert.strictEqual(first.status, 200);
+  assert.deepStrictEqual(first.json, [], 'from the cache, which holds no Yu-Gi-Oh! card yet');
+  assert.strictEqual(first.headers['x-catalogue-pending'], '1', 'and says the list is still coming');
+
+  // The sync is at its download, with the turn let go: requests are answered.
+  assert.strictEqual(await within(downloading.promise.then(() => 'downloading'), 2000), 'downloading');
+  const during = await within(call('GET', '/api/sets?game=yugioh'), 2000);
+  assert.notStrictEqual(during, 'still waiting', 'a request is not queued behind the download');
+  assert.deepStrictEqual(during.json, []);
+  assert.strictEqual(during.headers['x-catalogue-pending'], '1');
+  const note = await within(call('POST', '/api/notes', { title: 'written during the download' }), 2000);
+  assert.strictEqual(note.status, 201, 'a write too');
+  assert.deepStrictEqual(syncCalls.map(c => [c.context, c.switch]), [['first use of Yu-Gi-Oh!', undefined]],
+    'one sync, with the switch lifted, however many requests ask meanwhile');
+
+  download.open();
+  await until('the Yu-Gi-Oh! cards', async () => (await call('GET', '/api/search?game=yugioh&name=Dark')).json.length === 1);
+  const found = await call('GET', '/api/search?game=yugioh&name=Dark');
+  assert.strictEqual(found.json[0].id, 'yugioh-5011');
+  assert.strictEqual(found.json[0].price_normal, 30);
+  assert.strictEqual(found.headers['x-catalogue-pending'], undefined, 'and no longer says it is coming');
+  const sets = await call('GET', '/api/sets?game=yugioh');
+  assert.deepStrictEqual(sets.json.map(s => s.id), ['yugioh-lob']);
+  assert.strictEqual(sets.headers['x-catalogue-pending'], undefined);
+  assert.strictEqual(syncCalls.length, 1, 'nothing synced twice');
+  assert.ok(Date.now() - Number(await state('tcgcsv_synced_at')) < 60 * 1000, "the first use's sync counts as this week's");
+
+  // A first use that brings nothing (no network, say) is tried once: the requests
+  // after it answer from the cache, and do not each start another for a while.
+  syncImpl = async () => null;
+  syncCalls.length = 0;
+  const miss = await call('GET', '/api/search?game=onepiece&name=Luffy');
+  assert.strictEqual(miss.headers['x-catalogue-pending'], '1');
+  await until('the One Piece first use to end',
+    async () => !(await call('GET', '/api/sets?game=onepiece')).headers['x-catalogue-pending']);
+  const again = await call('GET', '/api/search?game=onepiece&name=Luffy');
+  assert.deepStrictEqual(again.json, []);
+  assert.strictEqual(again.headers['x-catalogue-pending'], undefined, 'not said to be coming when it is not');
+  await sleep(50);
+  assert.deepStrictEqual(syncCalls.map(c => c.context), ['first use of One Piece'], 'one try, not one per request');
+  syncImpl = null;
 }
 
 async function main() {
@@ -168,6 +255,7 @@ async function main() {
     await testLaunchRunsEveryStep();
     await testStopAndRestart();
     await testProductMapIsABackgroundUnit();
+    await testFirstUseIsABackgroundUnit();
   } finally {
     console.error = consoleError;
     await cleanup();

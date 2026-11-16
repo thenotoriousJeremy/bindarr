@@ -112,9 +112,14 @@ the UI makes is answered in-process.
   through the same native HTTP layer server mode uses. While the app is open:
   prices on the server's schedule, exchange rates daily, expired trash purged
   daily, set lists weekly. TCGCSV (the Pokémon price data, well over a thousand
-  requests per new version) syncs at most weekly on a phone, and when the Pokémon
-  scan download builds the product map; in between, Pokémon prices come from the
-  last version synced. Leaving device mode stops these jobs.
+  requests per new version) syncs at most weekly on a phone, when the Pokémon
+  scan download builds the product map, and the first time a game served from
+  TCGplayer's catalogue (Yu-Gi-Oh!, One Piece...) is opened; in between, prices
+  come from the last version synced. Each sync is a background job that downloads
+  with the database turn let go. A game's first use writes its card list in the
+  background too: until it is done, its search and set list answer with what is
+  cached and say so (`X-Catalogue-Pending`), and the app shows "downloading" rather
+  than "no matches". Leaving device mode stops these jobs.
 - There is one account and no login. The phone's owner is the `admin` user, with a
   session that never expires.
 

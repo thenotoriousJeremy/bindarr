@@ -30,6 +30,12 @@ const SEARCH_ERRORS = {
   upstream: { keyHint: false },
 };
 
+// A game's card list still being written on this device (X-Catalogue-Pending: a
+// TCGplayer-catalogue game's first use in device mode) is asked for again this
+// often, so its sets turn up once it is done.
+const CATALOGUE_RETRY_MS = 10000;
+const cataloguePending = (res) => res.headers?.get('X-Catalogue-Pending') === '1';
+
 function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   const { t } = useT();
   const [query, setQuery] = useState('');
@@ -45,6 +51,9 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState(null);
+  // The last search was answered while the game's card list was still being
+  // written: an empty answer then means "not yet", not "no such card".
+  const [searchPending, setSearchPending] = useState(false);
   // A Magic query that cannot be read (an open quote, a stray parenthesis), shown
   // under the box instead of being sent off to come back empty.
   const [syntaxError, setSyntaxError] = useState(null);
@@ -105,9 +114,13 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   // list is per-language (the route reads it from TCGdex for those).
   useEffect(() => {
     let cancelled = false;
+    let retry = null;
     setKnownSets([]);
-    fetch(`/api/sets?game=${game}&lang=${encodeURIComponent(searchLang)}`)
-      .then(r => (r.ok ? r.json() : []))
+    const load = () => fetch(`/api/sets?game=${game}&lang=${encodeURIComponent(searchLang)}`)
+      .then((r) => {
+        if (cataloguePending(r) && !cancelled) retry = setTimeout(load, CATALOGUE_RETRY_MS);
+        return r.ok ? r.json() : [];
+      })
       .then(rows => {
         if (cancelled) return;
         const seen = new Set();
@@ -118,7 +131,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
           .reverse()); // newest first — that is what people are adding
       })
       .catch(() => {});
-    return () => { cancelled = true; };
+    load();
+    return () => { cancelled = true; clearTimeout(retry); };
   }, [game, searchLang]);
 
   // Only the newest search may write results. Without this a slow "pika"
@@ -141,6 +155,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
     setSearchError(null);
     if (!append) {
       setSearching(true);
+      setSearchPending(false);
       setFilterType('');
       setFilterRarity('');
       setFilterSupertype('');
@@ -180,6 +195,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
         if (!req.isLatest()) return;
         const reported = parseInt(response.headers.get('X-Total-Count'), 10);
         if (Number.isFinite(reported)) setTotal(reported);
+        if (!append) setSearchPending(cataloguePending(response));
         setHasMore(data.length >= size);
         setPage(pageNum);
         // Paging shifts the exact-match head off later pages, so the same
@@ -998,7 +1014,9 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       {/* Empty State */}
       {!loading && searching && !searchError && cards.length === 0 && (
         <div className="glass-panel" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem 1.5rem' }}>
-          <p>{t('search.noQueryMatches')}</p>
+          <p role={searchPending ? 'status' : undefined}>
+            {searchPending ? t('search.cataloguePending', { game: gameLabel(game) }) : t('search.noQueryMatches')}
+          </p>
         </div>
       )}
 

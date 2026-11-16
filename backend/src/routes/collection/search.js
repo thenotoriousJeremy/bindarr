@@ -103,7 +103,7 @@ async function searchCards(req, res) {
     // the number and set fields still apply.
     const syntax = game === 'mtg' ? await scryfallSyntax.forSearch(rawName || q, { prints, image }) : null;
     const fields = syntax ? { ...normalizeSearchParams({ number: rawNumber, set: rawSet }), syntax } : { name, number, set };
-    let { cards, total } = await api.searchCards({
+    let { cards, total, pending } = await api.searchCards({
       ...fields, scope, userId: req.user.id, lang,
       apiKey: req.user.tcg_api_key, allPrints: prints === '1', page, limit,
       filters: pickFilters(query),
@@ -132,10 +132,19 @@ async function searchCards(req, res) {
 
     await attachOwnedQty(cards, req.user.id);
     // Header, not the body: every existing caller expects a bare array here.
+    // X-Catalogue-Pending: the game's card list is still being written in the
+    // background (a TCGplayer-catalogue game's first use on a phone,
+    // tcgcsvGameApi.ensureCatalogue), so an empty answer is not "no such card".
+    const exposed = [];
     if (total != null) {
       res.set('X-Total-Count', String(total));
-      res.set('Access-Control-Expose-Headers', 'X-Total-Count');
+      exposed.push('X-Total-Count');
     }
+    if (pending) {
+      res.set('X-Catalogue-Pending', '1');
+      exposed.push('X-Catalogue-Pending');
+    }
+    if (exposed.length) res.set('Access-Control-Expose-Headers', exposed.join(', '));
     res.json(cards);
   } catch (error) {
     // A query that cannot be read (or that Scryfall refused) is the user's to

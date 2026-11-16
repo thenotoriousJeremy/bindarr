@@ -2224,6 +2224,7 @@
   "art.contribute": "Contribute to database",
   "art.remove": "Remove custom art",
   "search.noQueryMatches": "No cards match your search query.",
+  "search.cataloguePending": "The {game} card list is still downloading to this device. Search again in a minute.",
   "search.tcgMarketPrice": "TCG MARKET PRICE ({printing})",
   "search.rarityLabel": "Rarity:",
   "catalog.title": "Scan Catalogs",

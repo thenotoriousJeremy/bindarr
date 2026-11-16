@@ -12,7 +12,8 @@
 // So the work that touches the database takes turns, first come first served:
 //   - each request, from the moment handle() starts it until it has answered;
 //   - each background job that opens transactions (exchange rates, the trash
-//     purge, the Pokémon product map), as a "background" unit.
+//     purge, the TCGCSV syncs, a TCGplayer-catalogue game's first write, the
+//     Pokémon product map), as a "background" unit.
 // While a unit holds the lock, the only transaction-opening code running is its
 // own, which is the one thing the shim cannot work out for itself.
 //

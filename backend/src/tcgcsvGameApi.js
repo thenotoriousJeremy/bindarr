@@ -16,7 +16,8 @@
 //
 //   · A game is ACTIVATED the first time anything on the install asks for it (a
 //     search, a set list, a catalog build). Until then its category is not synced
-//     at all, so an install that never opens Yu-Gi-Oh! pays nothing for it.
+//     at all, so an install that never opens Yu-Gi-Oh! pays nothing for it. On a
+//     phone that first sync and write is a background job (ensureCatalogue).
 //   · After every TCGCSV version, a group's cards are rewritten only if its
 //     products changed, and its prices only if its prices changed (hashes in
 //     tcgcsv_catalogues). The daily cost is the price rows that moved.
@@ -275,19 +276,68 @@ async function refreshCatalogue(game, { force = false } = {}) {
 // on would stay empty for up to a week.
 let firstUseSync = (context) => tcgcsv.syncIfUpdatedSafely(context);
 const setFirstUseSync = (fn) => { firstUseSync = fn; };
+
+async function updateCatalogue(game) {
+  await db.run(`INSERT OR IGNORE INTO tcgcsv_catalogues (game) VALUES (?)`, [game]);
+  let result = await refreshCatalogue(game);
+  if (result.missing) {
+    await firstUseSync(`first use of ${games.get(game).short}`);
+    result = await refreshCatalogue(game);
+  }
+  return result;
+}
+
+// Who waits for that is replaceable too. On a server the caller does: a search
+// for a game switched on a moment ago syncs, writes, then answers with the cards.
+// On a phone that caller is a request holding the app's one turn at the database
+// (embedded/units.js), through a network sync and thousands of writes, with every
+// other request queued behind it. So whenever the catalogue is missing or behind
+// the cached TCGCSV version, the phone hands the update to
+// `runInBackground(game, update)`, which starts it as a background job and
+// returns, and the caller answers from the cache meanwhile with `pending: true`.
+// One update per game at a time. Once it is done the catalogue is current and the
+// next caller reads it; one that ended without it (no network) is not retried for
+// RETRY_MS, so a phone offline does not try again on every keystroke.
+let runInBackground = null;
+const setBackgroundUpdates = (fn) => { runInBackground = fn; };
+const RETRY_MS = 5 * 60 * 1000;
+const inBackground = new Map();   // game -> its update, queued or running
+const missedAt = new Map();       // game -> when its last update ended without the catalogue
+
+// The cached TCGCSV version when the game's catalogue was written from it, else null.
+async function currentCatalogue(game) {
+  const version = await tcgcsv.currentVersion();
+  if (!version) return null;
+  const row = await db.get(`SELECT catalogue_version FROM tcgcsv_catalogues WHERE game = ?`, [game]);
+  return row && row.catalogue_version === version ? version : null;
+}
+
+async function ensureInBackground(game) {
+  const pending = { version: null, cards: 0, prices: 0, pending: true };
+  if (inBackground.has(game)) return pending;
+  const version = await currentCatalogue(game);
+  if (version) return { version, cards: 0, prices: 0, unchanged: true };
+  if (inBackground.has(game)) return pending;   // started while the check above read
+  if (Date.now() - (missedAt.get(game) || 0) < RETRY_MS) return { version: null, missing: true, cards: 0, prices: 0 };
+  const job = (async () => {
+    try {
+      await runInBackground(game, () => updateCatalogue(game));
+    } catch (e) {
+      console.warn(`${game}: catalogue update failed: ${e.message}`);
+    }
+    if (await currentCatalogue(game).catch(() => null)) missedAt.delete(game);
+    else missedAt.set(game, Date.now());
+  })().finally(() => inBackground.delete(game));
+  inBackground.set(game, job);
+  return pending;
+}
+
 const inflight = new Map();
 function ensureCatalogue(game) {
   if (!isTcgcsvGame(game)) return Promise.resolve(null);
+  if (runInBackground) return ensureInBackground(game);
   if (inflight.has(game)) return inflight.get(game);
-  const run = (async () => {
-    await db.run(`INSERT OR IGNORE INTO tcgcsv_catalogues (game) VALUES (?)`, [game]);
-    let result = await refreshCatalogue(game);
-    if (result.missing) {
-      await firstUseSync(`first use of ${games.get(game).short}`);
-      result = await refreshCatalogue(game);
-    }
-    return result;
-  })().finally(() => inflight.delete(game));
+  const run = updateCatalogue(game).finally(() => inflight.delete(game));
   inflight.set(game, run);
   return run;
 }
@@ -328,7 +378,12 @@ async function searchCards(game, {
     return { cards: (await db.all(sql, params)).map(parseCardRow), total: null };
   }
 
-  await ensureCatalogue(game).catch(e => console.warn(`${game}: catalogue unavailable: ${e.message}`));
+  const catalogue = await ensureCatalogue(game).catch((e) => {
+    console.warn(`${game}: catalogue unavailable: ${e.message}`);
+    return null;
+  });
+  // Being written in the background (a phone): what is cached now, said as such.
+  const pending = catalogue && catalogue.pending ? { pending: true } : {};
   const where = ['cc.game = ?'];
   const params = [game];
   const parts = [
@@ -350,7 +405,7 @@ async function searchCards(game, {
       LIMIT ? OFFSET ?`,
     [...params, limit, offset]
   );
-  return { cards: rows.map(parseCardRow), total };
+  return { cards: rows.map(parseCardRow), total, ...pending };
 }
 
 async function getCardById(id) {
@@ -469,7 +524,7 @@ function forGame(game) {
 }
 
 module.exports = {
-  setFirstUseSync,
+  setFirstUseSync, setBackgroundUpdates,
   forGame, isTcgcsvGame, tcgcsvGames, categoryOf, activated, cardIdFor, productIdOf,
   setCodes, displayNumber, quotesByProduct, finishOf, normalizeProduct, priceColumns, writePrices, hashOf,
   refreshCatalogue, ensureCatalogue, searchCards, getCardById, listSetCodes, getCardsBySet,
