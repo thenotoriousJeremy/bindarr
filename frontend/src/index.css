@@ -1044,6 +1044,21 @@ button, input, select, textarea {
   transform: translateY(-2px);
 }
 
+/* A button that cannot be pressed must not look like one that can: a flat chip in
+   the theme's own surface and muted text, no glow, no lift, and a not-allowed
+   cursor. Every variant and theme alike, so the selectors match the themed
+   .btn-primary rules above in weight (:root[data-theme] ...) and, coming later,
+   win over them and over each :hover too. */
+.btn:disabled,
+:root[data-theme] .btn:disabled {
+  background: var(--surface-3);
+  border-color: var(--border-glass);
+  color: var(--text-muted);
+  box-shadow: none;
+  transform: none;
+  cursor: not-allowed;
+}
+
 .btn-icon-only {
   padding: 0.5rem;
   border-radius: var(--radius-sm);
