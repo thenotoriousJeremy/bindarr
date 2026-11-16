@@ -354,9 +354,10 @@ async function runSearch(nameQuery = '', numberQuery = '', setQuery = '', scope 
 }
 
 // Re-fetch stale rows and record any price movement. Fire-and-forget: the search
-// that triggered it has already answered from cache.
+// that triggered it has already answered from cache (utils/backgroundWork: on a
+// phone, a background job of its own).
 function refreshInBackground(code, rows) {
-  (async () => {
+  require('./utils/backgroundWork').start('TCGdex search price refresh', async () => {
     try {
       const fresh = await mapLimited(rows, async (row) => {
         const raw = await fetchFullCard(code, providerId(row.id));
@@ -367,7 +368,7 @@ function refreshInBackground(code, rows) {
     } catch (e) {
       console.error('TCGdex background refresh failed:', e.message);
     }
-  })();
+  });
 }
 
 // Split "tcgdex-ja-SV2a-004" back into its language and the provider's own id.

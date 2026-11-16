@@ -192,7 +192,8 @@ async function loadCoverage(meta) {
   if (hit && Date.now() - hit.at < COVERAGE_TTL_MS) return hit.coverage;
   let coverage = null;
   try {
-    coverage = await releaseAssets.fetchJson(coverageAsset(meta.code));
+    // A download (fetch(), not axios): with a phone's background job's turn let go.
+    coverage = await require('./utils/backgroundWork').away(() => releaseAssets.fetchJson(coverageAsset(meta.code)));
   } catch (e) {
     console.warn(`Pokémon TCGplayer coverage (${meta.code}) unavailable: ${e.message}`);
   }
@@ -338,6 +339,9 @@ async function materialize(lang, coverage, { force = false } = {}) {
     console.log(`Pokémon (${meta.name}): ${removed} TCGplayer-only card(s) removed — TCGdex serves their set now, or TCGplayer dropped it`
       + (kept ? `; ${kept} kept because a collection, deck, list, recipe or trade refers to them` : '') + '.');
   }
+  // What a drop kept, this run or an earlier one, is still priced.
+  const listed = new Set(fallback.map(g => setIdFor(meta.code, codes.get(g.groupId))));
+  const keptPriced = await priceKeptCards(meta, groups, codes, listed);
 
   // Art for TCGdex cards that have none: the TCGplayer product's image. Never
   // replaces art TCGdex does have.
@@ -357,7 +361,61 @@ async function materialize(lang, coverage, { force = false } = {}) {
     [stateKey(meta.code), stamp, JSON.stringify(hashes), JSON.stringify(setIds)]
   );
   if (cards || art) console.log(`Pokémon (${meta.name}): ${cards} TCGplayer-only cards written, ${art} TCGdex cards given TCGplayer art.`);
+  if (keptPriced) console.log(`Pokémon (${meta.name}): ${keptPriced} kept TCGplayer-only card(s) priced from TCGplayer.`);
   return { cards, art };
+}
+
+// The cards a dropped group left behind because something refers to them
+// (dropFallbackSet): in no listed group, so the loop in materialize never writes
+// them again, and the TCGCSV price sweep leaves every tcgp- set to this module
+// (tcgcsvApi.setsToPrice). Without this their prices would stop on the day TCGdex
+// started serving their set. They are priced from the group they were written
+// from, by product id — the rule the listed groups follow — and only from a day
+// with price data for it: a day without any leaves the last prices standing.
+// Read from card_cache rather than from this module's state, so cards kept before
+// this was written are priced too. Returns how many cards it priced.
+async function priceKeptCards(meta, groups, codes, listed) {
+  const rows = await db.all(
+    `SELECT id, set_id FROM card_cache WHERE id LIKE 'tcgplayer-%' AND set_id LIKE ?`,
+    [`${setIdFor(meta.code, '')}%`]
+  );
+  const bySet = new Map();
+  for (const r of rows) {
+    if (listed.has(r.set_id) || productIdOf(r.id) == null) continue;
+    if (!bySet.has(r.set_id)) bySet.set(r.set_id, []);
+    bySet.get(r.set_id).push(r.id);
+  }
+  if (!bySet.size) return 0;
+  const groupOf = new Map(groups.map(g => [setIdFor(meta.code, codes.get(g.groupId)), g.groupId]));
+  let priced = 0;
+  for (const [setId, ids] of bySet) {
+    const groupId = groupOf.get(setId);
+    if (groupId == null) continue;   // TCGplayer no longer lists the group: nothing to price from
+    let prices;
+    try {
+      prices = await tcgcsv.getPrices(meta.categoryId, groupId);
+    } catch (e) {
+      if (tcgcsv.isCacheMissError(e)) continue;
+      throw e;
+    }
+    if (!Array.isArray(prices) || !prices.length) continue;
+    const quotes = quotesByProduct(prices);
+    await db.withTransaction(async () => {
+      for (const id of ids) {
+        const q = quotes.get(productIdOf(id));
+        const cols = priceColumns(q);
+        // 1st Edition only when quoted, as materialize writes it.
+        await db.run(
+          `UPDATE card_cache SET price_trend = ?, price_normal = ?, price_holofoil = ?, price_reverse_holofoil = ?,
+             price_1st_edition = COALESCE(?, price_1st_edition), price_source = 'tcgcsv', price_currency = 'USD'
+           WHERE id = ?`,
+          [cols.price_trend, cols.price_normal, cols.price_holofoil, cols.price_reverse_holofoil, q ? q.first : null, id]
+        );
+      }
+    });
+    priced += ids.length;
+  }
+  return priced;
 }
 
 // Brings the fallback rows up to date, in the background of a Pokémon search or set
@@ -366,6 +424,10 @@ async function materialize(lang, coverage, { force = false } = {}) {
 // admin asking for a sync — so with no TCGCSV data yet it does nothing, not even
 // fetch the coverage; the scheduled sync brings Pokémon in once the install holds
 // a Pokémon card, and the next call writes the rows.
+//
+// The run is work a request starts and does not wait for (utils/backgroundWork: on
+// a phone, a background job of its own). One per language at a time, as before;
+// every caller is fire-and-forget, so none holds a turn waiting on it.
 const inflight = new Map();
 const ready = new Map();   // code -> time of the last completed check
 const RECHECK_MS = 60 * 60 * 1000;
@@ -375,7 +437,7 @@ function ensure(lang) {
   const at = ready.get(meta.code);
   if (at && Date.now() - at < RECHECK_MS) return Promise.resolve(null);
   if (inflight.has(meta.code)) return inflight.get(meta.code);
-  const run = (async () => {
+  const run = require('./utils/backgroundWork').start(`Pokémon TCGplayer rows (${meta.code})`, async () => {
     if (await pokemonProvider.providerFor(meta.code) !== pokemonProvider.TCGDEX) return null;
     if (!(await tcgcsv.currentVersion())) return null;
     const coverage = await loadCoverage(meta);
@@ -383,7 +445,7 @@ function ensure(lang) {
     const result = await materialize(meta.name, coverage);
     if (!result.missing) ready.set(meta.code, Date.now());
     return result;
-  })().catch((e) => {
+  }).catch((e) => {
     console.warn(`Pokémon TCGplayer fallback (${meta.code}) failed: ${e.message}`);
     return null;
   }).finally(() => inflight.delete(meta.code));

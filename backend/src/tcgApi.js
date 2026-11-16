@@ -337,16 +337,19 @@ async function runSearch(meta, nameQuery = '', numberQuery = '', setQuery = '', 
       const staleCards = localResults.filter(r => (new Date() - new Date(r.last_updated) > CACHE_AGE_LIMIT_MS));
       const hasKey = apiKey || process.env.POKEMON_TCG_API_KEY;
       if (staleCards.length > 0 && hasKey) {
-        (async () => {
+        // Not waited for (utils/backgroundWork: on a phone, a background job of its
+        // own, which lets its turn go while it paces itself).
+        const work = require('./utils/backgroundWork');
+        work.start('Pokémon search price refresh', async () => {
           try {
             for (const card of staleCards) {
               await getCardById(card.id, hasKey);
-              await new Promise(r => setTimeout(r, 1000)); // Respect rate limits
+              await work.away(() => new Promise(r => setTimeout(r, 1000))); // Respect rate limits
             }
           } catch (e) {
             console.error('Background price refresh failed:', e.message);
           }
-        })();
+        });
       }
 
       return localResults.map(parseCardRow);

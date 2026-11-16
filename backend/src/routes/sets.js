@@ -61,8 +61,14 @@ router.get('/', async (req, res) => {
     // what is cached now, and opening Add Cards never waits on a download.
     if (game === 'pokemon') require('../pokemonTcgplayer').ensure('English').catch(() => {});
     // The TCGplayer-catalogue games build their set list from TCGCSV on first use.
+    // On a phone that runs in the background, and the list below is what is cached
+    // meanwhile; X-Catalogue-Pending tells the app to ask again (CardSearch).
     if (require('../tcgcsvGameApi').isTcgcsvGame(game)) {
-      await require('../tcgcsvGameApi').ensureCatalogue(game).catch(() => {});
+      const catalogue = await require('../tcgcsvGameApi').ensureCatalogue(game).catch(() => null);
+      if (catalogue && catalogue.pending) {
+        res.set('X-Catalogue-Pending', '1');
+        res.set('Access-Control-Expose-Headers', 'X-Catalogue-Pending');
+      }
     }
     const where = game ? `WHERE game = ?` : '';
     const params = game ? [game] : [];

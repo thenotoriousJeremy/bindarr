@@ -330,7 +330,7 @@ const FAILURE_BACKOFF_MS = 5 * 60 * 1000;
 
 // Fetch the whole catalogue and cache it. Concurrent callers share one fetch.
 function refreshCatalogue() {
-  if (refreshing) return refreshing;
+  if (refreshing) return require('./utils/backgroundWork').join(refreshing);   // on a phone, its runner may need the turn
   refreshing = (async () => {
     const sets = await fetchAllPages('/sets');
     const cards = normalizeCatalogue(await fetchAllPages('/cards'));

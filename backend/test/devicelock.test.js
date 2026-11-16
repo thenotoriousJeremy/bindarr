@@ -171,6 +171,107 @@ async function testAbortedWhileQueuedNeverRuns() {
   assert.strictEqual(refused.aborted, true);
 }
 
+// Resolves with the promise's value, or 'still waiting' after `ms`.
+const within = (promise, ms) => {
+  let timer;
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve('still waiting'), ms); });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+};
+
+// A background unit's provider requests (any axios instance) go out with the
+// turn let go, so the app is not queued behind a download; and the unit's code
+// after a download runs only once it holds the turn again, however many of its
+// downloads were under way at once. A unit that ends before a download it did not
+// wait for is not handed the turn back (which nobody would then let go).
+async function testDownloadsLetTheTurnGo() {
+  const downloads = [gate(), gate(), gate()];
+  let started = 0;
+  const provider = require('axios').create({
+    adapter: async (config) => {
+      const i = started++;
+      await downloads[i].promise;
+      return { data: i, status: 200, statusText: 'OK', headers: {}, config };
+    },
+  });
+  const after = [];
+  // Plain statements: two transactions open at once inside one unit would be one
+  // transaction here whatever the downloads did (no async context; see the shim).
+  const job = embedded.background('two downloads at once', () => Promise.all([0, 1].map(async (i) => {
+    await provider.get(`/download/${i}`);
+    after.push(i);
+    await db.run(`INSERT INTO notes (user_id, title) VALUES (1, ?)`, [`after download ${i}`]);
+  })));
+  await sleep(20);
+  assert.strictEqual(started, 2, 'both downloads under way');
+  const during = await within(call('POST', '/api/notes', { title: 'during the downloads' }), 1000);
+  assert.notStrictEqual(during, 'still waiting', 'a request is answered while the job downloads');
+  assert.strictEqual(during.status, 201);
+
+  // A download comes back while a request holds the turn: the job's code after it
+  // waits for that request, rather than running beside it.
+  const entered = gate();
+  const release = gate();
+  held.entered = entered.open;
+  held.release = release.promise;
+  const request = call('POST', '/api/__device-lock-test/hold', {});
+  await entered.promise;
+  downloads[0].open();
+  await sleep(50);
+  assert.deepStrictEqual(after, [], 'nothing of the job runs while the request holds the turn');
+  release.open();
+  await request;
+  downloads[1].open();
+  await within(job, 1000);
+  assert.deepStrictEqual(after.sort(), [0, 1]);
+  assert.strictEqual(await count(`SELECT COUNT(*) n FROM notes WHERE title LIKE 'after download %'`), 2);
+
+  // A job that ends with a download still out: once that download is back, the
+  // turn is still free for everyone.
+  await embedded.background('leaves a download behind', async () => { provider.get('/download/2').catch(() => {}); });
+  downloads[2].open();
+  await sleep(20);
+  const later = await within(call('POST', '/api/notes', { title: 'after the job ended' }), 1000);
+  assert.notStrictEqual(later, 'still waiting', 'nobody holds the turn for a job that has ended');
+  assert.strictEqual(later.status, 201);
+}
+
+// Work several callers share — a module's "already in flight, return that" branch
+// (riftcodexApi.refreshCatalogue, pokemontcgapi.request) — run by a job that has
+// let its turn go for a download. A request that wants the same work waits for it
+// with its own turn let go (utils/backgroundWork.join): the work needs a turn to
+// finish, and a request holding its turn while it waited would wait for ever.
+let sharedWork = null;
+embedded.app.post('/api/__device-lock-test/join', async (req, res) => {
+  res.json({ result: await require('../src/utils/backgroundWork').join(sharedWork) });
+});
+async function testJoiningSharedWorkDoesNotDeadlock() {
+  const download = gate();
+  const provider = require('axios').create({
+    adapter: async (config) => {
+      await download.promise;
+      return { data: 'fetched', status: 200, statusText: 'OK', headers: {}, config };
+    },
+  });
+  const job = embedded.background('a job running shared work', () => {
+    sharedWork = (async () => {
+      const { data } = await provider.get('/shared');
+      await db.withTransaction(() => db.run(`INSERT INTO notes (user_id, title) VALUES (1, 'written by the shared work')`));
+      return data;
+    })();
+    return sharedWork;
+  });
+  await sleep(20);   // the job is at its download, with its turn let go
+  const request = call('POST', '/api/__device-lock-test/join', {});
+  await sleep(20);   // the request holds the turn, waiting for the shared work
+  download.open();
+  const res = await within(request, 2000);
+  assert.notStrictEqual(res, 'still waiting', 'a request waiting on shared work a job is running does not deadlock');
+  assert.strictEqual(res.status, 200);
+  assert.deepStrictEqual(res.json, { result: 'fetched' });
+  assert.strictEqual(await within(job, 1000), 'fetched');
+  assert.strictEqual(await count(`SELECT COUNT(*) n FROM notes WHERE title = 'written by the shared work'`), 1);
+}
+
 async function main() {
   try {
     ({ token } = await embedded.start({ background: false }));
@@ -179,6 +280,8 @@ async function main() {
     await testBackgroundUnitWaitsForTheRequest();
     await testBackgroundUnitYieldsBetweenTransactions();
     await testAbortedWhileQueuedNeverRuns();
+    await testDownloadsLetTheTurnGo();
+    await testJoiningSharedWorkDoesNotDeadlock();
   } finally {
     await cleanup();
   }

@@ -518,14 +518,18 @@ async function ensure({ sync = true, waitForSync = false } = {}) {
   if (!(await tcgcsv.currentVersion())) return result;
   if (Date.now() - syncTriedAt < SYNC_RETRY_MS) return result;
   syncTriedAt = Date.now();
-  const filled = (async () => {
+  // Work this read starts and may not wait for (utils/backgroundWork): on a phone a
+  // background job of its own, which a read that does wait for it waits on with its
+  // turn let go — the sync and the writes need that turn.
+  const work = require('./utils/backgroundWork');
+  const filled = work.start('Riftbound sets RiftCodex lacks', async () => {
     await tcgcsvGames.runFirstUseSync('Riftbound sets RiftCodex lacks');
     return writeFromCache();
-  })().catch((e) => {
+  }).catch((e) => {
     console.warn(`Riftbound TCGplayer fallback: ${e.message}`);
     return result;
   });
-  return waitForSync ? filled : result;
+  return waitForSync ? work.join(filled) : result;
 }
 
 // TCGplayer's own abbreviation for a set this module wrote ('RXK/DA' where the set's
