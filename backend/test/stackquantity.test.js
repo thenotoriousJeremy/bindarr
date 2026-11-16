@@ -2,7 +2,17 @@
 // absolute ("how many copies I own"), so editing it has to add AND remove rows.
 // No framework — plain node + assert. Run: `node test/stackquantity.test.js`.
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+// The helper is driven through a fake db below, but its module requires the real
+// one, which opens DB_PATH as it loads: a throwaway file, never the dev database.
+const tmpDb = path.join(os.tmpdir(), `bindarr-stackquantity-${process.pid}.db`);
+process.env.DB_PATH = tmpDb;
+
 const { setStackQuantity } = require('../src/utils/collectionHelpers');
+const realDb = require('../src/db');
 
 const USER = 7;
 const base = { user_id: USER, card_id: 'c-A', quantity: 1, condition: 'Near Mint', printing: 'Normal', language: 'English', purchase_price: 2, location_id: 5, compartment_id: 9, position: 4000, is_trade: 0, favorite: 0, list_type: 'collection', game: 'pokemon' };
@@ -75,4 +85,11 @@ async function main() {
   console.log('stackquantity.test.js passed');
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+main()
+  .catch((err) => { console.error(err); process.exitCode = 1; })
+  .finally(async () => {
+    await new Promise(resolve => { try { realDb.dbConnection.close(() => resolve()); } catch { resolve(); } });
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { fs.unlinkSync(tmpDb + suffix); } catch { /* not present */ }
+    }
+  });

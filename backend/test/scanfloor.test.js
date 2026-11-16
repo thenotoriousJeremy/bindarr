@@ -21,11 +21,40 @@
 // half also fetches one card image from TCGdex, and is skipped (with the rest
 // still asserted) when that fetch fails.
 //
+// Its database is a throwaway one, never the dev database: the card rows the
+// sweep reads (each catalog row's set, the art to scan) are written into it from
+// the catalog's own meta file, which names every row and the image it was built
+// from.
+//
 // Run: node test/scanfloor.test.js
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const tmpDb = path.join(os.tmpdir(), `bindarr-scanfloor-${process.pid}.db`);
+process.env.DB_PATH = tmpDb;
+
 const sharp = require('sharp');
 const cvScan = require('../src/cvScan');
 const db = require('../src/db');
+const { metaPath } = require('../src/catalog');
+const { cacheNormalizedCards } = require('../src/utils/cardCache');
+
+// The Japanese catalog's rows as card_cache rows: id tcgdex-ja-<set>-<number>,
+// with the art the catalog embedded.
+async function seedFromCatalog() {
+  const meta = JSON.parse(fs.readFileSync(metaPath('pokemon', 'Japanese'), 'utf8'));
+  const srcs = meta.srcs || {};
+  const rows = meta.ids
+    .filter(id => /^tcgdex-ja-[^-]+-[^-]+$/.test(id))
+    .map((id) => {
+      const [, , set, number] = id.split('-');
+      return { id, name: id, set_id: set, number, image_url: srcs[id] || '', language: 'Japanese' };
+    });
+  await cacheNormalizedCards(rows, 'pokemon');
+  return rows.length;
+}
 
 // Structured noise, not flat grey: a uniform frame can trip the corner detector's
 // sharpness gate and land in the raw-frame path, which is a different code path
@@ -37,16 +66,19 @@ async function noise() {
   return sharp(buf, { raw: { width: w, height: h, channels: 3 } }).jpeg({ quality: 85 }).toBuffer();
 }
 
+// Resolves to the exit code: 0, or 77 for a skip.
 async function main() {
   if (!cvScan.isBuilt('pokemon', 'Japanese')) {
     console.log('scanfloor.test.js: no Japanese Pokemon catalog — skipped');
-    process.exit(77);
+    return 77;
   }
   const s = await cvScan.load('pokemon', 'Japanese');
   if (!s.local || s.lang !== 'Japanese') {
     console.log('scanfloor.test.js: Japanese catalog is a fallback, not a local build — skipped');
-    process.exit(77);
+    return 77;
   }
+  await db.initDb();
+  assert.ok(await seedFromCatalog() > 0, 'the Japanese catalog names TCGdex cards');
 
   // 1. Something that is not a card at all must not come back as one.
   const miss = await cvScan.match(await noise(), 'pokemon', 5, { lang: 'Japanese', cropped: true });
@@ -58,8 +90,9 @@ async function main() {
   // 2. A card that IS catalogued, from the art the catalog was built from.
   const row = await db.get(
     `SELECT id, image_url FROM card_cache WHERE game = 'pokemon' AND language = 'Japanese'
-       AND (image_url LIKE '%/low.png' OR image_url LIKE '%/low.webp') ORDER BY id LIMIT 1`
+       AND image_url LIKE 'https://assets.tcgdex.net/%' ORDER BY id LIMIT 1`
   );
+  assert.ok(row, 'the catalog meta names the art of at least one TCGdex card');
   let art = null;
   try {
     const res = await fetch(row.image_url.replace(/\/low\.(?:png|webp)$/, '/high.webp'),
@@ -94,7 +127,16 @@ async function main() {
   } else {
     console.log(`scanfloor.test.js: gap floor ${cvScan.GAP_FLOOR}, noise rejected (card image unreachable)`);
   }
-  process.exit(0);
+  return 0;
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+// An explicit exit, as before, once the throwaway database is closed and deleted.
+main()
+  .catch((e) => { console.error(e); return 1; })
+  .then(async (code) => {
+    await new Promise(resolve => { try { db.dbConnection.close(() => resolve()); } catch { resolve(); } });
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { fs.unlinkSync(tmpDb + suffix); } catch { /* not present */ }
+    }
+    process.exit(code);
+  });
