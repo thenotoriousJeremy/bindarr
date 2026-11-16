@@ -43,8 +43,9 @@
 // it was.
 //
 // What a row carries is what the TCGCSV cache keeps of a product (utils/tcgcsvSlim):
-// name, number, rarity, TCGplayer's picture and its product id, which is what prices
-// it (riftboundPrices.js, the same sweep as every other Riftbound card).
+// name, number, rarity, TCGplayer's picture, its card type, domains, tags and stats
+// (classify), and its product id, which is what prices it (riftboundPrices.js, the
+// same sweep as every other Riftbound card). No rules text, artist or flavour.
 'use strict';
 
 const db = require('./db');
@@ -122,6 +123,60 @@ const isCard = (p) => p && p.number != null && String(p.number).trim() !== '';
 // a few tokens, which RiftCodex would call Common.
 const rarityOf = (r) => (r && r !== 'None' ? r : 'Common');
 
+// One of a product's short extendedData fields (utils/tcgcsvSlim keeps them as
+// `ext`), matched with case and punctuation ignored.
+function extField(ext, name) {
+  for (const [k, v] of Object.entries(ext || {})) {
+    if (k.toLowerCase().replace(/[^a-z]/g, '') === name) return v;
+  }
+  return null;
+}
+const listOf = (v) => [...new Set(String(v || '').split(';').map(s => s.trim()).filter(s => s && s !== 'None'))];
+const NO_STATS = new Set(['Legend', 'Battlefield', 'Rune']);
+const statOf = (v) => (v == null || String(v).trim() === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+
+// What a card is, in the fields riftcodexApi.normalizeCard fills, from TCGplayer's:
+//   Card Type 'Champion Unit' -> supertype Unit, subtypes Champion + the tags;
+//   'Signature Gear' -> Gear + Signature; 'Unit;Token' -> Unit + Token;
+//   'Rune' -> Rune + Basic, as RiftCodex files its runes.
+// Domain 'Calm;Chaos' -> both, the colours; 'None' -> Colorless, as RiftCodex
+// writes it. Legends, battlefields and runes carry no stats there (TCGplayer lists
+// zeros), so none here. A row from a TCGCSV cache that predates `ext` has none of
+// this until the next sync brings it.
+function classify(ext) {
+  if (!ext) return { supertype: '', subtypes: [], types: [], attributes: null, cmc: null, orientation: 'portrait' };
+  let supertype = '';
+  const kinds = [];
+  for (const part of listOf(extField(ext, 'cardtype'))) {
+    const m = /^(Champion|Signature)\s+(.+)$/.exec(part);
+    if (m) {
+      kinds.push(m[1]);
+      supertype = supertype || m[2];
+    } else if (part === 'Token') {
+      kinds.push('Token');
+    } else {
+      supertype = supertype || part;
+    }
+  }
+  if (supertype === 'Rune') kinds.push('Basic');
+  const domains = listOf(extField(ext, 'domain'));
+  const stats = {};
+  if (!NO_STATS.has(supertype)) {
+    for (const [key, field] of [['energy', 'energycost'], ['might', 'might'], ['power', 'powercost']]) {
+      const n = statOf(extField(ext, field));
+      if (n != null) stats[key] = n;
+    }
+  }
+  return {
+    supertype,
+    subtypes: [...new Set([...kinds, ...listOf(extField(ext, 'tag'))])],
+    types: domains.length ? domains : ['Colorless'],
+    attributes: Object.keys(stats).length ? stats : null,
+    cmc: stats.energy ?? null,
+    orientation: supertype === 'Battlefield' ? 'landscape' : 'portrait',
+  };
+}
+
 // One group's card rows, in the shape riftcodexApi.normalizeCard gives, with today's
 // quote where TCGplayer has one (the daily sweep, riftboundPrices.js, keeps it
 // current). `skip` is the products not to write.
@@ -134,13 +189,15 @@ function rowsFor(group, setId, code, products, quotes, skip) {
     const { id, number } = ids.get(p.productId);
     const q = quotes.get(p.productId);
     const trend = q ? (q.price_normal ?? q.price_holofoil) : null;
+    const kind = classify(p.ext);
     rows.push({
       id,
       name: p.name || '',
-      supertype: '',
-      subtypes: [],
-      types: [],
-      color_identity: [],
+      supertype: kind.supertype,
+      subtypes: kind.subtypes,
+      // Domains are Riftbound's colours (riftcodexApi.normalizeCard).
+      types: kind.types,
+      color_identity: kind.types,
       rarity: rarityOf(p.rarity),
       set_id: setId,
       set_name: group.name || '',
@@ -148,11 +205,11 @@ function rowsFor(group, setId, code, products, quotes, skip) {
       // The slim cache leaves out TCGplayer's standard thumbnail url and keeps null
       // for a product with no picture (the CDN answers 403 then, not a placeholder).
       image_url: 'imageUrl' in p ? (p.imageUrl || '') : productImageUrl(p.productId),
-      orientation: 'portrait',
+      orientation: kind.orientation,
       artist: null,
       card_text: null,
-      attributes: null,
-      cmc: null,
+      attributes: kind.attributes,
+      cmc: kind.cmc,
       price_trend: trend,
       price_normal: q ? q.price_normal : null,
       price_holofoil: q ? q.price_holofoil : null,
@@ -481,7 +538,7 @@ async function tcgplayerAbbreviation(setId) {
 }
 
 module.exports = {
-  codeTail, looseNumber, assignIds, rowsFor,
+  codeTail, looseNumber, assignIds, classify, rowsFor,
   materialize, noteRiftcodex, takeOver, ensure, tcgplayerAbbreviation,
   STATE_KEY,
 };

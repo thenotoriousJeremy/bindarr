@@ -7,23 +7,35 @@
  ],
  "products": {
   "24502": [
-   { "productId": 672073, "name": "Bandle Tree", "number": "278a/298", "rarity": "Promo" },
-   { "productId": 722659, "name": "Bandle Tree (Oversized)", "number": "278a/298", "rarity": "Promo" }
+   { "productId": 672073, "name": "Bandle Tree", "number": "278a/298", "rarity": "Promo",
+     "ext": { "Energy Cost": "0", "Power Cost": "0", "Might": "0", "Card Type": "Battlefield", "Domain": "None" } },
+   { "productId": 722659, "name": "Bandle Tree (Oversized)", "number": "278a/298", "rarity": "Promo",
+     "ext": { "Energy Cost": "0", "Power Cost": "0", "Might": "0", "Card Type": "Battlefield", "Domain": "None" } }
   ],
   "24560": [
-   { "productId": 685521, "name": "Vi, Piltover Enforcer (Overnumbered)", "number": "229/219", "rarity": "Showcase" },
-   { "productId": 685522, "name": "Vi, Piltover Enforcer (Signature)", "number": "229*/219", "rarity": "Showcase" }
+   { "productId": 685521, "name": "Vi, Piltover Enforcer (Overnumbered)", "number": "229/219", "rarity": "Showcase",
+     "ext": { "Energy Cost": "0", "Power Cost": "0", "Might": "0", "Card Type": "Legend", "Tag": "Vi", "Domain": "Fury;Order" } },
+   { "productId": 685522, "name": "Vi, Piltover Enforcer (Signature)", "number": "229*/219", "rarity": "Showcase",
+     "ext": { "Energy Cost": "0", "Power Cost": "0", "Might": "0", "Card Type": "Legend", "Tag": "Vi", "Domain": "Fury;Order" } }
   ],
   "24819": [
    { "productId": 711362, "name": "Radiance - Booster Pack", "number": null, "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/711362_200w.jpg", "groupId": 24819 },
-   { "productId": 722279, "name": "Blade of the Exile", "number": "150/167", "rarity": "Epic" },
-   { "productId": 722281, "name": "Calm Rune", "number": "R02", "rarity": "Common" },
-   { "productId": 722294, "name": "Ekko, Ingenious", "number": "061/167", "rarity": "Rare" },
-   { "productId": 722295, "name": "Ekko, Ingenious (Alternate Art)", "number": "061a/167", "rarity": "Showcase" },
-   { "productId": 722313, "name": "Kai'Sa, Rebel (K/DA Special Art Card)", "number": "SP4/005", "rarity": "Showcase" },
-   { "productId": 724641, "name": "Jarvan IV, Exemplar of Demacia (Signature)", "number": "179*/167", "rarity": "Showcase", "imageUrl": null },
-   { "productId": 724664, "name": "Aphelios, Exalted (Heartsteel Signature)", "number": "179*/167", "rarity": "Showcase", "imageUrl": null },
-   { "productId": 728142, "name": "Bomb // Gold", "number": "T02 // T05", "rarity": "Common" }
+   { "productId": 722279, "name": "Blade of the Exile", "number": "150/167", "rarity": "Epic",
+     "ext": { "Energy Cost": "3", "Power Cost": "1", "Card Type": "Signature Gear", "Tag": "Equipment;Riven", "Domain": "Calm;Chaos" } },
+   { "productId": 722281, "name": "Calm Rune", "number": "R02", "rarity": "Common",
+     "ext": { "Card Type": "Rune", "Domain": "Calm" } },
+   { "productId": 722294, "name": "Ekko, Ingenious", "number": "061/167", "rarity": "Rare",
+     "ext": { "Energy Cost": "3", "Might": "4", "Card Type": "Champion Unit", "Tag": "Ekko;Zaun", "Domain": "Mind" } },
+   { "productId": 722295, "name": "Ekko, Ingenious (Alternate Art)", "number": "061a/167", "rarity": "Showcase",
+     "ext": { "Energy Cost": "3", "Might": "4", "Card Type": "Champion Unit", "Tag": "Ekko;Zaun", "Domain": "Mind" } },
+   { "productId": 722313, "name": "Kai'Sa, Rebel (K/DA Special Art Card)", "number": "SP4/005", "rarity": "Showcase",
+     "ext": { "Energy Cost": "5", "Power Cost": "1", "Might": "5", "Card Type": "Champion Unit", "Tag": "Kai'Sa;The Void", "Domain": "Mind" } },
+   { "productId": 724641, "name": "Jarvan IV, Exemplar of Demacia (Signature)", "number": "179*/167", "rarity": "Showcase", "imageUrl": null,
+     "ext": { "Card Type": "Legend", "Tag": "Jarvan IV", "Domain": "Body;Order" } },
+   { "productId": 724664, "name": "Aphelios, Exalted (Heartsteel Signature)", "number": "179*/167", "rarity": "Showcase", "imageUrl": null,
+     "ext": { "Energy Cost": "4", "Power Cost": "1", "Might": "4", "Card Type": "Champion Unit", "Tag": "Mount Targon;Aphelios;Aphelios", "Domain": "Calm" } },
+   { "productId": 728142, "name": "Bomb // Gold", "number": "T02 // T05", "rarity": "Common",
+     "ext": { "Card Type": "Gear;Token", "Tag": "Bomb" } }
   ],
   "24832": [
    { "productId": 712806, "name": "Legacy - Booster Display", "number": null, "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/712806_200w.jpg", "groupId": 24832 },

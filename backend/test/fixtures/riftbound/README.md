@@ -29,7 +29,8 @@ Nothing here is card art: the tests never fetch an image.
   double-sided token (`T02 // T05`) and a booster pack; Unleashed (UNL), which it
   does; the 2025 Worlds Bundle (RWB), whose Bandle Tree RiftCodex files under PR
   and whose Oversized printing it does not have; and Legacy (LGC), sealed product
-  only, not out yet.
+  only, not out yet. Cards carry `ext`, the short extendedData fields the slim
+  cache keeps for category 89 (card type, domain, tags, energy, might, power).
 - `riftcodex-later.json` — `PR`: RiftCodex's real Bandle Tree record (product
   672073), copied from `GET https://api.riftcodex.com/cards` on 2026-11-16. `RAD`
   and `RAD_SET`: Radiance as RiftCodex might add it, MODELLED on its records (the

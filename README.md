@@ -276,7 +276,8 @@ hotlinked from Riot's own CDN (`cmsassets.rgpub.io`); none is bundled. Prices ar
 TCGplayer market prices via TCGCSV (category 89), matched by each card's TCGplayer
 product id. Sets TCGplayer sells that RiftCodex has not added yet (Radiance, when
 this was written) come from that same TCGplayer data, with TCGplayer's names,
-numbers, rarities and pictures, under the ids RiftCodex will give them; when
+numbers, rarities, card types, domains and pictures (no rules text), under the ids
+RiftCodex will give them; when
 RiftCodex adds a set, its cards take over without anyone's collection changing.
 Scanning works once a Riftbound catalog is built in Admin → Catalogs;
 battlefields are matched as printed, in landscape. Riftbound decks are checked

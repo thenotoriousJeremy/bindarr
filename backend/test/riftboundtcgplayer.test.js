@@ -129,6 +129,21 @@ async function main() {
     assert.deepStrictEqual([t1.get(716012).id, t1.get(716013).id], ['riftbound-t12025-tcgp716012', 'riftbound-t12025-tcgp716013']);
     assert.strictEqual(t1.get(716012).number, 't1s 001');
 
+    // What a card is, from TCGplayer's fields, the way RiftCodex says it.
+    const kind = (ext) => fallback.classify(ext);
+    assert.deepStrictEqual(kind({ 'Energy Cost': '5', 'Power Cost': '1', Might: '5', 'Card Type': 'Champion Unit', Tag: "Kai'Sa;The Void", Domain: 'Mind' }),
+      { supertype: 'Unit', subtypes: ['Champion', "Kai'Sa", 'The Void'], types: ['Mind'], attributes: { energy: 5, might: 5, power: 1 }, cmc: 5, orientation: 'portrait' });
+    assert.deepStrictEqual(kind({ 'Energy Cost': '0', Might: '0', 'Card Type': 'Battlefield', Domain: 'None' }),
+      { supertype: 'Battlefield', subtypes: [], types: ['Colorless'], attributes: null, cmc: null, orientation: 'landscape' },
+      'a battlefield: no stats (TCGplayer lists zeros), colourless, printed sideways');
+    assert.deepStrictEqual(kind({ 'Card Type': 'Rune', Domain: 'Calm' }).subtypes, ['Basic'], 'runes are Basic, as RiftCodex files them');
+    assert.deepStrictEqual(kind({ 'Card Type': 'Signature Gear', Tag: 'Equipment;Riven', Domain: 'Calm;Chaos' }).subtypes, ['Signature', 'Equipment', 'Riven']);
+    assert.deepStrictEqual(kind({ 'Card Type': 'Unit;Gear;Token' }).subtypes, ['Token']);
+    assert.strictEqual(kind({ 'Card Type': 'Unit;Gear;Token' }).supertype, 'Unit');
+    assert.deepStrictEqual(kind({ 'Card Type': 'Legend', Tag: 'Mount Targon;Aphelios;Aphelios' }).subtypes, ['Mount Targon', 'Aphelios'], 'a tag listed twice is one');
+    assert.deepStrictEqual(kind(undefined), { supertype: '', subtypes: [], types: [], attributes: null, cmc: null, orientation: 'portrait' },
+      'a row cached before these fields were kept: nothing guessed');
+
     // --- 2. Nothing is written before RiftCodex's catalogue is ------------------
     version = 'v1';
     assert.deepStrictEqual(await fallback.ensure({ sync: false }), { skipped: 'RiftCodex catalogue not cached' });
@@ -153,6 +168,10 @@ async function main() {
     assert.strictEqual(alt.image_url, 'https://tcgplayer-cdn.tcgplayer.com/product/722295_200w.jpg');
     assert.deepStrictEqual([alt.price_trend, alt.price_normal, alt.price_holofoil, alt.price_source], [0.99, null, 0.99, 'tcgcsv'],
       'today\'s quote: Foil only, so the foil price and the trend');
+    assert.deepStrictEqual([alt.supertype, JSON.parse(alt.subtypes), JSON.parse(alt.types), JSON.parse(alt.attributes), alt.cmc],
+      ['Unit', ['Champion', 'Ekko', 'Zaun'], ['Mind'], { energy: 3, might: 4 }, 3], 'what the card is, for deck rules and filters');
+    assert.strictEqual((await card(RAD.jarvan)).supertype, 'Legend');
+    assert.strictEqual((await card('riftbound-rwb-278a-298~tcgp722659')).orientation, 'landscape', 'a battlefield, sideways');
     const rune = await card(RAD.rune);
     assert.deepStrictEqual([rune.number, rune.price_normal, rune.price_trend], ['r02', 0.09, 0.09]);
     assert.strictEqual((await card(RAD.jarvan)).image_url, '', 'no TCGplayer picture: no image, not a url that answers 403');
@@ -178,6 +197,10 @@ async function main() {
     const browse = await rc.searchCards({ set: 'RAD' });
     assert.strictEqual(browse.total, 8);
     assert.strictEqual(browse.cards[0].set_id, 'riftbound-rad', 'newest set first');
+    const legends = await rc.searchCards({ set: 'RAD', filters: { type: 'Legend' } });
+    assert.deepStrictEqual(legends.cards.map(c => c.id), [RAD.jarvan], 'the type filter finds them');
+    const mind = await rc.searchCards({ set: 'RAD', filters: { domain: 'Mind' } });
+    assert.deepStrictEqual(mind.cards.map(c => c.id).sort(), [RAD.ekko, RAD.ekkoAlt, RAD.kaisa].sort(), 'and the domain filter');
     assert.strictEqual((await rc.getCardById(RAD.kaisa)).name, "Kai'Sa, Rebel (K/DA Special Art Card)");
     assert.strictEqual((await cardApi.getCardById(RAD.aphelios, { game: 'riftbound' })).tcgplayer_product_id, 724664);
     const codes = await rc.listSetCodes();
@@ -197,7 +220,15 @@ async function main() {
     PRODUCTS['24819'] = [];
     assert.deepStrictEqual(await fallback.ensure({ sync: false }), { cards: 0, removed: 0, kept: 0 });
     assert.strictEqual((await ids('riftbound-rad')).length, 8, 'no product list today: the set stays as it was');
+    // A TCGCSV cache from before the slim rows kept `ext`, then the next with it.
+    PRODUCTS['24819'] = held.map(({ ext, ...p }) => p);
+    version = 'v3-older';
+    await fallback.ensure({ sync: false });
+    assert.strictEqual((await card(RAD.ekkoAlt)).supertype, '', 'no fields: a bare row, nothing guessed');
     PRODUCTS['24819'] = held;
+    version = 'v3-newer';
+    assert.deepStrictEqual(await fallback.ensure({ sync: false }), { cards: 8, removed: 0, kept: 0 }, 'the fields arrive: the set is rewritten');
+    assert.strictEqual((await card(RAD.ekkoAlt)).supertype, 'Unit');
     cached89 = false;
     version = 'v3-nothing';
     assert.deepStrictEqual(await fallback.ensure({ sync: false }), { missing: true });

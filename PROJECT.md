@@ -545,7 +545,10 @@ same), so when RiftCodex adds the set its rows land on the same ids. Products
 sharing a Number follow RiftCodex's canonical rule and the others get
 `~tcgp<product id>`; a Number of no RiftCodex shape (`T02 // T05`) gives
 `<set>-tcgp<product id>`. Products RiftCodex already serves under another set,
-sealed product and groups of sealed product only are skipped. RiftCodex's refresh
+sealed product and groups of sealed product only are skipped. A row has TCGplayer's
+name, number, rarity, picture and product id, and its card type, domains, tags and
+stats from the `ext` the slim cache keeps on category 89 cards (`tcgcsvSlim`
+`riftboundProduct`, an optional field, so `SLIM_VERSION` stands); no rules text. RiftCodex's refresh
 records the sets it serves (`riftcodexCovers`) and takes over any it now has: its
 rows replace these on shared ids, and fallback cards it lacks go unless something
 refers to them (`utils/cardReferences`, the rule `pokemonTcgplayer` uses). Every

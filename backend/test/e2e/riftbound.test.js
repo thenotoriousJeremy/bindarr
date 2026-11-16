@@ -143,7 +143,8 @@ async function main() {
       assert.strictEqual(browse.headers.get('x-total-count'), '8', 'the whole set is counted for paging');
       const number = await api('GET', '/api/search?game=riftbound&set=UNL&number=229');
       assert.deepStrictEqual(number.json.map(c => c.id).sort(), ['riftbound-unl-229-219', SIG].sort());
-      const fields = await api('GET', '/api/search?game=riftbound&type=Battlefield');
+      // In Unleashed: the Worlds Bundle's battlefields, from TCGplayer, are F9-TC15's.
+      const fields = await api('GET', '/api/search?game=riftbound&set=UNL&type=Battlefield');
       assert.deepStrictEqual(fields.json.map(c => c.id), [FIELD]);
       assert.strictEqual(fields.json[0].orientation, 'landscape');
       const fury = await api('GET', '/api/search?game=riftbound&domain=Fury');
@@ -276,6 +277,12 @@ async function main() {
       assert.strictEqual(alt.price_holofoil, 0.99, 'a Foil listing');
       const byName = await api('GET', '/api/search?game=riftbound&name=Jarvan');
       assert.deepStrictEqual(byName.json.map(c => c.id), [RAD.jarvan]);
+      // What a card is comes from TCGplayer too: the filters and deck rules read it.
+      const legends = await api('GET', '/api/search?game=riftbound&set=RAD&type=Legend');
+      assert.deepStrictEqual(legends.json.map(c => c.id), [RAD.jarvan]);
+      assert.deepStrictEqual(alt.types, ['Mind']);
+      const fields = await api('GET', '/api/search?game=riftbound&set=RWB&type=Battlefield');
+      assert.ok(fields.json.length && fields.json.every(c => c.orientation === 'landscape'), JSON.stringify(fields.json));
       // RiftCodex's own sets are not doubled.
       const unl = await api('GET', '/api/search?game=riftbound&set=UNL');
       assert.strictEqual(unl.headers.get('x-total-count'), '8');
