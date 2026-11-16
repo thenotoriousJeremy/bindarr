@@ -227,7 +227,7 @@ router.post('/users', async (req, res) => {
       VALUES (?, ?, ?, ?, ?)
     `, [cleanUsername, passwordHash, role, shareToken, 0]);
     // A binder and a box to put the first card in, as every new account gets.
-    await db.seedStarterLocations(created.lastID, { newAccount: true });
+    await db.seedStarterLocations(created.lastID);
 
     res.status(201).json({ message: `User "${cleanUsername}" created successfully.` });
   } catch (error) {
