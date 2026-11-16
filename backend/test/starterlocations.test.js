@@ -3,10 +3,10 @@
 // seedStarterLocations counted the locations of the whole install, so once the
 // first account had them nobody else ever did: SSO users were seeded into
 // nothing, and self-registration and the admin's Add User never called it at all.
-// It now counts the new account's own locations, and every route that creates an
-// account calls it. The boot-time call for the existing owner (initDb, no
-// options) keeps counting the whole install, so an owner who deleted theirs does
-// not get them back on every restart.
+// It now counts only the given account's own locations, whoever calls it, and
+// every route that creates an account calls it. initDb seeds only an owner it has
+// just created, so an existing owner who deleted theirs does not get them back on
+// a restart, even when nobody else on the install has any storage either.
 //
 // The real routers in this process. Plain node + assert.
 const path = require('path');
@@ -79,13 +79,31 @@ async function main() {
   console.log('PASS: registration and Add User seed the starter binder and box');
 
   // Counted per account: one that already has a location is left alone.
-  await db.seedStarterLocations(invited.id, { newAccount: true });
+  await db.seedStarterLocations(invited.id);
   assert.deepStrictEqual(await locationsOf(invited.id), STARTER, 'seeding twice adds nothing');
+
+  // A member is seeded however much storage the rest of the install has: only
+  // their own locations count, with no option needed to say so.
+  const member = await db.run(
+    `INSERT INTO users (username, password_hash, role, share_token, share_enabled) VALUES (?, ?, ?, ?, ?)`,
+    ['plainmember', '!', 'member', 'plainmember-token', 0]
+  );
+  assert.ok((await db.get(`SELECT COUNT(*) AS n FROM locations`)).n > 0, 'other accounts already have storage');
+  await db.seedStarterLocations(member.lastID);
+  assert.deepStrictEqual(await locationsOf(member.lastID), STARTER, 'the member gets their own pair');
+  assert.deepStrictEqual(await locationsOf(owner.id), STARTER, 'and nobody else gains any');
 
   // The boot-time call: an owner who deleted theirs does not get them back.
   await db.run(`DELETE FROM locations WHERE user_id = ?`, [owner.id]);
   await db.initDb();   // a restart
   assert.deepStrictEqual(await locationsOf(owner.id), [], 'a restart does not re-seed an owner who removed them');
+
+  // Not even when nobody on the install has any storage left, which the old
+  // install-wide count read as "a new install" and seeded again.
+  await db.run(`DELETE FROM locations`);
+  await db.initDb();
+  assert.deepStrictEqual(await locationsOf(owner.id), [], 'an empty install does not re-seed its owner on restart');
+  assert.strictEqual((await db.get(`SELECT COUNT(*) AS n FROM locations`)).n, 0, 'nor anyone else');
   console.log('PASS: seeding counts the account\'s own locations, and a restart re-seeds nobody');
 
   console.log('PASS: starterlocations.test.js');
