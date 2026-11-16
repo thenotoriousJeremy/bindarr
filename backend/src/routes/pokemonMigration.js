@@ -44,6 +44,8 @@ router.post('/apply', async (req, res) => {
   }
   try {
     res.json(await migration.apply(planId));
+    // A switch of provider switches Bindarr's Pokémon scan catalog on or off with it.
+    require('../catalogReleases').applyProvider().catch(() => {});
   } catch (error) {
     // Every failure that reaches here happened before the commit: the backup, or
     // the transaction, which has rolled back.
@@ -60,6 +62,7 @@ router.post('/revert', async (req, res) => {
   }
   try {
     res.json(await migration.revert(runId));
+    require('../catalogReleases').applyProvider().catch(() => {});
   } catch (error) {
     sendError(res, error, 'The undo failed and was rolled back; nothing was changed.');
   }

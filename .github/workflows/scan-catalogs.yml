@@ -1,0 +1,196 @@
+name: Scan catalogs
+
+# Bindarr's own scan catalogs: a milo embedding of every card's art, built once a
+# week here for every install, so no install has to download a game's worth of
+# images and embed them itself. Published as assets of this repository's
+# `scan-catalogs` release; an install downloads a catalog once and afterwards only
+# the week's delta segment (backend/src/catalogReleases.js). The format, and when a
+# fresh base is written instead of a delta, are in scripts/scan-catalogs/build.mjs.
+#
+# A prerelease on a tag of its own: Bindarr's update check reads /releases/latest,
+# which never returns a prerelease, and the release workflows fire on `v*` tags only.
+on:
+  workflow_dispatch:
+    inputs:
+      keys:
+        description: Catalogs to build, comma separated (blank builds all of them)
+        default: ''
+      rebase:
+        description: Publish a fresh base instead of a delta
+        type: boolean
+        default: false
+      fresh:
+        description: Embed every card again (implies a fresh base)
+        type: boolean
+        default: false
+  # Wednesdays 04:41 UTC: hours after the daily TCGCSV mirror (23:17), which the
+  # TCGplayer-catalogue games and Pokémon's TCGplayer cards read; off the hour.
+  schedule:
+    - cron: '41 4 * * 3'
+
+# Read-only by default. The builds run npm ci (install scripts) for hours, so they
+# get no write token at all: they hand their files over as artifacts, and only the
+# two short jobs that touch the release — creating it, and publishing — can write.
+permissions:
+  contents: read
+
+# One run at a time: two would race their uploads to the same assets.
+concurrency:
+  group: scan-catalogs
+  cancel-in-progress: false
+
+env:
+  TAG: scan-catalogs
+  # Every scanned game in English, and Japanese Pokémon (a set structure of its
+  # own, which the English catalog cannot answer for). Other languages fall back
+  # to the English catalog by art, as before.
+  ALL_KEYS: 'mtg-en,pokemon-en,pokemon-ja,lorcana-en,riftbound-en,yugioh-en,onepiece-en,digimon-en,fab-en,swu-en'
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      keys: ${{ steps.keys.outputs.keys }}
+    steps:
+      - name: Catalogs to build
+        id: keys
+        env:
+          REQUESTED: ${{ inputs.keys }}
+        run: |
+          set -euo pipefail
+          keys="${REQUESTED:-$ALL_KEYS}"
+          echo "keys=$(jq -Rc 'split(",") | map(gsub("\\s"; "")) | map(select(length > 0))' <<< "$keys")" >> "$GITHUB_OUTPUT"
+
+      - name: Make sure the release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
+              --title "Scan catalogs" \
+              --notes "Bindarr's camera-scan catalogs, rebuilt weekly by .github/workflows/scan-catalogs.yml. Bindarr downloads these itself (Admin → Scan catalogs); there is nothing here to install by hand. The embeddings come from the milo model (AGPL-3.0, https://huggingface.co/HanClinto/milo)."
+          fi
+
+  build:
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # The first Magic build embeds ~110k images; a weekly one, a few hundred.
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        key: ${{ fromJson(needs.plan.outputs.keys) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend
+        working-directory: backend
+        run: npm ci --omit=dev
+
+      # Pinned revisions, checked against their SHA-256 (backend/src/utils/modelAssets.js).
+      - name: Fetch the models
+        env:
+          CV_MODEL_DIR: ${{ runner.temp }}/models
+        run: node backend/scripts/fetch-models.mjs
+
+      # Reads last week's catalog from the public release (no token needed) and
+      # writes this week's files to $RUNNER_TEMP/out.
+      - name: Build ${{ matrix.key }}
+        env:
+          CV_MODEL_DIR: ${{ runner.temp }}/models
+          KEY: ${{ matrix.key }}
+          REBASE: ${{ inputs.rebase && '--rebase' || '' }}
+          FRESH: ${{ inputs.fresh && '--fresh' || '' }}
+        run: node scripts/scan-catalogs/build.mjs --key "$KEY" --out "$RUNNER_TEMP/out" $REBASE $FRESH
+
+      - name: Hand the files to the publish job
+        uses: actions/upload-artifact@v7
+        with:
+          name: catalog-${{ matrix.key }}
+          path: ${{ runner.temp }}/out
+          retention-days: 3
+          if-no-files-found: error
+
+  publish:
+    needs: [plan, build]
+    # A failed catalog keeps last week's copy; the others still publish, and the
+    # list still names every catalog.
+    if: ${{ always() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Only scripts/scan-catalogs/build.mjs --index runs here, which needs no
+      # dependencies; nothing is installed in the job that can write.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Collect the builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: catalog-*
+          path: ${{ runner.temp }}/artifacts
+
+      # Segments and state first, the manifest last: an install that reads the new
+      # manifest can always download everything it names.
+      - name: Publish each catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for dir in "$RUNNER_TEMP"/artifacts/catalog-*; do
+            [ -f "$dir/publish.json" ] || continue
+            cd "$dir"
+            mapfile -t files < <(jq -r '.upload[]' publish.json)
+            if [ "${#files[@]}" -gt 0 ]; then
+              gh release upload "$TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+            fi
+            manifest=$(jq -r '.manifest // empty' publish.json)
+            if [ -n "$manifest" ]; then
+              gh release upload "$TAG" "$manifest" --clobber --repo "$GITHUB_REPOSITORY"
+            fi
+            echo "$(basename "$dir"): ${files[*]:-nothing} ${manifest}"
+          done
+
+      # Manifests through the API rather than the download URL, which a CDN may
+      # serve a few minutes stale — the list of what to delete is built from them.
+      - name: Write the catalog list
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/manifests" "$RUNNER_TEMP/index"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' > "$RUNNER_TEMP/assets.txt"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.json' --dir "$RUNNER_TEMP/manifests" --clobber
+          node scripts/scan-catalogs/build.mjs --index --assets "$RUNNER_TEMP/assets.txt" \
+            --manifests "$RUNNER_TEMP/manifests" --out "$RUNNER_TEMP/index"
+          gh release upload "$TAG" "$RUNNER_TEMP/index/catalogs.json" --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Delete superseded segments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          while read -r name; do
+            [ -n "$name" ] || continue
+            gh release delete-asset "$TAG" "$name" --yes --repo "$GITHUB_REPOSITORY"
+            echo "deleted $name"
+          done < "$RUNNER_TEMP/index/delete.txt"

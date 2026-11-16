@@ -9,6 +9,9 @@ import { containerTypeKey } from '../utils/cardOptions';
 import { LOCALES, localeName, useT } from '../utils/i18n';
 import Modal from './Modal';
 
+// The games the registry starts switched off (shared/games.json defaultEnabled).
+const OFF_BY_DEFAULT = GAMES.filter(g => g.defaultEnabled === false);
+
 // First-run setup.
 //
 // A fresh install has an empty database, no models and no catalog, so the scanner
@@ -301,6 +304,13 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
         title={t('setup.cards.title')}
         sub={t('setup.cards.sub')}
       />
+      {/* The registry starts some games off; say which, and that switching one on
+          is all it takes (its card list is fetched the first time it is used). */}
+      {OFF_BY_DEFAULT.length > 0 && (
+        <p style={{ ...body, fontSize: '0.78rem', margin: 0 }}>
+          {t('setup.cards.offByDefault', { games: OFF_BY_DEFAULT.map(g => g.label).join(', ') })}
+        </p>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
         {GAMES.map(({ value, label: cardName }) => {
           const on = shownGames.includes(value);
@@ -381,7 +391,9 @@ export default function SetupWizard({ user, onUpdateUser, onClose, showToast }) 
           {t('setup.scan.catalogBody')}
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-          {(engine?.catalogs || []).map(c => (
+          {/* Only the games picked on the cards step: a catalog for a game the
+              owner just said they do not collect is a download nobody needs. */}
+          {(engine?.catalogs || []).filter(c => shownGames.includes(c.game)).map(c => (
             <div key={c.name}>
               <div style={row}>
                 <span style={{ fontSize: '0.76rem', color: 'var(--text-strong)' }}>

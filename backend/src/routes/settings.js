@@ -5,6 +5,10 @@ const { requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
+// The Pokémon providers an admin may pick. TCGdex is the default; pokemontcg.io
+// stays selectable only for installs still pinned to it until they migrate.
+const POKEMON_PROVIDERS = ['tcgdex', 'pokemontcg', 'pokemontcgapi'];
+
 // --- Version + update check ---
 
 // backend/package.json is what the release workflow bumps, so it is the running
@@ -67,7 +71,9 @@ async function getEffectiveSettings() {
     FROM app_settings WHERE id = 1
   `);
   const public_base_url = (row && row.public_base_url) || process.env.PUBLIC_BASE_URL || '';
-  const pokemon_provider = (row && row.pokemon_provider) || 'pokemontcg';
+  // TCGdex unless the row explicitly holds another provider: pokemontcg.io is only
+  // ever the upgrade pin for installs whose data it numbers (db.js), never a default.
+  const pokemon_provider = POKEMON_PROVIDERS.includes(row && row.pokemon_provider) ? row.pokemon_provider : 'tcgdex';
   const mtg_price_source = row && row.mtg_price_source === 'cardmarket' ? 'cardmarket' : 'tcgplayer';
   const scan_exclude_tokens = !!(row && row.scan_exclude_tokens);
   const scan_exclude_art_cards = !!(row && row.scan_exclude_art_cards);
@@ -126,16 +132,21 @@ router.put('/', requireAdmin, async (req, res) => {
 
   // Every field is validated before anything is written, so a bad value cannot
   // leave the other fields of the same save half-applied -- some used to be
-  // checked only after earlier ones had been saved. Rejected rather than coerced
-  // (unlike pokemon_provider): silently falling back to TCGplayer on a typo would
-  // look, from the admin's side, like the setting not working.
+  // checked only after earlier ones had been saved. Rejected rather than coerced:
+  // silently falling back to TCGplayer on a typo would look, from the admin's
+  // side, like the setting not working.
   const scryfallApi = require('../scryfallApi');
   if (mtg_price_source !== undefined && !scryfallApi.MTG_PRICE_SOURCES.includes(mtg_price_source)) {
     return res.status(400).json({ error: `MTG price source must be one of: ${scryfallApi.MTG_PRICE_SOURCES.join(', ')}.` });
   }
   let provider;
   if (pokemon_provider !== undefined) {
-    provider = ['tcgdex', 'pokemontcgapi'].includes(pokemon_provider) ? pokemon_provider : 'pokemontcg';
+    // A typo used to land on pokemontcg.io, which re-numbers every Pokémon set on
+    // the install behind the admin's back.
+    if (!POKEMON_PROVIDERS.includes(pokemon_provider)) {
+      return res.status(400).json({ error: `Pokémon provider must be one of: ${POKEMON_PROVIDERS.join(', ')}.` });
+    }
+    provider = pokemon_provider;
     if (provider === 'pokemontcgapi' && !require('../pokemontcgapi').hasKey()) {
       return res.status(400).json({ error: 'Set POKEMONTCGAPI_KEY on the server before selecting this provider.' });
     }
@@ -207,9 +218,17 @@ router.put('/', requireAdmin, async (req, res) => {
     // the TCGplayer product map resolves scans through set ids it took FROM that
     // table. Both are rebuilt here, in the background — the set walk is one
     // request plus a detail pass, the map is ~30 seconds.
-    if (provider !== undefined && ((before && before.pokemon_provider) || 'pokemontcg') !== provider) {
+    // An unset or unknown stored value is read as TCGdex, the default.
+    const previous = POKEMON_PROVIDERS.includes(before && before.pokemon_provider) ? before.pokemon_provider : 'tcgdex';
+    if (provider !== undefined && previous !== provider) {
       console.log(`Pokémon provider changed to ${provider} — re-syncing sets and the TCGplayer product map.`);
       (async () => {
+        // First, and apart from the rest: Bindarr's Pokémon scan catalog is keyed by
+        // TCGdex ids, so it goes on with TCGdex and off without, whether or not the
+        // provider below can be reached. Local work only (state files).
+        await require('../catalogReleases').applyProvider().catch((e) => {
+          console.error(`Provider switch: the Pokémon scan catalog could not follow: ${e.message}`);
+        });
         try {
           const source = await require('../utils/pokemonProvider').apiFor('en');
           await source.fetchAndCacheSets(true);

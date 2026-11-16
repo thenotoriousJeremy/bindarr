@@ -17,11 +17,19 @@ const {
   setGameEnabled, defaultGame, defaultGameFilter, gameLabel,
 } = await import('./games.js');
 
-// --- Default: all games shown -------------------------------------------------
+// --- Default: the four original games; the newer five start switched off -------
 assert.deepStrictEqual(enabledGames(), ['pokemon', 'mtg', 'lorcana', 'riftbound']);
 assert.ok(showGamePicker(), 'several games means the picker is worth showing');
 assert.strictEqual(gameOptions().length, 4);
 assert.strictEqual(defaultGameFilter(), '', "'all games' is meaningful with multiple shown");
+assert.ok(!isGameEnabled('yugioh'), 'a game the registry starts off is off until someone switches it on');
+
+// Switching one on shows it, in registry order, and switching it off again hides it.
+assert.strictEqual(setGameEnabled('onepiece', true), true);
+assert.deepStrictEqual(enabledGames(), [...['pokemon', 'mtg', 'lorcana', 'riftbound'], 'onepiece']);
+assert.strictEqual(setGameEnabled('onepiece', false), true);
+assert.deepStrictEqual(enabledGames(), ['pokemon', 'mtg', 'lorcana', 'riftbound']);
+assert.strictEqual(setGameEnabled('notagame', true), false, 'an unknown game cannot be switched on');
 
 // --- Hiding MTG, Lorcana & Riftbound ------------------------------------------
 assert.strictEqual(setGameEnabled('riftbound', false), true);
@@ -56,12 +64,20 @@ assert.deepStrictEqual(enabledGames(), ['pokemon', 'mtg', 'lorcana', 'riftbound'
 assert.ok(showGamePicker());
 
 // --- A corrupt stored value must not hide the whole app -----------------------
+store.delete('shown_games');
 store.set('hidden_games', 'not json');
-assert.deepStrictEqual(enabledGames(), ['pokemon', 'mtg', 'lorcana', 'riftbound'], 'malformed value falls back to showing everything');
-store.set('hidden_games', JSON.stringify(['pokemon', 'mtg', 'lorcana', 'riftbound', 'gibberish']));
-assert.deepStrictEqual(enabledGames(), ['pokemon', 'mtg', 'lorcana', 'riftbound'], 'hiding every known game is ignored');
+assert.deepStrictEqual(enabledGames(), ['pokemon', 'mtg', 'lorcana', 'riftbound'], 'malformed value falls back to the defaults');
+store.set('hidden_games', JSON.stringify([...['pokemon', 'mtg', 'lorcana', 'riftbound', 'yugioh', 'onepiece', 'digimon', 'fab', 'swu'], 'gibberish']));
+assert.deepStrictEqual(enabledGames(), ['pokemon', 'mtg', 'lorcana', 'riftbound'], 'hiding every known game falls back to the defaults');
 store.set('hidden_games', JSON.stringify(['gibberish']));
 assert.deepStrictEqual(enabledGames(), ['pokemon', 'mtg', 'lorcana', 'riftbound'], 'an unknown game name hides nothing');
+store.set('shown_games', 'not json');
+assert.deepStrictEqual(enabledGames(), ['pokemon', 'mtg', 'lorcana', 'riftbound'], 'a malformed shown list is ignored');
+
+// --- A browser from before the newer games: its hidden list still applies ------
+store.set('hidden_games', JSON.stringify(['mtg']));
+store.delete('shown_games');
+assert.deepStrictEqual(enabledGames(), ['pokemon', 'lorcana', 'riftbound'], 'old choices kept, new games off');
 
 assert.strictEqual(gameLabel('mtg'), 'Magic: The Gathering');
 assert.strictEqual(gameLabel('mtg', true), 'MTG');

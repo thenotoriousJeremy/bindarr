@@ -45,8 +45,12 @@ const cardId = (lang, id) => `tcgdex-${lang}-${id}`;
 // TCGdex serves art from a CDN path with no extension; the size is the last
 // segment. `low` is ~245px like pokemontcg.io's `small`, which is what the card
 // grids want — the inspector's zoom is still served the same URL, so keep the
-// cheap one rather than pushing 210 high-res PNGs through a set browse.
-const imageUrl = (image) => (image ? `${image}/low.png` : '');
+// cheap one rather than pushing 210 high-res images through a set browse.
+//
+// WebP, not PNG: the same 245px image measured 18 KB against 60 KB as PNG (five
+// cards, 2026-11-15), so a set browse moves a third of the bytes. Every browser
+// and WebView the app supports decodes it. db.js rewrites rows cached as PNG.
+const imageUrl = (image) => (image ? `${image}/low.webp` : '');
 
 // Cardmarket quotes in EUR while TCGplayer quotes USD, and TCGdex hands back
 // whichever it has (non-English cards are Cardmarket-only). ONE of the two prices
@@ -283,11 +287,22 @@ async function runSearch(nameQuery = '', numberQuery = '', setQuery = '', scope 
     return db.all(sql, params);
   };
 
+  // The cards TCGdex does not have (TCGplayer-only, pokemonTcgplayer.js) live in the
+  // same cache, so they answer the local query below. Brought up to date in the
+  // background: this search serves what is cached, and never waits on it.
+  require('./pokemonTcgplayer').ensure(langName).catch(() => {});
+
   let localResults = [];
   if (scope !== 'internet') {
     localResults = await queryLocal();
-    if (localResults.length > 0) {
-      const stale = localResults.filter(r => (Date.now() - new Date(r.last_updated).getTime()) > CACHE_AGE_LIMIT_MS);
+    // TCGplayer-only rows alone do not settle a search: the TCGdex card a user
+    // means may simply not be cached yet, so TCGdex is still asked and its cards
+    // come first.
+    const onlyFallback = localResults.length > 0 && localResults.every(r => String(r.id).startsWith('tcgplayer-'));
+    if (localResults.length > 0 && !onlyFallback) {
+      // Only TCGdex's own rows can be refreshed from TCGdex.
+      const stale = localResults.filter(r => String(r.id).startsWith('tcgdex-')
+        && (Date.now() - new Date(r.last_updated).getTime()) > CACHE_AGE_LIMIT_MS);
       if (stale.length > 0) refreshInBackground(code, stale);
       return localResults.map(parseCardRow);
     }
@@ -320,7 +335,9 @@ async function runSearch(nameQuery = '', numberQuery = '', setQuery = '', scope 
     if (full.length < window.length) console.warn(`TCGdex search (${code}): ${window.length - full.length} of ${window.length} cards could not be fetched.`);
     const cards = full.map(c => normalizeCard(c, code));
     if (cards.length > 0) await cacheCards(cards);
-    return storedCards(cards.map(c => c.id));
+    // TCGplayer-only matches from the local cache follow TCGdex's own.
+    return (await storedCards(cards.map(c => c.id)))
+      .concat(localResults.filter(r => String(r.id).startsWith('tcgplayer-')).map(parseCardRow));
   } catch (error) {
     console.error(`TCGdex search failed (${code}):`, error.message);
     // Same rule as the other providers: serve the cache before admitting defeat,
@@ -607,13 +624,13 @@ async function updateCollectionPrices(force = false) {
     }
     const rows = await db.all(`
       SELECT DISTINCT c.card_id AS id FROM collection c
-      JOIN card_cache cc ON c.card_id = cc.id WHERE cc.game = 'pokemon' AND cc.language != 'English'
+      JOIN card_cache cc ON c.card_id = cc.id WHERE cc.game = 'pokemon' AND cc.language != 'English' AND cc.id NOT LIKE 'tcgplayer-%'
       UNION
       SELECT DISTINCT d.card_id AS id FROM deck_cards d
-      JOIN card_cache cc ON d.card_id = cc.id WHERE cc.game = 'pokemon' AND cc.language != 'English'
+      JOIN card_cache cc ON d.card_id = cc.id WHERE cc.game = 'pokemon' AND cc.language != 'English' AND cc.id NOT LIKE 'tcgplayer-%'
       UNION
       SELECT DISTINCT w.card_id AS id FROM (${WISHLIST_CARDS_SQL}) w
-      JOIN card_cache cc ON w.card_id = cc.id WHERE cc.game = 'pokemon' AND cc.language != 'English'
+      JOIN card_cache cc ON w.card_id = cc.id WHERE cc.game = 'pokemon' AND cc.language != 'English' AND cc.id NOT LIKE 'tcgplayer-%'
     `);
     const owned = rows.filter(r => idLanguage(r.id));
     if (owned.length === 0) return;

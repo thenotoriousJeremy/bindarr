@@ -47,7 +47,21 @@ function rarities() {
   const shuffled = [...classic].reverse().map(r => ({ name: r, rarity: r }));
   assert.deepStrictEqual(names(sortCards(shuffled, [{ by: 'rarity', dir: 'desc' }])), classic,
     'the Pokémon and Magic tiers are ranked exactly as before');
-  console.log('PASS: rarity ranks cover Lorcana and Riftbound, the rest unchanged');
+  // The games served from TCGplayer's catalogue, in TCGplayer's own rarity names.
+  const yugioh = ['Common', 'Starlight Rare', 'Ultimate Rare', 'Short Print', 'Ghost Rare', 'Secret Rare',
+    "Collector's Rare", 'Super Rare', 'Ultra Rare', 'Rare', 'Quarter Century Secret Rare'].map(r => ({ name: r, rarity: r }));
+  assert.deepStrictEqual(names(sortCards(yugioh, [{ by: 'rarity', dir: 'desc' }])),
+    ['Starlight Rare', 'Ghost Rare', 'Secret Rare', 'Quarter Century Secret Rare', 'Ultimate Rare', "Collector's Rare",
+      'Ultra Rare', 'Super Rare', 'Rare', 'Short Print', 'Common'], "Yu-Gi-Oh!'s rarities sort rarest first");
+  const fab = ['Common', 'Fabled', 'Rare', 'Majestic', 'Marvel', 'Legendary', 'Super Rare'].map(r => ({ name: r, rarity: r }));
+  assert.deepStrictEqual(names(sortCards(fab, [{ by: 'rarity', dir: 'desc' }])),
+    ['Fabled', 'Marvel', 'Legendary', 'Majestic', 'Super Rare', 'Rare', 'Common'], "Flesh and Blood's rarities sort rarest first");
+  const onepiece = ['Common', 'Leader', 'Treasure Rare', 'Secret Rare', 'Special Card', 'Super Rare', 'Rare', 'Uncommon']
+    .map(r => ({ name: r, rarity: r }));
+  assert.deepStrictEqual(names(sortCards(onepiece, [{ by: 'rarity', dir: 'desc' }])),
+    ['Treasure Rare', 'Secret Rare', 'Special Card', 'Super Rare', 'Leader', 'Rare', 'Uncommon', 'Common'],
+    "One Piece's rarities sort rarest first");
+  console.log('PASS: rarity ranks cover Lorcana, Riftbound and the TCGplayer-catalogue games, the rest unchanged');
 }
 
 function newestFirst() {

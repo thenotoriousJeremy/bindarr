@@ -45,23 +45,36 @@ export function gameOfCard(card) {
 }
 
 const KEY = 'hidden_games';
+// Games switched ON by choice. Needed because some games start switched off
+// (`defaultEnabled: false` in the registry: the five served from TCGplayer's
+// catalogue), and "never hidden" can no longer mean "shown" for those.
+const SHOWN_KEY = 'shown_games';
 const ALL = GAMES.map(g => g.value);
+// What a browser that has decided nothing shows: every game but the ones the
+// registry starts off. An install upgraded to a release that adds a game does not
+// suddenly grow its tabs, filters and pickers; the setup wizard and Settings ->
+// Preferences say the others exist and switch them on.
+export const DEFAULT_GAMES = GAMES.filter(g => g.defaultEnabled !== false).map(g => g.value);
 
-const readHidden = () => {
+const readList = (key) => {
   try {
-    const raw = JSON.parse(localStorage.getItem(KEY));
+    const raw = JSON.parse(localStorage.getItem(key));
     return Array.isArray(raw) ? raw.filter(g => ALL.includes(g)) : [];
   } catch {
-    return []; // malformed value: show everything rather than hide the app
+    return []; // malformed value: fall back to the defaults rather than hide the app
   }
 };
+const readHidden = () => readList(KEY);
+const readShown = () => readList(SHOWN_KEY);
 
-// Enabled games, in GAMES order. Hiding every game would leave an app with
-// nothing in it, so the last one always stays visible.
+// Enabled games, in GAMES order: switched on by choice, or on by default and not
+// switched off. Hiding every game would leave an app with nothing in it, so a
+// state with none shown falls back to the defaults.
 export function enabledGames() {
   const hidden = readHidden();
-  const shown = ALL.filter(g => !hidden.includes(g));
-  return shown.length ? shown : ALL;
+  const chosen = readShown();
+  const shown = ALL.filter(g => chosen.includes(g) || (DEFAULT_GAMES.includes(g) && !hidden.includes(g)));
+  return shown.length ? shown : (DEFAULT_GAMES.length ? DEFAULT_GAMES : ALL);
 }
 
 export const isGameEnabled = (game) => enabledGames().includes(String(game || '').toLowerCase());
@@ -74,13 +87,16 @@ export const showGamePicker = () => enabledGames().length > 1;
 // GAMES entries for the enabled games, for rendering a picker.
 export const gameOptions = () => GAMES.filter(g => isGameEnabled(g.value));
 
-// Persist the hidden set. Refuses to hide the last visible game.
+// Persist the choice. Refuses to hide the last visible game.
 export function setGameEnabled(game, enabled) {
+  if (!ALL.includes(game)) return false;
   const hidden = new Set(readHidden());
-  if (enabled) hidden.delete(game);
-  else hidden.add(game);
-  if (ALL.every(g => hidden.has(g))) return false;
+  const shown = new Set(readShown());
+  if (enabled) { hidden.delete(game); shown.add(game); } else { hidden.add(game); shown.delete(game); }
+  const visible = ALL.filter(g => shown.has(g) || (DEFAULT_GAMES.includes(g) && !hidden.has(g)));
+  if (!visible.length) return false;
   localStorage.setItem(KEY, JSON.stringify([...hidden]));
+  localStorage.setItem(SHOWN_KEY, JSON.stringify([...shown]));
   return true;
 }
 

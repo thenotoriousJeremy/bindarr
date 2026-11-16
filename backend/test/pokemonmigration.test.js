@@ -301,7 +301,7 @@ async function main() {
   assert.ok(row('tcgdex-en-sv03.5-025').last_updated > '2000');
   const tg = row('tcgdex-en-swsh9tg-TG01');
   assert.deepStrictEqual([tg.rarity, tg.price_trend, tg.price_source, tg.last_updated], ['Trainer Gallery Rare Holo', 1.8, 'pokemontcg', '1970-01-01 00:00:00']);
-  assert.strictEqual(tg.image_url, 'https://assets.tcgdex.net/en/swsh/swsh9tg/TG01/low.png', 'name, number and art are the target provider\'s');
+  assert.strictEqual(tg.image_url, 'https://assets.tcgdex.net/en/swsh/swsh9tg/TG01/low.webp', 'name, number and art are the target provider\'s');
   const state = (await call('GET', '/status', admin)).body;
   assert.strictEqual(state.follow_up.phase, 'done');
   assert.strictEqual(state.follow_up.failed, 1);

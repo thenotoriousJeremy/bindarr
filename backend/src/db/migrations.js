@@ -370,6 +370,11 @@ async function initDb() {
   // hearts tapped at once cannot make two.
   await addColumns('card_lists', { is_default: 'INTEGER NOT NULL DEFAULT 0' });
   await create('idx_card_lists_default');
+  // How many builds found a set empty upstream (catalog.js markGap). A new set is
+  // listed before its cards are published, so the weekly update retries it a few
+  // times before giving up; a row from before this was counted (NULL) is one
+  // already given up on.
+  await addColumns('set_data_gaps', { tries: 'INTEGER' });
   await create(
     'notification_channels', 'idx_notification_channels_user', 'notification_prefs', 'notification_price_state',
     'notification_log', 'idx_notification_log_queue', 'idx_notification_log_dedupe',
@@ -399,7 +404,7 @@ async function initDb() {
     sealed_tcg_extra_enabled: 'INTEGER DEFAULT 0',
     tcgcsv_last_checked_at: 'DATETIME',
   });
-  await create('tcgcsv_cache');
+  await create('tcgcsv_cache', 'tcgcsv_catalogues', 'tcgcsv_bundles', 'catalog_set_checks');
   // An earlier build of the daily sync kept whole responses in
   // tcgcsv_response_cache. Slim them into the new table rather than discarding
   // them, so an upgrade does not cost a full re-download from TCGCSV, then drop it.
@@ -635,6 +640,17 @@ async function initDb() {
   // daily MTG price sweep re-fetches every owned and decked card).
   await addColumns('card_cache', { image_url_back: 'TEXT' });
 
+  // TCGdex art moved from PNG to WebP (tcgdexApi.imageUrl): the same 245px image
+  // at about a third of the bytes. Rows cached before, or restored from an older
+  // backup, still point at the PNG; both URLs serve, so this is purely bandwidth,
+  // and it is re-run every boot because it is one pass and self-healing. The scan
+  // catalog keeps its vectors across the switch (catalog.js artKey).
+  await run(`
+    UPDATE card_cache
+       SET image_url = substr(image_url, 1, length(image_url) - 4) || '.webp'
+     WHERE image_url LIKE 'https://assets.tcgdex.net/%/low.png'
+  `);
+
   // tcgplayer_catalog originally held cards only (a product with no collector
   // number was skipped as sealed product). Sealed rows now get a row too, so the
   // build needs somewhere to put the game they belong to, their artwork, and a
@@ -730,6 +746,8 @@ async function initDb() {
   // (utils/priceHelpers SWEEP_COLUMN: an unknown key means the sweep never runs).
   await addColumns('card_cache', { orientation: 'TEXT', artist: 'TEXT', card_text: 'TEXT', attributes: 'TEXT' });
   await addColumns('app_settings', { riftbound_prices_swept_at: 'DATETIME' });
+  // The games served from TCGplayer's catalogue (tcgcsvGameApi): one sweep for all.
+  await addColumns('app_settings', { tcgcsvgames_prices_swept_at: 'DATETIME' });
 
   await addColumns('collection', {
     user_id: 'INTEGER REFERENCES users(id) ON DELETE CASCADE',

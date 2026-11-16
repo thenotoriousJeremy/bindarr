@@ -58,11 +58,11 @@ async function main() {
   // 2. A card that IS catalogued, from the art the catalog was built from.
   const row = await db.get(
     `SELECT id, image_url FROM card_cache WHERE game = 'pokemon' AND language = 'Japanese'
-       AND image_url LIKE '%/low.png' ORDER BY id LIMIT 1`
+       AND (image_url LIKE '%/low.png' OR image_url LIKE '%/low.webp') ORDER BY id LIMIT 1`
   );
   let art = null;
   try {
-    const res = await fetch(row.image_url.replace(/\/low\.png$/, '/high.png'),
+    const res = await fetch(row.image_url.replace(/\/low\.(?:png|webp)$/, '/high.webp'),
       { signal: AbortSignal.timeout(20000) });
     if (res.ok) art = Buffer.from(await res.arrayBuffer());
   } catch { /* offline: the hit half of this test is skipped below */ }

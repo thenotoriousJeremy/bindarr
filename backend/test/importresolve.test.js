@@ -107,7 +107,7 @@ async function main() {
     assert.strictEqual(row.card_id, 'tcgdex-en-sv01-001');
     assert.strictEqual(row.set_id, 'sv01', 'set id is what the TCGCSV sweep prices by');
     assert.strictEqual(row.number, '001');
-    assert.ok(row.image_url.endsWith('/low.png'), 'resolved card carries its art');
+    assert.ok(row.image_url.endsWith('/low.webp'), 'resolved card carries its art');
   }
   assert.strictEqual(await db.get(`SELECT id FROM card_cache WHERE id IN ('parasect', 'journey together-999')`), undefined,
     'no placeholder card is minted for an unresolved row');

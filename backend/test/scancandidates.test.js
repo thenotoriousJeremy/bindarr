@@ -79,6 +79,26 @@ process.env.DB_PATH = tmpDb;
     assert.deepStrictEqual(await sc.resolveCandidate({ cardId: 'nowhere' }, 0, { game: 'pokemon', ...en }), { cardId: 'nowhere' });
   });
 
+  // Bindarr's downloaded catalogs carry every card, not only the ones this install
+  // has cached; a match on one of those is fetched by id, never dropped.
+  await check('A prefixed card id not cached here is fetched by id (a downloaded catalog)', async () => {
+    const tcgdexApi = require('../src/tcgdexApi');
+    const asked = [];
+    tcgdexApi.getCardById = async (id) => {
+      asked.push(id);
+      return { id, name: 'Fetched', set_id: 'sv01', number: '9', language: 'English', game: 'pokemon' };
+    };
+    const got = await sc.resolveCandidate({ cardId: 'tcgdex-en-sv01-009', score: 0.8 }, 0, { game: 'pokemon', ...en });
+    assert.strictEqual(got.card.id, 'tcgdex-en-sv01-009');
+    assert.strictEqual(got.name, 'Fetched');
+    assert.strictEqual(got.score, 0.8);
+    assert.deepStrictEqual(asked, ['tcgdex-en-sv01-009']);
+    // A bare id only comes from a catalog built out of card_cache: never fetched.
+    asked.length = 0;
+    assert.deepStrictEqual(await sc.resolveCandidate({ cardId: 'sv1-99' }, 0, { game: 'pokemon', ...en }), { cardId: 'sv1-99' });
+    assert.deepStrictEqual(asked, []);
+  });
+
   await check('Lorcana card id: cached row, else Lorcast by id', async () => {
     await cache('lor-1', 'lorcana');
     assert.strictEqual((await sc.resolveCandidate({ cardId: 'lor-1' }, 0, { game: 'lorcana', ...en })).card.id, 'lor-1');

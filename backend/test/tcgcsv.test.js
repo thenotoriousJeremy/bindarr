@@ -20,6 +20,9 @@ const path = require('path');
 
 process.env.DB_PATH = path.join(os.tmpdir(), `bindarr-tcgcsv-${process.pid}.db`);
 process.env.TCGCSV_BASE_URL = 'https://tcgcsv-cache.example.test/tcgcsv/';
+// The per-group walk is what this file pins; the mirror's bundles, which replace it
+// when the mirror publishes them, are test/tcgcsvbundles.test.js.
+process.env.TCGCSV_BUNDLES = '0';
 const tcgcsv = require('../src/tcgcsvApi');
 
 // Real groups, verbatim from /tcgplayer/3/groups and /tcgplayer/85/groups.
@@ -427,9 +430,9 @@ const dbMod = require('../src/db');
     { groupId: 32, name: 'Html Group', abbreviation: 'HG', publishedOn: null, isSupplemental: null },
   ]);
   assert.deepStrictEqual(await rawRow('/tcgplayer/3/30/products'),
-    [{ productId: 1001, name: 'Charizard', number: '004/102' },
+    [{ productId: 1001, name: 'Charizard', number: '004/102', rarity: 'Holo Rare', imageUrl: 'https://img.example.test/1001.jpg' },
      { productId: 1002, name: 'Fixture Booster Box', number: null, imageUrl: null, groupId: 30 }],
-    'cards keep id, name and collector number; sealed product (no number) keeps id, name, image and group');
+    'cards keep id, name, collector number, rarity and a non-standard image; sealed product (no number) keeps id, name, image and group');
   assert.deepStrictEqual(await rawRow('/tcgplayer/3/30/prices'),
     [{ productId: 1001, subTypeName: 'Holofoil', marketPrice: 420.5, midPrice: 450 }],
     'prices keep only priceable finishes and the two prices that are read');
@@ -629,7 +632,7 @@ const dbMod = require('../src/db');
     JSON.parse((await dbMod.get(
       `SELECT results_json FROM tcgcsv_cache WHERE path = '/tcgplayer/3/30/products' AND data_version = 'legacy-version'`
     )).results_json),
-    [{ productId: 1001, name: 'Charizard', number: '004/102' },
+    [{ productId: 1001, name: 'Charizard', number: '004/102', rarity: 'Holo Rare', imageUrl: 'https://img.example.test/1001.jpg' },
      { productId: 1002, name: 'Fixture Booster Box', number: null, imageUrl: null, groupId: 30 }],
     'legacy rows are slimmed into the new table, not refetched'
   );

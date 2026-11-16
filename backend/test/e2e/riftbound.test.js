@@ -118,7 +118,7 @@ async function main() {
     });
 
     await tc('F9-TC4 an unknown game or id is refused, not sent to Pokémon', async () => {
-      assert.strictEqual((await api('GET', '/api/search?game=yugioh&name=x')).status, 400);
+      assert.strictEqual((await api('GET', '/api/search?game=notagame&name=x')).status, 400);
       assert.strictEqual((await api('POST', '/api/collection', { card_id: 'not a card' })).status, 404);
     });
 
@@ -167,7 +167,7 @@ async function main() {
       const del = await api('DELETE', `/api/decks/${deckId}/cards/${encodeURIComponent(METAL)}`);
       assert.strictEqual(del.status, 200);
       assert.strictEqual((await api('GET', `/api/decks/${deckId}`)).json.cards.length, 1, 'removed by its ~ id');
-      assert.strictEqual((await api('POST', '/api/decks', { name: 'x', game: 'yugioh' })).status, 400);
+      assert.strictEqual((await api('POST', '/api/decks', { name: 'x', game: 'notagame' })).status, 400);
     });
 
     await tc('F9-TC9 stats and net worth by game', async () => {

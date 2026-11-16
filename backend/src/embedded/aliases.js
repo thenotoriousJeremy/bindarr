@@ -28,6 +28,8 @@ module.exports = {
   sharp: unavailable,
   'onnxruntime-node': unavailable,
   zlib: unavailable,
+  // Catalog builds' embed workers (embedPool.js); builds never run on a phone.
+  worker_threads: unavailable,
   http: unavailable,
   https: unavailable,
   // notify.js's SSRF guard (utils/notifyGuard); device mode sends no notifications.

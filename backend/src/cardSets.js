@@ -12,6 +12,7 @@ const { createProviderClient } = require('./utils/providerClient');
 // rather than re-deriving the answer from the language — see the note in that
 // module for what re-deriving it cost.
 const pokemonProvider = require('./utils/pokemonProvider');
+const games = require('./utils/games');
 // scryfallApi/tcgApi are lazy-required inside the build/preview paths only — they
 // pull in the DB module, which verify-only worker threads must not load.
 
@@ -130,23 +131,79 @@ const childBrief = (s) => ({
   type: s.set_type || 'subset',
 });
 
-// Every parent's children in ONE pass, as normalized-parent-code -> children[].
+// Every set's family ROOT: the top-level release it hangs under, however deep.
+//
+// Scryfall nests more than one level. 'ttdc' (Tarkir: Dragonstorm Commander
+// Tokens) is a child of 'tdc' (the Commander decks), which is itself a child of
+// 'tdm'. A family that only looked one level down never fetched 'ttdc' at all —
+// 51 sets and ~1,000 paper cards (Commander tokens, art series, promos) that no
+// local catalog could ever contain, while the weekly update counted them as
+// "new" forever because no build could cache them.
+//
+// A set belongs to its root's family only if it AND every set between it and the
+// root is paper and allowed by the scan exclusions: excluding promos drops a
+// promo set's own children too. Returns code -> root code (roots map to
+// themselves), or null for a set no family includes. Cycles and runaway chains
+// stop at 8 hops; Scryfall's deepest real chain is 2.
+function mtgRootIndex(sets, exclusions, excludeChildCodes = []) {
+  const byCode = new Map(sets.filter(s => s.code).map(s => [norm(s.code), s]));
+  const rootOf = new Map();
+  const resolve = (code) => {
+    if (rootOf.has(code)) return rootOf.get(code);
+    let s = byCode.get(code);
+    let root = null;
+    for (let hops = 0; s && hops < 8; hops++) {
+      if (s.digital) break;
+      const parent = s.parent_set_code ? norm(s.parent_set_code) : null;
+      if (!parent) { root = norm(s.code); break; }
+      if (!childAllowed(s, exclusions, excludeChildCodes)) break;
+      s = byCode.get(parent);
+    }
+    rootOf.set(code, root);
+    return root;
+  };
+  for (const code of byCode.keys()) resolve(code);
+  return { byCode, rootOf };
+}
+
+// Every root's descendants in ONE pass, as normalized-root-code -> children[].
 //
 // This replaced a per-parent lookup that cost a settings query plus a full scan
 // of the ~900 entry Scryfall set list EACH TIME: a caller wanting children for
 // every set in the catalogue paid that ~460 times per request. One query, one
 // pass, same answer — and now the only shape of this question anything asks.
+// Grandchildren are folded in under the root (see mtgRootIndex), so the set
+// picker offers them and a scoped build that sends the family embeds them.
 async function getMtgChildSetMap() {
   const [sets, exclusions] = await Promise.all([getScryfallSets(), getScanExclusions()]);
+  const { byCode, rootOf } = mtgRootIndex(sets, exclusions);
   const map = new Map();
-  for (const s of sets) {
-    if (!s.parent_set_code || s.digital) continue;
-    if (!childAllowed(s, exclusions)) continue;
-    const parent = norm(s.parent_set_code);
-    const arr = map.get(parent);
-    if (arr) arr.push(childBrief(s)); else map.set(parent, [childBrief(s)]);
+  for (const [code, root] of rootOf) {
+    if (!root || root === code) continue;
+    const s = byCode.get(code);
+    const arr = map.get(root);
+    if (arr) arr.push(childBrief(s)); else map.set(root, [childBrief(s)]);
   }
   return map;
+}
+
+// The set codes one MTG family covers: the root and every descendant the scan
+// exclusions allow, lower-case. What a build of `set` fetches and embeds.
+async function mtgFamilyCodes(set, { excludeChildCodes = [] } = {}) {
+  const [sets, exclusions] = await Promise.all([getScryfallSets(), getScanExclusions()]);
+  const { rootOf } = mtgRootIndex(sets, exclusions, excludeChildCodes.map(norm));
+  const root = rootOf.get(norm(set)) || norm(set);
+  const codes = [...rootOf].filter(([, r]) => r === root).map(([code]) => code);
+  return codes.length ? codes : [root];
+}
+
+// The family root of each code, for collapsing a list of family codes (what the
+// set picker sends) into the releases to fetch — each fetched once, not once per
+// child. Unknown codes map to themselves.
+async function mtgRoots(codes) {
+  const [sets, exclusions] = await Promise.all([getScryfallSets(), getScanExclusions()]);
+  const { rootOf } = mtgRootIndex(sets, exclusions);
+  return [...new Set(codes.map(c => rootOf.get(norm(c)) || norm(c)))];
 }
 
 // A Scryfall release is split into a parent expansion plus child sets — tokens,
@@ -156,22 +213,21 @@ async function getMtgChildSetMap() {
 // (Alchemy) are skipped — no physical card to scan. include:extras stops Scryfall
 // hiding tokens/emblems; -is:digital drops any stray digital print.
 async function mtgSetFamilyQuery(set, lang, { excludeChildCodes = [] } = {}) {
-  const code = norm(set);
-  const codes = new Set([code]);
-  const exclusions = await getScanExclusions();
+  // Same function the set picker lists the family from (getMtgChildSetMap shares
+  // mtgRootIndex), so a build indexes exactly what was shown. /sets unreachable
+  // yields an empty index, and the family degrades to the set itself.
+  let codes;
   try {
-    const data = await getScryfallSets();
-    for (const s of data) {
-      // norm() on both sides, matching getMtgChildSets — the UI lists the family
-      // from that function and the build queries it from this one, so a
-      // difference here means indexing something other than what was shown.
-      if (s.parent_set_code && norm(s.parent_set_code) === code && !s.digital
-          && childAllowed(s, exclusions, excludeChildCodes)) {
-        codes.add(s.code);
-      }
-    }
-  } catch { /* /sets unreachable: fall back to the main set only */ }
-  const sets = [...codes].map(c => `set:${c}`).join(' or ');
+    codes = await mtgFamilyCodes(set, { excludeChildCodes });
+  } catch {
+    codes = [norm(set)];
+  }
+  return mtgCodesQuery(codes, lang);
+}
+
+// The search for a list of set codes, every print, extras included, paper only.
+function mtgCodesQuery(codes, lang) {
+  const sets = codes.map(c => `set:${norm(c)}`).join(' or ');
   // Language is a search keyword (and needs include_multilingual on the request,
   // added by mtgSearchUrl below) — Scryfall has no lang parameter.
   const scryLang = languages.resolve(lang).scryfall;
@@ -194,14 +250,40 @@ function mtgSearchUrl(query, lang, extra = '') {
 // same printings twice: harmless for correctness (scanMatch treats repeated
 // set|number rows as faces and keeps the best) but a straight waste of build
 // time and disk. Digital-only sets are skipped — no physical card to scan.
+//
+// Memoised for an hour per (game, language, provider, exclusions): the weekly
+// update and the Admin panel both ask, and for pokemontcg.io each ask was a live
+// paged /sets walk.
+const LIST_ALL_TTL_MS = 60 * 60 * 1000;
+const listAllMemo = new Map();
+
 async function listAllSets(game, lang) {
+  const exclusions = await getScanExclusions();
+  const provider = game === 'pokemon' ? await pokemonProvider.providerFor(langOf(lang)) : '';
+  const key = JSON.stringify([game, langOf(lang), provider, exclusions]);
+  const hit = listAllMemo.get(key);
+  if (hit && Date.now() - hit.at < LIST_ALL_TTL_MS) return hit.sets;
+  const sets = await listAllSetsUncached(game, lang);
+  // An empty answer is usually an unreachable provider; do not pin it for an hour.
+  if (sets.length) listAllMemo.set(key, { at: Date.now(), sets });
+  return sets;
+}
+
+async function listAllSetsUncached(game, lang) {
   const code = langOf(lang);
   if (game === 'mtg') {
-    const sets = await getScryfallSets();
-    return sets
-      .filter(s => s.code && !s.digital && !s.parent_set_code && (s.card_count || 0) > 0)
-      .map(s => s.code);
+    // Roots only — each fetch pulls the root's whole family (mtgSetFamilyQuery),
+    // so listing children too would fetch them twice. A root counts when its
+    // FAMILY has cards, not only the root itself.
+    const [sets, exclusions] = await Promise.all([getScryfallSets(), getScanExclusions()]);
+    const { byCode, rootOf } = mtgRootIndex(sets, exclusions);
+    const familyCards = new Map();
+    for (const [c, root] of rootOf) {
+      if (root) familyCards.set(root, (familyCards.get(root) || 0) + (byCode.get(c).card_count || 0));
+    }
+    return [...familyCards].filter(([, n]) => n > 0).map(([root]) => byCode.get(root).code);
   }
+  if (games.get(game)?.provider === 'tcgcsv') return require('./tcgcsvGameApi').listSetCodes(game);
   if (game === 'lorcana') {
     const db = require('./db');
     let rows = await db.all("SELECT id, ptcgo_code FROM sets WHERE game = 'lorcana' ORDER BY release_date ASC");
@@ -270,9 +352,17 @@ function mtgCardImages(c) {
 // cards yield two, same name/number). `name` is the localized (printed) name when
 // there is one, because that is what the post-scan lookup searches Scryfall for —
 // verified: `!"稲妻" lang:ja` with include_multilingual finds the card.
-async function fetchMtgSet(set, lang, { excludeChildCodes = [] } = {}) {
+//
+// `codes`: fetch exactly these set codes in one query instead of `set`'s whole
+// family. A scoped build already knows its codes (the picker sends the family,
+// the weekly update sends only the sets released since), and one query for all
+// of them replaces one family query per code.
+async function fetchMtgSet(set, lang, { excludeChildCodes = [], codes = null } = {}) {
   const scryfallApi = require('./scryfallApi');
-  let url = mtgSearchUrl(await mtgSetFamilyQuery(set, lang, { excludeChildCodes }), lang, '&order=set');
+  const query = codes && codes.length
+    ? mtgCodesQuery(codes, lang)
+    : await mtgSetFamilyQuery(set, lang, { excludeChildCodes });
+  let url = mtgSearchUrl(query, lang, '&order=set');
   const cards = [];
   while (url) {
     const r = await scryfallApi.scryGetRetried(url);
@@ -329,9 +419,9 @@ async function fetchTcgdexSet(set, lang) {
       number: brief.localId != null ? String(brief.localId) : '',
       // High res on purpose: the 245px art the card grids use is what milo would
       // otherwise be handed, and an upscaled blur embeds worse than the sharp 448
-      // crop a camera produces. See catalog.js embedUrl for the same swap on the
-      // cached url.
-      img: `${brief.image}/high.png`,
+      // crop a camera produces. WebP: the same 600x825 image at about a quarter
+      // of the PNG's bytes. See catalog.js embedUrl for the swap on the cached url.
+      img: `${brief.image}/high.webp`,
       raw: { ...brief, set: { id: r.data.id || set, name: setName } },
       tcgdex: true,
     });
@@ -383,7 +473,7 @@ async function fetchPokemonSet(set) {
 // at ~35% of the real card pool: a set's cards arrive only if someone indexed,
 // searched or browsed that set. Nothing ever walked the catalogue just to cache
 // it. Returns the fetched cards so a caller can count them.
-async function cacheSetCards(game, set, lang, { excludeChildCodes = [] } = {}) {
+async function cacheSetCards(game, set, lang, { excludeChildCodes = [], codes = null } = {}) {
   const code = langOf(lang);
   if (!require('./utils/games').hasFeature(game, 'scan')) throw new Error(`no catalog source for game ${game}`);
   if (game === 'riftbound') {
@@ -391,6 +481,13 @@ async function cacheSetCards(game, set, lang, { excludeChildCodes = [] } = {}) {
     // also what keeps collision ids stable (they depend on the whole set of
     // records sharing a code, never on one page of it).
     const cards = await require('./riftcodexApi').getCardsBySet(set);
+    if (!cards.length) throw absent(`no cards for set ${set}`);
+    return cards.map(c => ({ name: c.name, set: c.set_id, number: c.number, img: c.image_url, raw: c }));
+  }
+  // The TCGplayer-catalogue games: their whole catalogue is already in card_cache
+  // (tcgcsvGameApi writes it from the TCGCSV sync), so a set is a read, not a fetch.
+  if (games.get(game)?.provider === 'tcgcsv') {
+    const cards = await require('./tcgcsvGameApi').getCardsBySet(game, set);
     if (!cards.length) throw absent(`no cards for set ${set}`);
     return cards.map(c => ({ name: c.name, set: c.set_id, number: c.number, img: c.image_url, raw: c }));
   }
@@ -418,7 +515,7 @@ async function cacheSetCards(game, set, lang, { excludeChildCodes = [] } = {}) {
   }
   const useTcgdex = provider === pokemonProvider.TCGDEX;
   const cards = game === 'mtg'
-    ? await fetchMtgSet(set, code, { excludeChildCodes })
+    ? await fetchMtgSet(set, code, { excludeChildCodes, codes })
     : (useTcgdex ? await fetchTcgdexSet(set, code) : await fetchPokemonSet(set));
   if (cards.length === 0) throw absent(`no cards for set ${set}`);
   await cacheFetchedCards(game, cards, code, useTcgdex);
@@ -466,4 +563,5 @@ module.exports = {
   // Pokemon cache sat at ~35% of the real card pool. Filling card_cache is now a
   // job in its own right.
   listAllSets, cacheSetCards, getMtgChildSetMap, getScanExclusions,
+  mtgFamilyCodes, mtgRoots, mtgRootIndex, getScryfallSets,
 };

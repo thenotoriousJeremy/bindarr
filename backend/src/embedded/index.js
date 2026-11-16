@@ -81,14 +81,16 @@ const app = express.Router();
 
 mountOnDevice(app, { public: true });
 app.use('/api', authenticateToken);
-// Scanning on a phone: the app downloads the models and the published catalogs
-// (frontend/src/device/scanAssets.js), runs milo itself and sends the route an
-// embedding instead of a photo — the route reads a photo with Node's Buffer,
-// which a phone does not have. Until that data is on the device, or for Lorcana,
-// which has no published catalog, the answer is the route's own 503 notBuilt,
-// worded for a phone. With the data there but the model failing to run on this
-// phone (embedError, from frontend/src/device/runtime.js), it says that instead:
-// downloading the data again would not help.
+// Scanning on a phone: the app downloads the models and a catalog per game
+// (frontend/src/device/scanAssets.js: Bindarr's weekly release, or the model
+// author's snapshot), runs milo itself and sends the route an embedding instead
+// of a photo — the route reads a photo with Node's Buffer, which a phone does not
+// have. Until that data is on the device the answer is the route's own 503
+// notBuilt, worded for a phone. Which games have a catalog at all is the
+// release's list, which the app shows; this route cannot know it offline. With
+// the data there but the model failing to run on this phone (embedError, from
+// frontend/src/device/runtime.js), it says that instead: downloading the data
+// again would not help.
 app.post('/api/scan-match', (req, res, next) => {
   const { game = 'pokemon', lang, embedding, embedError } = req.body || {};
   const langName = require('../utils/languages').toName(lang);
@@ -100,11 +102,10 @@ app.post('/api/scan-match', (req, res, next) => {
       error: `Scanning failed on this phone: ${String(embedError).slice(0, 200)}`,
     });
   }
+  const label = require('../utils/games').get(game)?.label || game;
   res.status(503).json({
     game, lang: langName, candidates: [], verified: false, notBuilt: true, deviceMode: true,
-    error: game === 'lorcana'
-      ? 'There is no downloadable scan catalog for Lorcana. Scanning Lorcana cards needs a Bindarr server.'
-      : 'Download the scan data for this game first: Add Cards → Scan.',
+    error: `Download the ${label} scan data first: Add Cards → Scan.`,
   });
 });
 mountOnDevice(app, { public: false });
@@ -208,6 +209,11 @@ async function syncTcgcsvForTheWeek(context, options) {
   if (result && !result.skipped && !result.disabled) await deviceState('tcgcsv_synced_at', Date.now());
   return result;
 }
+
+// A game served from TCGplayer's catalogue (Yu-Gi-Oh!, One Piece...) switched on
+// for the first time syncs its category now, with the switch lifted, instead of
+// staying empty until the weekly sync (tcgcsvGameApi.setFirstUseSync).
+require('../tcgcsvGameApi').setFirstUseSync((context) => syncTcgcsvForTheWeek(context));
 
 async function weeklyTcgcsv() {
   if (!(await due('tcgcsv_synced_at', WEEK))) return;
@@ -403,7 +409,21 @@ module.exports = {
   // Scanning: what can be downloaded (one descriptor table, shared with the
   // server's fetch-models script), where the app's downloaded catalogs come in,
   // and the TCGplayer product map the Pokémon catalog resolves its matches through.
-  scanAssets: { MODELS: require('../utils/modelAssets').MODELS, CATALOGS: require('../utils/modelAssets').CATALOGS },
+  // `release`: where Bindarr's own catalogs are published, and the segment format
+  // the app downloads and applies them with (catalogReleases.js is the server's
+  // side of the same thing).
+  scanAssets: {
+    MODELS: require('../utils/modelAssets').MODELS,
+    CATALOGS: require('../utils/modelAssets').CATALOGS,
+    release: {
+      base: require('../utils/releaseAssets').base(),
+      segments: require('../utils/catalogSegments'),
+      model: require('../utils/modelAssets').MODEL_ID,
+      // Whether a game's release catalog fits this phone's card ids: a Pokémon one
+      // is keyed by TCGdex ids (catalogReleases.fitsInstall on a server).
+      fits: async (game) => game !== 'pokemon' || require('../utils/pokemonProvider').usesTcgdex('en'),
+    },
+  },
   setScanSource: cvScan.setSource,
   productMap,
   app,

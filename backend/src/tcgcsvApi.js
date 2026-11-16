@@ -28,7 +28,9 @@ const db = require('./db');
 const { recordPrice, shouldSweepPrices, markPricesSwept, WISHLIST_CARDS_SQL } = require('./utils/priceHelpers');
 const { normId, normName, numberKey } = require('./utils/setCatalogueMatch');
 const metrics = require('./utils/metrics');
-const { slimResults, SEALED_ONLY_CATEGORY } = require('./utils/tcgcsvSlim');
+const {
+  slimResults, SEALED_ONLY_CATEGORY, SLIM_VERSION, CATALOGUE_CATEGORY, BUNDLE_KINDS, bundlePath, INDEX_PATH,
+} = require('./utils/tcgcsvSlim');
 const { createProviderClient } = require('./utils/providerClient');
 
 // The project's daily mirror of TCGCSV (.github/workflows/tcgcsv-mirror.yml), not
@@ -110,6 +112,10 @@ async function demandedCategories({ explicit = false } = {}) {
   `);
   const wanted = (c) => {
     if (BASE_SYNC_CATEGORIES.includes(c)) return !!row.pokemon;
+    // A catalogue game's category IS its card list: once the game is activated it
+    // is kept current whether or not anyone owns a card yet (syncCategories only
+    // lists it once activated).
+    if (CATALOGUE_CATEGORY.has(c)) return true;
     if (OPTIONAL_SYNC_CATEGORIES.some(o => o.categoryId === c)) return !!row.riftbound;
     return !!row.extra;
   };
@@ -138,15 +144,31 @@ async function setSealedExtraEnabled(enabled) {
 // (89) is priced straight off its groups by riftboundPrices.js, but an install
 // that has never cached a Riftbound card has nothing to price, and this mirror
 // is free: 1 + 2 x (its groups) requests a day are not asked of it for nothing.
-const OPTIONAL_SYNC_CATEGORIES = [{ categoryId: 89, game: 'riftbound' }];
+//
+// The games served entirely from TCGplayer's catalogue (tcgcsvGameApi) follow the
+// same rule with a different trigger: their card list comes FROM the category, so
+// "used" is the game having been activated (tcgcsv_catalogues), which the first
+// search or set list for it does.
+const OPTIONAL_SYNC_CATEGORIES = [
+  { categoryId: 89, game: 'riftbound' },
+  ...[...CATALOGUE_CATEGORY].map(([categoryId, game]) => ({ categoryId, game, catalogue: true })),
+];
 
 async function syncCategories() {
   const wanted = [...((await sealedExtraEnabled()) ? SYNC_CATEGORIES : BASE_SYNC_CATEGORIES)];
-  for (const { categoryId, game } of OPTIONAL_SYNC_CATEGORIES) {
-    const used = await db.get(`SELECT 1 AS used FROM card_cache WHERE game = ? LIMIT 1`, [game]).catch(() => null);
+  for (const { categoryId, game, catalogue } of OPTIONAL_SYNC_CATEGORIES) {
+    const used = catalogue
+      ? await db.get(`SELECT 1 AS used FROM tcgcsv_catalogues WHERE game = ?`, [game]).catch(() => null)
+      : await db.get(`SELECT 1 AS used FROM card_cache WHERE game = ? LIMIT 1`, [game]).catch(() => null);
     if (used) wanted.push(categoryId);
   }
   return wanted;
+}
+
+// The TCGCSV version the cache currently holds, or null before the first sync.
+async function currentVersion() {
+  const row = await db.get(`SELECT tcgcsv_data_version AS v FROM app_settings WHERE id = 1`).catch(() => null);
+  return (row && row.v) || null;
 }
 
 // TCGCSV rejects a request with no identifying User-Agent — a 401 with a note
@@ -361,6 +383,125 @@ async function syncResults(path, dataVersion, { perGroup = false, keepProductIds
   return results;
 }
 
+// --- bundles -----------------------------------------------------------------
+//
+// The project's mirror publishes, beside TCGCSV's per-group files, one bundle per
+// category and kind (groups, products, prices), already slim (utils/tcgcsvSlim),
+// and an index of every file's content hash. A version then costs an install
+// last-updated.txt, the index, and the bundles that changed — measured on the
+// mirror's layout that is ~4 requests a day for Pokémon where the per-group walk
+// made ~1,367, and a few MB where it moved tens. An unchanged bundle (products,
+// most days) is carried into the new version from the old one without a request.
+//
+// Anything short of a usable bundle falls back to the per-group walk, for that
+// category only: an index that is missing (an older mirror, or TCGCSV itself),
+// written by a different slim version, or naming no bundle for the category.
+const BUNDLES_DISABLED = () => process.env.TCGCSV_BUNDLES === '0'
+  || /(^|\.)tcgcsv\.com$/i.test((() => { try { return new URL(API_BASE_URL).hostname; } catch { return ''; } })());
+
+const parseBody = (data) => (typeof data === 'string' ? JSON.parse(data) : data);
+let indexMismatches = 0;   // consecutive checks that found the index behind last-updated.txt
+// The mirror's hash of a published file (sync.mjs writeIndex): SHA-256, 20 hex.
+const contentHash = (text) => require('crypto').createHash('sha256').update(text).digest('hex').slice(0, 20);
+
+// The mirror's index, or null when there is none to use. Never asks TCGCSV
+// itself for it (a path it does not serve, from an app it has blocked before).
+async function fetchIndex() {
+  if (BUNDLES_DISABLED()) return null;
+  try {
+    const { data } = await pacedGet(INDEX_PATH, { responseType: 'text' });
+    const index = parseBody(data);
+    if (!index || index.slim !== SLIM_VERSION || !index.files || typeof index.files !== 'object') return null;
+    return index;
+  } catch (error) {
+    if (isCooldownError(error)) throw error;
+    if (!(error.response && error.response.status === 404)) {
+      console.warn(`TCGCSV: mirror index unavailable (${error.message}); syncing group by group`);
+    }
+    return null;
+  }
+}
+
+const bundleable = (index, categoryId) => !!index && BUNDLE_KINDS.every(k => index.files[bundlePath(categoryId, k)]);
+
+// The per-group cache paths a bundle kind expands to.
+const kindPaths = (categoryId, kind, groupIds) => (kind === 'groups'
+  ? [`/tcgplayer/${categoryId}/groups`]
+  : groupIds.map(id => `/tcgplayer/${categoryId}/${id}/${kind}`));
+
+async function groupIdsFor(categoryId, version) {
+  const row = await db.get(`SELECT results_json FROM tcgcsv_cache WHERE path = ? AND data_version = ?`,
+    [`/tcgplayer/${categoryId}/groups`, version]);
+  return row ? JSON.parse(row.results_json).map(g => g.groupId) : [];
+}
+
+// Store one bundle's rows under the per-group paths every reader already uses.
+async function storeBundle(categoryId, kind, results, version) {
+  await db.withTransaction(async () => {
+    if (kind === 'groups') {
+      await db.run(`INSERT OR REPLACE INTO tcgcsv_cache (path, data_version, results_json) VALUES (?, ?, ?)`,
+        [`/tcgplayer/${categoryId}/groups`, version, JSON.stringify(Array.isArray(results) ? results : [])]);
+      return;
+    }
+    const byGroup = results && typeof results === 'object' ? results : {};
+    // Every listed group gets a row, an empty one included, so a reader never
+    // takes a group with nothing in it for a cache miss.
+    for (const groupId of await groupIdsFor(categoryId, version)) {
+      await db.run(`INSERT OR REPLACE INTO tcgcsv_cache (path, data_version, results_json) VALUES (?, ?, ?)`,
+        [`/tcgplayer/${categoryId}/${groupId}/${kind}`, version, JSON.stringify(byGroup[groupId] || [])]);
+    }
+  });
+}
+
+// Carry an unchanged bundle's rows from the previous version. False when the
+// previous version does not hold them all (a sync that was interrupted, say).
+async function copyForward(categoryId, kind, from, to) {
+  const groupIds = kind === 'groups' ? [] : await groupIdsFor(categoryId, to);
+  const paths = kindPaths(categoryId, kind, groupIds);
+  if (!paths.length) return true;
+  let copied = 0;
+  await db.withTransaction(async () => {
+    for (const p of paths) {
+      const r = await db.run(
+        `INSERT OR REPLACE INTO tcgcsv_cache (path, data_version, results_json)
+         SELECT path, ?, results_json FROM tcgcsv_cache WHERE path = ? AND data_version = ?`, [to, p, from]);
+      copied += (r && r.changes) || 0;
+    }
+  });
+  return copied === paths.length;
+}
+
+// Sync one category for `version` from its bundles. `previous` is the version the
+// cache held before, which unchanged bundles are copied from.
+async function syncCategoryFromBundles(categoryId, version, index, previous) {
+  for (const kind of BUNDLE_KINDS) {
+    const path = bundlePath(categoryId, kind);
+    const hash = index.files[path];
+    const prior = await db.get(`SELECT hash, data_version FROM tcgcsv_bundles WHERE path = ?`, [path]);
+    if (prior && prior.hash === hash) {
+      if (prior.data_version === version) continue;   // already stored: a resumed run
+      if (previous && prior.data_version === previous && await copyForward(categoryId, kind, previous, version)) {
+        await db.run(`UPDATE tcgcsv_bundles SET data_version = ? WHERE path = ?`, [version, path]);
+        continue;
+      }
+    }
+    // Raw text, so the bytes can be checked against the index before parsing.
+    const { data } = await pacedGet(path, { responseType: 'text', transformResponse: [(d) => d] });
+    const text = typeof data === 'string' ? data : JSON.stringify(data);
+    // The CDN caches each file on its own, so a bundle can lag the index by
+    // minutes. Thrown, so the run stays pending and the next check resumes it.
+    if (contentHash(text) !== hash) {
+      throw new Error(`${path} does not match the mirror's index yet; retrying later`);
+    }
+    const bundle = JSON.parse(text);
+    if (!bundle || bundle.slim !== SLIM_VERSION || bundle.results == null) {
+      throw new TcgcsvBadResponseError(path, 'not a bundle of this slim version');
+    }
+    await storeBundle(categoryId, kind, bundle.results, version);
+    await db.run(`INSERT OR REPLACE INTO tcgcsv_bundles (path, hash, data_version) VALUES (?, ?, ?)`, [path, hash, version]);
+  }
+}
+
 // Fetch last-updated.txt. Returns the version to sync, or null when the cache is
 // already current.
 async function checkLastUpdated(currentVersion) {
@@ -424,9 +565,34 @@ async function runSync(categories) {
     }
   }
 
+  // The mirror's bundles first: three requests a category at most, none for a
+  // bundle that has not changed. Categories it does not bundle walk group by group.
+  let index = await fetchIndex();
+  if (index && index.version !== dataVersion && categories.some(c => bundleable(index, c))) {
+    // raw.githubusercontent.com caches each file for five minutes, so just after a
+    // publish last-updated.txt and the index can disagree. The next hourly tick
+    // finds them in step; walking every group instead would be the expensive way.
+    // Three checks in a row out of step is a mirror that is not catching up, and
+    // the per-group files are walked rather than waiting a day for the pending
+    // version to be abandoned.
+    indexMismatches++;
+    if (indexMismatches < 3) {
+      console.log(`TCGCSV: mirror index is for ${index.version}, not ${dataVersion} yet; trying again on the next check.`);
+      return { updated: false, pending: dataVersion, requests: requestsThisRun() };
+    }
+    console.warn(`TCGCSV: mirror index still out of step with ${dataVersion}; syncing group by group.`);
+    index = null;
+  }
+  indexMismatches = 0;
+  const bundled = categories.filter(c => bundleable(index, c));
+  for (const categoryId of bundled) {
+    await syncCategoryFromBundles(categoryId, dataVersion, index, state.tcgcsv_data_version);
+  }
+  const walked = categories.filter(c => !bundled.includes(c));
+
   const groupsByCategory = {};
   let groupCount = 0;
-  for (const categoryId of categories) {
+  for (const categoryId of walked) {
     const groups = await syncResults(`/tcgplayer/${categoryId}/groups`, dataVersion);
     groupsByCategory[categoryId] = groups;
     groupCount += groups.length;
@@ -435,14 +601,14 @@ async function runSync(categories) {
   // A fresh version costs last-updated.txt, one groups list per category, then
   // products + prices per group. Both per-group lists are needed: products feed the
   // price sweep and the scan product map, prices feed the sweep.
-  const expectedRequests = 1 + categories.length + (groupCount * 2);
+  const expectedRequests = 1 + walked.length + (groupCount * 2);
   if (expectedRequests > TCGCSV_MAX_SYNC_REQUESTS) {
     throw new Error(
       `TCGCSV sync requires ${expectedRequests} requests, exceeding the ${TCGCSV_MAX_SYNC_REQUESTS} request budget`
     );
   }
 
-  for (const categoryId of categories) {
+  for (const categoryId of walked) {
     for (const group of groupsByCategory[categoryId]) {
       const products = await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/products`, dataVersion, { perGroup: true });
       // A sealed-only category keeps the prices of the products it kept and no
@@ -461,10 +627,10 @@ async function runSync(categories) {
   await db.run(`DELETE FROM tcgcsv_cache WHERE data_version != ?`, [dataVersion]);
   const requests = requestsThisRun();
   console.log(
-    `TCGCSV sync complete for ${dataVersion}: ${groupCount} groups, ` +
-    `${requests} requests this run (${expectedRequests} for a full sync).`
+    `TCGCSV sync complete for ${dataVersion}: ${bundled.length} categor${bundled.length === 1 ? 'y' : 'ies'} from bundles` +
+    `${walked.length ? `, ${groupCount} groups walked` : ''}, ${requests} requests this run.`
   );
-  return { updated: true, dataVersion, groups: groupCount, expectedRequests, requests };
+  return { updated: true, dataVersion, groups: groupCount, bundled, expectedRequests, requests };
 }
 
 // A category this install has only just started reading (its first Riftbound
@@ -473,10 +639,19 @@ async function runSync(categories) {
 // no reason. Fill just that category into the current version instead.
 async function backfillCategories(dataVersion, categories) {
   if (!dataVersion) return;
+  let index;   // fetched once, and only if some category is missing
   for (const categoryId of categories) {
     const path = `/tcgplayer/${categoryId}/groups`;
     const have = await db.get(`SELECT 1 AS have FROM tcgcsv_cache WHERE path = ? AND data_version = ?`, [path, dataVersion]);
     if (have) continue;
+    if (index === undefined) index = await fetchIndex();
+    // A bundle from a version newer than the cached one is still the right data
+    // to add — the per-group files below would be that newer version too.
+    if (bundleable(index, categoryId)) {
+      await syncCategoryFromBundles(categoryId, dataVersion, index, null);
+      console.log(`TCGCSV: added category ${categoryId} to cached version ${dataVersion} from the mirror's bundles.`);
+      continue;
+    }
     const groups = await syncResults(path, dataVersion);
     for (const group of groups) {
       await syncResults(`/tcgplayer/${categoryId}/${group.groupId}/products`, dataVersion, { perGroup: true });
@@ -771,7 +946,10 @@ async function setsToPrice(scope = 'owned') {
   `);
   // These rows already have a source-aware EUR/USD price. TCGCSV must not
   // replace it with a USD proxy or leave printing columns in mixed currencies.
-  return rows.filter(r => r.set_id && !r.set_id.startsWith('pokemontcgapi-') && !isPocketSet(r.set_id));
+  // Pokémon's TCGplayer-only sets (tcgp-*) are priced by their own sweep
+  // (pokemonTcgplayer.refresh), from the same data: priced here as well, each card
+  // took two history points a day.
+  return rows.filter(r => r.set_id && !r.set_id.startsWith('pokemontcgapi-') && !r.set_id.startsWith('tcgp-') && !isPocketSet(r.set_id));
 }
 
 // Price one matched set: fetch its products and prices, join them to the cached
@@ -935,6 +1113,9 @@ module.exports = {
   SEALED_ONLY_CATEGORY,
   syncIfUpdated,
   syncIfUpdatedSafely,
+  currentVersion,
+  fetchIndex,
+  OPTIONAL_SYNC_CATEGORIES,
   updateCollectionPrices,
   parseResults,
   client,

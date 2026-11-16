@@ -31,7 +31,7 @@ const path = require('path');
 const tmpDb = path.join(os.tmpdir(), `bindarr-newsetcount-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;
 const db = require('../src/db');
-const { newSetCount, nextAutoUpdate } = require('../src/catalog');
+const { newSetCount, setsBehind, autoUpdates } = require('../src/catalog');
 const scryfallApi = require('../src/scryfallApi');
 const lorcastApi = require('../src/lorcastApi');
 const { tcgClient } = require('../src/tcgApi');
@@ -131,6 +131,24 @@ async function main() {
   assert.strictEqual(await newSetCount('mtg', 'English'), UNCACHED - GAPPED,
     'a set with no upstream data must not be reported as missing');
 
+  // 4b. ...but a set a build found empty is retried by the next few builds before it
+  //     is given up on: providers list a new set before its cards are published, and
+  //     dropping it at the first empty answer left it unbuilt for good. Retried, not
+  //     reported: it is pending for the update without counting as "not downloaded".
+  //     A row from before builds counted (tries NULL, the GAPPED ones above) is one
+  //     already given up on.
+  const retried = codes[NSETS - UNCACHED + GAPPED];
+  await db.run(`INSERT INTO set_data_gaps (game, language, set_id, tries) VALUES ('mtg', 'English', ?, 1)`, [retried]);
+  let behind = await setsBehind('mtg', 'English');
+  assert.ok(behind.pending.includes(retried), 'a set found empty once is still pending');
+  assert.strictEqual(behind.newSets, UNCACHED - GAPPED - 1, 'but no longer counted as new');
+  assert.ok(!behind.pending.includes(codes[NSETS - UNCACHED]), 'a given-up set is not pending');
+  assert.strictEqual(behind.pending.length, UNCACHED - GAPPED);
+  await db.run(`UPDATE set_data_gaps SET tries = 4 WHERE set_id = ?`, [retried]);
+  behind = await setsBehind('mtg', 'English');
+  assert.ok(!behind.pending.includes(retried), 'after four empty builds it is given up on');
+  await db.run(`DELETE FROM set_data_gaps WHERE set_id = ?`, [retried]);
+
   // 5. A game whose provider lists no sets cannot say what is missing: null (not
   //    known), never "everything", and never a number the auto-update would chase.
   assert.strictEqual(await newSetCount('lorcana', 'English'), null);
@@ -148,19 +166,26 @@ async function main() {
   await db.run(`INSERT INTO card_cache (id, name, set_id, number, game, language) VALUES ('sv1-1', 'x', 'sv1', '1', 'pokemon', 'English')`);
   assert.strictEqual(await newSetCount('pokemon', 'English'), 1, 'sv2 is new; sv1 is cached under its own id');
 
-  // 8. The auto-update rebuilds one catalog at a time, the one built longest ago
-  //    first (so the games take turns), and a scoped one as its own sets.
-  const at = (d) => ({ builtAt: `2026-11-${d}T00:00:00.000Z`, scope: null });
+  // 8. The auto-update builds every catalog that has sets to fetch, the one built
+  //    longest ago first (so no game waits behind another), each as exactly the sets
+  //    it is missing (`pending`, from list(): a scoped catalog's are its own).
+  const at = (d, scope = null) => ({ builtAt: `2026-11-${d}T00:00:00.000Z`, scope });
   const listed = [
-    { game: 'pokemon', lang: 'English', newSets: 3, built: at('10') },
-    { game: 'mtg', lang: 'English', newSets: 1, built: { ...at('02'), scope: ['fdn'] } },
-    { game: 'lorcana', lang: 'English', newSets: 0, built: at('01') },
-    { game: 'riftbound', lang: 'English', newSets: 2, built: null },
+    { game: 'pokemon', lang: 'English', newSets: 3, pending: ['sv09', 'sv10', 'sv11'], built: at('10') },
+    { game: 'mtg', lang: 'English', newSets: 1, pending: ['fdn'], built: at('02', ['fdn', 'blb']) },
+    { game: 'lorcana', lang: 'English', newSets: 0, pending: [], built: at('01') },
+    { game: 'riftbound', lang: 'English', newSets: 2, pending: ['ogn'], built: null },
+    // Only a set being retried after an empty answer: still worth the update.
+    { game: 'lorcana', lang: 'Japanese', newSets: 0, pending: ['14'], built: at('05') },
   ];
-  assert.deepStrictEqual(nextAutoUpdate(listed), { game: 'mtg', lang: 'English', newSets: 1, sets: ['fdn'] });
-  listed[1].built.builtAt = '2026-11-15T00:00:00.000Z';   // just rebuilt: Pokémon's turn
-  assert.deepStrictEqual(nextAutoUpdate(listed), { game: 'pokemon', lang: 'English', newSets: 3, sets: null });
-  assert.strictEqual(nextAutoUpdate([listed[2], listed[3]]), null, 'nothing behind, nothing built');
+  assert.deepStrictEqual(autoUpdates(listed), [
+    { game: 'mtg', lang: 'English', newSets: 1, sets: ['fdn'], scope: ['fdn', 'blb'] },
+    { game: 'lorcana', lang: 'Japanese', newSets: 0, sets: ['14'], scope: null },
+    { game: 'pokemon', lang: 'English', newSets: 3, sets: ['sv09', 'sv10', 'sv11'], scope: null },
+  ]);
+  listed[1].built.builtAt = '2026-11-15T00:00:00.000Z';   // just rebuilt: to the back of the line
+  assert.deepStrictEqual(autoUpdates(listed).map(c => c.game), ['lorcana', 'pokemon', 'mtg']);
+  assert.deepStrictEqual(autoUpdates([listed[2], listed[3]]), [], 'nothing behind, nothing built');
 
   console.log(`newsetcount.test.js: all assertions passed (count took ${ms}ms)`);
 }

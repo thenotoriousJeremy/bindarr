@@ -45,6 +45,10 @@ const HF = 'https://huggingface.co';
 // on 2026-11-15; moving to a newer file means updating all three fields here.
 const MODEL_REVISION = '2ef37ff78ee80ad4c3558e4a15341e447ff8a1be';   // HanClinto/ccgdetector-fastweb-single
 const MILO_REVISION = '9bcc5e809e936b8c5630d1e7101aae1de1e76621';    // HanClinto/milo
+// Which embedding space a catalog's vectors live in: catalogs built here and the
+// ones Bindarr publishes (catalogReleases.js) record it, and one built for another
+// model is rebuilt or refused, never mixed. Bumped only if milo itself is replaced.
+const MODEL_ID = 'milo1';
 const MODELS = [
   {
     name: 'cornelius.onnx', repo: 'HanClinto/ccgdetector-fastweb-single', revision: MODEL_REVISION,
@@ -58,6 +62,14 @@ const MODELS = [
   },
 ];
 
+// Every catalog the author publishes for a game Bindarr knows (catalogs/
+// manifest.json in HanClinto/milo). Magic's is keyed by Scryfall id; the rest by
+// TCGplayer product id, which for the TCGplayer-catalogue games IS the card id
+// (`yugioh-<productId>`, scan.publishedIds "cardId" in shared/games.json) and for
+// Lorcana resolves through the card's tcgplayer_product_id (scanCandidates). The
+// TCGplayer snapshots are all from 2026-05-07: a card printed since is not in
+// them. Bindarr's own weekly catalogs (catalogReleases.js) are what installs use
+// first; these are the fallback when that release cannot be reached.
 const CATALOGS = [
   {
     name: 'milo-mtg.npz', repo: 'HanClinto/milo', revision: MILO_REVISION, game: 'mtg',
@@ -68,6 +80,36 @@ const CATALOGS = [
     name: 'milo-pokemon.npz', repo: 'HanClinto/milo', revision: MILO_REVISION, game: 'pokemon',
     file: 'catalogs/milo1-tcgplayer-pokemon-2026-05-07.npz', bytes: 13236761, snapshot: '2026-05-07',
     sha256: '84fecd5b9f1ddc4973fbb276bc9b0d253ac100e35d57ef00c5cfd6432aaa9dff',
+  },
+  {
+    name: 'milo-lorcana.npz', repo: 'HanClinto/milo', revision: MILO_REVISION, game: 'lorcana',
+    file: 'catalogs/milo1-tcgplayer-lorcana-2026-05-07.npz', bytes: 1325444, snapshot: '2026-05-07',
+    sha256: '3b08de5639a4a7da4115e439c7872e62498ddfecead8c140d5566663829b657c',
+  },
+  {
+    name: 'milo-yugioh.npz', repo: 'HanClinto/milo', revision: MILO_REVISION, game: 'yugioh',
+    file: 'catalogs/milo1-tcgplayer-yugioh-2026-05-07.npz', bytes: 20897555, snapshot: '2026-05-07',
+    sha256: 'c30e6977b7d2e10242e38bae056439df33c6ec10dc95240cbb8d1097a03c5f34',
+  },
+  {
+    name: 'milo-onepiece.npz', repo: 'HanClinto/milo', revision: MILO_REVISION, game: 'onepiece',
+    file: 'catalogs/milo1-tcgplayer-onepiece-2026-05-07.npz', bytes: 2969546, snapshot: '2026-05-07',
+    sha256: 'cd1c30a76aff40cc3474b067f4c580caff8ad5e3425e3c75e93994bbe8b70b84',
+  },
+  {
+    name: 'milo-digimon.npz', repo: 'HanClinto/milo', revision: MILO_REVISION, game: 'digimon',
+    file: 'catalogs/milo1-tcgplayer-digimon-2026-05-07.npz', bytes: 3928146, snapshot: '2026-05-07',
+    sha256: '944ae395cbb81b5e954f3b0970bf8be369caed83a4525a408dd8afb70178d38c',
+  },
+  {
+    name: 'milo-fab.npz', repo: 'HanClinto/milo', revision: MILO_REVISION, game: 'fab',
+    file: 'catalogs/milo1-tcgplayer-fab-2026-05-07.npz', bytes: 4278376, snapshot: '2026-05-07',
+    sha256: 'ec5ad27791347430d43f7fc1c60ca4f9d1f0ccaa91450802dfc77c2d50d35b95',
+  },
+  {
+    name: 'milo-swu.npz', repo: 'HanClinto/milo', revision: MILO_REVISION, game: 'swu',
+    file: 'catalogs/milo1-tcgplayer-swu-2026-05-07.npz', bytes: 3167209, snapshot: '2026-05-07',
+    sha256: 'e768734a746372a6eadb4518acdfa1a4c434b2c30c62e1cce9c529721e710471',
   },
 ];
 
@@ -213,4 +255,4 @@ function start(what) {
   return state();
 }
 
-module.exports = { MODELS, CATALOGS, LICENSE, MODEL_DIR, status, start, state, lastResult, isPresent, isOutdated, fetchAsset, assetUrl };
+module.exports = { MODELS, CATALOGS, LICENSE, MODEL_DIR, MODEL_ID, status, start, state, lastResult, isPresent, isOutdated, fetchAsset, assetUrl };

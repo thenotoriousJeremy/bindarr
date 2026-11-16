@@ -41,6 +41,10 @@ const PRICE_SWEEPS = [
   { key: 'tcgcsv', run: () => require('../tcgcsvApi').updateCollectionPrices() },
   // Riftbound: TCGplayer prices from TCGCSV category 89, by product id.
   { key: 'riftbound', run: () => require('../riftboundPrices').updateCollectionPrices() },
+  // Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood, Star Wars: Unlimited: their
+  // whole catalogue comes from TCGCSV, prices included. No-op for a game no one
+  // on the install has opened.
+  { key: 'tcgcsvgames', run: () => require('../tcgcsvGameApi').updateCollectionPrices() },
 ];
 
 let running = null;       // the run in progress, or null

@@ -95,6 +95,9 @@ async function searchCards(req, res) {
     // Every provider takes the same options object and ignores what does not
     // apply to it, so there is one call here rather than a branch per provider.
     const api = await cardApi.apiForGame(game, lang);
+    // A registered game whose provider this build cannot load answers like an
+    // unknown one, not with a 500 from calling into nothing.
+    if (!api) return res.status(400).json({ error: `No card source for game ${game}` });
     // Magic takes Scryfall syntax in the name box (t:creature c:g cmc<=3). It is
     // searched intact, so the name/number splitting above is for plain names only;
     // the number and set fields still apply.

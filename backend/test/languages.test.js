@@ -167,7 +167,7 @@ function tcgdexChecks() {
   assert.strictEqual(card.supertype, 'Pokémon', "must match pokemontcg.io's accented spelling so filters don't split");
   assert.strictEqual(card.price_normal, 0.07);
   assert.strictEqual(card.price_avg7, 0.05);
-  assert.strictEqual(card.image_url, 'https://assets.tcgdex.net/ja/SV/SV2a/004/low.png');
+  assert.strictEqual(card.image_url, 'https://assets.tcgdex.net/ja/SV/SV2a/004/low.webp');
 
   // TCGplayer's market price wins over Cardmarket when both exist (same
   // precedence tcgApi has always used for English cards).

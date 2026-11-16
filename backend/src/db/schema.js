@@ -566,6 +566,46 @@ module.exports = {
     )
   `,
 
+  // Per game served from TCGplayer's catalogue (tcgcsvGameApi.js), and per
+  // language of Pokémon's TCGplayer-only cards (pokemonTcgplayer.js): whether the
+  // install uses it (its TCGCSV category is only synced once something does), and
+  // which TCGCSV version its card_cache rows were last written from, with a hash
+  // per group so a daily refresh rewrites only the groups whose products changed.
+  tcgcsv_catalogues: `
+    CREATE TABLE IF NOT EXISTS tcgcsv_catalogues (
+      game TEXT PRIMARY KEY,
+      activated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      catalogue_version TEXT,
+      product_hashes TEXT NOT NULL DEFAULT '{}',
+      price_hashes TEXT NOT NULL DEFAULT '{}'
+    )
+  `,
+
+  // Where each set of a built scan catalog stood after its last build (catalog.js
+  // grownSets): a signature of its claimed, cached, illustrated and embedded card
+  // counts, and how many builds in a row left it unfinished without changing it.
+  catalog_set_checks: `
+    CREATE TABLE IF NOT EXISTS catalog_set_checks (
+      game TEXT NOT NULL,
+      language TEXT NOT NULL,
+      set_id TEXT NOT NULL,
+      sig TEXT NOT NULL,
+      tries INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (game, language, set_id)
+    )
+  `,
+
+  // The per-category bundles the mirror publishes (tcgcsvApi.syncCategoryFromBundles):
+  // the content hash of each one this install last stored, so an unchanged bundle
+  // is carried into the next version without downloading it again.
+  tcgcsv_bundles: `
+    CREATE TABLE IF NOT EXISTS tcgcsv_bundles (
+      path TEXT PRIMARY KEY,
+      hash TEXT NOT NULL,
+      data_version TEXT NOT NULL
+    )
+  `,
+
   // The admin-run Pokémon card-id migration (pokemonMigration.js): its runs, the
   // old -> new id log, and the before-images an exact undo needs. initDb has why.
   pokemon_id_migration_runs: `CREATE TABLE IF NOT EXISTS pokemon_id_migration_runs (

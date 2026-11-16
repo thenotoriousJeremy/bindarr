@@ -288,9 +288,14 @@ async function testDeviceScan() {
 
   const sets = await call('GET', '/api/scan-sets?game=mtg');
   assert.deepStrictEqual(sets.json.builtLangs, ['English'], 'the scanner offers the downloaded catalog');
+  // A game with nothing downloaded asks for the download, by name (which games
+  // have a catalog at all is the release's list, shown by the app).
+  const riftbound = await call('POST', '/api/scan-match', { body: { ...body, game: 'riftbound' } });
+  assert.strictEqual(riftbound.status, 503);
+  assert.match(riftbound.json.error, /Download the Riftbound scan data/);
   const lorcana = await call('POST', '/api/scan-match', { body: { ...body, game: 'lorcana' } });
   assert.strictEqual(lorcana.status, 503);
-  assert.match(lorcana.json.error, /Lorcana/);
+  assert.match(lorcana.json.error, /Download the Disney Lorcana scan data/);
 
   // The data is on the phone but milo would not run (frontend/src/device/runtime.js
   // sends embedError): that is not "download the scan data" (MOB-04).
@@ -464,6 +469,33 @@ async function testGlobalsForAWebView() {
   assert.strictEqual(node.process, process);
 }
 
+// A phone's catalog from Bindarr's release is keyed by card ids (`local: true`
+// from the device source), so its matches resolve like a server's local build.
+async function testDeviceReleaseCatalog() {
+  const cvScan = require('../src/cvScan');
+  const dim = 4;
+  cvScan.setSource({
+    hasModels: () => true,
+    hasCatalog: (game) => game === 'lorcana',
+    loadCatalog: async () => ({ cat: Float32Array.from([1, 0, 0, 0, 0, 1, 0, 0]), ids: ['lorcana-a', 'lorcana-b'], n: 2, dim, local: true }),
+  });
+  const c = await cvScan.load('lorcana');
+  assert.strictEqual(c.local, true, 'a release catalog is keyed by card ids');
+  assert.deepStrictEqual(c.ids, ['lorcana-a', 'lorcana-b']);
+  cvScan.setSource({
+    hasModels: () => true,
+    hasCatalog: () => true,
+    loadCatalog: async () => ({ cat: new Float32Array(dim), ids: ['123'], n: 1, dim }),
+  });
+  assert.strictEqual((await cvScan.load('pokemon')).local, false, 'a snapshot without the flag keeps provider ids');
+  cvScan.setSource(null);
+  // What the app downloads release catalogs with, handed over by the bundle.
+  const rel = embedded.scanAssets.release;
+  assert.match(rel.base, /\/releases\/download\/scan-catalogs$/);
+  assert.strictEqual(typeof rel.segments.decodeSegment, 'function');
+  assert.strictEqual(rel.model, 'milo1');
+}
+
 async function main() {
   try {
     testRouterMatching();
@@ -475,6 +507,7 @@ async function main() {
     await testBackupRoundTrip();
     await testServerOnlyRoutes();
     await testDeviceScan();
+    await testDeviceReleaseCatalog();
     await testTrashOnDevice();
     await testTransfersOnDevice();
     testRandomUuidWithoutWebCrypto();

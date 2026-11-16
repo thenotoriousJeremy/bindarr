@@ -165,6 +165,7 @@ const SWEEP_COLUMN = {
   // rather than tcgcsv's: the two sweep different games, and one marking the
   // other's gate would silently skip a game for a day.
   riftbound: 'riftbound_prices_swept_at',
+  tcgcsvgames: 'tcgcsvgames_prices_swept_at',
 };
 
 // How often the automatic sweep is allowed to run, as configured. 0 turns it off.

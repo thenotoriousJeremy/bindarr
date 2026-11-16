@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Database, Play, Square, RefreshCw, Check, AlertTriangle, Cpu, Download, ListFilter, Languages, Zap } from 'lucide-react';
+import { Database, Play, Square, RefreshCw, Check, AlertTriangle, Cpu, Download, ListFilter, Languages, Zap, Trash2 } from 'lucide-react';
 import SetTree from './SetTree';
 import { useT } from '../utils/i18n';
-import { gameInfo, gameLabel } from '../utils/games';
+import { gameInfo, gameLabel, isGameEnabled } from '../utils/games';
 import { fillParts } from '../utils/translate';
 
 // Scan catalogs.
@@ -52,6 +52,8 @@ function Bar({ value, tone = 'var(--type-grass)' }) {
 }
 
 const mb = (n) => `${(n / 1024 / 1024).toFixed(1)} MB`;
+// A weekly delta is kilobytes; "0.0 MB" would read as nothing to download.
+const size = (n) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : mb(n));
 const num = (n) => Number(n || 0).toLocaleString();
 
 // An always-open sub-panel, for the things a user has to see rather than find.
@@ -125,13 +127,123 @@ function EngineCard({ engine, onDownload, busy }) {
   );
 }
 
-// Step two, and the answer for most installs: a published catalog is one download
-// away from a working scanner, against the hours a local build takes. The
-// tradeoffs are real and stated, but they are stated in a panel that is OPEN.
-function ReadyMadeCard({ engine, onDownload, busy, enginePresent, productMaps, mapGame, onMapGameChange, onBuildMap }) {
+// Step two, and the answer for most installs: Bindarr's own catalogs, built every
+// week by the project's CI and published with its releases (catalogReleases.js on
+// the server). One download per game, then only each week's new cards, and keyed by
+// card ids, so a match always names a card. Installed ones update themselves daily.
+function ReleaseCatalogsCard({ releases, onInstall, onRemove, busy, enginePresent }) {
+  const { t } = useT();
+  if (!releases) return null;
+  // Games switched off in Preferences are left out unless already installed.
+  const cats = (releases.catalogs || []).filter(c => c.installed || isGameEnabled(c.game));
+  const have = cats.filter(c => c.installed).length;
+  const job = releases.progress;
+  const failed = !job && releases.last && releases.last.phase === 'error' ? releases.last : null;
+
+  return (
+    <Step
+      n="2"
+      icon={<Download size={16} style={{ color: 'var(--accent-red)' }} />}
+      title={t('catalog.releasesTitle')}
+      status={!releases.published ? t('catalog.releasesUnavailable')
+        : have ? t('catalog.nInstalled', { count: have }) : t('catalog.fastestWay')}
+      tone={!releases.published ? 'var(--accent-yellow)' : have ? 'var(--type-grass)' : 'var(--accent-blue, #60a5fa)'}
+    >
+      <p style={HINT}>{t('catalog.releasesDesc')}</p>
+      {/* No list at all is the state before the first weekly build, not an error. */}
+      {!releases.published && (
+        <p style={{ ...NOTE, color: 'var(--accent-yellow)' }}>
+          {releases.error ? t('catalog.releasesError', { message: releases.error }) : t('catalog.releasesNotYet')}
+        </p>
+      )}
+      {!!cats.length && (
+        <div className="collection-table-wrapper" style={{ overflowX: 'auto' }}>
+          <table className="collection-table">
+            <thead>
+              <tr>
+                <th>{t('catalog.thGame')}</th>
+                <th>{t('catalog.thCards')}</th>
+                <th>{t('catalog.thSize')}</th>
+                <th className="hide-mobile">{t('catalog.thUpdated')}</th>
+                <th style={{ textAlign: 'right' }}>{t('catalog.thStatus')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cats.map(c => (
+                <tr key={c.key}>
+                  <td style={{ fontWeight: 600, color: 'var(--text-strong)' }}>
+                    {gameLabel(c.game)}
+                    <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}> · {c.lang}</span>
+                  </td>
+                  <td>{num(c.rows)}</td>
+                  <td>{c.bytes ? size(c.bytes) : '—'}</td>
+                  <td className="hide-mobile">{c.updatedAt ? new Date(c.updatedAt).toLocaleDateString() : '—'}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', justifyContent: 'flex-end' }}>
+                      {!c.installed && (
+                        <button type="button" className="btn btn-primary btn-sm" disabled={busy || !c.segments}
+                          onClick={() => onInstall([c.key])} style={BTN}>
+                          <Download size={14} /> {t('catalog.get')}
+                        </button>
+                      )}
+                      {c.installed && !c.disabled && c.upToDate === false && (
+                        <button type="button" className="btn btn-primary btn-sm" disabled={busy}
+                          onClick={() => onInstall([c.key])} style={BTN}>
+                          <RefreshCw size={14} /> {t('catalog.update')}
+                        </button>
+                      )}
+                      {c.installed && c.disabled && (
+                        <span style={{ color: 'var(--accent-yellow)', fontSize: '0.8rem' }} title={t('catalog.releaseOffHint')}>
+                          {t('catalog.releaseOff')}
+                        </span>
+                      )}
+                      {c.installed && !c.disabled && c.upToDate !== false && (
+                        <span style={{ color: 'var(--type-grass)', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                          <Check size={14} /> {t('catalog.installed')}
+                        </span>
+                      )}
+                      {c.installed && (
+                        <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                          onClick={() => onRemove(c)} style={BTN}
+                          aria-label={t('catalog.removeCatalog', { game: gameLabel(c.game), lang: c.lang })}
+                          title={t('catalog.removeCatalog', { game: gameLabel(c.game), lang: c.lang })}>
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {job && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+          <div style={{ ...ROW, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            <span>{t('catalog.downloadingWithName', { name: job.name || job.key })}</span>
+            <span>{size(job.done || 0)} / {size(job.total || 0)}</span>
+          </div>
+          <Bar value={pct(job.done, job.total) ?? 0} tone="var(--accent-blue, #60a5fa)" />
+        </div>
+      )}
+      {failed && <p style={{ ...NOTE, color: 'var(--accent-red)' }}>{t('catalog.releasesFailed', { message: failed.message })}</p>}
+      {!enginePresent && (
+        <p style={{ ...NOTE, color: 'var(--accent-yellow)' }}>{t('catalog.engineRequiredNote')}</p>
+      )}
+      {releases.published && <p style={NOTE}>{t('catalog.releasesAutoUpdate')}</p>}
+    </Step>
+  );
+}
+
+// The model author's dated snapshots: what installs used before Bindarr published
+// its own, and the fallback when Bindarr's list cannot be reached.
+function ReadyMadeCard({ n = '2', engine, onDownload, busy, enginePresent, productMaps, mapGame, onMapGameChange, onBuildMap }) {
   const { t } = useT();
   if (!engine) return null;
-  const cats = engine.catalogs || [];
+  // Games switched off in Preferences (the newer ones start off) are left out
+  // unless their catalog is already here.
+  const cats = (engine.catalogs || []).filter(c => c.present || isGameEnabled(c.game));
   if (!cats.length) return null;
   const have = cats.filter(c => c.present).length;
   const productMap = productMaps?.[mapGame];
@@ -140,7 +252,7 @@ function ReadyMadeCard({ engine, onDownload, busy, enginePresent, productMaps, m
 
   return (
     <Step
-      n="2"
+      n={n}
       icon={<Download size={16} style={{ color: 'var(--accent-red)' }} />}
       title={t('catalog.readyMadeTitle')}
       status={have ? t('catalog.nInstalled', { count: have }) : t('catalog.fastestWay')}
@@ -334,7 +446,10 @@ function BuildPicker({ game, lang, disabled, onBuild, showToast, label }) {
         className="input-control"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder={game === 'mtg' ? t('catalog.searchMtgPlaceholder') : game === 'lorcana' ? t('catalog.searchLorcanaPlaceholder') : t('catalog.searchPokemonPlaceholder')}
+        placeholder={game === 'mtg' ? t('catalog.searchMtgPlaceholder')
+          : game === 'lorcana' ? t('catalog.searchLorcanaPlaceholder')
+            : game === 'pokemon' ? t('catalog.searchPokemonPlaceholder')
+              : t('catalog.searchSetsPlaceholder')}
         style={{ padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}
       />
       {loading
@@ -484,11 +599,21 @@ export default function CatalogPanel({ showToast }) {
   const [last, setLast] = useState(null);
   const [loading, setLoading] = useState(true);
   const [engine, setEngine] = useState(null);
+  const [releases, setReleases] = useState(null);
   const [mapGame, setMapGame] = useState('pokemon');
   const timer = useRef(null);
   // Bumped when a poll fails. State changes re-arm the poll below, and a failed
   // poll changes none, so without this the bar froze until the panel reopened.
   const [pollRetry, setPollRetry] = useState(0);
+
+  // Bindarr's published catalogs: one request to the release, cached ten minutes
+  // on the server. Failing to reach it is shown in its own step, not as an error.
+  const loadReleases = async () => {
+    try {
+      const r = await fetch('/api/admin/catalog-releases');
+      if (r.ok) setReleases(await r.json());
+    } catch { /* the step says the list is unavailable */ }
+  };
 
   const load = async () => {
     try {
@@ -515,6 +640,7 @@ export default function CatalogPanel({ showToast }) {
   // the panel is usually idle and a permanent 1s poll would be pure noise.
   useEffect(() => {
     load();
+    loadReleases();
     return () => clearTimeout(timer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -527,9 +653,17 @@ export default function CatalogPanel({ showToast }) {
     // is STARTED by a catalog download finishing — so the poll has to survive the
     // download it followed, or the bar freezes mid-build until the panel is reopened.
     const mapRunning = Object.values(engine?.productMaps || {}).some(m => m?.progress);
-    if (!progress && !engine?.progress && !mapRunning) return;
+    if (!progress && !engine?.progress && !mapRunning && !releases?.progress) return;
     timer.current = setTimeout(async () => {
       try {
+        if (releases?.progress) {
+          const r = await fetch('/api/admin/catalog-releases/progress');
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const j = await r.json();
+          setReleases(prev => ({ ...(prev || {}), progress: j.progress || null, last: j.last || null }));
+          // Finished: what is installed changed, and so did what the scanner uses.
+          if (!j.progress) { loadReleases(); load(); }
+        }
         if (progress) {
           const r = await fetch('/api/admin/catalogs/progress');
           // An error answer has no progress in it, which read as "the build finished".
@@ -557,7 +691,35 @@ export default function CatalogPanel({ showToast }) {
     }, POLL_MS);
     return () => clearTimeout(timer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [progress, engine?.progress, JSON.stringify(engine?.productMaps), pollRetry]);
+  }, [progress, engine?.progress, JSON.stringify(engine?.productMaps), releases?.progress, pollRetry]);
+
+  const installReleases = async (keys) => {
+    try {
+      const r = await fetch('/api/admin/catalog-releases/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys }),
+      });
+      const j = await r.json();
+      if (!r.ok) return showToast?.(j.error || t('catalog.errStartDownloadGeneric'));
+      setReleases(prev => ({ ...(prev || {}), progress: j.progress }));
+    } catch (e) {
+      showToast?.(t('catalog.errStartDownload', { message: e.message }));
+    }
+  };
+
+  const removeRelease = async (c) => {
+    if (!window.confirm(t('catalog.confirmRemoveCatalog', { game: gameLabel(c.game), lang: c.lang }))) return;
+    try {
+      const r = await fetch(`/api/admin/catalog-releases/${encodeURIComponent(c.key)}`, { method: 'DELETE' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) return showToast?.(j.error || t('catalog.errRemoveCatalog'));
+      loadReleases();
+      load();
+    } catch (e) {
+      showToast?.(e.message);
+    }
+  };
 
   const download = async (what) => {
     try {
@@ -635,7 +797,7 @@ export default function CatalogPanel({ showToast }) {
   // install merely holds a card or two of are not rows at all any more — they were
   // fifteen near-empty entries invented by one imported card each, and the ones
   // worth building now live in OtherLanguages with their real numbers.
-  const rows = catalogs.filter(c => !!c.built || c.lang === 'English');
+  const rows = catalogs.filter(c => !!c.built || (c.lang === 'English' && isGameEnabled(c.game)));
 
   // One collapsed line per catalog. The summary carries everything needed to decide
   // whether to open it — state, counts, and any warning — because a row that hides
@@ -749,7 +911,21 @@ export default function CatalogPanel({ showToast }) {
         busy={!!engine?.progress || !!running}
       />
 
-      <ReadyMadeCard
+      <ReleaseCatalogsCard
+        releases={releases}
+        onInstall={installReleases}
+        onRemove={removeRelease}
+        busy={!!releases?.progress}
+        enginePresent={!(engine?.models || []).some(m => !m.present)}
+      />
+
+      {/* The model author's snapshots: shown when Bindarr's own list cannot be
+          reached, or when one of them is already installed (so it can be seen,
+          and its product map still managed). */}
+      {(!releases?.published || (engine?.catalogs || []).some(c => c.present)
+        || (engine?.catalogs || []).some(c => isGameEnabled(c.game)
+          && !(releases?.catalogs || []).some(r => r.game === c.game && !r.disabled))) && <ReadyMadeCard
+        n={releases ? '2b' : '2'}
         engine={engine}
         onDownload={download}
         busy={!!engine?.progress || !!running}
@@ -758,7 +934,7 @@ export default function CatalogPanel({ showToast }) {
         mapGame={mapGame}
         onMapGameChange={setMapGame}
         onBuildMap={() => buildProductMap(mapGame)}
-      />
+      />}
 
       {/* One progress bar for both downloads: models and published catalogs share a
           single slot on the server, so only one of them can ever be running. */}

@@ -34,6 +34,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const sharp = require('sharp');
 const ort = require('onnxruntime-node');
 const db = require('../src/db');
+// The same image choice and resume key as Admin -> Catalogs (catalog.js), so a
+// catalog built here and one built there are interchangeable: the sharp image, not
+// the grid thumbnail, and no re-embed when only the encoding changed.
+const { embedUrl, artKey } = require('../src/catalog');
 
 const arg = (f, d) => { const i = process.argv.indexOf(f); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };
 const game = arg('--game', 'pokemon');
@@ -139,15 +143,15 @@ async function main() {
   const queue = rows.slice();
   const inflight = new Map();
   const fetchOne = async (row) => {
-    const res = await fetch(row.image_url, { signal: AbortSignal.timeout(30000) });
+    const res = await fetch(embedUrl(row), { signal: AbortSignal.timeout(30000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return Buffer.from(await res.arrayBuffer());
   };
   const pump = () => {
     while (inflight.size < concurrency && queue.length) {
       const row = queue.shift();
-      if (prev && prev.vecs.has(row.id) && prev.srcs.get(row.id) === row.image_url) {
-        ids.push(row.id); out.push(prev.vecs.get(row.id)); srcs[row.id] = row.image_url;
+      if (prev && prev.vecs.has(row.id) && artKey(prev.srcs.get(row.id)) === artKey(embedUrl(row))) {
+        ids.push(row.id); out.push(prev.vecs.get(row.id)); srcs[row.id] = embedUrl(row);
         reused++; done++;
         continue;
       }
@@ -165,7 +169,7 @@ async function main() {
       try {
         out.push(await embedCard(session, settled.buf));
         ids.push(settled.row.id);
-        srcs[settled.row.id] = settled.row.image_url;
+        srcs[settled.row.id] = embedUrl(settled.row);
         built++;
       } catch (e) {
         failed++;

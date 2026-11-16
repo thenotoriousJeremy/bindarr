@@ -44,6 +44,11 @@ async function boot() {
   // app from opening. The scan tab then offers the download again.
   await scanAssets.initScanAssets(backend.scanAssets).catch(err => console.warn('Scan data check failed:', err));
   backend.setScanSource(scanSource);
+  // Downloaded catalogs pick up the week's new cards in the background; handing
+  // the source over again makes the scanner reload what changed.
+  scanAssets.updateReleases()
+    .then(changed => { if (changed) backend.setScanSource(scanSource); })
+    .catch(err => console.warn('Scan catalog update failed:', err));
   return { backend, token };
 }
 
@@ -80,15 +85,16 @@ export async function releaseScanEngine() {
   if (scanEngine) await scanEngine.releaseSessions().catch(() => {});
 }
 
-// Download a game's scan data (models included when missing). The ready-made
-// Pokémon catalog names cards by TCGplayer product id, so it also needs the
-// product map a server builds from TCGCSV; that starts here, once, in the
-// background, exactly as a server starts it after the same download.
+// Download a game's scan data (models included when missing). Bindarr's release
+// catalogs name cards by card id. The model author's Pokémon snapshot, used when
+// the release cannot be reached, names them by TCGplayer product id and so also
+// needs the product map a server builds from TCGCSV; that starts here, once, in
+// the background, exactly as a server starts it after the same download.
 export async function downloadScanData(game) {
   const { backend } = await startDevice();
   await scanAssets.downloadForGame(game);
   backend.setScanSource(scanSource);
-  if (game === 'pokemon') {
+  if (game === 'pokemon' && !scanAssets.isReleaseCatalog(game)) {
     const map = await backend.productMap.summary().catch(() => null);
     if (map && !map.rows && !map.progress) backend.productMap.start();
   }

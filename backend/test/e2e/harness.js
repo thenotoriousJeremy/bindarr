@@ -78,6 +78,9 @@ async function startServer(tmp, { env = {}, wait = true } = {}) {
     CV_MODEL_DIR: path.join(tmp.dir, 'models'),
     BINDARR_DISABLE_TCGCSV_SYNC: '1',
     BINDARR_DISABLE_FX_SYNC: '1',
+    // Bindarr's published scan catalogs and Pokémon coverage read as unpublished,
+    // without a request (utils/releaseAssets.js).
+    CATALOG_RELEASE_URL: 'off',
     // Notification channels may then point at 127.0.0.1, which nothing here sends to.
     NOTIFY_ALLOW_PRIVATE: 'true',
     BACKUP_INTERVAL_HOURS: '0',

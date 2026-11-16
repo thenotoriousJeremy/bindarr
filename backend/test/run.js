@@ -54,6 +54,12 @@ if (!files.length) {
 // anything else set it themselves.
 const testEnv = { ...process.env };
 delete testEnv.BINDARR_DISABLE_TCGCSV_SYNC;
+// Bindarr's published scan catalogs and Pokémon coverage (utils/releaseAssets.js)
+// read as unpublished, without a request: a Pokémon search reaches for the
+// coverage file, and a fetch still in flight when a test exits crashed Node on
+// Windows (a libuv assertion) besides leaving the tests online. A test of the
+// releases themselves sets its own CATALOG_RELEASE_URL.
+testEnv.CATALOG_RELEASE_URL = 'off';
 
 const failed = [];
 const skipped = [];

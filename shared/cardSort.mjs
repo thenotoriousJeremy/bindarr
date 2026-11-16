@@ -22,29 +22,44 @@
 // had; Lorcana's (Super Rare, Legendary, Epic, Enchanted, Iconic) and Riftbound's
 // (Epic, Showcase) used to contain no word here at all, so a descending sort put
 // Super Rare (read as plain Rare) first and Enchanted and Legendary after Common.
+// The games served from TCGplayer's catalogue likewise: Yu-Gi-Oh!'s Starlight,
+// Ghost, Ultimate and Collector's Rare, One Piece's Treasure Rare, Special Card and
+// Leader, and Flesh and Blood's Fabled, Marvel and Majestic all read as plain Rare
+// or as nothing.
 export const RARITY_RANK = [
   ['classic collection', 160],
   ['hyper', 150],
+  ['starlight', 145],
   ['special illustration', 140],
+  ['fabled', 135],
   ['illustration', 130],
+  ['ghost', 125],
+  ['treasure', 125],
   ['secret', 120],
+  ['ultimate', 115],
+  ['marvel', 115],
+  ['collector', 112],
   ['ultra', 110],
   ['radiant', 100],
   ['amazing', 90],
   ['shiny', 80],
   ['double rare', 70],
+  ['special card', 65],
   ['iconic', 68],
   ['showcase', 67],
   ['enchanted', 66],
   ['epic', 64],
   ['legendary', 62],
   ['mythic', 60],
+  ['majestic', 56],
   ['rare holo', 50],
   ['holo rare', 50],
   ['promo', 40],
   ['super rare', 35],
+  ['leader', 33],
   ['rare', 30],
   ['uncommon', 20],
+  ['short print', 12],
   ['common', 10],
 ];
 

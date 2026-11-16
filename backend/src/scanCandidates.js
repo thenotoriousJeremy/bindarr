@@ -13,6 +13,7 @@ const lorcastApi = require('./lorcastApi');
 const tcgdexApi = require('./tcgdexApi');
 const tcgplayerCatalog = require('./tcgplayerCatalog');
 const languages = require('./utils/languages');
+const games = require('./utils/games');
 const pokemonProvider = require('./utils/pokemonProvider');
 const { parseCardRow } = require('./utils/priceHelpers');
 const { normName } = require('./utils/setCatalogueMatch');
@@ -88,6 +89,13 @@ async function pokemonBySetNumber(langName, number, setId, tcgApiKey) {
 // product-id candidates are resolved here (see below), the rest go back as a
 // set + number hint. Never throws for a card it cannot name — the bare
 // candidate is returned and the client decides what to do with it.
+//
+// Which card ids may be fetched when they are not cached: those carrying their
+// provider's prefix (tcgdex-, tcgplayer-, riftbound-, yugioh-...), the ids a
+// downloaded catalog holds. A bare legacy id only ever comes from a catalog built
+// here, out of card_cache, so a miss on one means a cached card with no art,
+// which is not a match.
+const fetchable = (game, id) => (games.get(game)?.idPrefixes || []).some(p => String(id).startsWith(p));
 async function resolveCandidate(cand, i, { game, langName, tcgApiKey }) {
   // MTG goes through getCardById because it can fetch and cache a printing
   // this install has never seen. A locally built catalog is drawn FROM
@@ -131,8 +139,18 @@ async function resolveCandidate(cand, i, { game, langName, tcgApiKey }) {
       `SELECT * FROM card_cache WHERE id = ? AND image_url IS NOT NULL AND image_url != '' LIMIT 1`,
       [cand.cardId]
     );
-    if (!row) return cand;
-    const card = parseCardRow(row);
+    // A downloaded catalog (Bindarr's own release, or a ready-made one) names cards
+    // this install may never have cached, which used to come back bare — and the
+    // scanner dropped a correct match without a word. The provider fetches and
+    // caches the one card asked for: a single request for TCGdex, none for the
+    // TCGplayer-catalogue games or Pokémon's TCGplayer rows (both read the TCGCSV
+    // cache), and only for the candidates of this one scan.
+    const card = row
+      ? parseCardRow(row)
+      : fetchable(game, cand.cardId)
+        ? await require('./utils/cardApi').getCardById(cand.cardId, { game, tcgApiKey }).catch(() => null)
+        : null;
+    if (!card) return cand;
     // Same re-expression as MTG above. A catalog built in the scanned language
     // returns localised ids already, so this is a no-op then; it matters when
     // the match fell back to the English catalog (no catalog in that language,

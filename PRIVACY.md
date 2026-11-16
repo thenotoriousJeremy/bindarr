@@ -51,11 +51,11 @@ details. Each is governed by its own privacy policy.
 | TCGdex | `api.tcgdex.net` | Pokémon cards and sets (the default Pokémon source) | Search terms, set and card ids, the language; price refreshes for the non-English Pokémon cards you own |
 | Pokémon TCG API | `api.pokemontcg.io` | The older Pokémon source, when selected or when an API key is set | Search terms, set and card ids, price refreshes for the cards you own, and the API key (the server's, or the one you entered in Settings) |
 | pokemontcgapi.com | `api.pokemontcgapi.com` | An optional Pokémon source an admin can select | Search terms, card ids, and the server's API key |
-| Scryfall | `api.scryfall.com` | Magic cards, sets and prices | Search terms; for the daily price refresh, the set and number (or name) of each Magic card you own or have in a deck |
+| Scryfall | `api.scryfall.com`, `data.scryfall.io` | Magic cards, sets and prices; its bulk card file when an admin builds a whole English Magic scan catalog | Search terms; for the daily price refresh, the set and number (or name) of each Magic card you own or have in a deck |
 | Lorcast | `api.lorcast.com` | Disney Lorcana cards, sets and prices | Search terms, set and card ids; price refreshes for the Lorcana cards you own |
 | RiftCodex | `api.riftcodex.com` | The Riftbound card list, downloaded whole on first use and refreshed weekly | Nothing beyond the request |
 | MTGJSON | `mtgjson.com` | Preconstructed Magic decks and Secret Lair drops, when you browse or import them | Which deck |
-| TCGplayer prices, through the project's TCGCSV mirror | `raw.githubusercontent.com` (GitHub) | Daily price files, so installs never contact TCGCSV themselves | Which price files are downloaded follows the sets your collection and lists hold (and sealed products, if enabled); no card list. `TCGCSV_BASE_URL` can point it elsewhere |
+| TCGplayer prices, through the project's TCGCSV mirror | `raw.githubusercontent.com` (GitHub) | Daily price files, so installs never contact TCGCSV themselves; the card lists of the games served from TCGplayer's catalogue (Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood, Star Wars: Unlimited) once one is switched on, and of the Pokémon cards TCGdex lacks | Which price files are downloaded follows the sets your collection and lists hold (and sealed products, if enabled); no card list. `TCGCSV_BASE_URL` can point it elsewhere |
 
 Price refreshes name the cards you own, by id or by set and number; quantities,
 conditions, prices paid and storage locations never go with them.
@@ -67,6 +67,7 @@ conditions, prices paid and storage locations never go with them.
 | European Central Bank | `www.ecb.europa.eu` | Exchange rates, for showing prices in another currency; at most once a day | Nothing beyond the request (a public file) |
 | GitHub | `api.github.com` | The "check for updates" button in Settings, answered from a six-hour cache | Nothing beyond the request |
 | Hugging Face | `huggingface.co` | The card-scanning models and published catalogs, only when an admin (or, in device mode, you) downloads them | Nothing beyond the request |
+| GitHub releases | `github.com` and its download servers | Bindarr's own scan catalogs, when an admin (or, in device mode, you) downloads one, then a daily check for the week's new cards in those installed; and, on an install using TCGdex, the small list of Pokémon sets TCGdex lacks, at most daily. `CATALOG_RELEASE_URL` points it elsewhere, or `off` | Nothing beyond the request |
 | PSA | `api.psacard.com` | Looking up a graded slab's certificate, if you entered a PSA token | The certificate number and your token |
 | PokemonPriceTracker | `www.pokemonpricetracker.com` | Prices for graded cards, on request, if you entered an API key | The card (its TCGplayer id, or its name), the grade, and your key |
 

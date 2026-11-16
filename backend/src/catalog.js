@@ -14,12 +14,17 @@
 //
 // Phase 2 can only ever be as complete as phase 1, which is why they are one job
 // rather than two buttons. Both resume: phase 1 is idempotent, and phase 2 keeps
-// every embedding whose image_url has not changed.
+// every embedding whose artwork has not changed (artKey).
+//
+// What a build costs, measured 2026-11-15, is almost all phase 2: one image per
+// card (Magic ~110k at ~130 KB, Pokémon ~22k). Phase 1 is a few hundred requests
+// at most, and a whole-game English Magic build reads Scryfall's bulk file
+// instead (scryfallBulk.js). The weekly update builds only the sets a catalog has
+// yet to fetch (setsBehind), so after the first build the cost is the new cards
+// alone.
 const fs = require('fs');
 const path = require('path');
 const { performance } = require('perf_hooks');
-const sharp = require('sharp');
-const ort = require('onnxruntime-node');
 const db = require('./db');
 const cardSets = require('./cardSets');
 const languages = require('./utils/languages');
@@ -27,12 +32,23 @@ const cvScan = require('./cvScan');
 const pokemonProvider = require('./utils/pokemonProvider');
 const metrics = require('./utils/metrics');
 const games = require('./utils/games');
-// Where the models and catalogs live (CV_MODEL_DIR): defined once, in modelAssets.
-const { MODEL_DIR } = require('./utils/modelAssets');
-// milo's input square (require() of an ES module: Node 22.12+).
-const { EMBED_SIZE } = require('../../shared/scanModel.mjs');
+// Where the models and catalogs live (CV_MODEL_DIR), and which embedding space a
+// catalog's vectors are in: both defined once, in modelAssets.
+const { MODEL_DIR, MODEL_ID } = require('./utils/modelAssets');
 // Every game the registry marks scannable (shared/games.json).
 const GAMES = games.withFeature('scan');
+// Set ids as the build and the bookkeeping compare them. Lower case only: TCGdex
+// ids carry punctuation ('sv03.5') that must survive.
+const setKey = (id) => String(id == null ? '' : id).trim().toLowerCase();
+// A new set with no upstream data yet (announced before its cards are published)
+// is retried by this many builds — about a month of weekly updates — before it
+// stops counting as new.
+const GAP_GIVE_UP = 4;
+// A set the catalog already has that keeps looking unfinished (see grownSets) is
+// re-walked by this many weekly updates without anything changing, then left alone
+// until something does: a provider that claims more cards than it serves must not
+// cost a re-walk a week forever.
+const GROWTH_GIVE_UP = 8;
 
 const suffix = (lang) => (!lang || lang === 'en' || lang === 'English' ? '' : `-${String(lang).toLowerCase()}`);
 const binPath = (game, lang) => path.join(MODEL_DIR, `milo-${game}${suffix(lang)}-local.bin`);
@@ -71,12 +87,22 @@ const scopeOf = (meta) => (meta && Array.isArray(meta.scope) && meta.scope.lengt
 // rate limits and the same single-threaded ONNX session, and finish later than
 // running them in sequence.
 let current = null;
+// The running build's promise (never rejects), so the weekly update can run one
+// catalog after another instead of starting the first and stopping there.
+let currentRun = null;
+const whenIdle = () => currentRun || Promise.resolve();
 
 const state = () => (current ? {
   game: current.game, lang: current.lang, phase: current.phase,
   done: current.done, total: current.total, message: current.message,
   // So the panel can say WHICH sets are building rather than implying the whole game.
   sets: current.sets,
+  // What the cache phase did, set by set: fetched, found no card data for, or
+  // failed to fetch (a network error, a 5xx). The release build trusts a removal
+  // only from a set it fetched (scripts/scan-catalogs/build.mjs).
+  fetchedSets: current.fetchedSets || [],
+  skipped: current.skipped || [],
+  failedSets: current.failedSets || [],
   startedAt: current.startedAt, cancelled: current.cancelled,
 } : null);
 
@@ -130,9 +156,16 @@ async function setUniverse(game, lang) {
   return sets;
 }
 
-// How many sets a build of this catalog would walk that this install has no cards
-// for at all — a newly released set, in other words. The weekly refresh keeps the
-// set lists current (server.js), so a release surfaces here on its own.
+// Where a built catalog stands against its provider:
+//
+//   pending  the sets a build of it would walk that this install has no cards for
+//            at all — a newly released set, in other words — which is what the
+//            weekly update builds, scoped to exactly these. A set a build found
+//            empty upstream stays pending for GAP_GIVE_UP builds: providers list a
+//            new set before its cards are published, and dropping it at the first
+//            empty answer left it unbuilt until someone rebuilt the whole game.
+//   newSets  how many of those are buildable today (not seen empty at all): the
+//            panel's "N sets not downloaded yet".
 //
 // The denominator is the build's own set list (setUniverse above). It used to be
 // the `sets` table, or for Pokémon whatever TCGdex or pokemontcgapi listed, and
@@ -149,34 +182,47 @@ async function setUniverse(game, lang) {
 // list is the provider's, card_cache is too, and a prefixed id ("lorcana-1",
 // "riftbound-ogn") meets its bare code. A correlated query here once re-scanned
 // card_cache per set and took 28 s on the single connection (#49).
+async function setsBehind(game, lang = 'English', { scope = null } = {}) {
+  const universe = await setUniverse(game, lang);
+  if (!universe.length) return null;
+  // How many builds found each set empty upstream. A row from before builds
+  // counted (tries NULL) is one already given up on.
+  const gapTries = new Map();
+  for (const r of await db.all(
+    `SELECT set_id, tries FROM set_data_gaps WHERE game = ? AND language = ?`, [game, lang]
+  ).catch(() => [])) {
+    gapTries.set(String(r.set_id).toLowerCase(), r.tries == null ? GAP_GIVE_UP : Number(r.tries));
+  }
+  // Scoped to the language, or a Spanish catalog would be measured against the
+  // ENGLISH cache and report whatever English happens to be missing.
+  const cached = new Set();
+  for (const r of await db.all(
+    `SELECT DISTINCT LOWER(set_id) sid FROM card_cache WHERE game = ? AND language = ?`, [game, lang]
+  )) {
+    if (!r.sid) continue;
+    cached.add(r.sid);
+    cached.add(games.bareSetId(r.sid));
+  }
+  const bare = (id) => games.bareSetId(id);
+  const inScope = scope ? new Set(scope.flatMap(s => [String(s).toLowerCase(), bare(String(s).toLowerCase())])) : null;
+  const pending = [];
+  let newSets = 0;
+  for (const s of universe) {
+    if (inScope && !inScope.has(s) && !inScope.has(bare(s))) continue;
+    if (cached.has(s) || cached.has(bare(s))) continue;
+    const tries = gapTries.has(s) ? gapTries.get(s) : gapTries.get(bare(s));
+    if (tries === undefined) { pending.push(s); newSets++; }
+    else if (tries < GAP_GIVE_UP) pending.push(s);
+  }
+  return { pending, newSets };
+}
+
+// The panel's number: how many sets a build of this catalog would fetch that are
+// not known to be empty upstream. Null when the provider's list cannot be had.
 async function newSetCount(game, lang = 'English', { scope = null } = {}) {
   try {
-    const universe = await setUniverse(game, lang);
-    if (!universe.length) return null;
-    // Sets a build already found to have no usable data upstream. Counting them as
-    // "not built yet" told the user to build sets that cannot be built: measured on
-    // a real install, ALL 46 uncached English Pokemon sets were of this kind
-    // (Miscellaneous Promos, Jumbo cards, Sample, EX trainer kits...), so the number
-    // could never drop and the weekly auto-update would have rebuilt forever.
-    const gaps = new Set((await db.all(
-      `SELECT set_id FROM set_data_gaps WHERE game = ? AND language = ?`, [game, lang]
-    ).catch(() => [])).map(r => String(r.set_id).toLowerCase()));
-    // Scoped to the language, or a Spanish catalog would be measured against the
-    // ENGLISH cache and report whatever English happens to be missing.
-    const cached = new Set();
-    for (const r of await db.all(
-      `SELECT DISTINCT LOWER(set_id) sid FROM card_cache WHERE game = ? AND language = ?`, [game, lang]
-    )) {
-      if (!r.sid) continue;
-      cached.add(r.sid);
-      cached.add(games.bareSetId(r.sid));
-    }
-    const bare = (id) => games.bareSetId(id);
-    const inScope = scope ? new Set(scope.flatMap(s => [String(s).toLowerCase(), bare(String(s).toLowerCase())])) : null;
-    return universe.filter(s =>
-      (!inScope || inScope.has(s) || inScope.has(bare(s)))
-      && !gaps.has(s) && !gaps.has(bare(s))
-      && !cached.has(s) && !cached.has(bare(s))).length;
+    const behind = await setsBehind(game, lang, { scope });
+    return behind ? behind.newSets : null;
   } catch {
     return null;
   }
@@ -234,7 +280,11 @@ async function list() {
         // to have fallen behind, and asking anyway cost a provider round-trip per
         // language on a list() the panel polls every second during a build — which
         // made this function take longer than its own 120s test harness allowed.
-        newSets: built ? await newSetCount(game, lang, { scope: built.scope }) : null,
+        ...await (async () => {
+          const behind = built ? await setsBehind(game, lang, { scope: built.scope }).catch(() => null) : null;
+          // pending: the sets the weekly update would fetch (autoUpdates).
+          return { newSets: behind ? behind.newSets : null, pending: behind ? behind.pending : null };
+        })(),
         // The published fallback still answers when nothing local is built.
         published: !built && cvScan.isBuilt(game, lang),
       });
@@ -344,45 +394,170 @@ async function setCounts(game, lang = 'English') {
 }
 
 // --- phase 1 -----------------------------------------------------------------
+//
+// What a build fetched, set by set: the set_data_gaps table the panel and the
+// weekly update read, and the build's own report.
+function newOutcome() {
+  return { cards: 0, failed: 0, gaps: 0, stopped: false, ok: new Set(), gapIds: new Set(), failedIds: new Set() };
+}
+
+async function markOk(job, outcome, id) {
+  outcome.ok.add(id);
+  // Data appeared for a set previously recorded as empty: forget the gap so it
+  // counts as a normal set again.
+  await db.run(`DELETE FROM set_data_gaps WHERE game = ? AND language = ? AND set_id = ?`,
+    [job.game, job.lang, id]).catch(() => {});
+}
+
+// A set with no cards in this language is an expected gap, not a failure —
+// provider coverage is patchy per language and treating gaps as errors would
+// abort every non-English build partway through. Remembered, so the panel stops
+// telling the user to build a set the provider cannot serve, and counted, so the
+// weekly update retries a new set (listed before its cards were published) a few
+// times before giving up on it (setsBehind). A row from before builds counted is
+// one already given up on, and stays so.
+async function markGap(job, outcome, id, reason) {
+  outcome.gapIds.add(id);
+  outcome.gaps++;
+  await db.run(
+    `INSERT INTO set_data_gaps (game, language, set_id, reason, tries) VALUES (?, ?, ?, ?, 1)
+     ON CONFLICT(game, language, set_id) DO UPDATE SET
+       reason = excluded.reason,
+       tries = MIN(COALESCE(set_data_gaps.tries, ${GAP_GIVE_UP}) + 1, ${GAP_GIVE_UP})`,
+    [job.game, job.lang, id, String(reason || '').slice(0, 200)]
+  ).catch(() => {});
+}
+
+// What phase 1 fetches, as units of work: { label, set, ids, opts }. One unit is
+// one provider call (or one paged walk) and the set ids it accounts for.
+//
+// Magic is the game where this matters. A scoped build sends codes it already
+// knows (the picker sends a release's whole family; the weekly update only what
+// is new), and those go out in ONE search per twenty codes — it used to be a
+// family search per code, so a family of six fetched its root six times. A
+// whole-game build walks each release's family once.
+async function buildUnits(job) {
+  const scoped = job.sets.length > 0;
+  if (job.game === 'mtg') {
+    if (scoped) {
+      const units = [];
+      for (let i = 0; i < job.sets.length; i += 20) {
+        const codes = job.sets.slice(i, i + 20);
+        units.push({ label: codes.join(', '), set: codes[0], ids: codes, opts: { codes } });
+      }
+      return units;
+    }
+    const roots = await cardSets.listAllSets('mtg', job.lang);
+    const units = [];
+    for (const root of roots) {
+      const codes = await cardSets.mtgFamilyCodes(root);
+      units.push({ label: root, set: root, ids: codes.map(setKey), opts: { codes } });
+    }
+    return units;
+  }
+  const sets = scoped ? job.sets : await cardSets.listAllSets(job.game, job.lang);
+  return sets.map(s => ({ label: String(s), set: s, ids: [setKey(s)], opts: {} }));
+}
+
 async function cachePhase(job) {
-  // A scoped build walks only the sets asked for. Everything else about the job is
-  // identical — same fetch, same cache writes — so "the sets in front of me" and
-  // "the whole game" are one code path with a different list, not two builders.
-  const sets = job.sets && job.sets.length
-    ? job.sets
-    : await cardSets.listAllSets(job.game, job.lang);
+  const scoped = job.sets.length > 0;
+  const outcome = newOutcome();
   job.phase = 'cache';
-  job.total = sets.length;
   job.done = 0;
-  let cards = 0, failed = 0, gaps = 0;
-  for (const set of sets) {
-    if (job.cancelled) return { cards, failed, gaps, stopped: true };
-    job.message = `${set}`;
+
+  // A whole-game English Magic build: one bulk file instead of ~950 searches.
+  if (job.game === 'mtg' && !scoped && languages.isEnglish(job.lang) && process.env.CATALOG_SCRYFALL_BULK !== '0') {
     try {
-      const got = await cardSets.cacheSetCards(job.game, set, job.lang);
-      cards += got.length;
-      // Data appeared for a set previously recorded as empty: forget the gap so it
-      // counts as a normal set again.
-      await db.run(`DELETE FROM set_data_gaps WHERE game = ? AND language = ? AND set_id = ?`,
-        [job.game, job.lang, String(set).toLowerCase()]).catch(() => {});
+      await mtgBulkCache(job, outcome);
+      return outcome;
     } catch (e) {
-      // A set with no cards in this language is an expected gap, not a failure —
-      // provider coverage is patchy per language and treating gaps as errors
-      // would abort every non-English build partway through.
-      if (!e.absent) failed++;
-      else {
-        gaps++;
-        // Remember it, so the panel stops telling the user to build a set the
-        // provider cannot serve and the auto-update stops chasing it.
-        await db.run(
-          `INSERT OR REPLACE INTO set_data_gaps (game, language, set_id, reason) VALUES (?, ?, ?, ?)`,
-          [job.game, job.lang, String(set).toLowerCase(), e.message.slice(0, 200)]
-        ).catch(() => {});
+      if (job.cancelled) { outcome.stopped = true; return outcome; }
+      console.warn(`catalog: Scryfall bulk data failed (${e.message}); falling back to searching set by set`);
+      Object.assign(outcome, newOutcome());
+    }
+  }
+
+  const units = await buildUnits(job);
+  job.total = units.length;
+  job.done = 0;
+  for (const unit of units) {
+    if (job.cancelled) { outcome.stopped = true; break; }
+    job.message = unit.label;
+    try {
+      const got = await cardSets.cacheSetCards(job.game, unit.set, job.lang, unit.opts);
+      outcome.cards += got.length;
+      if (job.game === 'mtg') {
+        // One query covers several codes; account for each one separately, so a
+        // Commander token set with no cards in this language is a gap of its own
+        // instead of hiding behind its release.
+        const seen = new Set(got.map(c => setKey(c.set)));
+        for (const id of unit.ids) {
+          if (seen.has(id)) await markOk(job, outcome, id);
+          else await markGap(job, outcome, id, `no ${job.lang} cards for set ${id}`);
+        }
+      } else {
+        await markOk(job, outcome, unit.ids[0]);
+      }
+    } catch (e) {
+      if (e.absent) {
+        for (const id of unit.ids) await markGap(job, outcome, id, e.message);
+      } else {
+        outcome.failed++;
+        for (const id of unit.ids) outcome.failedIds.add(id);
+        console.warn(`catalog: ${job.game}/${job.lang} ${unit.label} failed: ${e.message}`);
       }
     }
     job.done++;
   }
-  return { cards, failed, gaps, stopped: false };
+  return outcome;
+}
+
+// Phase 1 for a whole English Magic catalog, from Scryfall's bulk file: every
+// paper print in every reachable set (the same selection mtgCodesQuery searches
+// for, `include:extras unique:prints -is:digital`), cached in batches as it
+// streams past. Throws on any failure before the file is read, so the caller can
+// fall back to searching set by set.
+async function mtgBulkCache(job, outcome) {
+  const scryfallApi = require('./scryfallApi');
+  const [sets, exclusions] = await Promise.all([cardSets.getScryfallSets(), cardSets.getScanExclusions()]);
+  if (!sets.length) throw new Error('Scryfall set list unavailable');
+  const { byCode, rootOf } = cardSets.mtgRootIndex(sets, exclusions);
+  const reachable = new Set([...rootOf].filter(([, root]) => root).map(([code]) => code));
+  job.total = [...reachable].reduce((n, c) => n + (byCode.get(c).card_count || 0), 0);
+  job.done = 0;
+  job.message = 'Scryfall bulk data';
+
+  const perSet = new Map();
+  const seenIds = new Set();
+  let batch = [];
+  const flush = async () => {
+    if (!batch.length) return;
+    const rows = batch;
+    batch = [];
+    await scryfallApi.cacheCards(rows);
+    job.done += rows.length;
+  };
+  await require('./scryfallBulk').streamCards('default_cards', async (card) => {
+    if (job.cancelled) return false;
+    if (!card || !card.id || card.digital || seenIds.has(card.id)) return true;
+    const code = setKey(card.set);
+    if (!reachable.has(code)) return true;
+    seenIds.add(card.id);
+    perSet.set(code, (perSet.get(code) || 0) + 1);
+    batch.push(scryfallApi.normalizeCard(card, 'en'));
+    if (batch.length >= 500) await flush();
+    return true;
+  });
+  await flush();
+  if (job.cancelled) { outcome.stopped = true; return; }
+
+  outcome.cards = seenIds.size;
+  for (const code of reachable) {
+    if (!(byCode.get(code).card_count > 0)) continue;   // not a set anyone can build
+    if (perSet.has(code)) await markOk(job, outcome, code);
+    else await markGap(job, outcome, code, 'no English paper prints in Scryfall bulk data');
+  }
+  console.log(`catalog: mtg/${job.lang} cached ${seenIds.size} cards from Scryfall bulk data`);
 }
 
 // Which of the previous catalog's cards a SCOPED build must carry forward: every
@@ -408,81 +583,121 @@ function keptFromPrev(prev, embeddedIds) {
 }
 
 // The image the SCANNER should match against, which is not always the one the UI
-// displays. TCGdex's cached url is `/low.png` — 245x337, chosen so card grids do
-// not pull 312 KB per thumbnail — and this resizes to 448, so every TCGdex row was
-// embedded from an upscaled blur while the camera hands over a sharp 448 crop.
-// The same asset at `/high.png` is 600x825.
+// displays: grids want ~245px thumbnails, and milo wants a sharp 448 square, so
+// embedding the thumbnail meant matching the camera's sharp crop against an
+// upscaled blur.
 //
-// Swapped here rather than in tcgdexApi.imageUrl on purpose: card_cache's url is
-// what the frontend renders, and making every grid thumbnail high-res would cost
-// the whole app bandwidth to fix one pipeline.
+// Swapped here rather than in the providers on purpose: card_cache's url is what
+// the frontend renders, and making every grid thumbnail high-res would cost the
+// whole app bandwidth to fix one pipeline.
 function embedUrl(row) {
-  let url = row.image_url.replace(/\/low\.png$/, '/high.png');
+  let url = String(row.image_url || '');
+  // TCGdex: `high` is 600x825 against `low`'s 245x337. WebP rather than PNG: the
+  // same image measured 73 KB against 290 KB (four cards, 2026-11-15), so a whole
+  // English Pokémon build downloads ~1.6 GB instead of ~6.3 GB.
+  url = url.replace(/^(https:\/\/assets\.tcgdex\.net\/.+)\/(?:low|high)\.(?:png|webp|jpg)$/, '$1/high.webp');
+  // pokemontcg.io: '{n}.png' is 245x342, '{n}_hires.png' 734x1024 — the same
+  // upscaled-blur problem as TCGdex's `low`. Only installs still pinned to
+  // pokemontcg.io have these rows (TCGdex is the default), until it shuts down.
+  url = url.replace(/^(https:\/\/images\.pokemontcg\.io\/[^/]+\/[^/?#]+?)(?<!_hires)\.png$/, '$1_hires.png');
   if (url.includes('cards.lorcast.io/card/digital/')) {
     url = url.replace(/\/card\/digital\/(?:small|normal)\//, '/card/digital/large/');
   }
   // Riftbound rows store a 480px rendition of Riot's art; embed the full width.
   if (String(row.id).startsWith('riftbound-')) url = require('./riftcodexApi').embedImageUrl(url);
+  // TCGplayer's 200px product thumbnail: the games served from TCGCSV, and the
+  // Pokémon cards TCGdex lacks (pokemonTcgplayer.js). Matched by url, not game.
+  if (url.startsWith('https://tcgplayer-cdn.tcgplayer.com/product/')) url = require('./tcgcsvGameApi').embedImageUrl(url);
   return url;
+}
+
+// Two urls with the same artKey are the same picture at the same resolution, so a
+// vector embedded from one is still good for the other. TCGdex's PNG and WebP are
+// that (the extension is only the encoding); anything else must match exactly —
+// Scryfall's `?timestamp` changes when a card is rescanned, and a resolution
+// change has to re-embed.
+function artKey(url) {
+  const u = String(url || '');
+  const m = /^(https:\/\/assets\.tcgdex\.net\/.+\/(?:low|high))\.(?:png|webp|jpg)$/.exec(u);
+  return m ? m[1] : u;
+}
+
+const imageProvider = (url) => {
+  let host;
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return 'unknown'; }
+  if (host === 'tcgdex.net' || host.endsWith('.tcgdex.net')) return 'tcgdex';
+  if (host === 'pokemontcg.io' || host.endsWith('.pokemontcg.io')) return 'pokemontcg';
+  if (host === 'pokemontcgapi.com' || host.endsWith('.pokemontcgapi.com')) return 'pokemontcgapi';
+  if (host === 'scryfall.com' || host.endsWith('.scryfall.com') || host.endsWith('.scryfall.io')) return 'scryfall';
+  if (host === 'lorcast.io' || host.endsWith('.lorcast.io')) return 'lorcast';
+  if (host === 'rarebit.app' || host.endsWith('.rarebit.app')) return 'rarebit';
+  if (host === 'tcgcsv.com' || host.endsWith('.tcgcsv.com')) return 'tcgcsv';
+  if (host === 'tcgplayer.com' || host.endsWith('.tcgplayer.com')) return 'tcgplayer';
+  if (host === 'psacard.com' || host.endsWith('.psacard.com')) return 'psa';
+  if (host === 'pokemonpricetracker.com' || host.endsWith('.pokemonpricetracker.com')) return 'graded-prices';
+  return host;
+};
+
+// Scryfall's image CDN rejects a request with no User-Agent — 400, not 403, which
+// reads like a bad URL. The shared one (utils/providerClient), whose version comes
+// from package.json rather than a literal.
+const IMAGE_HEADERS = {
+  'User-Agent': require('./utils/providerClient').USER_AGENT,
+  Accept: 'image/webp,image/avif,image/*;q=0.8',
+};
+
+async function fetchImageOnce(url) {
+  const provider = imageProvider(url);
+  const startedAt = performance.now();
+  let status = 500;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(30000), headers: IMAGE_HEADERS });
+    status = res.status;
+    if (!res.ok) {
+      const err = new Error(`HTTP ${res.status}`);
+      err.status = res.status;
+      err.retryAfter = Number(res.headers.get('retry-after')) || 0;
+      throw err;
+    }
+    return Buffer.from(await res.arrayBuffer());
+  } finally {
+    metrics.recordProviderCall(provider, startedAt, status, 'card_image');
+  }
+}
+
+// Two retries for the failures that are worth one: a dropped connection, 429 and
+// 5xx. TCGdex's asset server answered an occasional 503 under parallel load in
+// testing (2026-11-15), and every failure here is a card the catalog cannot scan
+// until the next build. A 404 is final.
+async function fetchImage(url) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetchImageOnce(url);
+    } catch (err) {
+      const transient = !err.status || err.status === 429 || err.status >= 500;
+      if (!transient || attempt >= 2) throw err;
+      const wait = Math.min(10000, err.retryAfter ? err.retryAfter * 1000 : 1000 * 3 ** attempt);
+      await new Promise(r => setTimeout(r, wait));
+    }
+  }
 }
 
 // --- phase 2 -----------------------------------------------------------------
 
-// What turns an image URL into an embedding: a download and a milo forward pass.
-// `start(…, { embedder })` swaps it, which is how the tests drive a whole build
-// without a model file or a network.
+// What turns an image URL into an embedding: a download (fetchImage, which
+// retries what is worth retrying) and a milo forward pass on worker threads
+// (embedPool.js: onnxruntime-node's run() blocks the thread that calls it, and
+// milo takes one image at a time, so threads are how a build uses more than one
+// core). `start(…, { embedder })` swaps it, which is how the tests drive a whole
+// build without a model file or a network.
 async function defaultEmbedder() {
-  const session = await ort.InferenceSession.create(path.join(MODEL_DIR, 'milo.onnx'), {
-    intraOpNumThreads: 1, interOpNumThreads: 1, executionMode: 'sequential',
-  });
-
-  const imageProvider = (url) => {
-    const host = new URL(url).hostname.toLowerCase();
-    if (host === 'tcgdex.net' || host.endsWith('.tcgdex.net')) return 'tcgdex';
-    if (host === 'pokemontcg.io' || host.endsWith('.pokemontcg.io')) return 'pokemontcg';
-    if (host === 'pokemontcgapi.com' || host.endsWith('.pokemontcgapi.com')) return 'pokemontcgapi';
-    if (host === 'scryfall.com' || host.endsWith('.scryfall.com')) return 'scryfall';
-    if (host === 'lorcast.io' || host.endsWith('.lorcast.io')) return 'lorcast';
-    if (host === 'rarebit.app' || host.endsWith('.rarebit.app')) return 'rarebit';
-    if (host === 'tcgcsv.com' || host.endsWith('.tcgcsv.com')) return 'tcgcsv';
-    if (host === 'tcgplayer.com' || host.endsWith('.tcgplayer.com')) return 'tcgplayer';
-    if (host === 'psacard.com' || host.endsWith('.psacard.com')) return 'psa';
-    if (host === 'pokemonpricetracker.com' || host.endsWith('.pokemonpricetracker.com')) return 'graded-prices';
-    return host;
-  };
-
-  // Scryfall's image CDN rejects a request with no User-Agent — 400, not 403, which
-  // reads like a bad URL. The shared one (utils/providerClient), whose version comes
-  // from package.json rather than a literal.
-  const HEADERS = {
-    'User-Agent': require('./utils/providerClient').USER_AGENT,
-    Accept: 'image/*',
-  };
+  const pool = await require('./embedPool').createEmbedder(path.join(MODEL_DIR, 'milo.onnx'));
   return {
-    async fetch(url) {
-      const provider = imageProvider(url);
-      const startedAt = performance.now();
-      let status = 500;
-      try {
-        const res = await fetch(url, {
-          signal: AbortSignal.timeout(30000),
-          headers: HEADERS,
-        });
-        status = res.status;
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return Buffer.from(await res.arrayBuffer());
-      } finally {
-        metrics.recordProviderCall(provider, startedAt, status, 'card_image');
-      }
-    },
-    async embed(buf) {
-      const { data } = await sharp(buf).resize(EMBED_SIZE, EMBED_SIZE, { fit: 'fill' })
-        .removeAlpha().raw().toBuffer({ resolveWithObject: true });
-      // The scan's own tensor (cvScan.toTensor): a catalog row and the photo matched
-      // against it must be normalised alike, or every cosine drifts.
-      const out = await session.run({ image: cvScan.toTensor(data, EMBED_SIZE) });
-      return out.embedding.data;
-    },
+    fetch: fetchImage,
+    embed: (buf) => pool.embed(buf),
+    close: () => pool.close(),
+    size: pool.size,
+    workers: pool.workers,
   };
 }
 
@@ -535,50 +750,64 @@ async function embedPhase(job) {
   job.done = 0;
   if (!tasks.length) return { built: 0, reused: 0, failed: 0, wrote: false };
 
-  // Resume: keep every embedding whose source image has not changed.
+  // Resume: keep every embedding whose source image has not changed. Compared by
+  // artKey of the url that was EMBEDDED, not the one card_cache holds: raising the
+  // resolution has to invalidate every vector built from the old one, and a row
+  // whose art was re-uploaded still has to rebuild — while a change of encoding
+  // alone (TCGdex PNG to WebP) does not re-download a catalog's worth of art.
   const prev = readPrev(job.game, job.lang);
-
-  const embedder = job.embedder || await defaultEmbedder();
-
   const ids = [], vecs = [], srcs = {};
   let built = 0, reused = 0, failed = 0;
-  const queue = tasks.slice();
-  const inflight = new Map();
-  const CONCURRENCY = 8;
-
-  // Download ahead while the CPU embeds: the network is the slow half and the
-  // model is single-threaded, so overlapping them is most of the wall clock.
-  const pump = () => {
-    while (inflight.size < CONCURRENCY && queue.length && !job.cancelled) {
-      const task = queue.shift();
-      // Resume compares the url that was EMBEDDED, not the one card_cache holds:
-      // raising the resolution above has to invalidate every vector built from the
-      // old one, and a row whose art was re-uploaded still has to rebuild.
-      if (prev && prev.vecs.has(task.id) && prev.srcs.get(task.id) === task.url) {
-        ids.push(task.id); vecs.push(prev.vecs.get(task.id)); srcs[task.id] = task.url;
-        reused++; job.done++;
-        continue;
-      }
-      inflight.set(task.id, embedder.fetch(task.url).then(buf => ({ task, buf }), err => ({ task, err })));
+  const queue = [];
+  for (const task of tasks) {
+    if (prev && prev.vecs.has(task.id) && artKey(prev.srcs.get(task.id)) === artKey(task.url)) {
+      ids.push(task.id); vecs.push(prev.vecs.get(task.id)); srcs[task.id] = task.url;
+      reused++; job.done++;
+    } else {
+      queue.push(task);
     }
-  };
+  }
 
-  pump();
-  while (inflight.size) {
-    const settled = await Promise.race(inflight.values());
-    inflight.delete(settled.task.id);
-    if (settled.err) failed++;
-    else {
-      try {
-        vecs.push(await embedder.embed(settled.buf));
+  // The embedder only when something needs embedding: a rebuild that finds nothing
+  // new should not start a pool of ONNX sessions to do nothing.
+  let embedder = job.embedder;
+  let own = null;
+  try {
+    if (queue.length && !embedder) {
+      own = await defaultEmbedder();
+      embedder = own;
+      console.log(`catalog: ${job.game}/${job.lang} embedding ${queue.length} image(s) on ${own.workers ? `${own.workers} worker thread(s)` : 'the server thread'}`);
+    }
+    // Downloads run ahead of the embedders: the network is the slow half, so a few
+    // images per worker stay in flight.
+    const concurrency = Math.max(8, ((embedder && embedder.size) || 1) * 4);
+    const inflight = new Map();
+    const pump = () => {
+      while (inflight.size < concurrency && queue.length && !job.cancelled) {
+        const task = queue.shift();
+        inflight.set(task.id, Promise.resolve()
+          .then(() => embedder.fetch(task.url))
+          .then(buf => embedder.embed(buf))
+          .then(vec => ({ task, vec }), err => ({ task, err })));
+      }
+    };
+    pump();
+    while (inflight.size) {
+      const settled = await Promise.race(inflight.values());
+      inflight.delete(settled.task.id);
+      if (settled.err) failed++;
+      else {
         ids.push(settled.task.id);
+        vecs.push(settled.vec);
         srcs[settled.task.id] = settled.task.url;
         built++;
-      } catch { failed++; }
+      }
+      job.done++;
+      job.message = `${built + reused}/${tasks.length}`;
+      pump();
     }
-    job.done++;
-    job.message = `${built + reused}/${tasks.length}`;
-    pump();
+  } finally {
+    if (own) await own.close().catch(() => {});
   }
 
   // What the previous catalog had and this run did not embed: carried forward,
@@ -595,19 +824,22 @@ async function embedPhase(job) {
   //   · An unscoped build does NOT carry a card that has left card_cache: it walked
   //     every row for the language, and a vector with no card behind it can win a
   //     scan and then resolve to nothing.
+  // `kept` counts what a whole-game build could not refresh (stopped, failed); a
+  // scoped build's other sets are simply reused.
+  let kept = 0;
   if (prev) {
     const listed = scoped ? null : new Set(rows.map(r => r.id));
     for (const { id, vec, src } of keptFromPrev(prev, ids)) {
       if (listed && !listed.has(String(id).replace(/_back$/, ''))) continue;
       ids.push(id); vecs.push(vec);
       if (src) srcs[id] = src;
-      reused++;
+      if (scoped) reused++; else kept++;
     }
   }
 
   // A cancelled build still writes what it has (and what it kept): the catalog is
   // valid and resuming later reuses all of it.
-  if (!vecs.length) return { built, reused, failed, wrote: false };
+  if (!vecs.length) return { built, reused, failed, kept, wrote: false };
   // What this catalog covers, for list() and the auto-update: the union of every
   // scoped build added to it, or null once it is (or was) a whole-game build.
   let scope = null;
@@ -624,12 +856,12 @@ async function embedPhase(job) {
   fs.writeFileSync(binPath(job.game, job.lang) + '.tmp', bin);
   fs.writeFileSync(metaPath(job.game, job.lang) + '.tmp', JSON.stringify({
     dim, ids, srcs, game: job.game, lang: job.lang,
-    model: 'milo1', builtAt: new Date().toISOString(), scope,
+    model: MODEL_ID, builtAt: new Date().toISOString(), scope,
   }));
   fs.renameSync(binPath(job.game, job.lang) + '.tmp', binPath(job.game, job.lang));
   fs.renameSync(metaPath(job.game, job.lang) + '.tmp', metaPath(job.game, job.lang));
   cvScan.reload(job.game, job.lang);
-  return { built, reused, failed, wrote: true, rows: ids.length };
+  return { built, reused, failed, kept, wrote: true, rows: ids.length };
 }
 
 function start(game, lang = 'English', opts = {}) {
@@ -640,23 +872,35 @@ function start(game, lang = 'English', opts = {}) {
     // Which sets this build covers, or empty for the whole game. Lowercased once
     // here so neither phase has to think about case: cachePhase passes them to the
     // provider and embedPhase matches them against LOWER(set_id).
-    sets: (opts.sets || []).map(s => String(s).trim().toLowerCase()).filter(Boolean),
+    sets: [...new Set((opts.sets || []).map(setKey).filter(Boolean))],
     phase: 'starting', done: 0, total: 0, message: '',
     startedAt: Date.now(), cancelled: false,
     // Tests only: { fetch(url) -> Buffer, embed(Buffer) -> Float32Array }.
     embedder: opts.embedder || null,
   };
   current = job;
-  (async () => {
+  currentRun = (async () => {
     try {
-      const cached = opts.skipCache ? { cards: 0, failed: 0 } : await cachePhase(job);
-      const embedded = job.cancelled && !opts.keepGoing ? null : await embedPhase(job);
+      const cached = opts.skipCache ? newOutcome() : await cachePhase(job);
+      job.fetchedSets = [...cached.ok];
+      job.skipped = [...cached.gapIds];
+      job.failedSets = [...cached.failedIds];
+      // cacheOnly: the release build (scripts/scan-catalogs/build.mjs) caches every
+      // set first, adds rows of its own, then embeds with skipCache.
+      const embedded = opts.cacheOnly || (job.cancelled && !opts.keepGoing) ? null : await embedPhase(job);
       job.phase = job.cancelled ? 'cancelled' : 'done';
+      // A build that ran to the end: where each set it covered now stands, so the
+      // weekly update can tell a set that grew from one that will not finish.
+      if (!job.cancelled && embedded && embedded.wrote) {
+        await recordSetChecks(job).catch(e => console.warn(`catalog: could not record set checks: ${e.message}`));
+      }
       // Say what was skipped and why, or a build that could not touch 46 listed sets
       // reports success and leaves the user wondering why the coverage did not move.
-      const skipped = cached.gaps ? `, ${cached.gaps} set(s) skipped — no card data upstream` : '';
+      const skipped = (cached.gaps ? `, ${cached.gaps} set(s) skipped — no card data upstream` : '')
+        + (cached.failed ? `, ${cached.failed} set(s) failed to download` : '');
+      const keptNote = embedded && embedded.kept ? `, ${embedded.kept} kept from the previous build` : '';
       job.message = embedded
-        ? `${embedded.rows || 0} cards embedded (${embedded.built} new, ${embedded.reused} reused, ${embedded.failed} failed)${skipped}`
+        ? `${embedded.rows || 0} cards embedded (${embedded.built} new, ${embedded.reused} reused, ${embedded.failed} failed${keptNote})${skipped}`
         : `cached ${cached.cards} cards${skipped}`;
       console.log(`catalog: ${job.game}/${job.lang} ${job.phase} — ${job.message}`);
     } catch (e) {
@@ -676,21 +920,130 @@ function start(game, lang = 'English', opts = {}) {
 let last = null;
 const lastResult = () => last;
 
-// Which catalog the auto-update (server.js) rebuilds now, from list(), or null.
+// The weekly update's work (server.js), from list(): every built catalog with sets
+// to fetch, the one built longest ago first. Taking only the first behind one meant
+// Pokémon every week — it is first in the registry, and its count never settled —
+// so Magic, Lorcana and Riftbound were never updated at all. Oldest-built-first
+// rotates through them, and across restarts too, since a rebuild moves its catalog
+// to the back of the line; and every one behind is built in turn, not one a week.
 //
-// One at a time, and of those behind, the one built longest ago. Taking the first
-// behind one meant Pokémon every week — it is first in the registry, and its count
-// never settled — so Magic, Lorcana and Riftbound were never updated at all.
-// Oldest-built-first rotates through them, and across restarts too, since a
-// rebuild moves its catalog to the back of the line. A scoped catalog is rebuilt
-// as its scope: rebuilt whole, a few sets the user chose became the whole game.
-function nextAutoUpdate(catalogs) {
-  const behind = (catalogs || [])
-    .filter(c => c.built && c.newSets > 0)
-    .sort((a, b) => String(a.built.builtAt || '').localeCompare(String(b.built.builtAt || '')));
-  const c = behind[0];
-  if (!c) return null;
-  return { game: c.game, lang: c.lang, newSets: c.newSets, sets: c.built.scope || null };
+// Each is built as exactly the sets it is missing (`pending`). Rebuilding the
+// whole game to fetch one new set is what made the update cost hours, and a scoped
+// catalog's pending sets are its own: rebuilt whole, a few sets the user chose
+// became the whole game.
+function autoUpdates(catalogs) {
+  return (catalogs || [])
+    .filter(c => c.built && Array.isArray(c.pending) && c.pending.length)
+    .sort((a, b) => String(a.built.builtAt || '').localeCompare(String(b.built.builtAt || '')))
+    .map(c => ({ game: c.game, lang: c.lang, newSets: c.newSets, sets: c.pending, scope: c.built.scope || null }));
 }
 
-module.exports = { list, listLanguages, setCounts, newSetCount, nextAutoUpdate, keptFromPrev, embedUrl, start, stop, state, lastResult, binPath, metaPath, GAMES };
+// Sets a built catalog already covers that have grown since. setsBehind counts a
+// set as fetched once any card of it is cached, and a set is often not finished
+// then: TCGdex publishes a set in parts over weeks, Scryfall's promo sets keep
+// growing, and cards reach card_cache by other roads (a search, the TCGCSV
+// catalogue refresh, Pokémon's TCGplayer-only cards) without reaching the catalog.
+// So a set is grown when cards cached here with art are not in the catalog yet, or
+// when its provider claims more cards than are cached (English: the sets table,
+// refreshed daily). Re-walking one costs that set's list and only the new art.
+//
+// Each set's state after its last build is kept (catalog_set_checks): a set that
+// still looks unfinished with nothing changed, GROWTH_GIVE_UP builds in a row, is
+// left alone until something about it moves. Run by the weekly update only — it
+// reads every cached card of the game, which list() cannot afford on every poll.
+async function setSignatures(game, lang) {
+  const meta = readMeta(game, lang);
+  const inCatalog = new Set((meta ? meta.ids : []).map(id => String(id).replace(/_back$/, '')));
+  const per = new Map();   // bare set id -> { cached, art, embedded, claimed }
+  for (const r of await db.all(
+    `SELECT id, LOWER(set_id) sid, CASE WHEN image_url IS NOT NULL AND image_url != '' THEN 1 ELSE 0 END art
+       FROM card_cache WHERE game = ? AND language = ? AND set_id IS NOT NULL AND set_id != ''`, [game, lang]
+  )) {
+    const sid = games.bareSetId(r.sid);
+    const e = per.get(sid) || { cached: 0, art: 0, embedded: 0, claimed: null };
+    e.cached++;
+    if (r.art) { e.art++; if (inCatalog.has(r.id)) e.embedded++; }
+    per.set(sid, e);
+  }
+  if (languages.isEnglish(lang)) {
+    for (const r of await db.all(`SELECT id, total FROM sets WHERE game = ?`, [game])) {
+      const e = per.get(games.bareSetId(String(r.id).toLowerCase()));
+      if (e && r.total > 0) e.claimed = r.total;
+    }
+  }
+  return per;
+}
+const signature = (e) => `${e.claimed ?? ''}|${e.cached}|${e.art}|${e.embedded}`;
+const unfinished = (e) => e.art > e.embedded || (e.claimed != null && e.claimed > e.cached);
+
+async function grownSets(game, lang, { scope = null } = {}) {
+  const per = await setSignatures(game, lang);
+  const checks = new Map((await db.all(
+    `SELECT set_id, sig, tries FROM catalog_set_checks WHERE game = ? AND language = ?`, [game, lang]
+  ).catch(() => [])).map(r => [r.set_id, r]));
+  const inScope = scope ? new Set(scope.map(s => games.bareSetId(String(s).toLowerCase()))) : null;
+  const out = [];
+  for (const [sid, e] of per) {
+    if (inScope && !inScope.has(sid)) continue;
+    // Pokémon's TCGplayer-only sets are written from the TCGCSV cache
+    // (pokemonTcgplayer.js), not walked from TCGdex: re-walking one asks TCGdex
+    // for a set it has never had.
+    if (sid.startsWith('tcgp-')) continue;
+    if (!unfinished(e)) continue;
+    const c = checks.get(sid);
+    if (c && c.sig === signature(e) && c.tries >= GROWTH_GIVE_UP) continue;
+    out.push(sid);
+  }
+  return out;
+}
+
+// After a build that ran to the end: each set it covered, as it now stands. A set
+// that still looks unfinished with the same signature as after its previous build
+// made no progress; anything else starts the count again.
+async function recordSetChecks(job) {
+  const per = await setSignatures(job.game, job.lang);
+  const built = job.sets.length ? new Set(job.sets.map(s => games.bareSetId(s))) : null;
+  const before = new Map((await db.all(
+    `SELECT set_id, sig, tries FROM catalog_set_checks WHERE game = ? AND language = ?`, [job.game, job.lang]
+  )).map(r => [r.set_id, r]));
+  await db.withTransaction(async () => {
+    for (const [sid, e] of per) {
+      if (built && !built.has(sid)) continue;
+      const sig = signature(e);
+      const prev = before.get(sid);
+      const tries = !unfinished(e) ? 0 : prev && prev.sig === sig ? prev.tries + 1 : 1;
+      await db.run(
+        `INSERT INTO catalog_set_checks (game, language, set_id, sig, tries) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(game, language, set_id) DO UPDATE SET sig = excluded.sig, tries = excluded.tries`,
+        [job.game, job.lang, sid, sig, tries]
+      );
+    }
+  });
+}
+
+// autoUpdates over the live list, with each catalog's grown sets added to what it
+// is missing. A new Magic release is listed by its root code (setUniverse); its
+// tokens, promos and art cards are their own codes beneath it, so a whole-game
+// catalog's build is sent the whole family. A scoped catalog is built as exactly
+// its own codes: the user may have left a release's tokens out on purpose.
+async function behindCatalogs() {
+  const rows = await list();
+  for (const c of rows) {
+    if (!c.built) continue;
+    const grown = await grownSets(c.game, c.lang, { scope: c.built.scope }).catch(() => []);
+    if (grown.length) c.pending = [...new Set([...(c.pending || []), ...grown])];
+  }
+  const out = autoUpdates(rows);
+  for (const c of out) {
+    if (c.game !== 'mtg' || c.scope) continue;
+    const codes = new Set();
+    for (const root of c.sets) for (const code of await cardSets.mtgFamilyCodes(root)) codes.add(setKey(code));
+    c.sets = [...codes];
+  }
+  return out;
+}
+
+module.exports = {
+  list, listLanguages, setCounts, newSetCount, setsBehind, autoUpdates, grownSets, behindCatalogs, keptFromPrev, embedUrl, artKey,
+  start, stop, state, whenIdle, lastResult, binPath, metaPath, GAMES,
+};

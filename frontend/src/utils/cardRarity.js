@@ -2,8 +2,11 @@ import { rarityRank } from '../../../shared/cardSort.mjs';
 
 // Magic's Mythic, Lorcana's Legendary, Enchanted, Epic and Iconic, and Riftbound's
 // Epic and Showcase contain none of Pokémon's rarity words, so they used to fall
-// through to common: a mythic got a grey "COM" badge and no glow.
-const TOP_OUTSIDE_POKEMON = /mythic|legendary|enchanted|epic|iconic|showcase/;
+// through to common: a mythic got a grey "COM" badge and no glow. Likewise the
+// top tiers of the games served from TCGplayer's catalogue: Yu-Gi-Oh!'s Starlight,
+// Ghost and Ultimate Rare, One Piece's Treasure Rare, Flesh and Blood's Fabled and
+// Marvel (their "Rare" alone would read as merely rare).
+const TOP_OUTSIDE_POKEMON = /mythic|legendary|enchanted|epic|iconic|showcase|starlight|ghost|ultimate|treasure|fabled|marvel/;
 
 // Single source of truth for the rarity tiers used across LocationManager's
 // visualizers (card border glow, badge color, badge label).

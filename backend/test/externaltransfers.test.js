@@ -375,7 +375,7 @@ async function main() {
     assert.strictEqual((await db.get(`SELECT game FROM collection WHERE user_id = ? AND card_id = ?`, [ownerId, rune.cardId])).game, 'riftbound');
     assert.strictEqual((await db.get(`SELECT game FROM sealed_purchases WHERE user_id = ? AND product_name = 'Riftbound Booster'`, [ownerId])).game, 'riftbound');
     await expectStatus(await record({
-      contact_id: contact.id, transaction_type: 'gift', received_items: [{ type: 'card', card_id: rune.cardId, game: 'yugioh' }],
+      contact_id: contact.id, transaction_type: 'gift', received_items: [{ type: 'card', card_id: rune.cardId, game: 'netrunner' }],
     }), 400, 'a game nobody registered', 'invalid');
     await expectStatus(await record({
       contact_id: contact.id, transaction_type: 'gift', received_items: [{ type: 'card', card_id: rune.cardId, condition: 'Mint' }],

@@ -394,13 +394,25 @@ docker exec bindarr node scripts/fetch-models.mjs
 `backend/`.) Restart afterwards. Until they are there, the server says so at
 startup and scanning returns a clear error instead of guesses.
 
-**2. A catalog.** The fingerprint has to be compared against something. Build one
-per game and language from **Admin → Catalogs**: it downloads that game's card
-list and fingerprints every card's artwork — hours for a full English game, and
-about 5 MB of output per 10,000 cards. Progress is live, stopping keeps what it
-has, and resuming reuses it. `--catalogs` on the fetch command above grabs
-prebuilt English Magic and Pokémon catalogs instead, which answer immediately but
-only resolve cards your install has already seen.
+**2. A catalog.** The fingerprint has to be compared against something. The quick
+way is **Admin → Catalogs → Bindarr's catalogs**: one download per game (Magic is
+about 33 MB, Pokémon about 8 MB, the others less), built every week by this
+repository's CI from every card's artwork and published to its
+[`scan-catalogs` release](https://github.com/thenotoriousJeremy/bindarr/releases/tag/scan-catalogs).
+After that the server checks once a day and downloads only the new cards, usually
+a few hundred kilobytes a week. Every row is a Bindarr card id, so a match always
+names a card, even one this install has never cached. The Pokémon catalogs use
+TCGdex's card ids, so they are offered only while TCGdex is your Pokémon data
+provider. `CATALOG_AUTO_UPDATE=0` turns the daily check off; `CATALOG_RELEASE_URL`
+points it at a mirror, and `CATALOG_RELEASE_URL=off` turns the downloads off.
+
+You can also build one per game and language on the same page: it downloads that
+game's card list and fingerprints every card's artwork — hours for a full English
+game, and about 5 MB of output per 10,000 cards. Progress is live, stopping keeps
+what it has, and resuming reuses it. A catalog built here and a downloaded one are
+searched together, the local rows winning. `--catalogs` on the fetch command above
+grabs the model author's dated snapshots instead, which answer immediately but
+stop at their date.
 
 Scanning is then the same whether or not you tell it which set you are feeding.
 Naming the set just restricts the comparison to that set's cards, which is faster
@@ -460,7 +472,7 @@ Daily is what the free providers publish, so leave it there unless you have a re
 
 ### TCGCSV data sync
 
-Bindarr downloads TCGCSV data (from the project's mirror, below) and stores it in the local SQLite database; app and catalog operations use that cache instead of fetching data for each request. At startup and during scheduled work, Bindarr checks TCGCSV's `last-updated.txt` no more than once every 24 hours and only downloads a new dataset when the timestamp advances. A new dataset is staged until the full sync succeeds, so the last complete cache remains available if a refresh fails, and price refreshes keep using it. Only the Pokémon categories (3 and 85) are synced, plus Riftbound (89) when a collection or list holds a Riftbound card and Magic (1) and Lorcana (71) sealed product when an admin turns that on; that is about 1 + 2 × (number of sets) requests per category per new dataset, and only the fields Bindarr reads are stored. A set that TCGCSV answers with a 404 or an error is recorded as empty rather than blocking the sync; a dataset that still has not completed after 24 hours is abandoned and `last-updated.txt` is checked again.
+Bindarr downloads TCGCSV data (from the project's mirror, below) and stores it in the local SQLite database; app and catalog operations use that cache instead of fetching data for each request. At startup and during scheduled work, Bindarr checks TCGCSV's `last-updated.txt` no more than once every 24 hours and only downloads a new dataset when the timestamp advances. A new dataset is staged until the full sync succeeds, so the last complete cache remains available if a refresh fails, and price refreshes keep using it. Only the Pokémon categories (3 and 85) are synced, plus Riftbound (89) when a collection or list holds a Riftbound card, each of Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood and Star Wars: Unlimited once someone on the install opens that game (their whole card list comes from TCGCSV), and Magic (1) and Lorcana (71) sealed product when an admin turns that on. From the mirror's bundles that is at most three requests per category per new dataset, usually one; walking TCGCSV's own layout it is about 1 + 2 × (number of sets). Only the fields Bindarr reads are stored. A set that TCGCSV answers with a 404 or an error is recorded as empty rather than blocking the sync; a dataset that still has not completed after 24 hours is abandoned and `last-updated.txt` is checked again.
 
 Outbound requests are serialized and spaced by at least 100 ms. If TCGCSV returns HTTP 403, Bindarr logs the response and pauses further TCGCSV requests for 24 hours.
 
@@ -474,7 +486,9 @@ TCGplayer prices come from [TCGCSV](https://tcgcsv.com), a free service run by o
 https://raw.githubusercontent.com/thenotoriousJeremy/bindarr/tcgcsv-mirror
 ```
 
-Since 1.9 this is the default, and installs never contact tcgcsv.com. It carries every category Bindarr syncs: Pokémon (3, 85) and Riftbound (89) as TCGCSV serves them, and Lorcana (71) and Magic (1) reduced to sealed product and its prices. Older releases default to tcgcsv.com, whose 403s they wait out; set `TCGCSV_BASE_URL` to the URL above on those, or upgrade. Please don't point `TCGCSV_BASE_URL` back at tcgcsv.com. The sync script and workflow are `scripts/tcgcsv-mirror/sync.mjs` and `.github/workflows/tcgcsv-mirror.yml`.
+Since 1.9 this is the default, and installs never contact tcgcsv.com. It carries every category Bindarr syncs: Pokémon (3, 85), Riftbound (89), Yu-Gi-Oh! (2), One Piece (68), Digimon (63), Flesh and Blood (62) and Star Wars: Unlimited (79) as TCGCSV serves them, and Lorcana (71) and Magic (1) reduced to sealed product and its prices. Older releases default to tcgcsv.com, whose 403s they wait out; set `TCGCSV_BASE_URL` to the URL above on those, or upgrade. Please don't point `TCGCSV_BASE_URL` back at tcgcsv.com. The sync script and workflow are `scripts/tcgcsv-mirror/sync.mjs` and `.github/workflows/tcgcsv-mirror.yml`.
+
+The mirror also publishes one pre-slimmed **bundle** per category (groups, products, prices) under `bindarr/`, with an `index.json` of their hashes. Current releases read those: a new dataset costs `last-updated.txt`, the index and whichever bundles changed — a few requests a day instead of one per set, and a bundle whose rows did not change is not downloaded again. Without bundles (an older mirror, or a cache of your own) an install walks the per-set files as before. On the mirror's side, a set's product list is re-fetched from TCGCSV only when it may have changed (new, modified, recently released, or once a week), which roughly halves the daily requests to TCGCSV and is what makes room for the newer games; each of those is mirrored only when TCGCSV's own name for its category matches the game and the run still fits under the request cap.
 
 ## API access
 

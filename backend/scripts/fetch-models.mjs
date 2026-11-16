@@ -27,24 +27,29 @@ import { createRequire } from 'node:module';
 // One descriptor table, shared with the admin panel's download button
 // (backend/src/utils/modelAssets.js). Two copies of a byte size is two chances to
 // assert the wrong one.
-const { MODELS, CATALOGS, LICENSE } = createRequire(import.meta.url)('../src/utils/modelAssets.js');
-const HF = 'https://huggingface.co';
+const { MODELS, CATALOGS, LICENSE, assetUrl } = createRequire(import.meta.url)('../src/utils/modelAssets.js');
+const { createHash } = createRequire(import.meta.url)('crypto');
 
 const mb = (n) => `${(n / 1024 / 1024).toFixed(1)} MB`;
 
-async function fetchOne({ name, repo, file, bytes }) {
+async function fetchOne(asset) {
+  const { name, repo, bytes, sha256 } = asset;
   const dest = path.join(MODEL_DIR, name);
   if (fs.existsSync(dest) && fs.statSync(dest).size === bytes) {
     console.log(`  ${name}: already present (${mb(bytes)})`);
     return 'present';
   }
-  const url = `${HF}/${repo}/resolve/main/${file}`;
+  // The pinned revision modelAssets names, not whatever `main` holds today.
+  const url = assetUrl(asset);
   process.stdout.write(`  ${name}: downloading ${mb(bytes)} from ${repo}... `);
-  const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, redirect: 'follow', signal: AbortSignal.timeout(600000) });
+  const res = await fetch(url, { headers: { 'User-Agent': 'Bindarr fetch-models' }, redirect: 'follow', signal: AbortSignal.timeout(600000) });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length !== bytes) {
     throw new Error(`${name} came back ${buf.length} bytes, expected ${bytes} — refusing to write it`);
+  }
+  if (sha256 && createHash('sha256').update(buf).digest('hex') !== sha256) {
+    throw new Error(`${name} does not match its pinned SHA-256 — refusing to write it`);
   }
   // Write-then-rename, so an interrupted run cannot leave a half file that looks
   // finished to the next one.

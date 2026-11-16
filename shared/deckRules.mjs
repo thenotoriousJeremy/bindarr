@@ -137,6 +137,24 @@ export function riftboundName(name) {
 }
 const rbKey = (card) => `${riftboundZone(card)}:${riftboundName(card && card.name)}`;
 
+// One card for the copy rule across TCGplayer printings. TCGplayer names a
+// printing by suffix — 'Dark Magician (Alternate Art)', 'Luke Skywalker
+// (Hyperspace)', 'Omnimon (Parallel)' — and those are the same card. Flesh and
+// Blood is the exception: its pitch colour, '(Red)' / '(Yellow)' / '(Blue)', names
+// a different card, so a colour suffix stays.
+const PITCH_COLOUR = /^\((red|yellow|blue)\)$/i;
+export function tcgplayerCardName(name) {
+  let s = String(name || '').trim();
+  const keep = [];
+  for (;;) {
+    const m = /\s*(\([^()]*\))\s*$/.exec(s);
+    if (!m) break;
+    if (PITCH_COLOUR.test(m[1])) keep.unshift(m[1].toLowerCase());
+    s = s.slice(0, m.index);
+  }
+  return foldName([s, ...keep].join(' ').replace(/\s+/g, ' '));
+}
+
 // The champion a Legend or champion unit belongs to: the name before its title,
 // else its first tag.
 function rbChampion(card) {
@@ -285,6 +303,56 @@ export const DECK_GAMES = {
       { name: 'Constructed', size: { min: 56 } },
       { name: 'Casual' },
     ],
+  },
+  // The games served from TCGplayer's catalogue (tcgcsvGameApi). Basic
+  // constructed rules only — deck size and the copy limit — counted by card
+  // name with TCGplayer's printing suffixes taken off (tcgplayerCardName).
+  yugioh: {
+    // Main Deck 40-60; Extra and Side Decks are kept in the same list, so only
+    // the minimum is checked.
+    rules: { size: { min: 40 }, copies: 3 },
+    copyKey: (card) => tcgplayerCardName(card && card.name),
+    sameCard: (a, b) => tcgplayerCardName(a && a.name) === tcgplayerCardName(b && b.name),
+    anyPrinting: true,
+    formats: [{ name: 'Advanced' }, { name: 'Traditional' }, { name: 'Casual' }],
+  },
+  onepiece: {
+    // 50 cards plus the Leader, in one list.
+    rules: { size: { min: 51 }, copies: 4 },
+    copyKey: (card) => tcgplayerCardName(card && card.name),
+    sameCard: (a, b) => tcgplayerCardName(a && a.name) === tcgplayerCardName(b && b.name),
+    anyPrinting: true,
+    formats: [{ name: 'Standard' }, { name: 'Casual' }],
+  },
+  digimon: {
+    // 50 in the main deck; up to 5 Digi-Eggs ride in the same list.
+    rules: { size: { min: 50 }, copies: 4 },
+    copyKey: (card) => tcgplayerCardName(card && card.name),
+    sameCard: (a, b) => tcgplayerCardName(a && a.name) === tcgplayerCardName(b && b.name),
+    anyPrinting: true,
+    formats: [{ name: 'Standard' }, { name: 'Casual' }],
+  },
+  fab: {
+    // Classic Constructed: 60 cards plus the hero and equipment; Blitz: 40, two
+    // copies. A card's pitch colour is part of its name here — '(Red)' and
+    // '(Blue)' are different cards — and tcgplayerCardName keeps it.
+    rules: { size: { min: 60 }, copies: 3 },
+    copyKey: (card) => tcgplayerCardName(card && card.name),
+    sameCard: (a, b) => tcgplayerCardName(a && a.name) === tcgplayerCardName(b && b.name),
+    anyPrinting: true,
+    formats: [
+      { name: 'Classic Constructed' },
+      { name: 'Blitz', size: { min: 40 }, copies: 2 },
+      { name: 'Casual' },
+    ],
+  },
+  swu: {
+    // 50 cards plus a Leader and a Base.
+    rules: { size: { min: 50 }, copies: 3 },
+    copyKey: (card) => tcgplayerCardName(card && card.name),
+    sameCard: (a, b) => tcgplayerCardName(a && a.name) === tcgplayerCardName(b && b.name),
+    anyPrinting: true,
+    formats: [{ name: 'Premier' }, { name: 'Twin Suns' }, { name: 'Casual' }],
   },
 };
 
