@@ -13,7 +13,9 @@
 //             (numberOf, productId, name, imageUrl), pokemonTcgplayer (rarity,
 //             whether there is an image) -> productId, name, number, rarity,
 //             imageUrl only when absent or non-standard; imageUrl and groupId
-//             on sealed product
+//             on sealed product; and on Riftbound's cards (89) the short
+//             extendedData fields, `ext`, for riftboundTcgplayer (card type,
+//             domain, tags, stats)
 //   prices    tcgcsvApi.pricesByProduct, routes/sealed.js refresh-value,
 //             riftboundPrices.quotesByProduct
 //             -> productId, subTypeName, marketPrice, midPrice
@@ -41,7 +43,12 @@
 // The version of every shape below. The mirror stamps it on the bundles and the
 // index it publishes, and an instance only takes a bundle stamped with its own
 // version (tcgcsvApi.syncFromBundles), falling back to the per-group files
-// otherwise. Bump it whenever a slim shape changes.
+// otherwise. Bump it whenever a slim shape changes in a way some reader would
+// misread. A new optional field is not that, and is not worth what a bump costs
+// (every install on either side of it walking group by group until the other
+// catches up): code that does not read it ignores it, and code that does reads
+// an older bundle as a row without it until the mirror publishes the next. The
+// `ext` on Riftbound's cards was added that way.
 const SLIM_VERSION = 3;
 
 // Games served entirely from TCGCSV (`provider: "tcgcsv"` in shared/games.json):
@@ -129,10 +136,9 @@ const CATALOGUE_EXT_SKIP = new Set(['number', 'rarity', 'description', 'flavorte
 const CATALOGUE_EXT_MAX_LENGTH = 80;
 const CATALOGUE_EXT_MAX_FIELDS = 12;
 
-function catalogueProduct(p) {
-  // Nothing reads sealed product for these games (routes/sealed.js serves the
-  // three original games only), so only cards are kept.
-  if (isSealedProduct(p)) return null;
+// A product's rarity and its short descriptive extendedData fields (null when it
+// has none).
+function shortFields(p) {
   let rarity = null;
   const ext = {};
   let fields = 0;
@@ -147,12 +153,34 @@ function catalogueProduct(p) {
     ext[key] = value;
     fields++;
   }
+  return { rarity, ext: fields ? ext : null };
+}
+
+function catalogueProduct(p) {
+  // Nothing reads sealed product for these games (routes/sealed.js serves the
+  // three original games only), so only cards are kept.
+  if (isSealedProduct(p)) return null;
+  const { rarity, ext } = shortFields(p);
   const out = {
     productId: p.productId, name: p.name ?? '', number: String(rawNumber(p)), groupId: p.groupId ?? null, rarity,
   };
-  if (fields) out.ext = ext;
+  if (ext) out.ext = ext;
   if (!p.imageUrl || p.imageCount === 0) out.imageUrl = null;
   else if (p.imageUrl !== productImageUrl(p.productId)) out.imageUrl = p.imageUrl;
+  return out;
+}
+
+// Riftbound (89): the Pokémon shape, which its price sweep reads, and on a card the
+// same short fields a catalogue card keeps: the sets RiftCodex lacks are written
+// from these rows (riftboundTcgplayer.js), and its card type, domain, tags and
+// stats are what deck rules, filters and battlefields' orientation go by. About
+// 100 bytes a card.
+function riftboundProduct(p) {
+  const out = slimProduct(p);
+  if (out && out.number != null) {
+    const { ext } = shortFields(p);
+    if (ext) out.ext = ext;
+  }
   return out;
 }
 
@@ -177,6 +205,7 @@ function slimmerFor(path) {
   if (/\/groups$/.test(path)) return slimGroup;
   if (/\/products$/.test(path)) {
     if (CATALOGUE_CATEGORY.has(categoryOf(path))) return catalogueProduct;
+    if (categoryOf(path) === RIFTBOUND_CATEGORY) return riftboundProduct;
     const sealedOnly = SEALED_ONLY_CATEGORIES.has(categoryOf(path));
     return (p) => slimProduct(p, { sealedOnly });
   }

@@ -471,6 +471,33 @@ async function testGlobalsForAWebView() {
 
 // A phone's catalog from Bindarr's release is keyed by card ids (`local: true`
 // from the device source), so its matches resolve like a server's local build.
+// The Riftbound sets RiftCodex lacks (riftboundTcgplayer.js) are written on the
+// phone too: from the TCGCSV cache it keeps, with no Buffer and no request.
+async function testRiftboundFallbackOnDevice() {
+  const rc = require('../src/riftcodexApi');
+  await rc.cacheCards(rc.normalizeCatalogue(require('./fixtures/riftbound/cards.json')));
+  const fix = require('./fixtures/riftbound/tcgplayer-89.json');
+  const version = '2026-11-16T20:05:50+0000';
+  await db.run(`UPDATE app_settings SET tcgcsv_data_version = ? WHERE id = 1`, [version]);
+  const put = (p, rows) => db.run(
+    `INSERT OR REPLACE INTO tcgcsv_cache (path, data_version, results_json) VALUES (?, ?, ?)`, [p, version, JSON.stringify(rows)]
+  );
+  await put('/tcgplayer/89/groups', fix.groups);
+  for (const g of fix.groups) {
+    await put(`/tcgplayer/89/${g.groupId}/products`, fix.products[g.groupId] || []);
+    await put(`/tcgplayer/89/${g.groupId}/prices`, fix.prices[g.groupId] || []);
+  }
+  const sets = await onPhone('GET', '/api/sets?game=riftbound');
+  assert.strictEqual(sets.status, 200, JSON.stringify(sets.json));
+  assert.ok(sets.json.some(s => s.id === 'riftbound-rad' && s.name === 'Radiance'), JSON.stringify(sets.json.map(s => s.id)));
+  const found = await onPhone('GET', '/api/search?game=riftbound&set=RAD');
+  assert.strictEqual(found.status, 200, JSON.stringify(found.json));
+  assert.strictEqual(found.json.length, 8);
+  const signature = await onPhone('GET', `/api/cards/${encodeURIComponent('riftbound-rad-179.2a-167')}/printing?lang=en`);
+  assert.strictEqual(signature.status, 200, JSON.stringify(signature.json));
+  assert.strictEqual(signature.json.tcgplayer_product_id, 724641);
+}
+
 async function testDeviceReleaseCatalog() {
   const cvScan = require('../src/cvScan');
   const dim = 4;
@@ -510,6 +537,7 @@ async function main() {
     await testDeviceReleaseCatalog();
     await testTrashOnDevice();
     await testTransfersOnDevice();
+    await testRiftboundFallbackOnDevice();
     testRandomUuidWithoutWebCrypto();
     await testGlobalsForAWebView();
   } finally {

@@ -50,6 +50,8 @@ export const RARITY_RANK = [
   ['enchanted', 66],
   ['epic', 64],
   ['legendary', 62],
+  // Gundam's top tier above its Rare; "legendary" does not match it.
+  ['legend rare', 62],
   ['mythic', 60],
   ['majestic', 56],
   ['rare holo', 50],

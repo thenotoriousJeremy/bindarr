@@ -133,7 +133,7 @@ const VIEWS = {
   Notes: { showToast: noop },
   SealedList: { showToast: noop },
   Settings: { user: USER, onUpdateUser: noop, showToast: noop, onLeaveDevice: noop, onDataChanged: noop },
-  AdminPanel: { user: USER, onUpdateUser: noop, showToast: noop },
+  AdminPanel: { showToast: noop, onRunSetup: noop },
   SetupWizard: { user: USER, onUpdateUser: noop, showToast: noop, onClose: noop },
   SharedCollection: { shareToken: 'abc' },
   SharedContainer: { shareToken: 'abc', containerId: '1' },

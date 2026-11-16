@@ -50,7 +50,12 @@ router.get('/', async (req, res) => {
     // Riftbound's sets arrive with its catalogue, which is fetched on first use —
     // opening the Riftbound search is a first use. Unreachable is not an error
     // here: the list is a convenience and searching still says what is wrong.
-    if (game === 'riftbound') await require('../riftcodexApi').ensureCatalogue().catch(() => {});
+    // Then the sets RiftCodex lacks, written from the TCGCSV cache
+    // (riftboundTcgplayer.js); a sync that has to bring them is not waited for.
+    if (game === 'riftbound') {
+      await require('../riftcodexApi').ensureCatalogue().catch(() => {});
+      await require('../riftboundTcgplayer').ensure().catch(() => {});
+    }
     // English Pokémon sets TCGdex lacks (World Championship decks, Prize Pack...)
     // are written into `sets` from TCGplayer, in the background: this list is
     // what is cached now, and opening Add Cards never waits on a download.

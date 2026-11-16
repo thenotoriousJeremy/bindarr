@@ -5,8 +5,8 @@ import { rarityRank } from '../../../shared/cardSort.mjs';
 // through to common: a mythic got a grey "COM" badge and no glow. Likewise the
 // top tiers of the games served from TCGplayer's catalogue: Yu-Gi-Oh!'s Starlight,
 // Ghost and Ultimate Rare, One Piece's Treasure Rare, Flesh and Blood's Fabled and
-// Marvel (their "Rare" alone would read as merely rare).
-const TOP_OUTSIDE_POKEMON = /mythic|legendary|enchanted|epic|iconic|showcase|starlight|ghost|ultimate|treasure|fabled|marvel/;
+// Marvel, Gundam's Legend Rare (their "Rare" alone would read as merely rare).
+const TOP_OUTSIDE_POKEMON = /mythic|legendary|legend rare|enchanted|epic|iconic|showcase|starlight|ghost|ultimate|treasure|fabled|marvel/;
 
 // Single source of truth for the rarity tiers used across LocationManager's
 // visualizers (card border glow, badge color, badge label).
@@ -66,6 +66,7 @@ export function getRarityBadgeLabel(rarity) {
   if (r.includes('secret') || r.includes('ultra') || r.includes('hyper') || r.includes('illustration')) return 'ULTRA';
   if (r.includes('mythic')) return 'MYTHIC';
   if (r.includes('legendary')) return 'LEG';
+  if (r.includes('legend rare')) return 'LR';
   if (r.includes('enchanted')) return 'ENCH';
   if (r.includes('epic')) return 'EPIC';
   if (r.includes('iconic')) return 'ICONIC';

@@ -67,7 +67,7 @@ async function getEffectiveSettings() {
   const row = await db.get(`
     SELECT public_base_url, pokemon_provider, mtg_price_source, price_refresh_days,
            scan_exclude_tokens, scan_exclude_art_cards, scan_exclude_jumpstart, scan_exclude_promos,
-           scan_exclude_digital, setup_complete, sealed_tcg_extra_enabled
+           scan_exclude_digital, setup_complete, setup_step, sealed_tcg_extra_enabled
     FROM app_settings WHERE id = 1
   `);
   const public_base_url = (row && row.public_base_url) || process.env.PUBLIC_BASE_URL || '';
@@ -83,6 +83,7 @@ async function getEffectiveSettings() {
   // read as excluded rather than as included — see the column comment in db.js.
   const scan_exclude_digital = row ? !!row.scan_exclude_digital : true;
   const setup_complete = !!(row && row.setup_complete);
+  const setup_step = (row && typeof row.setup_step === 'string') ? row.setup_step : '';
   // Magic/Lorcana sealed tracking: TCGCSV categories 1 and 71 in the daily sync.
   const sealed_tcg_extra_enabled = !!(row && row.sealed_tcg_extra_enabled);
   // Daily unless an admin says otherwise, matching what every install did before
@@ -100,6 +101,7 @@ async function getEffectiveSettings() {
     scan_exclude_promos,
     scan_exclude_digital,
     setup_complete,
+    setup_step,
     sealed_tcg_extra_enabled,
   };
 }
@@ -127,6 +129,7 @@ router.put('/', requireAdmin, async (req, res) => {
     scan_exclude_promos,
     scan_exclude_digital,
     setup_complete,
+    setup_step,
     sealed_tcg_extra_enabled,
   } = req.body;
 
@@ -153,6 +156,12 @@ router.put('/', requireAdmin, async (req, res) => {
   }
   if (sealed_tcg_extra_enabled !== undefined && typeof sealed_tcg_extra_enabled !== 'boolean') {
     return res.status(400).json({ error: 'Magic/Lorcana sealed tracking must be true or false.' });
+  }
+  // The wizard's step, by name (see the column in db/migrations.js). Only checked
+  // for shape: the step names are the wizard's, and one it no longer has simply
+  // reopens it at the start.
+  if (setup_step !== undefined && (typeof setup_step !== 'string' || !/^[a-z]{0,32}$/.test(setup_step))) {
+    return res.status(400).json({ error: 'Setup step must be a step name.' });
   }
   let refreshDays;
   if (price_refresh_days !== undefined) {
@@ -190,6 +199,7 @@ router.put('/', requireAdmin, async (req, res) => {
       ['scan_exclude_promos', scan_exclude_promos === undefined ? undefined : flag(scan_exclude_promos)],
       ['scan_exclude_digital', scan_exclude_digital === undefined ? undefined : flag(scan_exclude_digital)],
       ['setup_complete', setup_complete === undefined ? undefined : flag(setup_complete)],
+      ['setup_step', setup_step],
       ['public_base_url', baseUrl],
     ].filter(([, value]) => value !== undefined);
     await db.withTransaction(async () => {

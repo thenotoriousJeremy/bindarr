@@ -31,6 +31,7 @@ const tcgcsvGames = require('./tcgcsvGameApi');
 const releaseAssets = require('./utils/releaseAssets');
 const { cacheNormalizedCards } = require('./utils/cardCache');
 const { parseCardRow } = require('./utils/priceHelpers');
+const { referencingTables, deleteUnreferenced } = require('./utils/cardReferences');
 
 const PREFIX = 'tcgplayer-';
 const isFallbackId = (id) => String(id || '').startsWith(PREFIX);
@@ -212,56 +213,22 @@ async function loadCoverage(meta) {
   return coverage;
 }
 
-// Remove one TCGplayer-only set's cards that nothing of a user's refers to, with the
-// rows that only described them, and the set itself once it is empty. Returns
-// { removed, kept }.
-//
-// What refers to a card is read from the database itself: every table with a
-// `card_id` column (collections, trash, decks, lists, sealed recipes, trade
-// history...) other than the rows that only describe a card. A table added later
-// counts without anyone remembering to list it here. A failed read throws rather
-// than counting as "nothing refers to it": that would delete a card someone owns.
-const DESCRIBING_ROWS = ['price_history', 'tcgplayer_product', 'notification_price_state'];
-const quoteName = (name) => `"${String(name).replace(/"/g, '""')}"`;
-async function referencingTables() {
-  const tables = await db.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`);
-  const out = [];
-  for (const { name } of tables) {
-    if (name === 'card_cache' || DESCRIBING_ROWS.includes(name)) continue;
-    const columns = await db.all(`PRAGMA table_info(${quoteName(name)})`);
-    if (columns.some(c => c.name === 'card_id')) out.push(name);
-  }
-  return out;
-}
+// Remove one TCGplayer-only set's cards that nothing of a user's refers to
+// (collections, trash, decks, lists, sealed recipes, trade history...: see
+// utils/cardReferences), with the rows that only described them, and the set
+// itself once it is empty. Returns { removed, kept }.
 async function dropFallbackSet(setId) {
   const tables = await referencingTables();
   // Read and delete in one transaction: a card added to a collection between the
   // two is never deleted from under it.
   return db.withTransaction(async () => {
     const rows = await db.all(`SELECT id FROM card_cache WHERE set_id = ? AND id LIKE 'tcgplayer-%'`, [setId]);
-    const owned = new Set();
-    for (const table of rows.length ? tables : []) {
-      const refs = await db.all(
-        `SELECT DISTINCT card_id FROM ${quoteName(table)}
-          WHERE card_id IN (SELECT id FROM card_cache WHERE set_id = ? AND id LIKE 'tcgplayer-%')`,
-        [setId]
-      );
-      for (const r of refs) owned.add(r.card_id);
-    }
-    const doomed = rows.map(r => r.id).filter(id => !owned.has(id));
-    for (let i = 0; i < doomed.length; i += 400) {
-      const chunk = doomed.slice(i, i + 400);
-      const marks = chunk.map(() => '?').join(',');
-      for (const table of DESCRIBING_ROWS) {
-        await db.run(`DELETE FROM ${table} WHERE card_id IN (${marks})`, chunk);
-      }
-      await db.run(`DELETE FROM card_cache WHERE id IN (${marks})`, chunk);
-    }
+    const { removed, kept } = await deleteUnreferenced(rows.map(r => r.id), tables);
     // The set's listing (setListing.js) names the removed ids; it is a cache, read
     // again from card_cache the next time the set is opened.
     await db.run(`DELETE FROM set_listings WHERE game = 'pokemon' AND LOWER(set_id) = LOWER(?)`, [setId]);
-    if (!owned.size) await db.run(`DELETE FROM sets WHERE id = ? AND game = 'pokemon'`, [setId]);
-    return { removed: doomed.length, kept: owned.size };
+    if (!kept.length) await db.run(`DELETE FROM sets WHERE id = ? AND game = 'pokemon'`, [setId]);
+    return { removed: removed.length, kept: kept.length };
   });
 }
 

@@ -223,6 +223,7 @@ export const CATEGORY_NAMES = {
   63: /digimon/i,
   68: /one ?piece/i,
   79: /star ?wars/i,
+  86: /gundam/i,
 };
 
 const exists = async (file) => { try { await stat(file); return true; } catch { return false; } };

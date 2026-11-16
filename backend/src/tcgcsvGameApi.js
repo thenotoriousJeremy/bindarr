@@ -1,6 +1,6 @@
 // The games served entirely from TCGplayer's catalogue, through TCGCSV:
-// Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood and Star Wars: Unlimited
-// (`provider: "tcgcsv"` in shared/games.json).
+// Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood, Star Wars: Unlimited and the
+// Gundam Card Game (`provider: "tcgcsv"` in shared/games.json).
 //
 // Why TCGplayer's catalogue rather than a community API per game: it is one
 // source with one shape for every game, prices included, already mirrored for
@@ -274,8 +274,14 @@ async function refreshCatalogue(game, { force = false } = {}) {
 // The sync is replaceable: on a phone (embedded/index.js) the TCGCSV switch is off
 // between its weekly syncs, so the plain one would do nothing and a game switched
 // on would stay empty for up to a week.
+//
+// Riftbound's TCGplayer fallback (riftboundTcgplayer.js) fills its category in
+// through the same one, for the same reason.
 let firstUseSync = (context) => tcgcsv.syncIfUpdatedSafely(context);
 const setFirstUseSync = (fn) => { firstUseSync = fn; };
+// On a phone, called from outside a TCGCSV turn (Riftbound's fallback), the sync is
+// a turn of its own that the caller waits for with its turn let go (embedded/index.js).
+const runFirstUseSync = (context) => firstUseSync(context);
 
 async function updateCatalogue(game) {
   await db.run(`INSERT OR IGNORE INTO tcgcsv_catalogues (game) VALUES (?)`, [game]);
@@ -524,7 +530,7 @@ function forGame(game) {
 }
 
 module.exports = {
-  setFirstUseSync, setBackgroundUpdates,
+  setFirstUseSync, runFirstUseSync, setBackgroundUpdates,
   forGame, isTcgcsvGame, tcgcsvGames, categoryOf, activated, cardIdFor, productIdOf,
   setCodes, displayNumber, quotesByProduct, finishOf, normalizeProduct, priceColumns, writePrices, hashOf,
   refreshCatalogue, ensureCatalogue, searchCards, getCardById, listSetCodes, getCardsBySet,
