@@ -262,6 +262,10 @@ function riftboundWarnings(list) {
 //   copyKey      what counts as one card for the copy limit (default: its name).
 //   warnings     the game's own construction rules, replacing the generic size
 //                and copy checks.
+//   sizeExcludes cards kept in the list that the size rule does not count (Gundam's
+//                separate resource deck).
+//   targetSize   a new deck's target when the list holds more than `size` counts:
+//                the whole list a player assembles.
 export const DECK_GAMES = {
   pokemon: {
     rules: { size: { exact: 60 }, copies: 4 },
@@ -365,9 +369,12 @@ export const DECK_GAMES = {
     formats: [{ name: 'Premier' }, { name: 'Twin Suns' }, { name: 'Casual' }],
   },
   gundam: {
-    // 50 in the main deck, at most 4 of a card number; the 10-card resource deck
-    // rides in the same list. The two-colour limit is not checked.
-    rules: { size: { min: 50 }, copies: 4 },
+    // Exactly 50 in the main deck, at most 4 of a card number. The 10-card
+    // resource deck rides in the same list, outside the size and copy rules, so a
+    // finished list is 60. The two-colour limit is not checked.
+    rules: { size: { exact: 50 }, copies: 4 },
+    sizeExcludes: isGundamResource,
+    targetSize: 60,
     unlimited: isGundamResource,
     copyKey: gundamCardKey,
     sameCard: (a, b) => gundamCardKey(a) === gundamCardKey(b),
@@ -407,10 +414,11 @@ export const defaultFormat = (game) => formatNames(game)[0] || 'Standard';
 export const supportsAnyPrinting = (game) => !!gameEntry(game).sameCard;
 export const defaultAnyPrinting = (game) => supportsAnyPrinting(game) && !!gameEntry(game).anyPrinting;
 
-// What a new deck's target size starts at: the format's own size, else 60.
+// What a new deck's target size starts at: the whole list where the size rule
+// counts only part of it (targetSize), else the format's own size, else 60.
 export function defaultTargetSize(game, format) {
   const { size } = rulesFor(game, format);
-  return size.exact || size.min || 60;
+  return gameEntry(game).targetSize || size.exact || size.min || 60;
 }
 
 // Basic lands and basic Energy — exempt from the copy limit in every format.
@@ -535,7 +543,8 @@ export function deckWarnings({ game, format, cards }) {
   if (own) return own(list);
   const warnings = [];
 
-  const total = list.reduce((sum, c) => sum + Number(c.quantity), 0);
+  const excluded = gameEntry(game).sizeExcludes;
+  const total = list.reduce((sum, c) => sum + (excluded && excluded(c) ? 0 : Number(c.quantity)), 0);
   const { exact, min, max } = rules.size;
   if (exact != null) {
     if (total !== exact) warnings.push({ code: 'size_exact', expected: exact, actual: total });

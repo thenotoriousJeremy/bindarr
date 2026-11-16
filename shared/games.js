@@ -172,7 +172,7 @@ export default [
     "languages": ["en"],
     "printings": "foil",
     "features": { "prices": true, "scan": true, "grading": true, "gradedPrices": false, "decks": true },
-    "deck": { "defaultFormat": "Standard", "defaultSize": 50 },
+    "deck": { "defaultFormat": "Standard", "defaultSize": 60 },
     "cardBack": "gundam",
     "marketplaces": { "tcgplayer": true, "cardmarket": false, "tcgplayerSearchLine": null },
     "tcgplayerCategories": [86],

@@ -68,6 +68,10 @@ async function main() {
   console.log('gundam.test.js: all assertions passed');
 }
 
+// The connection is closed before the files are removed: Windows will not unlink
+// a database SQLite still holds open.
+const closeDb = () => new Promise(ok => db.dbConnection.close(() => ok()));
+
 main()
-  .then(async () => { await db.close?.().catch(() => {}); cleanup(); process.exit(0); })
-  .catch(async (err) => { console.error(err); await db.close?.().catch(() => {}); cleanup(); process.exit(1); });
+  .then(async () => { await closeDb(); cleanup(); process.exit(0); })
+  .catch(async (err) => { console.error(err); await closeDb(); cleanup(); process.exit(1); });

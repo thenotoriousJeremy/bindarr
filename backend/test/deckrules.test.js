@@ -255,12 +255,16 @@ async function testRuleTable() {
       // A fifth GD01-001, the parallel printing included, is one too many.
       assert.deepStrictEqual(deck([inDeck(unit('GD01-001'), 3), inDeck(unit('gd01-001', { id: 'gundam-p', name: 'Gundam (Parallel)' }), 2),
         ...filler(45)]), [{ code: 'copy_limit', name: 'Gundam', count: 5, limit: 4 }]);
-      assert.deepStrictEqual(deck([inDeck(unit('GD01-001'), 4)]), [{ code: 'size_min', min: 50, actual: 4 }]);
+      // The size rule is the main deck's: Resources do not count toward it, so 40
+      // Units and 10 Resources is ten short, not a legal 50.
+      assert.deepStrictEqual(deck([...filler(40), inDeck(resource, 10)]), [{ code: 'size_exact', expected: 50, actual: 40 }]);
+      assert.deepStrictEqual(deck([inDeck(unit('GD01-001'), 4)]), [{ code: 'size_exact', expected: 50, actual: 4 }]);
       assert.strictEqual(R.sameCard({ card_id: 'gundam-1', name: 'Gundam', number: 'GD01-001' },
         { card_id: 'gundam-2', name: 'Gundam (Parallel)', number: 'GD01-001' }, 'gundam', true), true);
       assert.strictEqual(R.sameCard({ card_id: 'gundam-1', name: 'Gundam', number: 'GD01-001' },
         { card_id: 'gundam-3', name: 'Gundam', number: 'GD01-008' }, 'gundam', true), false);
-      assert.deepStrictEqual([R.defaultFormat('gundam'), R.defaultTargetSize('gundam', 'Standard')], ['Standard', 50]);
+      // A new deck targets the whole list: 50 and the 10 Resources.
+      assert.deepStrictEqual([R.defaultFormat('gundam'), R.defaultTargetSize('gundam', 'Standard')], ['Standard', 60]);
     }],
     ['Yu-Gi-Oh!: warnings count printings that differ only by suffix as one card, as additions do', () => {
       const dm = (id, name) => ({ id, name, supertype: 'Normal Monster', subtypes: [], game: 'yugioh' });
