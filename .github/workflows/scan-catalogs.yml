@@ -44,7 +44,7 @@ env:
   # Every scanned game in English, and Japanese Pokémon (a set structure of its
   # own, which the English catalog cannot answer for). Other languages fall back
   # to the English catalog by art, as before.
-  ALL_KEYS: 'mtg-en,pokemon-en,pokemon-ja,lorcana-en,riftbound-en,yugioh-en,onepiece-en,digimon-en,fab-en,swu-en'
+  ALL_KEYS: 'mtg-en,pokemon-en,pokemon-ja,lorcana-en,riftbound-en,yugioh-en,onepiece-en,digimon-en,fab-en,swu-en,gundam-en'
 
 jobs:
   plan:

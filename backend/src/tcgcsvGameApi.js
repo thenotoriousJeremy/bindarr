@@ -1,6 +1,6 @@
 // The games served entirely from TCGplayer's catalogue, through TCGCSV:
-// Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood and Star Wars: Unlimited
-// (`provider: "tcgcsv"` in shared/games.json).
+// Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood, Star Wars: Unlimited and the
+// Gundam Card Game (`provider: "tcgcsv"` in shared/games.json).
 //
 // Why TCGplayer's catalogue rather than a community API per game: it is one
 // source with one shape for every game, prices included, already mirrored for

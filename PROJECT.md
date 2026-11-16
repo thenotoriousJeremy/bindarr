@@ -331,12 +331,13 @@ per-user) is passed through where available.
 
 #### Games served from TCGplayer's catalogue
 
-Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood and Star Wars: Unlimited have no
-provider of their own: `tcgcsvGameApi.js` (`provider: "tcgcsv"` in the registry,
+Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood, Star Wars: Unlimited and the
+Gundam Card Game have no provider of their own: `tcgcsvGameApi.js` (`provider: "tcgcsv"` in the registry,
 bound per game through `cardApi.PROVIDERS`) writes their `card_cache` rows and
 `sets` from the TCGCSV cache. Card ids are `<game>-<TCGplayer product id>` — the
 key the published scan catalogs for these games use (`scan.publishedIds:
-"cardId"`), so a scan hit names a card with no mapping table — and set ids are
+"cardId"`; Gundam has none, so `null`, and scans only against Bindarr's own
+or a locally built catalog), so a scan hit names a card with no mapping table — and set ids are
 `<game>-<group abbreviation>` (`g<groupId>` when there is none, or an older group
 holds it). A game is activated (`tcgcsv_catalogues`) by its first search, set
 list or catalog build; only then is its category synced. After each TCGCSV

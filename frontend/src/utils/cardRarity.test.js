@@ -27,6 +27,12 @@ test("Lorcana's top rarities are top tier with their own labels", () => {
   assert.equal(getRarityBadgeLabel('Super Rare'), 'RARE');
 });
 
+test("Gundam's Legend Rare is top tier, labelled as Gundam prints it", () => {
+  assert.equal(getRarityTier('Legend Rare'), 'top');
+  assert.equal(getRarityBadgeLabel('Legend Rare'), 'LR');
+  assert.equal(getRarityTier('Rare'), 'rare');
+});
+
 test("Riftbound's Showcase is top tier with its own label", () => {
   assert.equal(getRarityTier('Showcase'), 'top');
   assert.equal(getRarityBadgeLabel('Showcase'), 'SHOW');
