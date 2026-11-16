@@ -513,6 +513,11 @@ async function initDb() {
     // offered that tour. It is one screen with a "Skip setup" button that marks it
     // done for good, so the cost to someone who wants nothing from it is one click.
     setup_complete: 'INTEGER NOT NULL DEFAULT 0',
+    // The step the wizard was last on while unfinished, by name ('keys'), so a
+    // wizard closed halfway reopens there at the next login, on any device. A name
+    // rather than an index: a release that adds or reorders steps still reopens
+    // at the same one, or at the start if it is gone. '' is the first step.
+    setup_step: `TEXT NOT NULL DEFAULT ''`,
 
     // Which marketplace Magic prices are read from first (#93). Scryfall quotes both
     // TCGplayer (`usd`) and Cardmarket (`eur`) for most printings; 'tcgplayer' is

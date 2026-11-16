@@ -148,7 +148,7 @@ function routes() {
     { method: 'POST', path: '/api/import-container', base: { name: 'MF Import', data: '1 Card (abc) 1' }, required: true, fields: ['data', 'name'], variants: SHORT_VARIANTS.slice(0, 3), bodyCases: ['empty object'] },
     // settings.js (admin)
     { method: 'PUT', path: '/api/settings',
-      fields: ['public_base_url', 'pokemon_provider', 'mtg_price_source', 'price_refresh_days', 'scan_exclude_tokens', 'scan_exclude_art_cards', 'scan_exclude_jumpstart', 'scan_exclude_promos', 'scan_exclude_digital', 'setup_complete'] },
+      fields: ['public_base_url', 'pokemon_provider', 'mtg_price_source', 'price_refresh_days', 'scan_exclude_tokens', 'scan_exclude_art_cards', 'scan_exclude_jumpstart', 'scan_exclude_promos', 'scan_exclude_digital', 'setup_complete', 'setup_step'] },
     // auth.js, the authenticated half
     { method: 'PUT', path: '/api/auth/settings', base: { current_password: 'wrong-password' },
       fields: ['current_password', 'password', 'share_enabled', 'share_locations', 'regenerate_share_token', 'tcg_api_key', 'psa_api_token', 'graded_price_api_key'] },
