@@ -334,7 +334,7 @@ async function getListing(game, setId, lang, { refresh = false, name = null } = 
   }
 
   const pendingKey = `${game}|${key.lang}|${key.setId}`;
-  if (pending.has(pendingKey)) return pending.get(pendingKey);
+  if (pending.has(pendingKey)) return require('./utils/backgroundWork').join(pending.get(pendingKey));   // on a phone, its runner may have let its turn go
   const work = (async () => {
     let listed;
     try {
