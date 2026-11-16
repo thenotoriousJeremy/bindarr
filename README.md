@@ -167,7 +167,7 @@ The HTTPS certificate is self-signed and generated on first start into the volum
 | Tag | Points at |
 | --- | --- |
 | `latest` | newest release — use this |
-| `1.9`, `1.9.0` | a specific release, if you want to control upgrades |
+| `1.10`, `1.10.0` | a specific release, if you want to control upgrades |
 | `edge` | newest `main` commit, including unreleased work |
 | `sha-<short>` | one exact commit |
 
