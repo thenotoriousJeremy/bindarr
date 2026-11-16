@@ -14,7 +14,12 @@
 //   - each background job (embedded/index.js schedules every one of them as a
 //     unit: set refreshes, price sweeps, exchange rates, the trash purge, the
 //     TCGCSV syncs, a TCGplayer-catalogue game's first write, the Pokémon
-//     product map), as a "background" unit.
+//     product map), and each piece of work a request starts and does not wait
+//     for (utils/backgroundWork.start), as a "background" unit.
+//
+// A unit never waits, holding the turn, for work another unit runs: that work may
+// need the turn to finish. Work several callers share is waited for with the turn
+// let go (utils/backgroundWork.join, through away() below).
 // While a unit holds the lock, the only transaction-opening code running is its
 // own, which is the one thing the shim cannot work out for itself.
 //

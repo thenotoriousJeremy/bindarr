@@ -533,15 +533,16 @@ async function runSearch(meta, nameQuery = '', numberQuery = '', setQuery = '', 
       const stale = localResults.filter(r => (Date.now() - new Date(r.last_updated).getTime()) > CACHE_AGE_LIMIT_MS);
       if (stale.length > 0) {
         // Batched: a page is now up to 250 rows, and one request per stale row
-        // was a 250-call burst behind a single search.
-        (async () => {
+        // was a 250-call burst behind a single search. Not waited for
+        // (utils/backgroundWork: on a phone, a background job of its own).
+        require('./utils/backgroundWork').start('Magic search price refresh', async () => {
           try {
             const { cards: fresh } = await bulkFetchByIdentifier(stale);
             if (fresh.length) await cacheCards(fresh);
           } catch (e) {
             console.error('MTG background refresh failed:', e.message);
           }
-        })();
+        });
       }
       return localResults.map(parseCardRow);
     }

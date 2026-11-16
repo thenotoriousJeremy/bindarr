@@ -207,7 +207,8 @@ router.put('/', requireAdmin, async (req, res) => {
       scryfallApi.setPriceSource(mtg_price_source);
       if (((before && before.mtg_price_source) || 'tcgplayer') !== mtg_price_source) {
         console.log(`MTG price source changed to ${mtg_price_source} — re-pricing cached Magic cards.`);
-        scryfallApi.repriceForSourceChange().catch(e => {
+        // utils/backgroundWork: on a phone, a background job of its own.
+        require('../utils/backgroundWork').start('Magic re-price', () => scryfallApi.repriceForSourceChange()).catch(e => {
           console.error(`MTG re-price after price source change failed: ${e.message}`);
         });
       }
@@ -222,7 +223,8 @@ router.put('/', requireAdmin, async (req, res) => {
     const previous = POKEMON_PROVIDERS.includes(before && before.pokemon_provider) ? before.pokemon_provider : 'tcgdex';
     if (provider !== undefined && previous !== provider) {
       console.log(`Pokémon provider changed to ${provider} — re-syncing sets and the TCGplayer product map.`);
-      (async () => {
+      // utils/backgroundWork: on a phone, a background job of its own.
+      require('../utils/backgroundWork').start('Pokémon provider switch', async () => {
         // First, and apart from the rest: Bindarr's Pokémon scan catalog is keyed by
         // TCGdex ids, so it goes on with TCGdex and off without, whether or not the
         // provider below can be reached. Local work only (state files).
@@ -237,7 +239,7 @@ router.put('/', requireAdmin, async (req, res) => {
         } catch (e) {
           console.error(`Provider switch follow-up failed: ${e.message}`);
         }
-      })();
+      });
     }
     // Its own write, which also queues the fetch of newly enabled categories, so
     // it runs after the transaction rather than inside it.

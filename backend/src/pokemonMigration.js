@@ -824,10 +824,13 @@ async function providerFollowUp(provider) {
   try { require('./tcgplayerCatalog').start(); } catch { /* already building, which is what was wanted */ }
 }
 
+// Work the apply request does not wait for (utils/backgroundWork). The migration
+// is a server's (Admin), and only there does anything await this promise
+// (apply({ background: false }), idle()).
 function startFollowUp({ runId, provider, switched }) {
   const state = { run_id: runId, phase: 'catalog', done: 0, total: 0, failed: 0, catalog: 0, message: '', started_at: new Date().toISOString(), finished_at: null };
   followUp = state;
-  state.promise = (async () => {
+  state.promise = require('./utils/backgroundWork').start('Pokémon id migration follow-up', async () => {
     try {
       state.catalog = rekeyCatalogIds(await appliedPairs());
       state.phase = 'hydrating';
@@ -866,7 +869,7 @@ function startFollowUp({ runId, provider, switched }) {
     } finally {
       state.finished_at = new Date().toISOString();
     }
-  })();
+  });
   return state;
 }
 

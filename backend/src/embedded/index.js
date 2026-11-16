@@ -56,10 +56,11 @@ const { createUnitLock } = require('./units');
 const lock = createUnitLock();
 const background = (name, job) => lock.run({ name, background: true }, job);
 
-// A transaction outside any turn is background work no unit owns (every job this
-// file schedules is a unit: work a request started and did not wait for, such as
-// a search's price refresh), and it takes a turn for as long as it is open, so a
-// request cannot start in the middle of it. Inside a turn, it belongs to
+// A transaction outside any turn is background work no unit owns: every job this
+// file schedules is a unit, and so is work a request starts and does not wait for
+// (utils/backgroundWork, below), so this is only ever something that slipped past
+// both. It takes a turn for as long as it is open, so a request cannot start in
+// the middle of it. Inside a turn, it belongs to
 // the unit holding the lock; a background unit first lets a queued request go.
 // A transaction already open makes this one a savepoint, as db.js decides.
 const baseWithTransaction = db.withTransaction;
@@ -80,17 +81,37 @@ db.withTransaction = async function withTransaction(fn) {
 // it, so that download keeps the turn. A request keeps its turn through its own
 // provider calls, as ./units.js describes. An axios without that method (a future
 // major version) keeps every download inside the turn: slower, never wrong.
+//
+// Safe only because the code that holds a background unit's turn is that unit's
+// own: work a request leaves running is a unit of its own (backgroundWork.start),
+// so no stray download can let a running job's turn go.
+const awayFromTurn = (fn) => {
+  const unit = lock.holder();
+  return unit && unit.background && !inTransaction() ? lock.away(unit, fn) : fn();
+};
 const { Axios } = require('axios');
 if (Axios && Axios.prototype && typeof Axios.prototype.request === 'function') {
   const requestOverNetwork = Axios.prototype.request;
   Axios.prototype.request = function requestOutsideTheTurn(...args) {
-    const send = () => requestOverNetwork.apply(this, args);
-    const unit = lock.holder();
-    return unit && unit.background && !inTransaction() ? lock.away(unit, send) : send();
+    return awayFromTurn(() => requestOverNetwork.apply(this, args));
   };
 } else {
   console.warn('Device mode: axios has no Axios.prototype.request; background jobs keep their turn while they download.');
 }
+
+// Work a request starts and does not wait for, and work several callers share
+// (utils/backgroundWork has the whole story). start: a background unit of its own.
+// join: the caller — request or job — lets its turn go while it waits for work
+// someone else is running, which may need that turn to finish; inside a
+// transaction it cannot, and keeps it. away: awayFromTurn, for what is not axios.
+require('../utils/backgroundWork').installDevice({
+  start: (name, fn) => background(name, () => fn()),
+  join: (promise) => {
+    const unit = lock.holder();
+    return unit && !inTransaction() ? lock.away(unit, () => promise) : promise;
+  },
+  away: awayFromTurn,
+});
 
 const scryfallApi = require('../scryfallApi');
 const { authenticateToken } = require('../middleware/auth');
@@ -236,10 +257,11 @@ const sweepPricesInTurn = () => background('price sweeps', () => sweepPrices());
 // waiting on that run while holding the turn would never let the first back in.
 let tcgcsvTurns = Promise.resolve();
 function inTcgcsvTurn(name, job) {
-  const run = tcgcsvTurns.then(() => background(name, job));
+  const run = tcgcsvTurns.then(() => lock.run({ name, background: true, tcgcsv: true }, job));
   tcgcsvTurns = run.catch(() => {});
   return run;
 }
+const inATcgcsvTurn = () => !!(lock.holder() && lock.holder().tcgcsv);
 
 // The TCGCSV sync with the switch lifted (top of this file). tcgcsvApi reads the
 // switch synchronously when the call starts, so it is lifted for exactly that
@@ -272,10 +294,14 @@ async function syncTcgcsvForTheWeek(context, options) {
 // the request that asked, which would hold every other request through the sync
 // and the thousands of card rows written after it: the catalogue is brought up to
 // date in a TCGCSV turn of its own, while the request answers from the cache and
-// says so (tcgcsvGameApi.setBackgroundUpdates). The first-use sync runs inside
-// that turn, so it is the plain call here, not a turn of its own.
+// says so (tcgcsvGameApi.setBackgroundUpdates). Called inside that turn, the
+// first-use sync is the plain call. Called from anywhere else (another job that
+// needs a category filled in), it is a TCGCSV turn of its own, waited for with the
+// caller's turn let go (backgroundWork.join): one sync at a time, as above.
 const tcgcsvGames = require('../tcgcsvGameApi');
-tcgcsvGames.setFirstUseSync((context) => syncTcgcsvForTheWeek(context));
+tcgcsvGames.setFirstUseSync((context) => (inATcgcsvTurn()
+  ? syncTcgcsvForTheWeek(context)
+  : require('../utils/backgroundWork').join(inTcgcsvTurn(`TCGCSV sync: ${context}`, () => syncTcgcsvForTheWeek(context)))));
 tcgcsvGames.setBackgroundUpdates((game, update) => inTcgcsvTurn(`${game} catalogue`, () => update()));
 
 async function weeklyTcgcsv() {

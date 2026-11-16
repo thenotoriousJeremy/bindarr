@@ -106,8 +106,11 @@ the UI makes is answered in-process.
   take turns, first come first served (`backend/src/embedded/units.js`): every job
   `backend/src/embedded/index.js` schedules (set lists, price sweeps, exchange
   rates, the trash purge, TCGCSV, the product map) runs as one unit from start to
-  end, and lets go while it downloads (any provider request it makes through axios)
-  and between its transactions. A request's own provider calls happen
+  end, and so does work a request starts and does not wait for (a search's price
+  refresh, a re-price after a settings change: `backend/src/utils/backgroundWork.js`).
+  A unit lets go while it downloads (any provider request it makes through axios)
+  and between its transactions, and a caller waiting on work someone else is
+  running lets go while it waits. A request's own provider calls happen
   inside its turn, so a slow provider delays the next request, up to that
   provider's timeout.
 - Card search, set lists and prices go straight from the phone to the providers,

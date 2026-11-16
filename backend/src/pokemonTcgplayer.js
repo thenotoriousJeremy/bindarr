@@ -191,7 +191,8 @@ async function loadCoverage(meta) {
   if (hit && Date.now() - hit.at < COVERAGE_TTL_MS) return hit.coverage;
   let coverage = null;
   try {
-    coverage = await releaseAssets.fetchJson(coverageAsset(meta.code));
+    // A download (fetch(), not axios): with a phone's background job's turn let go.
+    coverage = await require('./utils/backgroundWork').away(() => releaseAssets.fetchJson(coverageAsset(meta.code)));
   } catch (e) {
     console.warn(`Pokémon TCGplayer coverage (${meta.code}) unavailable: ${e.message}`);
   }
@@ -456,6 +457,10 @@ async function priceKeptCards(meta, groups, codes, listed) {
 // admin asking for a sync — so with no TCGCSV data yet it does nothing, not even
 // fetch the coverage; the scheduled sync brings Pokémon in once the install holds
 // a Pokémon card, and the next call writes the rows.
+//
+// The run is work a request starts and does not wait for (utils/backgroundWork: on
+// a phone, a background job of its own). One per language at a time, as before;
+// every caller is fire-and-forget, so none holds a turn waiting on it.
 const inflight = new Map();
 const ready = new Map();   // code -> time of the last completed check
 const RECHECK_MS = 60 * 60 * 1000;
@@ -465,7 +470,7 @@ function ensure(lang) {
   const at = ready.get(meta.code);
   if (at && Date.now() - at < RECHECK_MS) return Promise.resolve(null);
   if (inflight.has(meta.code)) return inflight.get(meta.code);
-  const run = (async () => {
+  const run = require('./utils/backgroundWork').start(`Pokémon TCGplayer rows (${meta.code})`, async () => {
     if (await pokemonProvider.providerFor(meta.code) !== pokemonProvider.TCGDEX) return null;
     if (!(await tcgcsv.currentVersion())) return null;
     const coverage = await loadCoverage(meta);
@@ -473,7 +478,7 @@ function ensure(lang) {
     const result = await materialize(meta.name, coverage);
     if (!result.missing) ready.set(meta.code, Date.now());
     return result;
-  })().catch((e) => {
+  }).catch((e) => {
     console.warn(`Pokémon TCGplayer fallback (${meta.code}) failed: ${e.message}`);
     return null;
   }).finally(() => inflight.delete(meta.code));

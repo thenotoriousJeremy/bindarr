@@ -235,6 +235,43 @@ async function testDownloadsLetTheTurnGo() {
   assert.strictEqual(later.status, 201);
 }
 
+// Work several callers share — a module's "already in flight, return that" branch
+// (riftcodexApi.refreshCatalogue, pokemontcgapi.request) — run by a job that has
+// let its turn go for a download. A request that wants the same work waits for it
+// with its own turn let go (utils/backgroundWork.join): the work needs a turn to
+// finish, and a request holding its turn while it waited would wait for ever.
+let sharedWork = null;
+embedded.app.post('/api/__device-lock-test/join', async (req, res) => {
+  res.json({ result: await require('../src/utils/backgroundWork').join(sharedWork) });
+});
+async function testJoiningSharedWorkDoesNotDeadlock() {
+  const download = gate();
+  const provider = require('axios').create({
+    adapter: async (config) => {
+      await download.promise;
+      return { data: 'fetched', status: 200, statusText: 'OK', headers: {}, config };
+    },
+  });
+  const job = embedded.background('a job running shared work', () => {
+    sharedWork = (async () => {
+      const { data } = await provider.get('/shared');
+      await db.withTransaction(() => db.run(`INSERT INTO notes (user_id, title) VALUES (1, 'written by the shared work')`));
+      return data;
+    })();
+    return sharedWork;
+  });
+  await sleep(20);   // the job is at its download, with its turn let go
+  const request = call('POST', '/api/__device-lock-test/join', {});
+  await sleep(20);   // the request holds the turn, waiting for the shared work
+  download.open();
+  const res = await within(request, 2000);
+  assert.notStrictEqual(res, 'still waiting', 'a request waiting on shared work a job is running does not deadlock');
+  assert.strictEqual(res.status, 200);
+  assert.deepStrictEqual(res.json, { result: 'fetched' });
+  assert.strictEqual(await within(job, 1000), 'fetched');
+  assert.strictEqual(await count(`SELECT COUNT(*) n FROM notes WHERE title = 'written by the shared work'`), 1);
+}
+
 async function main() {
   try {
     ({ token } = await embedded.start({ background: false }));
@@ -244,6 +281,7 @@ async function main() {
     await testBackgroundUnitYieldsBetweenTransactions();
     await testAbortedWhileQueuedNeverRuns();
     await testDownloadsLetTheTurnGo();
+    await testJoiningSharedWorkDoesNotDeadlock();
   } finally {
     await cleanup();
   }

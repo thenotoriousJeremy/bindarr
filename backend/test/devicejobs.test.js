@@ -323,6 +323,98 @@ async function testScheduledJobsWaitForTheRequest() {
   assert.deepStrictEqual(logged.filter(l => /^Device .* failed/.test(l)), [], 'no job failed');
 }
 
+// Work a request starts and does not wait for (a search's price refresh, the
+// Pokémon TCGplayer rows, a re-price after a settings change: utils/backgroundWork)
+// is a background unit of its own. So it opens no transaction under the request
+// that started it, and a download it makes later cannot let a running job's turn
+// go — which, running in nobody's turn, it did: the axios hook let go of whatever
+// background unit held the turn at that moment.
+const leftRunning = { entered: null, spawn: null, done: null, go: null, download: null, promise: null };
+embedded.app.post('/api/__device-jobs-test/spawn', async (req, res) => {
+  leftRunning.entered();
+  await leftRunning.spawn;
+  const provider = require('axios').create({
+    adapter: async (config) => {
+      await leftRunning.download;
+      return { data: 'ok', status: 200, statusText: 'OK', headers: {}, config };
+    },
+  });
+  leftRunning.promise = require('../src/utils/backgroundWork').start('test: work a request leaves running', async () => {
+    await db.withTransaction(() => db.run(`INSERT INTO notes (user_id, title) VALUES (1, 'left running')`));
+    await leftRunning.go;
+    await provider.get('/download');
+  });
+  await leftRunning.done;
+  res.json({ ok: true });
+});
+// A request that starts a real piece of such work: the Pokémon TCGplayer rows
+// (routes/sets.js and tcgdexApi start them the same way), then holds its turn.
+const ensuring = { entered: null, release: null };
+embedded.app.post('/api/__device-jobs-test/ensure', async (req, res) => {
+  require('../src/pokemonTcgplayer').ensure('Japanese').catch(() => {});
+  ensuring.entered();
+  await ensuring.release;
+  res.json({ ok: true });
+});
+
+async function testRequestStartedWorkIsABackgroundUnit() {
+  const notes = async (title) => (await db.get(`SELECT COUNT(*) n FROM notes WHERE title = ?`, [title])).n;
+  const entered = gate(), spawn = gate(), done = gate(), go = gate(), download = gate();
+  Object.assign(leftRunning, { entered: entered.open, spawn: spawn.promise, done: done.promise, go: go.promise, download: download.promise });
+  const request = call('POST', '/api/__device-jobs-test/spawn', {});
+  await entered.promise;
+  // A job queued behind the request, so it holds the turn next.
+  const jobIn = gate(), jobGo = gate();
+  const job = embedded.background('a job', async () => {
+    jobIn.open();
+    await jobGo.promise;
+    await db.run(`INSERT INTO notes (user_id, title) VALUES (1, 'the job')`);
+  });
+  await sleep(10);
+  begins.seen.length = 0;
+  begins.watching = true;
+  spawn.open();
+  await sleep(100);
+  begins.watching = false;
+  assert.deepStrictEqual(begins.seen, [], 'work a request starts opens no transaction while that request holds the turn');
+  assert.strictEqual(await notes('left running'), 0);
+  done.open();
+  assert.strictEqual((await request).status, 200);
+
+  // The job holds the turn. The work goes on to download — or would, if it ran.
+  await jobIn.promise;
+  const queued = call('POST', '/api/notes', { title: 'queued behind the job' });
+  go.open();
+  await sleep(150);
+  assert.strictEqual(await within(queued, 10), 'still waiting', "the work lets nobody into a running job's turn");
+  assert.strictEqual(await notes('the job'), 0);
+  jobGo.open();
+  await job;
+  download.open();
+  assert.strictEqual((await queued).status, 201);
+  await within(leftRunning.promise, 2000);
+  assert.strictEqual(await notes('left running'), 1, 'and runs once the job is done');
+
+  // A real one: nothing of the Pokémon TCGplayer rows' work runs inside the request.
+  const pokemonProvider = require('../src/utils/pokemonProvider');
+  const providerFor = pokemonProvider.providerFor;
+  let asked = 0;
+  pokemonProvider.providerFor = async (...args) => { asked++; return providerFor(...args); };
+  try {
+    const inRequest = gate(), release = gate();
+    Object.assign(ensuring, { entered: inRequest.open, release: release.promise });
+    const holding = call('POST', '/api/__device-jobs-test/ensure', {});
+    await inRequest.promise;
+    await sleep(50);
+    assert.strictEqual(asked, 0, 'the Pokémon TCGplayer rows wait for the request that asked for them');
+    release.open();
+    await holding;
+    await until('the Pokémon TCGplayer rows to start', async () => asked > 0);
+  } finally {
+    pokemonProvider.providerFor = providerFor;
+  }
+}
+
 async function main() {
   try {
     ({ token } = await embedded.start({ background: false }));
@@ -332,6 +424,7 @@ async function main() {
     await testProductMapIsABackgroundUnit();
     await testFirstUseIsABackgroundUnit();
     await testScheduledJobsWaitForTheRequest();
+    await testRequestStartedWorkIsABackgroundUnit();
   } finally {
     console.error = consoleError;
     await cleanup();
