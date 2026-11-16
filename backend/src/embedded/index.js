@@ -505,7 +505,12 @@ async function handle(request, { signal } = {}) {
   try {
     return await dispatch(app, request);
   } finally {
-    lock.release(unit);
+    // As lock.run ends a unit: a request whose turn was let go and not yet taken
+    // back (backgroundWork.join used where the request did not wait for it) is
+    // never handed the turn again, rather than holding it with nobody to let go.
+    unit.finished = true;
+    if (lock.holder() === unit) lock.release(unit);
+    else console.warn(`Device: ${unit.name} ended without its turn (backgroundWork.join outside an await?).`);
   }
 }
 

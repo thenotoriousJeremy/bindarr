@@ -415,6 +415,67 @@ async function testRequestStartedWorkIsABackgroundUnit() {
   }
 }
 
+// Riftbound's sets RiftCodex lacks (riftboundTcgplayer.js), when TCGCSV data is
+// cached without category 89: a search answers from the cache and starts the fill,
+// a TCGCSV sync and then the rows written from it. That fill is a background unit
+// of its own, and its sync a TCGCSV turn it waits on with its turn let go. So the
+// writes after the sync wait for a request holding the turn, instead of opening
+// under it as the work of nobody's turn did.
+async function testRiftboundFillIsABackgroundUnit() {
+  const rc = require('../src/riftcodexApi');
+  await rc.cacheCards(rc.normalizeCatalogue(require('./fixtures/riftbound/cards.json')));
+  const fix = require('./fixtures/riftbound/tcgplayer-89.json');
+  const radiance = async () => (await db.get(`SELECT COUNT(*) n FROM card_cache WHERE set_id = 'riftbound-rad'`)).n;
+  const syncing = gate();
+  const letSync = gate();
+  syncCalls.length = 0;
+  syncImpl = async () => {
+    syncing.open();
+    await letSync.promise;
+    const { v } = await db.get(`SELECT tcgcsv_data_version AS v FROM app_settings WHERE id = 1`);
+    await db.withTransaction(async () => {
+      const put = (p, rows) => db.run(`INSERT OR REPLACE INTO tcgcsv_cache (path, data_version, results_json) VALUES (?, ?, ?)`, [p, v, JSON.stringify(rows)]);
+      await put('/tcgplayer/89/groups', fix.groups);
+      for (const g of fix.groups) {
+        await put(`/tcgplayer/89/${g.groupId}/products`, fix.products[g.groupId] || []);
+        await put(`/tcgplayer/89/${g.groupId}/prices`, fix.prices[g.groupId] || []);
+      }
+    });
+    return { updated: true, dataVersion: v };
+  };
+  try {
+    const search = await within(call('GET', '/api/search?game=riftbound&set=RAD'), 2000);
+    assert.notStrictEqual(search, 'still waiting', 'the search answers without waiting for the fill');
+    assert.strictEqual(search.status, 200, JSON.stringify(search.json));
+    assert.strictEqual(await within(syncing.promise.then(() => 'syncing'), 2000), 'syncing');
+    assert.deepStrictEqual(syncCalls.map(c => [c.context, c.switch]), [['Riftbound sets RiftCodex lacks', undefined]],
+      'the fill syncs TCGCSV with the switch lifted');
+
+    // A request queued behind the sync holds the turn when the sync is done.
+    const entered = gate();
+    const release = gate();
+    held.entered = entered.open;
+    held.release = release.promise;
+    const holding = call('POST', '/api/__device-jobs-test/hold', {});
+    await sleep(20);
+    begins.seen.length = 0;
+    begins.watching = true;
+    letSync.open();
+    await entered.promise;
+    await sleep(150);
+    begins.watching = false;
+    assert.deepStrictEqual(begins.seen, [], "the fill's writes wait for the request holding the turn");
+    assert.strictEqual(await radiance(), 0);
+    release.open();
+    assert.strictEqual((await holding).status, 200);
+    await until('the Radiance cards', async () => (await radiance()) > 0);
+    const found = await call('GET', '/api/search?game=riftbound&set=RAD');
+    assert.ok(found.json.length > 0, 'a later search finds them');
+  } finally {
+    syncImpl = null;
+  }
+}
+
 async function main() {
   try {
     ({ token } = await embedded.start({ background: false }));
@@ -425,6 +486,7 @@ async function main() {
     await testFirstUseIsABackgroundUnit();
     await testScheduledJobsWaitForTheRequest();
     await testRequestStartedWorkIsABackgroundUnit();
+    await testRiftboundFillIsABackgroundUnit();
   } finally {
     console.error = consoleError;
     await cleanup();
