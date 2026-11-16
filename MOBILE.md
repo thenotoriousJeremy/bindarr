@@ -141,9 +141,11 @@ none). Pokémon's catalog names cards by TCGdex id, so it is used only while the
 phone takes its Pokémon cards from TCGdex; otherwise the snapshot is offered.
 
 - `frontend/src/device/scanAssets.js` downloads with `@capacitor/file-transfer`
-  into the app's private storage, checks each file's exact size and SHA-256, and
-  reads files back through the WebView's local server rather than across the
-  bridge. Release segments are applied with the backend's own
+  into the app's private storage, checks each file's exact size and SHA-256
+  (WebCrypto, or `src/utils/sha256.js` in a WebView without it), and reads files
+  back through the WebView's local server rather than across the bridge. The
+  release's index and manifests are read with a size cap (`src/utils/cappedJson.js`).
+  Release segments are applied with the backend's own
   `utils/catalogSegments.js`, handed over by the bundle. The files
   stay out of the phone's backups, since they can be downloaded again and would
   crowd out the database: on iOS they live in `Library/NoCloud` (an install that

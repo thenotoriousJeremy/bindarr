@@ -17,6 +17,8 @@ import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { FileTransfer } from '@capacitor/file-transfer';
 import { loadNpz } from '../utils/npz';
+import { sha256Hex } from '../utils/sha256';
+import { readCappedJson } from '../utils/cappedJson';
 import { wasmSimdSupported, NO_SIMD_MESSAGE } from './wasmSupport';
 
 const DIR = 'scan';
@@ -41,6 +43,15 @@ const stateName = (game) => `bindarr-${keyFor(game)}.json`;
 const STATE_RE = /^bindarr-([a-z0-9]+)-en\.json$/;
 // Installed release catalogs ask for their manifest at most this often.
 const RECHECK_MS = 24 * 60 * 60 * 1000;
+// The most a release index or manifest may weigh before it is refused unread
+// (utils/cappedJson). A manifest names one entry per segment, and the weekly build
+// folds a catalog into a new base after 26 deltas (scripts/scan-catalogs/build.mjs,
+// MAX_DELTAS), so the largest it can get is 27 entries: about 6 KB. The index has
+// one entry per catalog: about 10 KB even for forty catalogs. The caps are forty
+// and a hundred times those, so the release can grow a lot before they matter,
+// while a wrong answer still cannot fill the WebView's memory.
+const MANIFEST_MAX_BYTES = 256 * 1024;
+const INDEX_MAX_BYTES = 1024 * 1024;
 
 let models = [];
 let snapshots = [];           // the model author's .npz catalogs
@@ -197,7 +208,7 @@ export async function loadReleaseIndex() {
   try {
     const res = await fetch(`${release.base}/catalogs.json`, { cache: 'no-store' });
     if (!res.ok) return;
-    const j = await res.json();
+    const j = await readCappedJson(res, INDEX_MAX_BYTES, 'catalogs.json');
     if (j && Array.isArray(j.catalogs)) {
       index = { ...j, catalogs: j.catalogs.filter(c => c.model === release.model) };
       emit();
@@ -228,18 +239,16 @@ export async function initScanAssets({ MODELS, CATALOGS, release: rel }) {
   emit();
 }
 
-// The descriptors come from modelAssets.js, which pins each file to one Hugging
-// Face commit and records its SHA-256, and a release manifest records each
-// segment's. The phone checks the same hash, so it never scans with a file the
-// server would refuse.
-async function sha256Hex(bytes) {
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
-}
-
 // One file to DIR/name through the native downloader, checked against its size
 // and SHA-256, then renamed into place, so an interrupted download can never pass
-// for a finished one. Resolves to the bytes it hashed, or null when it could not.
+// for a finished one. Resolves to the bytes it hashed, or null when it was given
+// no hash to check.
+//
+// The hashes come from modelAssets.js, which pins each model and snapshot to one
+// Hugging Face commit and records its SHA-256, and from a release manifest, which
+// records each segment's. The phone checks the same hash, so it never scans with
+// a file the server would refuse; utils/sha256 does it in JavaScript where the
+// WebView has no WebCrypto, rather than keep the file unchecked.
 async function downloadTo(url, name, bytes, { sha256 = null, acceptSizes = [] } = {}) {
   const part = `${name}.part`;
   await Filesystem.mkdir({ path: DIR, directory: HOME, recursive: true }).catch(() => {});
@@ -260,7 +269,7 @@ async function downloadTo(url, name, bytes, { sha256 = null, acceptSizes = [] } 
     throw new Error(`${name} downloaded ${size} bytes, expected ${bytes}`);
   }
   let data = null;
-  if (sha256 && globalThis.crypto?.subtle) {
+  if (sha256) {
     data = await readBytes(part);
     const digest = await sha256Hex(data);
     if (digest !== sha256) {
@@ -286,14 +295,11 @@ function downloadAsset(asset) {
 // new state is written. False when the release has no catalog for the game.
 async function syncRelease(game) {
   if (!release || unfit.has(game)) return false;
-  // A segment's SHA-256 is what stands between a bad download and a catalog that
-  // scores every card wrong: without WebCrypto to check it, nothing is installed.
-  if (!globalThis.crypto?.subtle) throw new Error('this WebView cannot verify downloads (no WebCrypto)');
   const key = keyFor(game);
   const res = await fetch(`${release.base}/${key}.json`, { cache: 'no-store' });
   if (res.status === 404) return false;
   if (!res.ok) throw new Error(`${key}.json: HTTP ${res.status}`);
-  const manifest = await res.json();
+  const manifest = await readCappedJson(res, MANIFEST_MAX_BYTES, `${key}.json`);
   if (!manifest || !Array.isArray(manifest.segments) || !manifest.segments.length) return false;
   if (manifest.model !== release.model) throw new Error(`${key} is built for another scan model; update the app to use it`);
   const have = installed.get(game);
@@ -301,10 +307,12 @@ async function syncRelease(game) {
   for (const s of manifest.segments) {
     if (onDisk.has(s.name)) continue;
     if (!/^[\w.-]+\.seg$/.test(s.name)) throw new Error(`refusing a segment named ${s.name}`);
+    // A segment's SHA-256 is what stands between a bad download and a catalog
+    // that scores every card wrong: one the manifest gives none for is refused.
+    if (!/^[0-9a-f]{64}$/.test(String(s.sha256 || ''))) throw new Error(`${s.name} has no SHA-256 in ${key}.json`);
     busy = { name: s.name, fraction: 0 };
     emit();
     const data = await downloadTo(`${release.base}/${s.name}`, s.name, s.bytes, { sha256: s.sha256 });
-    if (!data) throw new Error(`${s.name} could not be verified`);
     release.segments.decodeSegment(data);   // refuses anything that would not load
   }
   const state = {
