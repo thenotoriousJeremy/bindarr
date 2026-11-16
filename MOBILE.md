@@ -102,10 +102,12 @@ the UI makes is answered in-process.
   storage (iOS: `Library/CapacitorDatabase`), which the OS includes in device
   backups. The downloaded scan data is kept out of them (below).
 - A WebView has no async context, so `db.js` cannot tell a transaction's own
-  statements from anyone else's there. Requests and the background jobs that open
-  transactions therefore take turns, first come first served
-  (`backend/src/embedded/units.js`); a background job lets go while it waits on
-  the network and between its transactions. A request's own provider calls happen
+  statements from anyone else's there. Requests and the background jobs therefore
+  take turns, first come first served (`backend/src/embedded/units.js`): every job
+  `backend/src/embedded/index.js` schedules (set lists, price sweeps, exchange
+  rates, the trash purge, TCGCSV, the product map) runs as one unit from start to
+  end, and lets go while it downloads (any provider request it makes through axios)
+  and between its transactions. A request's own provider calls happen
   inside its turn, so a slow provider delays the next request, up to that
   provider's timeout.
 - Card search, set lists and prices go straight from the phone to the providers,
@@ -115,8 +117,7 @@ the UI makes is answered in-process.
   requests per new version) syncs at most weekly on a phone, when the Pokémon
   scan download builds the product map, and the first time a game served from
   TCGplayer's catalogue (Yu-Gi-Oh!, One Piece...) is opened; in between, prices
-  come from the last version synced. Each sync is a background job that downloads
-  with the database turn let go. A game's first use writes its card list in the
+  come from the last version synced. A game's first use writes its card list in the
   background too: until it is done, its search and set list answer with what is
   cached and say so (`X-Catalogue-Pending`), and the app shows "downloading" rather
   than "no matches". Leaving device mode stops these jobs.

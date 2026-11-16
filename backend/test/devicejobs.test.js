@@ -8,9 +8,17 @@
 const assert = require('assert');
 const { loadEmbedded, gate, sleep } = require('./deviceHarness');
 
-const { embedded, db, cleanup } = loadEmbedded('devicejobs', { ownTcgcsvSwitch: true });
+// Every transaction the driver sees begin, while a test is watching.
+const begins = { watching: false, seen: [] };
+const { embedded, db, cleanup } = loadEmbedded('devicejobs', {
+  ownTcgcsvSwitch: true,
+  observe(sql) {
+    if (begins.watching && /^\s*(BEGIN|SAVEPOINT)\b/i.test(sql)) begins.seen.push(sql);
+  },
+});
 const tcgcsv = require('../src/tcgcsvApi');
 const tcgdex = require('../src/tcgdexApi');
+const tcgcsvGames = require('../src/tcgcsvGameApi');
 
 // What the device asked TCGCSV for, and with the switch in which position. A
 // test that needs the sync to do something sets syncImpl.
@@ -248,6 +256,73 @@ async function testFirstUseIsABackgroundUnit() {
   syncImpl = null;
 }
 
+// The jobs a launch and its timers start run as background units: the set
+// refresh, which rewrites the TCGplayer-catalogue games' catalogues
+// (tcgcsvGameApi.fetchAndCacheSets), and the price sweeps, which do too
+// (tcgcsvGameApi.updateCollectionPrices). A transaction one opens while a request
+// holds the turn waits for that request, instead of opening under it as the
+// request's own — where a rollback would take the request's writes with it, and
+// the request's own transaction would become a savepoint in the job's (MOB-02).
+async function testScheduledJobsWaitForTheRequest() {
+  const darkMagician = async () => (await db.get(`SELECT price_normal FROM card_cache WHERE id = 'yugioh-5011'`)).price_normal;
+  // A new TCGCSV day on which Dark Magician's price moved: its catalogue is behind.
+  async function newDay(version, price) {
+    const { v } = await db.get(`SELECT tcgcsv_data_version AS v FROM app_settings WHERE id = 1`);
+    await db.run(`INSERT OR REPLACE INTO tcgcsv_cache (path, data_version, results_json)
+                  SELECT path, ?, results_json FROM tcgcsv_cache WHERE data_version = ?`, [version, v]);
+    await db.run(`UPDATE tcgcsv_cache SET results_json = ? WHERE path = ? AND data_version = ?`,
+      [JSON.stringify([{ productId: 5011, subTypeName: 'Unlimited', marketPrice: price }]), `/tcgplayer/${YGO}/501/prices`, version]);
+    await db.run(`UPDATE app_settings SET tcgcsv_data_version = ? WHERE id = 1`, [version]);
+  }
+  // A request holds the turn while `launch` starts the jobs; then it lets go.
+  async function whileARequestHoldsTheTurn(job, launch, { before, after }) {
+    const entered = gate();
+    const release = gate();
+    held.entered = entered.open;
+    held.release = release.promise;
+    const request = call('POST', '/api/__device-jobs-test/hold', {});
+    await entered.promise;
+    begins.seen.length = 0;
+    begins.watching = true;
+    await launch();
+    await sleep(300);
+    begins.watching = false;
+    assert.deepStrictEqual(begins.seen, [], `${job}: no transaction opens while a request holds the turn`);
+    assert.strictEqual(await darkMagician(), before, `${job}: nothing written under the request`);
+    release.open();
+    assert.strictEqual((await request).status, 200);
+    await until(`${job} to write once the request is done`, async () => (await darkMagician()) === after);
+    await embedded.stop();   // and lets the rest of the launch's jobs finish
+  }
+
+  await embedded.stop();
+  assert.strictEqual(await darkMagician(), 30, 'as the first use wrote it');
+
+  // The set refresh every launch starts.
+  await newDay('v2', 31);
+  await whileARequestHoldsTheTurn('the set refresh', () => embedded.start(), { before: 30, after: 31 });
+
+  // The launch's first price sweep, brought forward from 30 s to now. The set
+  // refresh is kept off the catalogue this time, so what writes it is the sweep.
+  await newDay('v3', 32);
+  const fetchAndCacheSets = tcgcsvGames.fetchAndCacheSets;
+  tcgcsvGames.fetchAndCacheSets = async () => {};
+  try {
+    await whileARequestHoldsTheTurn('the price sweep', async () => {
+      const setTimeoutAsIs = global.setTimeout;
+      global.setTimeout = (fn, ms, ...rest) => setTimeoutAsIs(fn, ms === 30000 ? 0 : ms, ...rest);
+      try {
+        await embedded.start();
+      } finally {
+        global.setTimeout = setTimeoutAsIs;
+      }
+    }, { before: 31, after: 32 });
+  } finally {
+    tcgcsvGames.fetchAndCacheSets = fetchAndCacheSets;
+  }
+  assert.deepStrictEqual(logged.filter(l => /^Device .* failed/.test(l)), [], 'no job failed');
+}
+
 async function main() {
   try {
     ({ token } = await embedded.start({ background: false }));
@@ -256,6 +331,7 @@ async function main() {
     await testStopAndRestart();
     await testProductMapIsABackgroundUnit();
     await testFirstUseIsABackgroundUnit();
+    await testScheduledJobsWaitForTheRequest();
   } finally {
     console.error = consoleError;
     await cleanup();

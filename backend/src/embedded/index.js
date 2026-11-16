@@ -56,9 +56,10 @@ const { createUnitLock } = require('./units');
 const lock = createUnitLock();
 const background = (name, job) => lock.run({ name, background: true }, job);
 
-// A transaction outside any turn is background work this file did not start
-// (nothing else runs code here), and it takes a turn for as long as it is open,
-// so a request cannot start in the middle of it. Inside a turn, it belongs to
+// A transaction outside any turn is background work no unit owns (every job this
+// file schedules is a unit: work a request started and did not wait for, such as
+// a search's price refresh), and it takes a turn for as long as it is open, so a
+// request cannot start in the middle of it. Inside a turn, it belongs to
 // the unit holding the lock; a background unit first lets a queued request go.
 // A transaction already open makes this one a savepoint, as db.js decides.
 const baseWithTransaction = db.withTransaction;
@@ -69,6 +70,27 @@ db.withTransaction = async function withTransaction(fn) {
   if (unit.background) await lock.yieldTurn(unit);
   return baseWithTransaction(fn);
 };
+
+// A background unit's provider requests go out with the turn let go (lock.away),
+// so requests are not queued behind a download: a price sweep or a set refresh
+// holds the turn only while it reads and writes. Every provider client is an axios
+// instance, and every get/post/... of every instance, made before or after this
+// line, calls Axios.prototype.request, which is wrapped here. Not inside a
+// transaction: letting the turn go there would let a request's statements into
+// it, so that download keeps the turn. A request keeps its turn through its own
+// provider calls, as ./units.js describes. An axios without that method (a future
+// major version) keeps every download inside the turn: slower, never wrong.
+const { Axios } = require('axios');
+if (Axios && Axios.prototype && typeof Axios.prototype.request === 'function') {
+  const requestOverNetwork = Axios.prototype.request;
+  Axios.prototype.request = function requestOutsideTheTurn(...args) {
+    const send = () => requestOverNetwork.apply(this, args);
+    const unit = lock.holder();
+    return unit && unit.background && !inTransaction() ? lock.away(unit, send) : send();
+  };
+} else {
+  console.warn('Device mode: axios has no Axios.prototype.request; background jobs keep their turn while they download.');
+}
 
 const scryfallApi = require('../scryfallApi');
 const { authenticateToken } = require('../middleware/auth');
@@ -165,56 +187,56 @@ const WEEK = 7 * DAY;
 // Whether the job behind a device_state clock is due, `every` ms after it last ran.
 const due = async (key, every) => Date.now() - (Number(await deviceState(key)) || 0) >= every;
 
+// Every job this file schedules (the set refresh and check, the price sweeps, the
+// trash purge, exchange rates, the TCGCSV syncs, the product map) runs as one
+// background unit from start to end, clock included. So each transaction it opens
+// is its own: it waits for a request holding the turn instead of opening under it,
+// which is what a job run outside any unit did (db.withTransaction above takes
+// whatever opens while a request holds the turn for that request's own). Its
+// provider requests let the turn go meanwhile (the axios hook above).
+
 // server.js refreshes the set tables on a weekly timer. An app is opened and
 // closed all day and would never live to see that timer fire, so the date of the
 // last forced refresh is kept, and whichever launch finds it a week old does one.
-async function refreshSets() {
-  const forced = await due('sets_refreshed_at', WEEK);
-  await syncSets(forced);
-  if (forced) {
-    await deviceState('sets_refreshed_at', Date.now());
-    await deviceState('sets_checked_at', Date.now());   // a forced refresh is also today's check
-  }
-  await require('../utils/compartmentSort').loadSetsCache(db);
+// Reaches the TCGplayer-catalogue games' catalogues too (tcgcsvGameApi.fetchAndCacheSets).
+function refreshSets() {
+  return background('set refresh', async () => {
+    const forced = await due('sets_refreshed_at', WEEK);
+    await syncSets(forced);
+    if (forced) {
+      await deviceState('sets_refreshed_at', Date.now());
+      await deviceState('sets_checked_at', Date.now());   // a forced refresh is also today's check
+    }
+    await require('../utils/compartmentSort').loadSetsCache(db);
+  });
 }
 
 // New sets between the weekly refreshes, as server.js's daily sets-check job: one
 // set-list request per provider (utils/syncJobs.checkSets), at most once a day.
-async function dailySetCheck() {
-  if (!(await due('sets_checked_at', DAY))) return;
-  await checkSets();
-  await deviceState('sets_checked_at', Date.now());
-  await require('../utils/compartmentSort').loadSetsCache(db);
+function dailySetCheck() {
+  return background('set check', async () => {
+    if (!(await due('sets_checked_at', DAY))) return;
+    await checkSets();
+    await deviceState('sets_checked_at', Date.now());
+    await require('../utils/compartmentSort').loadSetsCache(db);
+  });
 }
+
+// Every provider's price sweep, in utils/priceSweeps' order (the TCGplayer-catalogue
+// games' included: tcgcsvGameApi.updateCollectionPrices). runPriceSweeps is
+// single-flight, so a tick that finds the last run still going skips.
+const sweepPricesInTurn = () => background('price sweeps', () => sweepPrices());
 
 // Each TCGCSV sync the phone makes is a background unit (./units.js), like the
 // product map's build: its reads and writes take turns with requests, and its
-// downloads go out with the turn let go (lock.outside), as the exchange-rate fetch
-// does, so no request is queued behind the mirror. tcgcsvApi makes every request
-// through its client's get(), wrapped here for that: while a sync unit holds the
-// turn, a request lets it go for as long as the download takes.
-let tcgcsvSyncUnit = null;
-const tcgcsvClient = require('../tcgcsvApi').client;
-const getOverTheNetwork = tcgcsvClient.get;
-tcgcsvClient.get = function getOutsideTheTurn(...args) {
-  const send = () => getOverTheNetwork.apply(this, args);
-  const unit = tcgcsvSyncUnit;
-  return unit && lock.holder() === unit ? lock.outside(unit, send) : send();
-};
-
+// downloads from the mirror go out with the turn let go (the axios hook above).
+//
 // One sync unit at a time, in the order asked. Two at once would deadlock:
 // syncIfUpdated hands a second caller the run already going, and a second unit
 // waiting on that run while holding the turn would never let the first back in.
 let tcgcsvTurns = Promise.resolve();
 function inTcgcsvTurn(name, job) {
-  const run = tcgcsvTurns.then(() => background(name, async (unit) => {
-    tcgcsvSyncUnit = unit;
-    try {
-      return await job(unit);
-    } finally {
-      tcgcsvSyncUnit = null;
-    }
-  }));
+  const run = tcgcsvTurns.then(() => background(name, job));
   tcgcsvTurns = run.catch(() => {});
   return run;
 }
@@ -266,16 +288,19 @@ async function weeklyTcgcsv() {
 
 // Deleted cards past their 30 days in the trash (utils/collectionTrash.js), as
 // server.js's daily trash-purge job.
-async function dailyTrashPurge() {
-  if (!(await due('trash_purged_at', DAY))) return;
-  const removed = await background('trash purge', () => require('../utils/collectionTrash').purgeExpiredTrash());
-  await deviceState('trash_purged_at', Date.now());
-  if (removed) console.log(`Trash: removed ${removed} card(s) deleted more than 30 days ago.`);
+function dailyTrashPurge() {
+  return background('trash purge', async () => {
+    if (!(await due('trash_purged_at', DAY))) return;
+    const removed = await require('../utils/collectionTrash').purgeExpiredTrash();
+    await deviceState('trash_purged_at', Date.now());
+    if (removed) console.log(`Trash: removed ${removed} card(s) deleted more than 30 days ago.`);
+  });
 }
 
 // Exchange rates, as the server's fx-rates job: hourly asks, at most one ECB fetch
 // a day (fxRates.refreshIfDue keeps that clock in the database). Its write is a
-// transaction, so it runs as a background unit, with the lock let go for the fetch.
+// transaction, so it runs as a background unit, with the lock let go for the
+// fetch (the axios hook above: it is made outside the transaction).
 function refreshFx() {
   if (process.env.BINDARR_DISABLE_FX_SYNC === '1') return Promise.resolve();
   const fx = require('../fxRates');
@@ -284,7 +309,7 @@ function refreshFx() {
     responseType: 'text',
     headers: { 'User-Agent': fx.USER_AGENT, Accept: 'application/xml, text/xml' },
   }).then(res => res.data);
-  return background('exchange rates', (unit) => fx.refreshIfDue({ fetchXml: () => lock.outside(unit, fetchXml) }))
+  return background('exchange rates', () => fx.refreshIfDue({ fetchXml }))
     .then((result) => { if (result && result.error) console.warn('FX refresh failed:', result.error); })
     .catch(err => console.warn('FX refresh failed:', err.message));
 }
@@ -294,9 +319,9 @@ function refreshFx() {
 // transaction per TCGCSV group, from the cached TCGCSV data, for a minute or two
 // on a phone; so it runs as a background unit, yielding to requests between
 // groups (db.withTransaction above). Its data comes first: the TCGCSV data it is
-// built from, synced in a TCGCSV turn (downloads outside the lock), then TCGdex's
-// Japanese set list, outside the lock, which tcgdexApi keeps in memory for the
-// build to read.
+// built from, synced in a TCGCSV turn, then TCGdex's Japanese set list, which
+// tcgdexApi keeps in memory for the build to read, in a unit of its own; both
+// download with the turn let go.
 const productMap = require('../tcgplayerCatalog');
 const startProductMapBuild = productMap.start;
 const productMapSummary = productMap.summary;
@@ -308,7 +333,9 @@ productMap.start = function startOnDevice(game = 'pokemon') {
   productMapQueued = { game, phase: 'queued', done: 0, total: 0, rows: 0, message: '' };
   (async () => {
     await inTcgcsvTurn('product map data', () => syncTcgcsvForTheWeek('product map', { explicit: true }));
-    if (game === 'pokemon') await require('../tcgdexApi').listSets('ja').catch(() => {});
+    if (game === 'pokemon') {
+      await background('product map: Japanese sets', () => require('../tcgdexApi').listSets('ja').catch(() => {}));
+    }
     await background('product map', async () => {
       productMapQueued = null;
       startProductMapBuild(game);
@@ -346,28 +373,38 @@ async function warmUp() {
   await step('trash purge', dailyTrashPurge);
 }
 
-// The background jobs' timers, so stop() can clear every one of them.
+// The background jobs' timers, so stop() can clear every one of them, and the
+// jobs they started that are still queued or running.
 const timers = new Set();
+const running = new Set();
 let backgroundOn = false;
 
+// Runs fn now and keeps its promise while it is pending (stop() returns them).
+function tracked(fn) {
+  const p = Promise.resolve().then(fn);
+  running.add(p);
+  p.catch(() => {}).finally(() => running.delete(p));
+  return p;
+}
+
 function every(ms, fn) {
-  timers.add(setInterval(fn, ms));
+  timers.add(setInterval(() => tracked(fn), ms));
 }
 
 function after(ms, fn) {
-  const t = setTimeout(() => { timers.delete(t); fn(); }, ms);
+  const t = setTimeout(() => { timers.delete(t); tracked(fn); }, ms);
   timers.add(t);
 }
 
 function startBackground() {
   if (backgroundOn) return;
   backgroundOn = true;
-  warmUp();
+  tracked(warmUp);
   // Prices on the server's cadence: soon after launch, then hourly while the app
   // stays open. Each provider decides for itself whether it is due.
-  after(30000, sweepPrices);
-  every(HOUR, sweepPrices);
-  refreshFx();
+  after(30000, sweepPricesInTurn);
+  every(HOUR, sweepPricesInTurn);
+  tracked(refreshFx);
   every(HOUR, refreshFx);
   // The weekly TCGCSV sync and the daily trash purge keep their clocks in
   // device_state, for an app left open across days.
@@ -379,7 +416,8 @@ function startBackground() {
 }
 
 // Leaving device mode for a server: the jobs stop with it (MOB-05). Work already
-// running finishes; nothing new is started until start() is called again.
+// running finishes; nothing new is started until start() is called again. The
+// promise says when that work is done (a caller may ignore it).
 function stop() {
   for (const t of timers) {
     clearTimeout(t);
@@ -387,6 +425,7 @@ function stop() {
   }
   timers.clear();
   backgroundOn = false;
+  return Promise.allSettled([...running]).then(() => {});
 }
 
 let booted = null;
