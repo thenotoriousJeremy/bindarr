@@ -213,6 +213,21 @@ async function build(args) {
       console.log(`${key}: ${coverage.fallbackGroups.length} TCGplayer group(s) TCGdex lacks (${wrote.cards || 0} cards), art borrowed for ${Object.keys(coverage.artFill).length} TCGdex card(s)`);
     }
     await run({ skipCache: true });
+  } else if (game === 'riftbound') {
+    // Riftbound: RiftCodex's catalogue, then TCGplayer's category 89 from the TCGCSV
+    // mirror (a few requests), from which the sets RiftCodex lacks are written
+    // (riftboundTcgplayer.js); the walk below then reads both. Without the mirror
+    // those sets are not fetched this run, and their published cards are kept.
+    await backend('./src/riftcodexApi').ensureCatalogue();
+    try {
+      const synced = await backend('./src/tcgcsvApi').syncIfUpdated();
+      if (synced && synced.disabled) throw new Error('TCGCSV sync is disabled (BINDARR_DISABLE_TCGCSV_SYNC=1)');
+      const wrote = await backend('./src/riftboundTcgplayer').ensure({ sync: false });
+      console.log(`${key}: ${wrote.cards || 0} card(s) of sets RiftCodex lacks, from TCGplayer`);
+    } catch (e) {
+      console.warn(`${key}: no TCGplayer rows for the sets RiftCodex lacks this run: ${e.message}`);
+    }
+    cacheRun = await run({});
   } else {
     cacheRun = await run({});
   }
@@ -244,6 +259,8 @@ async function build(args) {
   // The sets this run knows the whole of: those it fetched and, for Pokémon's
   // TCGplayer-only cards, the groups whose product list came back — only when this
   // run wrote those cards from a coverage; with none, none of them is known.
+  // (Riftbound's TCGplayer sets are fetched from card_cache like RiftCodex's: one
+  // with no product list today was not written, so not fetched, so not known.)
   const known = new Set(fetched);
   if (coverage) for (const s of await tcgplayer.knownSetIds(lang)) known.add(normSet(s));
 

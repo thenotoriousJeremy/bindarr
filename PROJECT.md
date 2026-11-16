@@ -530,11 +530,34 @@ merge printings. New card columns: `orientation` (battlefields are landscape),
 `artist`, `card_text`, `attributes` (energy/might/power JSON; energy is also `cmc`).
 
 Prices: `riftboundPrices.js` reads TCGCSV category 89 from `tcgcsvApi`'s cache
-(same pacing, 403 cooldown and base URL). Category 89 is synced only once the
-install has a Riftbound card, and backfilled into the current version the first
-time. Match is by product id only; Normal → `price_normal`, Foil →
-`price_holofoil`, trend prefers Normal; a missing quote leaves the stored price.
-Own clock: `riftbound_prices_swept_at`.
+(same pacing, 403 cooldown and base URL). Category 89 is synced once the install
+has used Riftbound (a Riftbound card cached, owned or not), and backfilled into the
+current version the first time. Match is by product id only; Normal →
+`price_normal`, Foil → `price_holofoil`, trend prefers Normal; a missing quote
+leaves the stored price. Own clock: `riftbound_prices_swept_at`.
+
+Sets RiftCodex lacks (Radiance, on 2026-11-16; #181): `riftboundTcgplayer.js`
+writes each TCGplayer group of category 89 whose set RiftCodex serves no card in,
+from the TCGCSV cache, with no request of its own (server and phone alike). Ids are
+RiftCodex's shape, built from the group abbreviation and TCGplayer's Number (RAD +
+`061a/167` → `riftbound-rad-061a-167`; 1,213 of 1,224 RiftCodex codes come out the
+same), so when RiftCodex adds the set its rows land on the same ids. Products
+sharing a Number follow RiftCodex's canonical rule and the others get
+`~tcgp<product id>`; a Number of no RiftCodex shape (`T02 // T05`) gives
+`<set>-tcgp<product id>`. Products RiftCodex already serves under another set,
+sealed product and groups of sealed product only are skipped. A row has TCGplayer's
+name, number, rarity, picture and product id, and its card type, domains, tags and
+stats from the `ext` the slim cache keeps on category 89 cards (`tcgcsvSlim`
+`riftboundProduct`, an optional field, so `SLIM_VERSION` stands); no rules text. RiftCodex's refresh
+records the sets it serves (`riftcodexCovers`) and takes over any it now has: its
+rows replace these on shared ids, and fallback cards it lacks go unless something
+refers to them (`utils/cardReferences`, the rule `pokemonTcgplayer` uses). Every
+Riftbound read (search, set list, id, set listing, catalog build) first brings the
+rows up to date (`ensure`: local, cheap once current); only groups whose products
+changed are rewritten, prices are the daily sweep's. With TCGCSV cached but no
+category 89 in it, `ensure` starts the first-use sync `tcgcsvGameApi` uses (at most
+hourly); with no TCGCSV data at all, the scheduled sync brings it. The weekly CI
+catalog build syncs category 89 before walking Riftbound's sets.
 
 Deck rules are the `riftbound` entry in `shared/deckRules.mjs`: per-zone copy
 limits (enforced on add) and Riot's construction rules as deck warnings. Scan: `cardSets` lists
