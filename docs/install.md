@@ -1,6 +1,7 @@
 # Install
 
 - [Docker](#docker)
+- [Unraid](#unraid)
 - [Prebuilt server binary](#prebuilt-server-binary)
 - [Mobile apps](#mobile-apps)
 - [From source](#from-source)
@@ -62,6 +63,10 @@ The HTTPS certificate is self-signed, so each device warns once (**Advanced → 
 | `sha-<short>` | One exact commit. |
 
 `GET /api/health` answers `200` without auth and backs the image's healthcheck.
+
+## Unraid
+
+[`unraid/bindarr.xml`](../unraid/bindarr.xml) is a Docker template for Unraid. To use it before it's in Community Applications, save it to `/boot/config/plugins/dockerMan/templates-user/my-bindarr.xml` on the server, then pick **Bindarr** under **Docker → Add Container → Template**. Data goes to `/mnt/user/appdata/bindarr`, and [First sign-in](#first-sign-in) applies as above (the setup code is in the container's log).
 
 ## Prebuilt server binary
 

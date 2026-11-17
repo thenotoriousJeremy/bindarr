@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Bindarr</Name>
+  <Repository>ghcr.io/thenotoriousjeremy/bindarr:latest</Repository>
+  <Registry>https://github.com/thenotoriousJeremy/bindarr/pkgs/container/bindarr</Registry>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/thenotoriousJeremy/bindarr/issues</Support>
+  <Project>https://github.com/thenotoriousJeremy/bindarr</Project>
+  <Overview>Collection manager for trading cards: Pokémon, Magic: The Gathering, Disney Lorcana, Riftbound, Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood, Star Wars: Unlimited and the Gundam Card Game.&#xD;
+&#xD;
+Scan cards with your phone camera, track market prices and value over time, and record which binder page and pocket or box row each card is in. Build decks from what you own, keep wishlists and buylists, and share collections with other accounts on the server.&#xD;
+&#xD;
+The first visit to the WebUI creates the admin account and asks for a setup code, which the container log prints while no account exists (or set Setup code below). Card scanning needs a secure context, so phones should use the HTTPS port (a self-signed certificate is generated unless you provide your own) or a reverse proxy with TLS.</Overview>
+  <Category>Productivity: Tools:</Category>
+  <WebUI>http://[IP]:[PORT:3001]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/thenotoriousJeremy/bindarr/main/unraid/bindarr.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/thenotoriousJeremy/bindarr/main/frontend/public/icons/icon-512.png</Icon>
+  <ExtraParams/>
+  <DonateText/>
+  <DonateLink/>
+  <Config Name="HTTP port" Target="3001" Default="3001" Mode="tcp" Description="Web interface over HTTP. Point a reverse proxy here." Type="Port" Display="always" Required="true" Mask="false">3001</Config>
+  <Config Name="HTTPS port" Target="3443" Default="3443" Mode="tcp" Description="Web interface over HTTPS with a self-signed certificate unless SSL_CERT_PATH is set. Use this from phones when there is no reverse proxy: camera scanning needs HTTPS." Type="Port" Display="always" Required="false" Mask="false">3443</Config>
+  <Config Name="Data" Target="/app/database" Default="/mnt/user/appdata/bindarr" Mode="rw" Description="Database, backups, TLS certificates, scan models and catalogs." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/bindarr</Config>
+  <Config Name="Public URL" Target="PUBLIC_BASE_URL" Default="" Mode="" Description="External URL when behind a reverse proxy, e.g. https://cards.example.com. Used for share links and allowed as a CORS origin." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="Trust proxy" Target="TRUST_PROXY" Default="" Mode="" Description="Set to 1 behind a TLS-terminating reverse proxy so rate limiting sees the real client IP." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="Allow registration" Target="ALLOW_REGISTRATION" Default="" Mode="" Description="true allows anyone who can reach the server to create an account. Leave empty for invite-only." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="HTTPS port inside the container" Target="HTTPS_PORT" Default="3443" Mode="" Description="Set to an empty value to serve plain HTTP only (camera scanning then works only on localhost or behind a TLS proxy)." Type="Variable" Display="advanced" Required="false" Mask="false">3443</Config>
+  <Config Name="TLS certificate path" Target="SSL_CERT_PATH" Default="" Mode="" Description="Your own certificate inside the container, e.g. /app/database/certs/fullchain.pem. Leave empty for a self-signed one." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="TLS key path" Target="SSL_KEY_PATH" Default="" Mode="" Description="Private key for that certificate, e.g. /app/database/certs/privkey.pem." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Setup code" Target="SETUP_CODE" Default="" Mode="" Description="Code the first visit asks for before creating the admin account. Leave empty for a new random code in the container log on each start." Type="Variable" Display="advanced" Required="false" Mask="true"/>
+  <Config Name="Default admin password" Target="DEFAULT_ADMIN_PASSWORD" Default="" Mode="" Description="Create the admin account at startup with this password instead of on first visit." Type="Variable" Display="advanced" Required="false" Mask="true"/>
+  <Config Name="Allow private notification targets" Target="NOTIFY_ALLOW_PRIVATE" Default="" Mode="" Description="true lets price alerts reach LAN or Docker hosts, such as a local ntfy." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+</Container>
