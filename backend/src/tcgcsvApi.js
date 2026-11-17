@@ -89,7 +89,12 @@ async function sealedExtraEnabled() {
 //          purchase.
 //   1, 71  the Magic/Lorcana sealed gate is on AND a Magic or Lorcana sealed
 //          purchase exists.
-//   89     a Riftbound card in any collection or card list (riftboundPrices.js).
+//   89     the install using Riftbound at all (syncCategories: a Riftbound card
+//          cached). It prices Riftbound (riftboundPrices.js), and it is where the
+//          cards of the sets RiftCodex lacks come from (riftboundTcgplayer.js), so
+//          like a catalogue game's category it is kept current whether or not a
+//          card is owned yet: else a set RiftCodex lacks could not be found until
+//          a card of another set was owned.
 //
 // `explicit` is an admin acting on purpose: building a product map (which the
 // first Pokémon scan-catalog download does, before any card exists) or turning
@@ -105,18 +110,14 @@ async function demandedCategories({ explicit = false } = {}) {
       OR EXISTS (SELECT 1 FROM card_list_items i JOIN card_cache cc ON cc.id = i.card_id
                   WHERE cc.game = 'pokemon')
       OR EXISTS (SELECT 1 FROM sealed_purchases WHERE game = 'pokemon') AS pokemon,
-      EXISTS (SELECT 1 FROM sealed_purchases WHERE game IN ('mtg', 'lorcana')) AS extra,
-      EXISTS (SELECT 1 FROM collection WHERE game = 'riftbound')
-      OR EXISTS (SELECT 1 FROM card_list_items i JOIN card_cache cc ON cc.id = i.card_id
-                  WHERE cc.game = 'riftbound') AS riftbound
+      EXISTS (SELECT 1 FROM sealed_purchases WHERE game IN ('mtg', 'lorcana')) AS extra
   `);
   const wanted = (c) => {
     if (BASE_SYNC_CATEGORIES.includes(c)) return !!row.pokemon;
-    // A catalogue game's category IS its card list: once the game is activated it
-    // is kept current whether or not anyone owns a card yet (syncCategories only
-    // lists it once activated).
-    if (CATALOGUE_CATEGORY.has(c)) return true;
-    if (OPTIONAL_SYNC_CATEGORIES.some(o => o.categoryId === c)) return !!row.riftbound;
+    // A catalogue game's category IS its card list, and Riftbound's holds the sets
+    // RiftCodex lacks: once the game is used it is kept current whether or not
+    // anyone owns a card yet (syncCategories only lists it once used).
+    if (OPTIONAL_SYNC_CATEGORIES.some(o => o.categoryId === c)) return true;
     return !!row.extra;
   };
   return allowed.filter(wanted);
@@ -141,9 +142,10 @@ async function setSealedExtraEnabled(enabled) {
 }
 
 // Categories synced only while something in this install reads them. Riftbound
-// (89) is priced straight off its groups by riftboundPrices.js, but an install
-// that has never cached a Riftbound card has nothing to price, and this mirror
-// is free: 1 + 2 x (its groups) requests a day are not asked of it for nothing.
+// (89) is priced straight off its groups by riftboundPrices.js and fills in the
+// sets RiftCodex lacks (riftboundTcgplayer.js), but an install that has never
+// cached a Riftbound card reads neither, and this mirror is free: its requests
+// are not asked of it for nothing.
 //
 // The games served entirely from TCGplayer's catalogue (tcgcsvGameApi) follow the
 // same rule with a different trigger: their card list comes FROM the category, so

@@ -5,6 +5,7 @@ import { lazyNamed } from '../../utils/lazyWithReload';
 import ChartFallback from '../charts/ChartFallback';
 import { CARD_COLORS } from '../../utils/cardColors';
 import { cardGroup as cardGroupFor, deckGroupLabel } from './deckHelpers';
+import { isOutsideDeck } from '../../utils/deckRules';
 
 // The analytics plots are code-split (charts/DeckCharts), so recharts is fetched
 // when a deck's stats are first drawn rather than with the deck list.
@@ -24,12 +25,14 @@ const BASIC_LAND_COLORS = { Plains: 'White', Island: 'Blue', Swamp: 'Black', Mou
 export default function DeckStats({ activeDeck, deckGame }) {
   const { t } = useT();
   const cardGroup = (card) => cardGroupFor(deckGame, card);
+  // Tokens kept in the list are no part of the deck, so no chart counts them (#184).
+  const deckCards = (activeDeck?.cards || []).filter(c => !isOutsideDeck(c, deckGame));
 
   // --- CHART DATA GENERATION ---
   const getSupertypeChartData = () => {
     if (!activeDeck) return [];
     const counts = {};
-    activeDeck.cards.forEach(c => {
+    deckCards.forEach(c => {
       const g = cardGroup(c);
       counts[g] = (counts[g] || 0) + c.quantity;
     });
@@ -39,7 +42,7 @@ export default function DeckStats({ activeDeck, deckGame }) {
   const getManaCurveData = () => {
     if (!activeDeck) return [];
     const counts = { '0': 0, '1': 0, '2': 0, '3': 0, '4': 0, '5': 0, '6': 0, '7+': 0 };
-    activeDeck.cards.forEach(c => {
+    deckCards.forEach(c => {
       const val = c.cmc !== undefined && c.cmc !== null
         ? c.cmc
         : (c.convertedEnergyCost !== undefined && c.convertedEnergyCost !== null ? c.convertedEnergyCost : null);
@@ -65,7 +68,7 @@ export default function DeckStats({ activeDeck, deckGame }) {
     const colorless = () => t('deck.chartColorless');
     if (deckGame === 'mtg') {
       // Color and Land type distribution
-      activeDeck.cards.forEach(c => {
+      deckCards.forEach(c => {
         const subs = c.subtypes || [];
         const isLand = subs.includes('Land') || c.supertype === 'Land' || cardGroup(c) === 'Land';
         if (isLand) {
@@ -88,7 +91,7 @@ export default function DeckStats({ activeDeck, deckGame }) {
       return [...map.values()];
     }
     if (deckGame === 'lorcana') {
-      activeDeck.cards.forEach(c => {
+      deckCards.forEach(c => {
         const inks = Array.isArray(c.types) && c.types.length ? c.types : (c.ink ? [c.ink] : []);
         if (inks.length === 0) {
           add('Colorless', colorless(), c.quantity);
@@ -98,7 +101,7 @@ export default function DeckStats({ activeDeck, deckGame }) {
       });
       return [...map.values()];
     }
-    activeDeck.cards.forEach(c => {
+    deckCards.forEach(c => {
       if (c.supertype === 'Energy') {
         const name = c.name.replace(/\s*Energy/i, '').trim();
         if (name) add(name, name, c.quantity);

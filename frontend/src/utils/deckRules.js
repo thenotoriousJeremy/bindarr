@@ -3,7 +3,7 @@
 // rule warning into words.
 export {
   rulesFor, formatNames, defaultFormat, defaultTargetSize, supportsAnyPrinting, defaultAnyPrinting,
-  copyLimit, isBasicEnergyOrLand, deckWarnings,
+  copyLimit, isBasicEnergyOrLand, isOutsideDeck, isMtgToken, deckWarnings,
 } from '../../../shared/deckRules.mjs';
 
 // Names in a list, cut short with the existing "(+N more)" so one wide warning

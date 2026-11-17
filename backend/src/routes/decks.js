@@ -111,6 +111,27 @@ router.get('/', async (req, res) => {
       ORDER BY d.created_at DESC
     `;
     const rows = await db.all(query, [req.user.id]);
+    // A Magic list may keep its tokens and emblems handy; they are no part of the
+    // deck, so the totals the deck list shows leave them out (#184), by the same
+    // rule the editor and Deck Health use. The LIKE only narrows the rows read.
+    const extras = await db.all(
+      `SELECT dc.deck_id, dc.quantity, cc.name, cc.supertype, cc.subtypes, d.game
+       FROM deck_cards dc
+       JOIN decks d ON d.id = dc.deck_id
+       JOIN card_cache cc ON cc.id = dc.card_id
+       WHERE d.user_id = ? AND (cc.subtypes LIKE '%Token%' OR cc.subtypes LIKE '%Emblem%')`,
+      [req.user.id]
+    );
+    if (extras.length) {
+      const rules = await loadRules();
+      const byDeck = new Map(rows.map(r => [r.id, r]));
+      for (const e of extras) {
+        const deck = byDeck.get(e.deck_id);
+        if (!deck || !rules.isOutsideDeck(e, e.game)) continue;
+        deck.total_cards -= e.quantity;
+        deck.total_card_types -= 1;
+      }
+    }
     res.json(rows);
   } catch (error) {
     console.error(error);

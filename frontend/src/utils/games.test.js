@@ -67,7 +67,7 @@ assert.ok(showGamePicker());
 store.delete('shown_games');
 store.set('hidden_games', 'not json');
 assert.deepStrictEqual(enabledGames(), ['pokemon', 'mtg', 'lorcana', 'riftbound'], 'malformed value falls back to the defaults');
-store.set('hidden_games', JSON.stringify([...['pokemon', 'mtg', 'lorcana', 'riftbound', 'yugioh', 'onepiece', 'digimon', 'fab', 'swu'], 'gibberish']));
+store.set('hidden_games', JSON.stringify([...['pokemon', 'mtg', 'lorcana', 'riftbound', 'yugioh', 'onepiece', 'digimon', 'fab', 'swu', 'gundam'], 'gibberish']));
 assert.deepStrictEqual(enabledGames(), ['pokemon', 'mtg', 'lorcana', 'riftbound'], 'hiding every known game falls back to the defaults');
 store.set('hidden_games', JSON.stringify(['gibberish']));
 assert.deepStrictEqual(enabledGames(), ['pokemon', 'mtg', 'lorcana', 'riftbound'], 'an unknown game name hides nothing');

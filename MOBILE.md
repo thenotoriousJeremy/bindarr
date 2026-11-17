@@ -102,19 +102,28 @@ the UI makes is answered in-process.
   storage (iOS: `Library/CapacitorDatabase`), which the OS includes in device
   backups. The downloaded scan data is kept out of them (below).
 - A WebView has no async context, so `db.js` cannot tell a transaction's own
-  statements from anyone else's there. Requests and the background jobs that open
-  transactions therefore take turns, first come first served
-  (`backend/src/embedded/units.js`); a background job lets go while it waits on
-  the network and between its transactions. A request's own provider calls happen
+  statements from anyone else's there. Requests and the background jobs therefore
+  take turns, first come first served (`backend/src/embedded/units.js`): every job
+  `backend/src/embedded/index.js` schedules (set lists, price sweeps, exchange
+  rates, the trash purge, TCGCSV, the product map) runs as one unit from start to
+  end, and so does work a request starts and does not wait for (a search's price
+  refresh, a re-price after a settings change: `backend/src/utils/backgroundWork.js`).
+  A unit lets go while it downloads (any provider request it makes through axios)
+  and between its transactions, and a caller waiting on work someone else is
+  running lets go while it waits. A request's own provider calls happen
   inside its turn, so a slow provider delays the next request, up to that
   provider's timeout.
 - Card search, set lists and prices go straight from the phone to the providers,
   through the same native HTTP layer server mode uses. While the app is open:
   prices on the server's schedule, exchange rates daily, expired trash purged
   daily, set lists weekly. TCGCSV (the Pokémon price data, well over a thousand
-  requests per new version) syncs at most weekly on a phone, and when the Pokémon
-  scan download builds the product map; in between, Pokémon prices come from the
-  last version synced. Leaving device mode stops these jobs.
+  requests per new version) syncs at most weekly on a phone, when the Pokémon
+  scan download builds the product map, and the first time a game served from
+  TCGplayer's catalogue (Yu-Gi-Oh!, One Piece...) is opened; in between, prices
+  come from the last version synced. A game's first use writes its card list in the
+  background too: until it is done, its search and set list answer with what is
+  cached and say so (`X-Catalogue-Pending`), and the app shows "downloading" rather
+  than "no matches". Leaving device mode stops these jobs.
 - There is one account and no login. The phone's owner is the `admin` user, with a
   session that never expires.
 
@@ -141,9 +150,11 @@ none). Pokémon's catalog names cards by TCGdex id, so it is used only while the
 phone takes its Pokémon cards from TCGdex; otherwise the snapshot is offered.
 
 - `frontend/src/device/scanAssets.js` downloads with `@capacitor/file-transfer`
-  into the app's private storage, checks each file's exact size and SHA-256, and
-  reads files back through the WebView's local server rather than across the
-  bridge. Release segments are applied with the backend's own
+  into the app's private storage, checks each file's exact size and SHA-256
+  (WebCrypto, or `src/utils/sha256.js` in a WebView without it), and reads files
+  back through the WebView's local server rather than across the bridge. The
+  release's index and manifests are read with a size cap (`src/utils/cappedJson.js`).
+  Release segments are applied with the backend's own
   `utils/catalogSegments.js`, handed over by the bundle. The files
   stay out of the phone's backups, since they can be downloaded again and would
   crowd out the database: on iOS they live in `Library/NoCloud` (an install that

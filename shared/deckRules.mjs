@@ -52,6 +52,15 @@ export function isBasicEnergy(card) {
   return !!card && card.supertype === 'Energy' && !typeWords(card).includes('Special');
 }
 
+// Magic: a token or an emblem ("Token Creature — Goblin", "Emblem — Elspeth"), read
+// off the type line. Made in play, never decked, though a list may keep them handy
+// (#184: a token with power and toughness was counted as a creature of the deck).
+export function isMtgToken(card) {
+  if (!card) return false;
+  const words = typeWords(card);
+  return words.includes('Token') || words.includes('Emblem');
+}
+
 // Cards whose own text overrides the copy limit. Read from oracle_text when the row
 // has it, so a card printed next year is covered without an edit here; this list is
 // for rows cached before oracle_text was (they gain it on their next re-cache, which
@@ -155,6 +164,16 @@ export function tcgplayerCardName(name) {
   return foldName([s, ...keep].join(' ').replace(/\s+/g, ' '));
 }
 
+// The Gundam Card Game limits copies by card NUMBER (GD01-001), not by name: a
+// dozen different Units are all called "Gundam". A parallel printing keeps its
+// number; a card without one falls back to its name. Resources fill the separate
+// 10-card resource deck and have no copy limit.
+const gundamCardKey = (card) => {
+  const number = String((card && card.number) || '').trim().toUpperCase();
+  return number || tcgplayerCardName(card && card.name);
+};
+const isGundamResource = (card) => /\bresource\b/i.test(String((card && card.supertype) || ''));
+
 // The champion a Legend or champion unit belongs to: the name before its title,
 // else its first tag.
 function rbChampion(card) {
@@ -252,6 +271,14 @@ function riftboundWarnings(list) {
 //   copyKey      what counts as one card for the copy limit (default: its name).
 //   warnings     the game's own construction rules, replacing the generic size
 //                and copy checks.
+//   sizeExcludes cards kept in the list that the size rule does not count (Gundam's
+//                separate resource deck).
+//   outsideDeck  cards a list may hold that are not part of the deck at all
+//                (Magic's tokens and emblems, which are made in play): no size,
+//                copy, commander or colour rule counts them, and they are listed
+//                under their own heading.
+//   targetSize   a new deck's target when the list holds more than `size` counts:
+//                the whole list a player assembles.
 export const DECK_GAMES = {
   pokemon: {
     rules: { size: { exact: 60 }, copies: 4 },
@@ -267,6 +294,7 @@ export const DECK_GAMES = {
   mtg: {
     rules: { size: { min: 60 }, copies: 4 },
     unlimited: isBasicLand,
+    outsideDeck: isMtgToken,
     printedLimit: printedCopyLimit,
     sameCard: sameOracleCard,
     anyPrinting: true,
@@ -354,6 +382,19 @@ export const DECK_GAMES = {
     anyPrinting: true,
     formats: [{ name: 'Premier' }, { name: 'Twin Suns' }, { name: 'Casual' }],
   },
+  gundam: {
+    // Exactly 50 in the main deck, at most 4 of a card number. The 10-card
+    // resource deck rides in the same list, outside the size and copy rules, so a
+    // finished list is 60. The two-colour limit is not checked.
+    rules: { size: { exact: 50 }, copies: 4 },
+    sizeExcludes: isGundamResource,
+    targetSize: 60,
+    unlimited: isGundamResource,
+    copyKey: gundamCardKey,
+    sameCard: (a, b) => gundamCardKey(a) === gundamCardKey(b),
+    anyPrinting: true,
+    formats: [{ name: 'Standard' }, { name: 'Casual' }],
+  },
 };
 
 // A game this table does not know yet still gets the copy limit every game here
@@ -387,10 +428,11 @@ export const defaultFormat = (game) => formatNames(game)[0] || 'Standard';
 export const supportsAnyPrinting = (game) => !!gameEntry(game).sameCard;
 export const defaultAnyPrinting = (game) => supportsAnyPrinting(game) && !!gameEntry(game).anyPrinting;
 
-// What a new deck's target size starts at: the format's own size, else 60.
+// What a new deck's target size starts at: the whole list where the size rule
+// counts only part of it (targetSize), else the format's own size, else 60.
 export function defaultTargetSize(game, format) {
   const { size } = rulesFor(game, format);
-  return size.exact || size.min || 60;
+  return gameEntry(game).targetSize || size.exact || size.min || 60;
 }
 
 // Basic lands and basic Energy — exempt from the copy limit in every format.
@@ -399,11 +441,18 @@ export function isBasicEnergyOrLand(card, game) {
   return !!(card && entry.unlimited && entry.unlimited(card));
 }
 
+// Whether a card in a deck's list is outside the deck itself (the game's
+// `outsideDeck`: Magic's tokens and emblems).
+export function isOutsideDeck(card, game) {
+  const entry = gameEntry(game || (card && card.game));
+  return !!(card && entry.outsideDeck && entry.outsideDeck(card));
+}
+
 // How many copies of this card (by name, across printings) a deck under `rules`
 // may hold. Infinity for the exempt.
 export function copyLimit(card, rules) {
   const entry = gameEntry(rules.game);
-  if (isBasicEnergyOrLand(card, rules.game)) return Infinity;
+  if (isBasicEnergyOrLand(card, rules.game) || isOutsideDeck(card, rules.game)) return Infinity;
   if (entry.cardLimit) return entry.cardLimit(card);
   const printed = entry.printedLimit ? entry.printedLimit(card) : null;
   return printed != null ? printed : rules.copies;
@@ -510,12 +559,14 @@ export function canBeCommander(card, rules) {
 // { code, ...details } for the deck builder to put into words.
 export function deckWarnings({ game, format, cards }) {
   const rules = rulesFor(game, format);
-  const list = (cards || []).filter(c => c && Number(c.quantity) > 0);
+  // Tokens and the like ride in the list but are no part of the deck.
+  const list = (cards || []).filter(c => c && Number(c.quantity) > 0 && !isOutsideDeck(c, game));
   const own = gameEntry(game).warnings;
   if (own) return own(list);
   const warnings = [];
 
-  const total = list.reduce((sum, c) => sum + Number(c.quantity), 0);
+  const excluded = gameEntry(game).sizeExcludes;
+  const total = list.reduce((sum, c) => sum + (excluded && excluded(c) ? 0 : Number(c.quantity)), 0);
   const { exact, min, max } = rules.size;
   if (exact != null) {
     if (total !== exact) warnings.push({ code: 'size_exact', expected: exact, actual: total });
@@ -524,15 +575,19 @@ export function deckWarnings({ game, format, cards }) {
     if (max != null && total > max) warnings.push({ code: 'size_max', max, actual: total });
   }
 
-  // Copies are counted by name, across every printing of it.
-  const byName = new Map();
+  // Copies are counted per card as the game defines one, across every printing of
+  // it: by name (copyKey's default), by name less TCGplayer's printing suffix for
+  // the TCGplayer-catalogue games, by card number for Gundam. The same key the
+  // server enforces additions with (utils/deckRules.validateDeckAddition), so a
+  // warning never disagrees with what an add was allowed to do.
+  const byCard = new Map();
   for (const c of list) {
-    const key = foldName(c.name);
-    const seen = byName.get(key);
+    const key = copyKey(c, game);
+    const seen = byCard.get(key);
     if (seen) seen.count += Number(c.quantity);
-    else byName.set(key, { card: c, count: Number(c.quantity) });
+    else byCard.set(key, { card: c, count: Number(c.quantity) });
   }
-  for (const { card, count } of byName.values()) {
+  for (const { card, count } of byCard.values()) {
     const limit = copyLimit(card, rules);
     if (count > limit) warnings.push({ code: 'copy_limit', name: card.name, count, limit });
   }

@@ -160,5 +160,23 @@
     "tcgplayerCategories": [79],
     "scan": { "publishedIds": "cardId" },
     "psaBrand": "STAR WARS UNLIMITED"
+  },
+  {
+    "value": "gundam",
+    "label": "Gundam Card Game",
+    "short": "Gundam",
+    "idPrefixes": ["gundam-"],
+    "setIdPrefix": "gundam-",
+    "provider": "tcgcsv",
+    "defaultEnabled": false,
+    "languages": ["en"],
+    "printings": "foil",
+    "features": { "prices": true, "scan": true, "grading": true, "gradedPrices": false, "decks": true },
+    "deck": { "defaultFormat": "Standard", "defaultSize": 60 },
+    "cardBack": "gundam",
+    "marketplaces": { "tcgplayer": true, "cardmarket": false, "tcgplayerSearchLine": null },
+    "tcgplayerCategories": [86],
+    "scan": { "publishedIds": null },
+    "psaBrand": "GUNDAM"
   }
 ]

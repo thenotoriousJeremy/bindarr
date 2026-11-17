@@ -3,7 +3,8 @@
 // The automatic sync skips Pokémon (3/85) and Riftbound (89) until something on
 // the install needs them. A user who only browses sets and hearts cards owns
 // nothing yet, but their wishlist is priced -- so a card on any card list,
-// the default Wishlist the hearts fill included, has to count.
+// the default Wishlist the hearts fill included, has to count. Riftbound's is
+// needed as soon as the game is used: it holds cards as well as prices.
 //
 // Offline: demandedCategories only reads the database.
 const assert = require('assert');
@@ -44,12 +45,14 @@ const db = require('../src/db');
     assert.deepStrictEqual(await tcgcsv.demandedCategories(), [3, 85], 'a Pokémon card on any list demands 3/85');
     console.log('PASS: a Pokémon card on any card list demands 3/85');
 
-    // Riftbound the same way: listed, not owned.
+    // Riftbound sooner: its category is also where the cards of the sets RiftCodex
+    // lacks come from (riftboundTcgplayer.js), so using Riftbound at all demands it,
+    // owned card or not. Not using it demands nothing.
+    await db.run(`DELETE FROM card_list_items`);
+    assert.ok(!(await tcgcsv.demandedCategories()).includes(89), 'no Riftbound card cached: no demand');
     await db.run(`INSERT INTO card_cache (id, name, game) VALUES ('riftbound-ogn-1', 'R', 'riftbound')`);
-    assert.ok(!(await tcgcsv.demandedCategories()).includes(89), 'cached but on no list: no demand');
-    await db.run(`INSERT INTO card_list_items (list_id, card_id) VALUES (?, 'riftbound-ogn-1')`, [wishlist]);
-    assert.ok((await tcgcsv.demandedCategories()).includes(89), 'a wishlisted Riftbound card demands 89');
-    console.log('PASS: a Riftbound card on a list demands 89');
+    assert.deepStrictEqual(await tcgcsv.demandedCategories(), [89], 'a Riftbound card cached, on no list: 89, and only 89');
+    console.log('PASS: using Riftbound at all demands 89');
     process.exit(0);
   } catch (e) {
     console.error(e);

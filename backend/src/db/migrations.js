@@ -513,6 +513,11 @@ async function initDb() {
     // offered that tour. It is one screen with a "Skip setup" button that marks it
     // done for good, so the cost to someone who wants nothing from it is one click.
     setup_complete: 'INTEGER NOT NULL DEFAULT 0',
+    // The step the wizard was last on while unfinished, by name ('keys'), so a
+    // wizard closed halfway reopens there at the next login, on any device. A name
+    // rather than an index: a release that adds or reorders steps still reopens
+    // at the same one, or at the start if it is gone. '' is the first step.
+    setup_step: `TEXT NOT NULL DEFAULT ''`,
 
     // Which marketplace Magic prices are read from first (#93). Scryfall quotes both
     // TCGplayer (`usd`) and Cardmarket (`eur`) for most printings; 'tcgplayer' is
@@ -985,6 +990,7 @@ async function initDb() {
   // --- SEED DATA & MIGRATION TO DEFAULT ADMIN ---
   const userCount = await get(`SELECT COUNT(*) as count FROM users`);
   let adminId = null;
+  let createdOwner = false;
   // An empty users table stays empty on purpose. The first visit to the web UI
   // asks for a password and creates the owner account itself
   // (POST /api/auth/bootstrap), so no generated password is ever printed to a log
@@ -1003,6 +1009,7 @@ async function initDb() {
       VALUES (?, ?, ?, ?, ?)
     `, ['admin', defaultPassHash, 'admin', defaultShareToken, 0]);
     adminId = result.lastID;
+    createdOwner = true;
     console.log('Created admin user "admin" from DEFAULT_ADMIN_PASSWORD.');
   } else if (userCount.count === 0) {
     console.log('No accounts yet. Open the web UI to create the owner account.');
@@ -1015,7 +1022,10 @@ async function initDb() {
 
   if (adminId) {
     await adoptOrphanRows(adminId);
-    await seedStarterLocations(adminId);
+    // Only an owner this boot just created gets the starter pair, like any other
+    // new account. An existing owner is never seeded at boot: one who deleted
+    // theirs must not get them back on every restart.
+    if (createdOwner) await seedStarterLocations(adminId);
   }
 
   // The pre-1.9 wishlist (collection rows with list_type = 'wishlist') moves onto
@@ -1123,18 +1133,15 @@ async function adoptOrphanRows(userId) {
 
 // A binder and a bulk box, so a new account has somewhere to put its first card.
 //
-// `newAccount` is every route that creates an account (the owner's bootstrap,
-// registration, an admin's Add User, SSO sign-up): it counts that account's own
-// locations, so each new account gets the pair. Counting the whole install's, as
-// this used to for everyone, gave them to the first account and to no one after.
-//
-// Without it, the install-wide count stays: initDb calls this at every boot for
-// the existing owner, and an owner who deleted their starter locations must not
-// get them back on each restart.
-async function seedStarterLocations(userId, { newAccount = false } = {}) {
-  const locCount = newAccount
-    ? await get(`SELECT COUNT(*) as count FROM locations WHERE user_id = ?`, [userId])
-    : await get(`SELECT COUNT(*) as count FROM locations`);
+// Called by everything that creates an account: the owner's bootstrap, initDb's
+// DEFAULT_ADMIN_PASSWORD owner, registration, an admin's Add User, SSO sign-up and
+// device mode's one account. It counts that account's own locations only, so a
+// member gets the pair whoever else already has storage, and an account that
+// already has a location (rows adopted from before multi-user) gets nothing on top.
+// Counting the whole install's, as this used to, gave them to the first account
+// and to no one after.
+async function seedStarterLocations(userId) {
+  const locCount = await get(`SELECT COUNT(*) as count FROM locations WHERE user_id = ?`, [userId]);
   if (locCount.count > 0) return;
 
   console.log('Populating default locations...');

@@ -38,10 +38,10 @@ env:
   CATEGORIES: '3,85,89,71,1'
   # The games served entirely from TCGplayer's catalogue (provider "tcgcsv" in
   # shared/games.json): Yu-Gi-Oh! 2, One Piece 68, Digimon 63, Flesh and Blood 62,
-  # Star Wars: Unlimited 79. Each is mirrored only when TCGCSV's own name for the
+  # Star Wars: Unlimited 79, Gundam 86. Each is mirrored only when TCGCSV's own name for the
   # category matches the game, and only while it fits under the request cap
   # after the categories above; one that does not keeps yesterday's copy.
-  OPTIONAL_CATEGORIES: '68,63,62,79,2'
+  OPTIONAL_CATEGORIES: '68,63,62,79,86,2'
   MIRROR_BRANCH: tcgcsv-mirror
 
 jobs:
@@ -125,7 +125,7 @@ jobs:
           A daily copy of the [TCGCSV](https://tcgcsv.com) data Bindarr reads
           (TCGplayer categories 3 and 85 Pokémon, 89 Riftbound; 71 Lorcana and
           1 Magic as sealed product only; 2 Yu-Gi-Oh!, 68 One Piece, 63 Digimon,
-          62 Flesh and Blood and 79 Star Wars: Unlimited), in TCGCSV's own path
+          62 Flesh and Blood, 79 Star Wars: Unlimited and 86 Gundam), in TCGCSV's own path
           layout. Bindarr 1.9 and later read it by default instead of each
           syncing from TCGCSV. `bindarr/` holds one pre-slimmed bundle per
           category and an index of their hashes, which newer releases read

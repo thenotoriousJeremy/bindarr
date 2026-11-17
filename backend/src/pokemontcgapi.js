@@ -104,7 +104,9 @@ async function request(path, params = {}, ttl = DAY) {
   // responses without ever storing the credential itself in the database.
   const scope = createHash('sha256').update(key).digest('hex');
   const cacheKey = scope + path + '?' + new URLSearchParams(Object.entries(params).sort()).toString();
-  if (pending.has(cacheKey)) return pending.get(cacheKey);
+  // Shared with whoever started it: on a phone, waited for with the turn let go
+  // (utils/backgroundWork.join), since a price sweep running it may need the turn.
+  if (pending.has(cacheKey)) return require('./utils/backgroundWork').join(pending.get(cacheKey));
   const work = (async () => {
     const cached = await db.get('SELECT * FROM pokemontcgapi_cache WHERE request = ?', [cacheKey]);
     if (cached && Date.now() - cached.fetched_at < ttl) return JSON.parse(cached.body);

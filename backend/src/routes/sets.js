@@ -50,14 +50,25 @@ router.get('/', async (req, res) => {
     // Riftbound's sets arrive with its catalogue, which is fetched on first use —
     // opening the Riftbound search is a first use. Unreachable is not an error
     // here: the list is a convenience and searching still says what is wrong.
-    if (game === 'riftbound') await require('../riftcodexApi').ensureCatalogue().catch(() => {});
+    // Then the sets RiftCodex lacks, written from the TCGCSV cache
+    // (riftboundTcgplayer.js); a sync that has to bring them is not waited for.
+    if (game === 'riftbound') {
+      await require('../riftcodexApi').ensureCatalogue().catch(() => {});
+      await require('../riftboundTcgplayer').ensure().catch(() => {});
+    }
     // English Pokémon sets TCGdex lacks (World Championship decks, Prize Pack...)
     // are written into `sets` from TCGplayer, in the background: this list is
     // what is cached now, and opening Add Cards never waits on a download.
     if (game === 'pokemon') require('../pokemonTcgplayer').ensure('English').catch(() => {});
     // The TCGplayer-catalogue games build their set list from TCGCSV on first use.
+    // On a phone that runs in the background, and the list below is what is cached
+    // meanwhile; X-Catalogue-Pending tells the app to ask again (CardSearch).
     if (require('../tcgcsvGameApi').isTcgcsvGame(game)) {
-      await require('../tcgcsvGameApi').ensureCatalogue(game).catch(() => {});
+      const catalogue = await require('../tcgcsvGameApi').ensureCatalogue(game).catch(() => null);
+      if (catalogue && catalogue.pending) {
+        res.set('X-Catalogue-Pending', '1');
+        res.set('Access-Control-Expose-Headers', 'X-Catalogue-Pending');
+      }
     }
     const where = game ? `WHERE game = ?` : '';
     const params = game ? [game] : [];

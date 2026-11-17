@@ -234,6 +234,46 @@ async function main() {
   assert.strictEqual(await db.get(`SELECT set_id FROM set_listings WHERE set_id = 'tcgp-en-g300'`), undefined, "and the set's listing, which named it");
   assert.ok(await db.get(`SELECT id FROM sets WHERE id = 'tcgp-en-g300'`), 'the set stays while a card in it is held');
   assert.ok(await db.get(`SELECT id FROM card_cache WHERE id = 'tcgplayer-21'`), 'a group still listed is untouched');
+
+  // The cards kept are still priced from TCGplayer: the listed groups no longer
+  // include theirs, and the TCGCSV sweep leaves tcgp- sets alone (above), so
+  // nothing else would. By product id, from the group they came from, on each new
+  // TCGCSV day.
+  const priceOf = (id) => db.get(
+    `SELECT price_trend, price_normal, price_holofoil, price_1st_edition, price_source FROM card_cache WHERE id = ?`, [id]
+  );
+  version = 'v4';
+  PRICES = {
+    ...PRICES,
+    300: [
+      { productId: 31, subTypeName: 'Normal', marketPrice: 2.5, midPrice: 3 },
+      { productId: 32, subTypeName: 'Normal', marketPrice: 4, midPrice: 4 },
+      { productId: 33, subTypeName: 'Holofoil', marketPrice: 7, midPrice: 8 },
+      { productId: 33, subTypeName: '1st Edition Holofoil', marketPrice: 20, midPrice: 21 },
+    ],
+  };
+  assert.deepStrictEqual(await tcgplayer.materialize('English', { ...coverage, fallbackGroups: [200] }), { cards: 0, art: 0 });
+  assert.deepStrictEqual({ ...await priceOf('tcgplayer-31') },
+    { price_trend: 2.5, price_normal: 2.5, price_holofoil: null, price_1st_edition: null, price_source: 'tcgcsv' },
+    'a held card of a dropped group takes the new day\'s price');
+  assert.deepStrictEqual({ ...await priceOf('tcgplayer-33') },
+    { price_trend: 7, price_normal: null, price_holofoil: 7, price_1st_edition: 20, price_source: 'tcgcsv' },
+    'every finish, the holofoil first, as a listed group is priced');
+  assert.strictEqual(await db.get(`SELECT id FROM card_cache WHERE id = 'tcgplayer-32'`), undefined,
+    'pricing brings back no card that went');
+  // A day with no price data for the group says nothing about the card: its last
+  // prices stand.
+  version = 'v5';
+  PRICES = { ...PRICES, 300: [] };
+  await tcgplayer.materialize('English', { ...coverage, fallbackGroups: [200] });
+  assert.strictEqual((await priceOf('tcgplayer-31')).price_trend, 2.5, 'kept through a day without data');
+  // The next day with data moves it again.
+  version = 'v6';
+  PRICES = { ...PRICES, 300: [{ productId: 31, subTypeName: 'Normal', marketPrice: 2.75, midPrice: 3 }] };
+  await tcgplayer.materialize('English', { ...coverage, fallbackGroups: [200] });
+  assert.strictEqual((await priceOf('tcgplayer-31')).price_trend, 2.75);
+  assert.strictEqual((await priceOf('tcgplayer-33')).price_holofoil, null, 'a product with no quote that day has no price, as in a listed group');
+  assert.strictEqual((await priceOf('tcgplayer-33')).price_1st_edition, 20, '1st Edition is only ever written when quoted, as materialize does');
   // A group nothing holds goes whole, set and all.
   assert.deepStrictEqual(await tcgplayer.materialize('English', { ...coverage, fallbackGroups: [] }), { cards: 0, art: 0 });
   assert.strictEqual((await db.get(`SELECT COUNT(*) AS n FROM card_cache WHERE set_id = 'tcgp-en-wcd'`)).n, 0);

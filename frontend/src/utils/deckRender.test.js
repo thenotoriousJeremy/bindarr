@@ -93,6 +93,48 @@ test('an open deck heads its groups with real plurals and says each count once',
   assert.match(html, /aria-label="Back to decks"/);
 });
 
+// #184: tokens under their own heading and outside the count, the mana value in
+// the list, the copy count off the card art, and a "+" that says why it can't add.
+test('an open Magic deck lists tokens apart, shows mana value, and explains a blocked "+"', async () => {
+  const { default: DeckEditor } = await load('/src/components/deck/DeckEditor.jsx');
+  const { rulesFor } = await load('/src/utils/deckRules.js');
+  const activeDeck = {
+    id: 3, name: 'Goblins', game: 'mtg', format: 'Modern', target_size: 60, checked_out: 0,
+    cards: [
+      { id: 'mtg-guide', name: 'Goblin Guide', quantity: 2, owned_qty: 2, cmc: 1, subtypes: ['Creature', 'Goblin', 'Scout'], set_name: 'Set', number: '1' },
+      { id: 'mtg-token', name: 'Goblin', quantity: 3, owned_qty: 3, cmc: 0, subtypes: ['Token', 'Creature', 'Goblin'], set_name: 'Tokens', number: 'T1' },
+      { id: 'mtg-mountain', name: 'Mountain', quantity: 1, owned_qty: 9, cmc: 0, subtypes: ['Basic', 'Land', 'Mountain'], set_name: 'Set', number: '9' },
+    ],
+  };
+  const props = (cardDisplayMode) => ({
+    activeDeck, deckGame: 'mtg', deckRules: rulesFor('mtg', 'Modern'), showToast: noop,
+    deckDraft: null, setDeckDraft: noop, handleSaveDeckProperties: noop,
+    openDeck: noop, setShowExportModal: noop, setShowImportModal: noop, loadDeckDetails: noop,
+    checkingOut: false, handleCheckout: noop, handleReturn: noop, startSimulator: noop,
+    deckSearchGame: 'mtg', setDeckSearchGame: noop, searchQuery: '', setSearchQuery: noop, searching: false, searchResults: [], handleSearchCards: noop,
+    savingCard: false, atCopyLimit: () => false, copyLimitText: () => '', handleAddCardToDeck: noop, handleUpdateCardQty: noop, handleToggleCommander: noop,
+    cardDisplayMode, setCardDisplayMode: noop, deckCardSortBy: 'type', setDeckCardSortBy: noop, deckCardLocations: {}, setPreviewCard: noop,
+  });
+
+  const list = render(DeckEditor, props('list'));
+  const shown = text(list);
+  assert.match(shown, /Tokens/);
+  // 2 Goblin Guide + 1 Mountain; the 3 Goblin tokens are not in the count.
+  assert.match(shown, /\(3 \/ 60 cards\)/);
+  assert.match(shown, /Unique Cards: 2 titles/);
+  assert.ok(shown.indexOf('Creatures') < shown.indexOf('Goblin Guide') && shown.indexOf('Goblin Guide') < shown.indexOf('Tokens'),
+    'the token is listed under Tokens, after the creatures');
+  assert.match(shown, /MV 1/);
+  assert.doesNotMatch(shown, /MV 0/, 'lands and tokens show no mana value');
+  // Both copies owned are in the deck: "+" stays pressable and says why it can't add.
+  assert.match(list, /title="You only own 2 copies of Goblin Guide\."/);
+  assert.doesNotMatch(list, /<button[^>]*disabled=""[^>]*aria-label="Increase quantity"/);
+
+  const grid = render(DeckEditor, props('grid'));
+  assert.match(text(grid), /x2/);
+  assert.doesNotMatch(grid, /position:absolute;top:4px;right:4px/, 'the copy count no longer sits on the card art');
+});
+
 test('ContainerList names the kebab button and translates the container type', async () => {
   const { default: ContainerList } = await load('/src/components/storage/ContainerList.jsx');
   const loc = { id: 5, name: 'Main', type: 'Toploader Binder', locked: 0, total_cards: 3 };

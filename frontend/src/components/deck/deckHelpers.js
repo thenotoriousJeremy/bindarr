@@ -1,5 +1,5 @@
 // Pure pieces the deck views share: no state, no fetches, no JSX.
-import { defaultFormat, defaultTargetSize, defaultAnyPrinting } from '../../utils/deckRules';
+import { defaultFormat, defaultTargetSize, defaultAnyPrinting, isMtgToken } from '../../utils/deckRules';
 import { RIFTBOUND_GROUPS, riftboundGroup } from '../../utils/riftbound';
 
 // Total copies of a card (matched by name) already in a deck's card list.
@@ -59,6 +59,7 @@ const GROUP_KEYS = {
   Enchantment: 'enchantment', Artifact: 'artifact', Battle: 'battle', Land: 'land',
   Character: 'character', Action: 'action', Item: 'item', Location: 'location',
   Legend: 'legend', Champion: 'champion', Unit: 'unit', Spell: 'spell', Gear: 'gear', Rune: 'rune', Battlefield: 'battlefield',
+  Token: 'token',
   Other: 'misc',
 };
 export const deckGroupLabel = (t, group) => (GROUP_KEYS[group] ? t(`deck.group.${GROUP_KEYS[group]}`) : group);
@@ -66,6 +67,9 @@ export const deckGroupLabel = (t, group) => (GROUP_KEYS[group] ? t(`deck.group.$
 // MTG card-type buckets, read off the parsed type line stored in subtypes.
 const MTG_MAIN_TYPES = ['Creature', 'Planeswalker', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Battle', 'Land'];
 const mtgCardType = (card) => {
+  // Before the card types: a token creature is a token, not one of the deck's
+  // creatures (#184).
+  if (isMtgToken(card)) return 'Token';
   const subs = card.subtypes || [];
   for (const t of MTG_MAIN_TYPES) if (subs.includes(t)) return t;
   return 'Other';
@@ -88,6 +92,9 @@ const TCGPLAYER_GROUPS = {
   fab: [['Hero', /hero/i], ['Equipment', /equipment|weapon/i], ['Attack', /attack/i], ['Defense', /defen[cs]e/i],
     ['Action', /action/i], ['Instant', /instant/i]],
   swu: [['Leader', /leader/i], ['Base', /\bbase\b/i], ['Unit', /unit/i], ['Upgrade', /upgrade/i], ['Event', /event/i]],
+  // Resources are the separate 10-card resource deck, kept in the same list.
+  gundam: [['Unit', /unit/i], ['Pilot', /pilot/i], ['Command', /command/i], ['Base', /\bbase\b/i],
+    ['Resource', /resource/i]],
 };
 const tcgplayerGroup = (deckGame, card) => {
   const type = `${card.supertype || ''} ${(card.subtypes || []).join(' ')}`;
@@ -110,7 +117,7 @@ export const cardGroup = (deckGame, card) => {
 export const groupOrder = (deckGame) => (TCGPLAYER_GROUPS[deckGame]
   ? [...TCGPLAYER_GROUPS[deckGame].map(([name]) => name), 'Other']
   : deckGame === 'riftbound' ? RIFTBOUND_GROUPS : deckGame === 'mtg'
-  ? ['Creature', 'Planeswalker', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Battle', 'Land', 'Other']
+  ? ['Creature', 'Planeswalker', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Battle', 'Land', 'Other', 'Token']
   : (deckGame === 'lorcana'
     ? ['Character', 'Action', 'Item', 'Location', 'Other']
     : ['Pokémon', 'Trainer', 'Energy', 'Other']));

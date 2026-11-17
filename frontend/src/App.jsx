@@ -162,10 +162,10 @@ function App() {
 
   // Follows the URL (utils/router.js); a reload lands back on the same tab.
   const [activeTab, setActiveTab] = useState(initialTab);
-  // First-run scanning setup. Asked once per session, only for an admin, and only
-  // while it is genuinely incomplete — setupNeeded() reads the same endpoints the
-  // wizard does so there is one definition of 'set up'.
-  const [showSetup, setShowSetup] = useState(false);
+  // First-run setup (components/SetupWizard.jsx): null while closed, otherwise the
+  // step it opens at. App holds the one instance, whether it opened itself at login
+  // or Admin's "Run Setup Wizard" asked for it (runSetup below).
+  const [setupStep, setSetupStep] = useState(null);
   const [selectedLocationId, setSelectedLocationId] = useState(null);
   const [focusEntryId, setFocusEntryId] = useState(null);
   const [selectedCardFilter, setSelectedCardFilter] = useState('');
@@ -223,6 +223,7 @@ function App() {
     setTransferHistoryFocus(null);
     wishlist.reset();
     scrollByTabRef.current = {};
+    setSetupStep(null);
   };
 
   // Navigate tabs through here: it pushes the tab's URL, so Back and Forward walk
@@ -470,20 +471,35 @@ function App() {
     window.scrollTo(0, scrollByTabRef.current[activeTab] || 0);
   }, [activeTab]);
 
-  // Offer first-run setup to an admin until it is finished or skipped. The flag
-  // lives on the server, so closing the wizard halfway resumes it at the next
-  // login on any device; everything it configures is also reachable from Settings
-  // and Admin. Not in device mode: the wizard sets up a server's scan models and
-  // catalogs, and nothing it offers applies to a phone on its own.
+  // Offer first-run setup to an admin until it is finished or skipped. The flag,
+  // and the step the wizard was on, live on the server, so closing it halfway
+  // resumes it on that step at the next login on any device; everything it
+  // configures is also reachable from Settings and Admin. Not in device mode: the
+  // wizard sets up a server's scan models and catalogs, and nothing it offers
+  // applies to a phone on its own.
+  //
+  // Asked once per sign-in: keyed on the account, not the user object. Saving a
+  // key (in the wizard or Settings) hands App a new user object, and re-asking on
+  // that opened a second wizard over Admin's, or reopened one just closed.
+  const setupAccount = user && user.role === 'admin' ? user.username : null;
   useEffect(() => {
-    if (!user || user.role !== 'admin' || isDeviceMode()) return;
+    if (!setupAccount || isDeviceMode()) return;
     let cancelled = false;
     import('./components/SetupWizard')
-      .then(m => m.setupNeeded())
-      .then(needed => { if (needed && !cancelled) setShowSetup(true); })
+      .then(m => m.setupResumeStep())
+      .then(at => { if (at !== null && !cancelled) setSetupStep(open => open ?? at); })
       .catch(() => { /* never block the app on the wizard's own probe */ });
     return () => { cancelled = true; };
-  }, [user]);
+  }, [setupAccount]);
+
+  // Admin's "Run Setup Wizard": this same instance, so there is never a second one.
+  // An unfinished setup carries on where it was closed; a finished one starts over.
+  const runSetup = useStableCallback(() => {
+    import('./components/SetupWizard')
+      .then(m => m.setupResumeStep())
+      .catch(() => null)
+      .then(at => setSetupStep(open => open ?? at ?? 0));
+  });
 
   // Offline banner, and the message a refused write carries (utils/offline.js).
   useEffect(() => subscribeOffline(setOffline), []);
@@ -716,7 +732,7 @@ function App() {
       case 'settings':
         return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} onLeaveDevice={handleLeaveDevice} onDataChanged={handleDataChanged} />;
       case 'admin':
-        return <AdminPanel user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
+        return <AdminPanel showToast={showToast} onRunSetup={runSetup} />;
       default:
         return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} onProposeTrade={proposeCardTrade} onViewTrade={openTradeHistory} />;
     }
@@ -724,9 +740,9 @@ function App() {
 
   return (
     <div className="app-container">
-      {showSetup && (
+      {setupStep !== null && (
         <Suspense fallback={null}>
-          <SetupWizard user={user} onUpdateUser={handleUpdateUser} showToast={showToast} onClose={() => setShowSetup(false)} />
+          <SetupWizard user={user} initialStep={setupStep} onUpdateUser={handleUpdateUser} showToast={showToast} onClose={() => setSetupStep(null)} />
         </Suspense>
       )}
       {/* Premium Header */}

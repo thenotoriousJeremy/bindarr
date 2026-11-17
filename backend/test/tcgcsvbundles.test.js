@@ -201,6 +201,21 @@ const rowsFor = async (version, like) => db.all(
   assert.strictEqual(cat.cards, 0, 'no product changed, so no card row is rewritten');
   assert.strictEqual((await db.get(`SELECT price_normal FROM card_cache WHERE id = 'yugioh-5011'`)).price_normal, 32.5);
 
+  // --- a game's first use on a server: the search that asks waits for it ---------
+  // (A phone answers from the cache instead and writes in the background; see
+  // devicejobs.test.js.) Its category is not in the cached version yet, so the
+  // first search syncs it in, writes the catalogue, and answers with the cards.
+  publish(68, {
+    groups: [{ groupId: 680, name: 'Romance Dawn', abbreviation: 'OP01', publishedOn: '2022-12-02T00:00:00' }],
+    products: { 680: [{ productId: 6801, name: 'Monkey.D.Luffy', number: 'OP01-024', groupId: 680 }] },
+    prices: { 680: [{ productId: 6801, subTypeName: 'Normal', marketPrice: 1.5, midPrice: null }] },
+  });
+  assert.strictEqual(await db.get(`SELECT game FROM tcgcsv_catalogues WHERE game = 'onepiece'`), undefined, 'not activated yet');
+  const luffy = await tcgcsvGames.searchCards('onepiece', { name: 'Luffy' });
+  assert.strictEqual(luffy.total, 1, 'answered with the cards it waited for');
+  assert.strictEqual(luffy.cards[0].id, 'onepiece-6801');
+  assert.strictEqual(luffy.pending, undefined, 'never pending on a server');
+
   console.log('tcgcsvbundles.test.js: all assertions passed');
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
