@@ -156,7 +156,11 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          for dir in "$RUNNER_TEMP"/artifacts/catalog-*; do
+          # download-artifact puts each artifact in a folder of its own name, except
+          # when the pattern matches just one: that one is unpacked straight into
+          # artifacts/. A run where a single build succeeded published nothing
+          # (gundam-en, 2026-11-17), so the folder itself is looked at too.
+          for dir in "$RUNNER_TEMP"/artifacts "$RUNNER_TEMP"/artifacts/catalog-*; do
             [ -f "$dir/publish.json" ] || continue
             cd "$dir"
             mapfile -t files < <(jq -r '.upload[]' publish.json)
