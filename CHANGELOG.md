@@ -6,6 +6,10 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+### Fixed
+- **A slow RiftCodex no longer fails Riftbound's card download.** It takes 8–11 seconds to answer a page, and the 20-second limit failed whole downloads; each page now gets a minute and up to three tries.
+- **A weekly scan-catalog run in which only one game builds publishes that game.** It published nothing, which kept Gundam's first catalog off the release.
+
 ### Documentation
 - **A shorter README.** It is now a landing page: what Bindarr does, a Docker quick start, and links. Install, configuration, scanning, card data and prices, everyday use and backups each have a page under [`docs/`](docs/), rewritten to about half the words and brought up to date with 1.10.
 

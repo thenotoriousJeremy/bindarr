@@ -16,6 +16,7 @@ const path = require('path');
 process.env.DB_PATH = path.join(os.tmpdir(), `bindarr-riftbound-${process.pid}.db`);
 process.env.RIFTCODEX_BASE_URL = 'https://riftcodex.example.test';
 process.env.RIFTCODEX_GAP_MS = '0';
+process.env.RIFTCODEX_RETRY_MS = '0';
 
 const CARDS = require('./fixtures/riftbound/cards.json');
 const SETS = require('./fixtures/riftbound/sets.json');
@@ -30,12 +31,20 @@ const served = [];
 let pageSize = 4;
 let reportPages = true;
 let failWith = null;
+let timeoutsLeft = 0;
 // For the walk without a reported page count: 250 synthetic records served at the
 // size asked for, so only a genuinely short page can end it.
 const MANY = Array.from({ length: 250 }, (_, i) => ({ ...CARDS[0], id: `synthetic${i}`, riftbound_id: `zzz-${i}-250` }));
 let source250 = false;
 rc.client.defaults.adapter = async (config) => {
   served.push(`${config.url}?page=${config.params && config.params.page}`);
+  if (timeoutsLeft > 0) {
+    timeoutsLeft--;
+    const err = new Error(`timeout of ${config.timeout}ms exceeded`);
+    err.code = 'ECONNABORTED';
+    err.config = config;
+    throw err;
+  }
   if (failWith) {
     const err = new Error(`Request failed with status code ${failWith}`);
     err.response = { status: failWith, headers: {}, data: 'nope' };
@@ -250,6 +259,21 @@ const ID = {
 
   // No catalog built: the scanner says so rather than guessing.
   assert.strictEqual(require('../src/cvScan').isBuilt('riftbound', 'English'), false);
+
+  // --- 7b. A slow page is asked again, with a minute to answer -----------------------
+  served.length = 0;
+  timeoutsLeft = 2;
+  let askedTimeout = null;
+  const realAdapter = rc.client.defaults.adapter;
+  rc.client.defaults.adapter = (config) => { askedTimeout = config.timeout; return realAdapter(config); };
+  const setItems = await rc.fetchAllPages('/sets');
+  rc.client.defaults.adapter = realAdapter;
+  assert.strictEqual(setItems.length, SETS.items.length, 'two timeouts on a page do not fail the walk');
+  assert.strictEqual(served.filter(s => s === '/sets?page=1').length, 3, 'the timed-out page was asked three times');
+  assert.strictEqual(askedTimeout, 60000, 'a page gets a minute to answer');
+  timeoutsLeft = 3;
+  await assert.rejects(rc.fetchAllPages('/sets'), /timeout/, 'a third timeout gives up');
+  timeoutsLeft = 0;
 
   // --- 8. RiftCodex down with nothing cached is a clean 503, and it backs off --------
   await db.run(`DELETE FROM card_cache WHERE game = 'riftbound'`);

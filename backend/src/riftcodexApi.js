@@ -261,6 +261,28 @@ function normalizeCatalogue(records) {
 
 // --- fetching and caching ------------------------------------------------------------
 
+// RiftCodex takes 8–11 s to answer a page of 100 (measured 2026-11-17), so the
+// client's 20 s timeout failed two catalogue refreshes in a row from CI runners.
+// A page gets a minute, and one that times out, cannot connect or answers 5xx is
+// asked again: three tries, a growing pause between them. A 4xx is not retried
+// (a 429 arms the client's own cooldown).
+const PAGE_TIMEOUT_MS = Number(process.env.RIFTCODEX_TIMEOUT_MS) || 60000;
+const PAGE_TRIES = 3;
+const RETRY_WAIT_MS = Number(process.env.RIFTCODEX_RETRY_MS ?? 2000);
+const transient = (e) => !e.response || e.response.status >= 500;
+const pause = (ms) => new Promise(r => setTimeout(r, ms));
+async function getPage(path, params) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await get(path, { params, timeout: PAGE_TIMEOUT_MS });
+    } catch (e) {
+      if (attempt >= PAGE_TRIES || !transient(e)) throw e;
+      console.warn(`RiftCodex ${path} page ${params.page}: ${e.message}; trying again (${attempt + 1} of ${PAGE_TRIES}).`);
+      await pause(RETRY_WAIT_MS * attempt);
+    }
+  }
+}
+
 // Every page of a paged RiftCodex listing. `pages` is what the API reports; when
 // it reports nothing, a short or empty page ends the walk.
 async function fetchAllPages(path) {
@@ -268,7 +290,7 @@ async function fetchAllPages(path) {
   let pages = 1;
   let total = null;
   for (let page = 1; page <= pages && page <= MAX_PAGES; page++) {
-    const { data } = await get(path, { params: { page, size: PAGE_SIZE } });
+    const { data } = await getPage(path, { page, size: PAGE_SIZE });
     if (!data || !Array.isArray(data.items)) throw new Error(`RiftCodex ${path} page ${page} is not a page of results`);
     items.push(...data.items);
     if (page === 1 && Number.isFinite(Number(data.total))) total = Number(data.total);
