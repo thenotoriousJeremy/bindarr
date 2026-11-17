@@ -78,7 +78,7 @@ Use `npm ci` in each package scope for reproducible CI/container installs. Backe
 - `frontend/vite.config.js` — HTTPS dev server, proxy, build behavior.
 - `.env.example` — canonical runtime configuration.
 - `Dockerfile`, `docker-compose.yml`, `entrypoint.sh` — production build, persistence, privilege model.
-- `PROJECT.md` — architecture and operational reference; `README.md` — setup/operator reference.
+- `PROJECT.md` — architecture and operational reference; `README.md` — landing page; `docs/` — install, configuration and operator reference.
 
 ## Runtime/Tooling Preferences
 

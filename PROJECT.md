@@ -1,7 +1,7 @@
 # Bindarr — Architecture & Developer Guide
 
 Developer-facing reference for the codebase. For install/run/deploy and end-user
-features, see [README.md](README.md); this document explains **how the system is
+features, see [README.md](README.md) and [docs/](docs/); this document explains **how the system is
 built and why**.
 
 Bindarr is a self-hosted trading-card collection manager for **Pokémon**,
@@ -1131,7 +1131,7 @@ only `decks.checked_out` changes.
 
 ## Build, run, test
 
-Setup and Docker deployment: see [README.md](README.md). Quick reference:
+Setup and Docker deployment: see [docs/install.md](docs/install.md). Quick reference:
 
 - Runtime: Node 24 in the image (`node:24-slim`, Debian/glibc), in every workflow and in `.nvmrc`; Node 22.12+ works locally (the `engines` field of each package.json). Bump the Dockerfile, the workflows, `.nvmrc` and these docs together.
 - Backend: `cd backend && npm run dev` (nodemon) or `npm start`; port `3001`.
