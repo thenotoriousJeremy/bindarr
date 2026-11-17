@@ -321,7 +321,11 @@ async function main() {
       proc = await harness.startServer(tmp, { env });
       base = proc.base;
       const printing = (id) => api('GET', `/api/cards/${encodeURIComponent(id)}/printing?lang=en`);
-      await waitFor(async () => hits.includes('/cards') && (await printing(RAD.ekkoAlt)).json.supertype === 'Unit', 'the RiftCodex refresh');
+      // The whole refresh, hand-over included: its cards are cached before
+      // takeOver removes the fallback cards RiftCodex lacks, so waiting on a card
+      // alone raced the removal on a slow runner. The log line comes after both.
+      await waitFor(() => /Riftbound: cached \d+ cards in \d+ sets from RiftCodex/.test(proc.stdout()), 'the RiftCodex refresh');
+      assert.ok(hits.includes('/cards'), 'the refresh asked RiftCodex for its cards');
       const alt = (await printing(RAD.ekkoAlt)).json;
       assert.strictEqual(alt.name, 'Ekko - Ingenious (Alternate Art)', 'RiftCodex\'s card, on the id the collection holds');
       assert.deepStrictEqual(Array.isArray(alt.types) ? alt.types : JSON.parse(alt.types), ['Mind'], 'with its domain');
