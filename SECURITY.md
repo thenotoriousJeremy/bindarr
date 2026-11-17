@@ -36,7 +36,7 @@ Not a vulnerability in Bindarr:
 - The security of the machine, network or reverse proxy you run it on.
 - Settings that knowingly widen access, used as documented: `NOTIFY_ALLOW_PRIVATE`,
   `OIDC_DEFAULT_ROLE=admin`, `OIDC_ALLOW_USERNAME_LINK`, `ALLOW_REGISTRATION`, or
-  `TRUST_PROXY` on a server that is reached directly. The README describes what
-  each one opens.
+  `TRUST_PROXY` on a server that is reached directly. docs/configuration.md
+  describes what each one opens.
 - Problems in the card-data providers or other services Bindarr talks to
   ([PRIVACY.md](PRIVACY.md) lists them); report those to the service.

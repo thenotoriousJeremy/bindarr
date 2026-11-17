@@ -6,6 +6,9 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+### Documentation
+- **A shorter README.** It is now a landing page: what Bindarr does, a Docker quick start, and links. Install, configuration, scanning, card data and prices, everyday use and backups each have a page under [`docs/`](docs/), rewritten to about half the words and brought up to date with 1.10.
+
 ## [1.10.0] - 2026-11-16
 
 ### Added
