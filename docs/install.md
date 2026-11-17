@@ -57,7 +57,7 @@ The HTTPS certificate is self-signed, so each device warns once (**Advanced → 
 | Tag | Points at |
 | --- | --- |
 | `latest` | The newest release. |
-| `1.10`, `1.10.0` | A specific release. |
+| `1.10`, `1.10.1` | A specific release. |
 | `edge` | The newest `main` commit, including unreleased work. |
 | `sha-<short>` | One exact commit. |
 
