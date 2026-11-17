@@ -72,7 +72,26 @@ async function testRuleTable() {
   const modern = R.rulesFor('mtg', 'Modern');
   const warn = (format, cards) => R.deckWarnings({ game: 'mtg', format, cards });
 
+  const GOBLIN_TOKEN = mtg('Goblin', 'Token Creature — Goblin', { identity: ['Red'] });
+  const EMBLEM = mtg('Elspeth, Knight-Errant Emblem', 'Emblem — Elspeth');
+  const sixtyBolts = Array.from({ length: 15 }, (_, i) => inDeck(mtg(`Spell ${i}`, 'Instant'), 4));
+
   const cases = [
+    // --- Tokens and emblems ride in a Magic list outside the deck (#184) ---
+    ['a token creature is a token, not a deck creature', () => assert.strictEqual(R.isMtgToken(GOBLIN_TOKEN), true)],
+    ['an emblem is outside the deck', () => assert.strictEqual(R.isOutsideDeck(EMBLEM, 'mtg'), true)],
+    ['a creature card is not a token', () => assert.strictEqual(R.isMtgToken(ELVES), false)],
+    ['only Magic keeps tokens outside the deck', () => assert.strictEqual(R.isOutsideDeck(GOBLIN_TOKEN, 'pokemon'), false)],
+    ['tokens have no copy limit', () => assert.strictEqual(R.copyLimit(GOBLIN_TOKEN, modern), Infinity)],
+    ['tokens do not count toward the size', () =>
+      assert.deepStrictEqual(codes(warn('Modern', [...sixtyBolts, inDeck(GOBLIN_TOKEN, 6)])), [])],
+    ['tokens are not judged against the commander\'s colours', () => {
+      const deck = [commander(mtg('Talrand, Sky Summoner', 'Legendary Creature — Merfolk Wizard', { identity: ['Blue'] })),
+        ...Array.from({ length: 99 }, (_, i) => inDeck(mtg(`Island Card ${i}`, 'Instant', { identity: ['Blue'] }))),
+        inDeck(GOBLIN_TOKEN, 3)];
+      assert.deepStrictEqual(codes(warn('Commander / EDH', deck)), []);
+    }],
+
     // --- What counts as a basic land ---
     ['Forest (Basic Land — Forest) is a basic land', () => assert.strictEqual(R.isBasicLand(FOREST), true)],
     ['Snow-Covered Island (Basic Snow Land) is a basic land', () => assert.strictEqual(R.isBasicLand(SNOW_ISLAND), true)],

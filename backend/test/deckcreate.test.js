@@ -116,12 +116,41 @@ async function oneLookupForTheList() {
   console.log(`PASS: a ${lines.length}-line decklist is resolved in ${counts.n} lookups`);
 }
 
+// #184: the deck list's totals leave out the tokens a Magic list keeps, as the
+// editor and Deck Health do.
+async function tokensLeaveTheDeckTotals() {
+  const card = (id, name, subtypes, game = 'mtg') => db.run(
+    `INSERT INTO card_cache (id, name, game, set_id, number, supertype, subtypes) VALUES (?, ?, ?, 'tkn', ?, ?, ?)`,
+    [id, name, game, id, game === 'mtg' ? 'MTG' : 'Trainer', JSON.stringify(subtypes)]);
+  await card('mtg-t-guide', 'Goblin Guide', ['Creature', 'Goblin', 'Scout']);
+  await card('mtg-t-goblin', 'Goblin', ['Token', 'Creature', 'Goblin']);
+  await card('mtg-t-emblem', 'Elspeth Emblem', ['Emblem', 'Elspeth']);
+  await card('pkm-t-token', 'Token Collector', ['Token', 'Supporter'], 'pokemon');
+  const deck = async (name, game, rows) => {
+    const id = (await db.run(`INSERT INTO decks (user_id, name, game, format) VALUES (?, ?, ?, 'Modern')`, [userId, name, game])).lastID;
+    for (const [cardId, quantity] of rows) await db.run(`INSERT INTO deck_cards (deck_id, card_id, quantity) VALUES (?, ?, ?)`, [id, cardId, quantity]);
+    return id;
+  };
+  const mtgDeck = await deck('Goblins', 'mtg', [['mtg-t-guide', 4], ['mtg-t-goblin', 6], ['mtg-t-emblem', 1]]);
+  const pokemonDeck = await deck('Collectors', 'pokemon', [['pkm-t-token', 2]]);
+  const res = await fetch(`${base}/decks`);
+  assert.strictEqual(res.status, 200);
+  const decks = await res.json();
+  const goblins = decks.find(d => d.id === mtgDeck);
+  assert.strictEqual(goblins.total_cards, 4, 'the tokens and the emblem are not cards of the deck');
+  assert.strictEqual(goblins.total_card_types, 1);
+  const collectors = decks.find(d => d.id === pokemonDeck);
+  assert.strictEqual(collectors.total_cards, 2, 'only Magic keeps tokens outside the deck');
+  console.log('PASS: the deck list leaves a Magic list\'s tokens out of its totals');
+}
+
 async function main() {
   await db.initDb();
   userId = (await db.run(`INSERT INTO users (username, password_hash, role, share_token) VALUES ('decker', 'x', 'admin', 'tok')`)).lastID;
   base = await startApp();
   await providerFailureWritesNothing();
   await oneLookupForTheList();
+  await tokensLeaveTheDeckTotals();
 }
 
 main()

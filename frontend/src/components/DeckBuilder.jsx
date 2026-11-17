@@ -11,7 +11,7 @@ import Modal from './Modal';
 import { defaultGame, showGamePicker } from '../utils/games';
 import CardImage from './CardImage';
 import { useT } from '../utils/i18n';
-import { rulesFor, copyLimit } from '../utils/deckRules';
+import { rulesFor, copyLimit, isOutsideDeck } from '../utils/deckRules';
 import { deckCardUndo, undoToast } from '../utils/undo';
 import { apiErrorText } from '../utils/apiError';
 import { deckCountByName } from './deck/deckHelpers';
@@ -522,7 +522,8 @@ function DeckBuilder({ showToast, statsTrigger, active = true, onUpdate }) {
 
     // Expand cards into full array based on quantities
     const fullDeck = [];
-    activeDeck.cards.forEach(c => {
+    // Tokens kept in the list are never shuffled into the library (#184).
+    activeDeck.cards.filter(c => !isOutsideDeck(c, activeDeck.game || 'pokemon')).forEach(c => {
       for (let i = 0; i < c.quantity; i++) {
         fullDeck.push({ ...c });
       }

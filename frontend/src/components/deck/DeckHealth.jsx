@@ -1,5 +1,5 @@
 import { CheckCircle, AlertTriangle } from 'lucide-react';
-import { isBasicEnergyOrLand, deckWarnings, ruleWarningText } from '../../utils/deckRules';
+import { isBasicEnergyOrLand, isOutsideDeck, deckWarnings, ruleWarningText } from '../../utils/deckRules';
 import RiotNotice from '../RiotNotice';
 import { useT } from '../../utils/i18n';
 
@@ -11,6 +11,8 @@ export default function DeckHealth({ activeDeck, deckGame, deckRules, totalDeckC
   // (the same table the server enforces).
   const ruleWarnings = activeDeck ? deckWarnings({ game: deckGame, format: activeDeck.format, cards: activeDeck.cards }) : [];
   const basicCount = (activeDeck?.cards || []).filter(c => isBasicEnergyOrLand(c, deckGame)).reduce((s, c) => s + c.quantity, 0);
+  // Tokens kept in the list are not cards of the deck (#184).
+  const uniqueCount = (activeDeck?.cards || []).filter(c => !isOutsideDeck(c, deckGame)).length;
 
   return (
     <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -34,7 +36,7 @@ export default function DeckHealth({ activeDeck, deckGame, deckRules, totalDeckC
             written in front of them as well. */}
         <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
           <span>{t('deck.uniqueCards')}</span>
-          <strong style={{ color: 'var(--text-strong)' }}>{deckGame === 'mtg' ? t('deck.titlesCount', { count: activeDeck.cards.length }) : t('deck.speciesCount', { count: activeDeck.cards.length })}</strong>
+          <strong style={{ color: 'var(--text-strong)' }}>{deckGame === 'mtg' ? t('deck.titlesCount', { count: uniqueCount }) : t('deck.speciesCount', { count: uniqueCount })}</strong>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
           <span>{t(deckGame === 'mtg' ? 'deck.basicLands' : 'deck.basicEnergy')}</span>

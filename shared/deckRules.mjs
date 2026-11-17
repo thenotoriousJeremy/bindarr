@@ -52,6 +52,15 @@ export function isBasicEnergy(card) {
   return !!card && card.supertype === 'Energy' && !typeWords(card).includes('Special');
 }
 
+// Magic: a token or an emblem ("Token Creature — Goblin", "Emblem — Elspeth"), read
+// off the type line. Made in play, never decked, though a list may keep them handy
+// (#184: a token with power and toughness was counted as a creature of the deck).
+export function isMtgToken(card) {
+  if (!card) return false;
+  const words = typeWords(card);
+  return words.includes('Token') || words.includes('Emblem');
+}
+
 // Cards whose own text overrides the copy limit. Read from oracle_text when the row
 // has it, so a card printed next year is covered without an edit here; this list is
 // for rows cached before oracle_text was (they gain it on their next re-cache, which
@@ -264,6 +273,10 @@ function riftboundWarnings(list) {
 //                and copy checks.
 //   sizeExcludes cards kept in the list that the size rule does not count (Gundam's
 //                separate resource deck).
+//   outsideDeck  cards a list may hold that are not part of the deck at all
+//                (Magic's tokens and emblems, which are made in play): no size,
+//                copy, commander or colour rule counts them, and they are listed
+//                under their own heading.
 //   targetSize   a new deck's target when the list holds more than `size` counts:
 //                the whole list a player assembles.
 export const DECK_GAMES = {
@@ -281,6 +294,7 @@ export const DECK_GAMES = {
   mtg: {
     rules: { size: { min: 60 }, copies: 4 },
     unlimited: isBasicLand,
+    outsideDeck: isMtgToken,
     printedLimit: printedCopyLimit,
     sameCard: sameOracleCard,
     anyPrinting: true,
@@ -427,11 +441,18 @@ export function isBasicEnergyOrLand(card, game) {
   return !!(card && entry.unlimited && entry.unlimited(card));
 }
 
+// Whether a card in a deck's list is outside the deck itself (the game's
+// `outsideDeck`: Magic's tokens and emblems).
+export function isOutsideDeck(card, game) {
+  const entry = gameEntry(game || (card && card.game));
+  return !!(card && entry.outsideDeck && entry.outsideDeck(card));
+}
+
 // How many copies of this card (by name, across printings) a deck under `rules`
 // may hold. Infinity for the exempt.
 export function copyLimit(card, rules) {
   const entry = gameEntry(rules.game);
-  if (isBasicEnergyOrLand(card, rules.game)) return Infinity;
+  if (isBasicEnergyOrLand(card, rules.game) || isOutsideDeck(card, rules.game)) return Infinity;
   if (entry.cardLimit) return entry.cardLimit(card);
   const printed = entry.printedLimit ? entry.printedLimit(card) : null;
   return printed != null ? printed : rules.copies;
@@ -538,7 +559,8 @@ export function canBeCommander(card, rules) {
 // { code, ...details } for the deck builder to put into words.
 export function deckWarnings({ game, format, cards }) {
   const rules = rulesFor(game, format);
-  const list = (cards || []).filter(c => c && Number(c.quantity) > 0);
+  // Tokens and the like ride in the list but are no part of the deck.
+  const list = (cards || []).filter(c => c && Number(c.quantity) > 0 && !isOutsideDeck(c, game));
   const own = gameEntry(game).warnings;
   if (own) return own(list);
   const warnings = [];

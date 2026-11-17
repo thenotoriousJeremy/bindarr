@@ -7,7 +7,7 @@ import { gameOptions, showGamePicker } from '../../utils/games';
 import CardImage from '../CardImage';
 import DeckListActions from '../DeckListActions';
 import { useT } from '../../utils/i18n';
-import { formatNames, supportsAnyPrinting } from '../../utils/deckRules';
+import { formatNames, supportsAnyPrinting, isOutsideDeck } from '../../utils/deckRules';
 import AnyPrintingField from './AnyPrintingField';
 import DeckHealth from './DeckHealth';
 import DeckStats from './DeckStats';
@@ -61,8 +61,33 @@ export default function DeckEditor({
         })),
       ];
 
-  const totalDeckCardsCount = activeDeck ? activeDeck.cards.reduce((sum, c) => sum + c.quantity, 0) : 0;
+  // Tokens kept in the list are no part of the deck's count (#184).
+  const totalDeckCardsCount = activeDeck
+    ? activeDeck.cards.reduce((sum, c) => sum + (isOutsideDeck(c, deckGame) ? 0 : c.quantity), 0)
+    : 0;
   const targetDeckCardsCount = activeDeck?.target_size || 60;
+
+  // Why "+" cannot add another copy, or null when it can. The button stays live and
+  // a click says why (DeckBuilder's handleUpdateCardQty), rather than a disabled
+  // "+" that did nothing when pressed (#184).
+  const moreBlockedBy = (card) => {
+    if (card.quantity >= (card.owned_qty || 0)) return t('deck.errOwnedLimit', { count: card.owned_qty || 0, name: displayName(card) });
+    if (atCopyLimit(card)) return copyLimitText(card);
+    return null;
+  };
+
+  // The cost a list row shows beside the name: Magic's mana value, the other
+  // games' cost. Not for lands and tokens, whose 0 says nothing.
+  const costLabel = (card) => {
+    if (card.cmc == null || card.cmc === '') return null;
+    const group = cardGroup(card);
+    if (group === 'Land' || group === 'Token' || group === 'Rune' || group === 'Battlefield') return null;
+    const value = Number(card.cmc);
+    if (!Number.isFinite(value)) return null;
+    return deckGame === 'mtg'
+      ? { text: t('deck.manaValue', { value }), title: t('deck.manaValueTitle', { value }) }
+      : { text: t('deck.costValue', { value }), title: t('deck.costValue', { value }) };
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -409,7 +434,14 @@ export default function DeckEditor({
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', minWidth: 0, flex: '1 1 10rem' }} role="button" tabIndex={0} onClick={() => setPreviewCard(card)} onKeyDown={onActivateKey(() => setPreviewCard(card))}>
                                 <CardImage card={card} style={{ width: '32px', height: '44px', objectFit: 'cover', borderRadius: '2px', flexShrink: 0 }} />
                                 <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
-                                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(card)}</div>
+                                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', minWidth: 0 }}>
+                                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{displayName(card)}</div>
+                                    {costLabel(card) && (
+                                      <span title={costLabel(card).title} style={{ flexShrink: 0, fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-secondary)', background: 'var(--surface-2)', border: '1px solid var(--border-glass)', borderRadius: '4px', padding: '0 4px' }}>
+                                        {costLabel(card).text}
+                                      </span>
+                                    )}
+                                  </div>
                                   <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.set_name} • #{card.number}</div>
                                   {deckCardLocations[card.id]?.length > 0 && (
                                     <div title={formatCardLocations(deckCardLocations[card.id])} style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '0.68rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -456,11 +488,12 @@ export default function DeckEditor({
                                   <span style={{ padding: '0 0.4rem', fontSize: '0.85rem', fontWeight: 700, minWidth: '18px', textAlign: 'center', color: 'var(--text-strong)' }}>{card.quantity}</span>
                                   <button
                                     className="btn btn-secondary btn-icon-only"
-                                    style={{ width: '22px', height: '22px', padding: 0 }}
-                                    disabled={savingCard || card.quantity >= (card.owned_qty || 0) || atCopyLimit(card)}
+                                    style={{ width: '22px', height: '22px', padding: 0, opacity: moreBlockedBy(card) ? 0.45 : undefined }}
+                                    disabled={savingCard}
                                     onClick={() => handleUpdateCardQty(card.id, card.quantity + 1)}
-                                    title={t('card.quantityUp')}
+                                    title={moreBlockedBy(card) || t('card.quantityUp')}
                                     aria-label={t('card.quantityUp')}
+                                    aria-disabled={moreBlockedBy(card) ? true : undefined}
                                   >
                                     +
                                   </button>
@@ -478,9 +511,8 @@ export default function DeckEditor({
                             <div key={card.id} style={{ position: 'relative', borderRadius: '6px', overflow: 'hidden', border: missingCopies(card) > 0 ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)', background: missingCopies(card) > 0 ? 'rgba(127,29,29,0.16)' : 'rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', transition: 'transform 0.15s' }}>
                               <div style={{ position: 'relative', width: '100%', aspectRatio: 0.718, cursor: 'pointer' }} role="button" tabIndex={0} onClick={() => setPreviewCard(card)} onKeyDown={onActivateKey(() => setPreviewCard(card))}>
                                 <CardImage card={card} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                                <span style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.85)', color: 'var(--accent-yellow)', fontSize: '0.75rem', fontWeight: 800, padding: '1px 6px', borderRadius: '10px', border: '1px solid var(--accent-yellow)' }}>
-                                  {t('deck.quantityBadge', { count: card.quantity })}
-                                </span>
+                                {/* The copy count sits in the bar below, not on the art,
+                                    where it hid Magic's mana cost (#184). */}
                                 {missingCopies(card) > 0 && (
                                   <span style={{ position: 'absolute', top: '4px', left: '4px', background: 'rgba(127,29,29,0.92)', color: '#fff', fontSize: '0.65rem', fontWeight: 800, padding: '2px 5px', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '2px' }} title={card.locked_decks || t('deck.unavailableCopies', { count: missingCopies(card) })}>
                                     <AlertTriangle size={10} /> {missingCopies(card)}
@@ -493,11 +525,14 @@ export default function DeckEditor({
                                 </div>
                               )}
                               <div style={{ padding: '4px', display: 'flex', justifyContent: 'center', background: 'rgba(0,0,0,0.5)' }}>
-                                <div style={{ display: 'flex', gap: '2px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
                                   <button className={`btn ${card.quantity === 1 ? 'btn-danger' : 'btn-secondary'} btn-icon-only`} style={{ width: '20px', height: '20px', fontSize: '0.7rem', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} disabled={savingCard} onClick={() => handleUpdateCardQty(card.id, card.quantity - 1)} title={t(card.quantity === 1 ? 'deck.removeFromDeck' : 'deck.decreaseQty')} aria-label={t(card.quantity === 1 ? 'deck.removeFromDeck' : 'deck.decreaseQty')}>
                                     {card.quantity === 1 ? <Trash2 size={10} /> : '-'}
                                   </button>
-                                  <button className="btn btn-secondary btn-icon-only" style={{ width: '20px', height: '20px', fontSize: '0.7rem', padding: 0 }} disabled={savingCard || card.quantity >= (card.owned_qty || 0) || atCopyLimit(card)} onClick={() => handleUpdateCardQty(card.id, card.quantity + 1)} title={t('card.quantityUp')} aria-label={t('card.quantityUp')}>+</button>
+                                  <span style={{ minWidth: '22px', textAlign: 'center', color: 'var(--accent-yellow)', fontSize: '0.75rem', fontWeight: 800 }}>
+                                    {t('deck.quantityBadge', { count: card.quantity })}
+                                  </span>
+                                  <button className="btn btn-secondary btn-icon-only" style={{ width: '20px', height: '20px', fontSize: '0.7rem', padding: 0, opacity: moreBlockedBy(card) ? 0.45 : undefined }} disabled={savingCard} onClick={() => handleUpdateCardQty(card.id, card.quantity + 1)} title={moreBlockedBy(card) || t('card.quantityUp')} aria-label={t('card.quantityUp')} aria-disabled={moreBlockedBy(card) ? true : undefined}>+</button>
                                   {hasCommandZone && (
                                     <button className={`btn ${card.is_commander ? 'btn-primary' : 'btn-secondary'} btn-icon-only`} style={{ width: '20px', height: '20px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} disabled={savingCard} onClick={() => handleToggleCommander(card)} title={t(card.is_commander ? 'deck.unsetCommander' : 'deck.setCommander')} aria-label={t('deck.setCommander')} aria-pressed={!!card.is_commander}>
                                       <Crown size={10} />
