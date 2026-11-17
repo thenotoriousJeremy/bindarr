@@ -6,6 +6,8 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-11-17
+
 ### Fixed
 - **A slow RiftCodex no longer fails Riftbound's card download.** It takes 8–11 seconds to answer a page, and the 20-second limit failed whole downloads; each page now gets a minute and up to three tries.
 - **A weekly scan-catalog run in which only one game builds publishes that game.** It published nothing, which kept Gundam's first catalog off the release.
