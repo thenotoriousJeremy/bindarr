@@ -18,7 +18,7 @@ Scan cards with your phone, track prices, know which binder pocket each card is 
 
 ---
 
-https://github.com/user-attachments/assets/4ee6c23f-a024-499b-9fc3-3d144c42ba61
+![Bindarr on three phones: a binder page holding cards from nine games, the collection grid with prices, and the dashboard's value chart](docs/images/hero.png)
 
 The [demo](https://thenotoriousjeremy.github.io/bindarr/) runs the real app on sample data. Edits aren't saved and scanning is off.
 
