@@ -24,7 +24,7 @@ The [demo](https://thenotoriousjeremy.github.io/bindarr/) runs the real app on s
 
 ## Games
 
-Pokémon, Magic: The Gathering, Disney Lorcana and Riftbound, plus Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood, Star Wars: Unlimited and the Gundam Card Game (off by default; turn them on in Settings → Preferences).
+Pokémon, Magic: The Gathering, Disney Lorcana, Riftbound, Yu-Gi-Oh!, One Piece, Digimon, Flesh and Blood, Star Wars: Unlimited and the Gundam Card Game.
 
 ## Features
 
