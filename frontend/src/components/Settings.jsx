@@ -7,6 +7,7 @@ import { CURRENCIES, getCurrency, setCurrency } from '../utils/formatPrice';
 import { LOCALES, localeName, useT } from '../utils/i18n';
 import { apiErrorText } from '../utils/apiError';
 import { backupForUpload } from '../utils/backupUpload';
+import { importFormatFor, readFileText, importCardFile } from '../utils/collectionImport';
 import { REPO_URL } from '../utils/repo';
 import { saveFile } from '../utils/saveFile';
 import NotificationSettings from './NotificationSettings';
@@ -286,52 +287,25 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice, onDataChanged 
     if (!file) return;
     e.target.value = '';
 
-    const reader = new FileReader();
-    const isJson = file.name.endsWith('.json');
-    const format = isJson ? 'json' : (file.name.endsWith('.txt') ? 'manabox' : 'csv');
-
-    reader.onload = async (event) => {
-      const fileData = event.target.result;
-      // The one Import button takes full backups too: they announce themselves,
-      // and they restore rather than merge, so they get their own warning.
-      if (isJson) {
-        let parsed = null;
-        try { parsed = JSON.parse(fileData); } catch { /* the import route reports it */ }
-        if (parsed && parsed.format === 'bindarr-backup') {
-          await restoreBackup(parsed, file.name);
-          return;
-        }
-      }
-      if (!window.confirm(t('settings.confirmImport', { file: file.name }))) return;
-      try {
-        showToast(t('settings.importing'));
-        const response = await fetch('/api/import', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            format,
-            data: fileData
-          })
-        });
-
-        const result = await response.json();
-        if (response.ok) {
-          showToast(result.message || t('settings.importOk'));
-          dataChanged();
-        } else {
-          showToast(t('settings.importFailed', { error: apiErrorText(t, result, 'settings.unknownError') }));
-        }
-      } catch (err) {
-        console.error(err);
-        showToast(t('settings.importFailed', { error: err.message }));
-      }
-    };
-
-    reader.onerror = () => {
+    const format = importFormatFor(file.name);
+    let fileData;
+    try {
+      fileData = await readFileText(file);
+    } catch {
       showToast(t('settings.errReadFile'));
-    };
-
-    reader.readAsText(file);
+      return;
+    }
+    // The one Import button takes full backups too: they announce themselves,
+    // and they restore rather than merge, so they get their own warning.
+    if (format === 'json') {
+      let parsed = null;
+      try { parsed = JSON.parse(fileData); } catch { /* the import route reports it */ }
+      if (parsed && parsed.format === 'bindarr-backup') {
+        await restoreBackup(parsed, file.name);
+        return;
+      }
+    }
+    if (await importCardFile({ fileName: file.name, format, data: fileData, t, showToast })) dataChanged();
   };
 
   // Containers to offer share links for. Only fetched once both share toggles are
