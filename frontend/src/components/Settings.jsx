@@ -1,7 +1,7 @@
 import { useState, useEffect, lazy, Suspense, memo } from 'react';
 import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload, Eye, EyeOff, SlidersHorizontal, Info, Bug, Lightbulb, MessagesSquare, ScrollText, Layers, Languages, Smartphone, Server, PackageOpen } from 'lucide-react';
 import GithubIcon from './GithubIcon';
-import { GAMES, enabledGames, setGameEnabled, gameOptions, defaultGame, isGameEnabled } from '../utils/games';
+import { GAMES, enabledGames, setGameEnabled, gameOptions, defaultGame, isGameEnabled, preconGames } from '../utils/games';
 import RiotNotice from './RiotNotice';
 import { CURRENCIES, getCurrency, setCurrency } from '../utils/formatPrice';
 import { LOCALES, localeName, useT } from '../utils/i18n';
@@ -1014,7 +1014,7 @@ function Settings({ user, onUpdateUser, showToast, onLeaveDevice, onDataChanged 
               />
             </label>
             {/* A boxed Magic product, by name: MTGJSON's precon and Secret Lair lists. */}
-            {isGameEnabled('mtg') && (
+            {preconGames().length > 0 && (
               <button
                 type="button"
                 onClick={() => setShowPrecons(true)}

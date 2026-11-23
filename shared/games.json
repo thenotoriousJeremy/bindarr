@@ -27,7 +27,7 @@
     "provider": "scryfall",
     "languages": ["en", "ja", "de", "fr", "es", "it", "pt", "ko", "ru", "zh-tw", "zh-cn"],
     "printings": "foil",
-    "features": { "prices": true, "scan": true, "grading": true, "gradedPrices": false, "decks": true },
+    "features": { "prices": true, "scan": true, "grading": true, "gradedPrices": false, "decks": true, "precons": true },
     "deck": { "defaultFormat": "Commander / EDH", "defaultSize": 100 },
     "cardBack": "mtg",
     "marketplaces": { "tcgplayer": true, "cardmarket": true, "tcgplayerSearchLine": "magic" },

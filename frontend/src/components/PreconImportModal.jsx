@@ -11,16 +11,19 @@ import { useT } from '../utils/i18n';
 const MODES = ['collection', 'deck', 'both'];
 
 // onImported runs after cards or a deck were written, so the open tabs refetch.
-export default function PreconImportModal({ onClose, showToast, onImported }) {
+// initialQuery / initialSet open the list already searched (Search & Add hands
+// over what was typed there); initialFile opens straight on one deck, and Back
+// still leads to that search.
+export default function PreconImportModal({ onClose, showToast, onImported, initialQuery = '', initialSet = '', initialFile = null }) {
   const { t } = useT();
 
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState(initialQuery);
   const [type, setType] = useState('');
-  const [setCode, setSetCode] = useState('');
+  const [setCode, setSetCode] = useState(initialSet);
   const [results, setResults] = useState({ decks: [], total: 0, types: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [selected, setSelected] = useState(null);
+  const [selected, setSelected] = useState(initialFile);
   const [deck, setDeck] = useState(null);
   const [mode, setMode] = useState('collection');
   const [locations, setLocations] = useState([]);

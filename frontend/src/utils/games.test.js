@@ -92,4 +92,14 @@ assert.strictEqual(gameOfCard({ id: 'base1-4' }), 'pokemon');
 assert.strictEqual(gameOfCard({ id: 'not a card' }), null);
 assert.strictEqual(gameInfo('riftbound').nativeApp, false, 'kept out of the store-distributed apps (Riot fan policy)');
 
+// Registry features: only Magic has preconstructed products to import (MTGJSON).
+const { hasFeature, preconGames } = await import('./games.js');
+assert.strictEqual(hasFeature('mtg', 'precons'), true);
+assert.strictEqual(hasFeature('pokemon', 'precons'), false);
+assert.strictEqual(hasFeature('notagame', 'decks'), false);
+// The state above hides Magic, so no game offers a precon; showing it brings it back.
+assert.deepStrictEqual(preconGames(), []);
+assert.strictEqual(setGameEnabled('mtg', true), true);
+assert.deepStrictEqual(preconGames(), ['mtg']);
+
 console.log('games self-check passed');

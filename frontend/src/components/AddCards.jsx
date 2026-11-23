@@ -6,7 +6,7 @@ import SlabLookup from './SlabLookup';
 import { useT } from '../utils/i18n';
 import { isDeviceMode } from '../apiBase';
 import { lazyWithReload } from '../utils/lazyWithReload';
-import { isGameEnabled } from '../utils/games';
+import { preconGames } from '../utils/games';
 import { importFormatFor, readFileText, importCardFile } from '../utils/collectionImport';
 
 // Device mode only, so a server-mode build never loads the download manager.
@@ -22,7 +22,7 @@ const PreconImportModal = lazyWithReload(() => import('./PreconImportModal'));
 function ImportShortcuts({ showToast, onDataChanged }) {
   const { t } = useT();
   const [showPrecons, setShowPrecons] = useState(false);
-  const showPrecon = isGameEnabled('mtg');
+  const showPrecon = preconGames().length > 0;
 
   const handleFile = async (e) => {
     const file = e.target.files[0];
@@ -182,7 +182,7 @@ function AddCards({
             ) : (
               <CameraScanner onAddSuccess={onAddSuccess} showToast={showToast} setActiveTab={setActiveTab} />
             ))}
-            {mode === 'search' && <CardSearch onAddSuccess={onAddSuccess} showToast={showToast} setActiveTab={setActiveTab} />}
+            {mode === 'search' && <CardSearch onAddSuccess={onAddSuccess} onDataChanged={onDataChanged} showToast={showToast} setActiveTab={setActiveTab} />}
             {mode === 'slab' && <SlabLookup onAddSuccess={onAddSuccess} showToast={showToast} />}
           </div>
         </>

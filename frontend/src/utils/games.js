@@ -26,6 +26,14 @@ const byValue = new Map(GAMES.map(g => [g.value, g]));
 // The whole registry entry for a game, or null.
 export const gameInfo = (game) => byValue.get(String(game || '')) || null;
 
+// Whether a game's registry entry switches a feature on (shared/games.json
+// `features`); mirrors backend/src/utils/games.hasFeature.
+export const hasFeature = (game, feature) => !!gameInfo(game)?.features?.[feature];
+
+// Games with preconstructed products to import whole (routes/precons.js), and
+// switched on here.
+export const preconGames = () => enabledGames().filter(g => hasFeature(g, 'precons'));
+
 // The game rows from before multi-game support belong to.
 export const LEGACY_GAME = (GAMES.find(g => g.legacy) || GAMES[0]).value;
 
