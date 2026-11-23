@@ -684,7 +684,7 @@ function App() {
       case 'dashboard':
         return <Dashboard active={active} statsTrigger={statsTrigger} onNavigate={goTab} onOpenSet={openSet} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} onProposeTrade={proposeCardTrade} onViewTrade={openTradeHistory} />;
       case 'add-cards':
-        return <AddCards active={active} user={user} onAddSuccess={triggerRefresh} onUpdateUser={handleUpdateUser} showToast={showToast} setActiveTab={goTab}
+        return <AddCards active={active} user={user} onAddSuccess={triggerRefresh} onDataChanged={handleDataChanged} onUpdateUser={handleUpdateUser} showToast={showToast} setActiveTab={goTab}
           transferLaunch={transferLaunch} transferHistoryFocus={transferHistoryFocus}
           onInitialOfferHandled={clearTransferLaunch} onHistoryFocusHandled={clearTradeHistoryFocus} />;
       case 'collection':

@@ -1,16 +1,67 @@
 import { memo, useState, useEffect, lazy, Suspense } from 'react';
-import { Camera, Search, Award, Plus, ArrowLeftRight } from 'lucide-react';
+import { Camera, Search, Award, Plus, ArrowLeftRight, Upload, PackageOpen } from 'lucide-react';
 import CameraScanner from './CameraScanner';
 import CardSearch from './CardSearch';
 import SlabLookup from './SlabLookup';
 import { useT } from '../utils/i18n';
 import { isDeviceMode } from '../apiBase';
 import { lazyWithReload } from '../utils/lazyWithReload';
+import { preconGames } from '../utils/games';
+import { importFormatFor, readFileText, importCardFile } from '../utils/collectionImport';
 
 // Device mode only, so a server-mode build never loads the download manager.
 const DeviceScanSetup = lazy(() => import('./DeviceScanSetup'));
 // Its own chunk: most visits to this tab are to add cards.
 const TransferManager = lazyWithReload(() => import('./transfers/TransferManager'));
+const PreconImportModal = lazyWithReload(() => import('./PreconImportModal'));
+
+// A whole list at once, for someone who came here to add cards and has them
+// written down already: the same file import and precon picker Settings has
+// (people looked for them here, not there). A card list only; a full backup is
+// restored from Settings, since it replaces rather than merges.
+function ImportShortcuts({ showToast, onDataChanged }) {
+  const { t } = useT();
+  const [showPrecons, setShowPrecons] = useState(false);
+  const showPrecon = preconGames().length > 0;
+
+  const handleFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+    let data;
+    try {
+      data = await readFileText(file);
+    } catch {
+      showToast(t('settings.errReadFile'));
+      return;
+    }
+    const format = importFormatFor(file.name);
+    if (await importCardFile({ fileName: file.name, format, data, t, showToast }) && onDataChanged) onDataChanged();
+  };
+
+  const linkStyle = { display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', padding: '0.3rem 0.65rem', cursor: 'pointer', margin: 0 };
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+      {showPrecons && (
+        <Suspense fallback={null}>
+          <PreconImportModal onClose={() => setShowPrecons(false)} showToast={showToast} onImported={onDataChanged} />
+        </Suspense>
+      )}
+      <span>{t('addCards.haveList')}</span>
+      <label className="btn btn-secondary" style={linkStyle} title={t('addCards.importFileHint')}>
+        <Upload size={14} />
+        <span>{t('addCards.importFile')}</span>
+        <input type="file" accept=".csv,.txt" onChange={handleFile} style={{ display: 'none' }} />
+      </label>
+      {showPrecon && (
+        <button type="button" className="btn btn-secondary" style={linkStyle} title={t('precon.hint')} onClick={() => setShowPrecons(true)}>
+          <PackageOpen size={14} />
+          <span>{t('precon.open')}</span>
+        </button>
+      )}
+    </div>
+  );
+}
 
 // `active` is false while another tab is showing: the tab stays mounted so the
 // chosen mode and search survive, but the scanner is unmounted so the camera
@@ -21,6 +72,7 @@ function AddCards({
   active = true,
   user,
   onAddSuccess,
+  onDataChanged,
   onUpdateUser,
   showToast,
   setActiveTab,
@@ -118,6 +170,8 @@ function AddCards({
             </div>
           </div>
 
+          <ImportShortcuts showToast={showToast} onDataChanged={onDataChanged || onAddSuccess} />
+
           <div>
             {mode === 'scan' && active && (deviceMode ? (
               <Suspense fallback={null}>
@@ -128,7 +182,7 @@ function AddCards({
             ) : (
               <CameraScanner onAddSuccess={onAddSuccess} showToast={showToast} setActiveTab={setActiveTab} />
             ))}
-            {mode === 'search' && <CardSearch onAddSuccess={onAddSuccess} showToast={showToast} setActiveTab={setActiveTab} />}
+            {mode === 'search' && <CardSearch onAddSuccess={onAddSuccess} onDataChanged={onDataChanged} showToast={showToast} setActiveTab={setActiveTab} />}
             {mode === 'slab' && <SlabLookup onAddSuccess={onAddSuccess} showToast={showToast} />}
           </div>
         </>

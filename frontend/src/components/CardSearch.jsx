@@ -20,6 +20,7 @@ import RiotNotice from './RiotNotice';
 import { apiErrorText } from '../utils/apiError';
 import { LatestRequest, isAbortError } from '../utils/request';
 import SelectionBar, { BarDivider } from './SelectionBar';
+import PreconMatches from './PreconMatches';
 
 // Search failures worth explaining in-page rather than only as a toast. `keyHint`
 // marks the ones a user API key actually fixes; an upstream 5xx does not. Title
@@ -36,7 +37,7 @@ const SEARCH_ERRORS = {
 const CATALOGUE_RETRY_MS = 10000;
 const cataloguePending = (res) => res.headers?.get('X-Catalogue-Pending') === '1';
 
-function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
+function CardSearch({ onAddSuccess, onDataChanged, showToast, setActiveTab }) {
   const { t } = useT();
   const [query, setQuery] = useState('');
   const [numberQuery, setNumberQuery] = useState('');
@@ -57,6 +58,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   // A Magic query that cannot be read (an open quote, a stray parenthesis), shown
   // under the box instead of being sent off to come back empty.
   const [syntaxError, setSyntaxError] = useState(null);
+  // What the precon strip searches for: the last submitted name and set.
+  const [preconSearch, setPreconSearch] = useState(null);
 
   // Paging. A full page back means there is probably another one; `total` is the
   // provider's real match count when it reports one (cache hits don't).
@@ -243,6 +246,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
     const problem = game === 'mtg' ? checkSearchSyntax(query) : null;
     setSyntaxError(problem);
     if (problem) return;
+    // A new object each search, so the precon strip looks again even for the same words.
+    setPreconSearch({ q: query.trim(), set: setCodeQuery.trim() });
     runSearch(1);
   };
 
@@ -486,6 +491,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   const handleGameChange = (newGame) => {
     setGame(newGame);
     setSyntaxError(null);
+    setPreconSearch(null);
     if (!isLanguageSupported(newGame, searchLang)) {
       setSearchLang('en');
       setLanguage(langName('en'));
@@ -807,6 +813,8 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
       )}
 
       {game === 'riftbound' && <RiotNotice style={{ margin: '0 0 1rem' }} />}
+
+      <PreconMatches game={game} search={preconSearch} showToast={showToast} onImported={onDataChanged || onAddSuccess} />
 
       {/* Loading state */}
       {/* Only when there is nothing to show: a new search over existing results
