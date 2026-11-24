@@ -11,7 +11,7 @@ const { compartmentLabel, rebalanceCompartmentByScheme } = require('../../utils/
 const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement, reconcileIdenticalRows, setTileQuantity, tileMembers, ownedLocation, ownedCompartment } = require('../../utils/collectionHelpers');
 const { readQuantity } = require('../../utils/requestBounds');
 const { trashEntries } = require('../../utils/collectionTrash');
-const { conflictingSealedLinks, GRADERS, CONDITIONS, PRINTINGS, LIST_TYPES, moveCopiesToWishlist, readPurchasePrice, ownsSealedUnit, cardIdForLanguage } = require('./shared');
+const { conflictingSealedLinks, GRADERS, CONDITIONS, PRINTINGS, LIST_TYPES, moveCopiesToWishlist, readPurchasePrice, readAddedAt, ownsSealedUnit, cardIdForLanguage } = require('./shared');
 
 // A refusal decided inside updateEntry's transaction: thrown so the transaction
 // rolls back, answered with its own status and body.
@@ -437,7 +437,7 @@ async function updateEntry(req, res) {
   const {
     quantity, condition, printing, language, purchase_price,
     location_id, compartment_id, list_type, is_trade, favorite, game, notes,
-    grader, grade, cert_number, market_value, card_id, sealed_unit_id
+    grader, grade, cert_number, market_value, card_id, sealed_unit_id, added_at
   } = req.body;
 
   try {
@@ -471,6 +471,10 @@ async function updateEntry(req, res) {
     if (game !== undefined && !games.isGame(game)) return res.status(400).json({ error: 'Invalid game' });
     const price = purchase_price === undefined ? null : readPurchasePrice(purchase_price);
     if (price && price.error) return res.status(400).json({ error: price.error });
+    // When the copy was added, corrected by its owner: a collection entered long
+    // after the cards were bought, or an import that stamped every row today.
+    const addedAt = added_at === undefined ? null : readAddedAt(added_at);
+    if (addedAt && addedAt.error) return res.status(400).json({ error: addedAt.error, code: 'invalid_added_at' });
     // Grading. The three columns move together on purpose: sending grader:'Raw'
     // must clear the grade and cert in the same statement, or the row keeps a grade
     // it no longer claims to have. Cracking a slab is a real thing people do.
@@ -625,6 +629,7 @@ async function updateEntry(req, res) {
       if (favorite !== undefined) { updates.push('favorite = ?'); params.push(favorite ? 1 : 0); }
       if (game !== undefined) { updates.push('game = ?'); params.push(game); }
       if (notes !== undefined) { updates.push('notes = ?'); params.push(notes); }
+      if (addedAt) { updates.push('added_at = ?'); params.push(addedAt.value); }
       if (grading) {
         if (grading.cert) {
           const dup = await db.get(
@@ -668,6 +673,13 @@ async function updateEntry(req, res) {
           const loc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [row.location_id, req.user.id]);
           if (loc) await rebalanceCompartmentByScheme(db, row.compartment_id, loc.sort_order, loc.foil_sorting);
         }
+      }
+
+      // A container can be sorted by date added, so a copy that stays in its slot
+      // with a new date has to be re-sorted around too.
+      if (addedAt && addedAt.value !== row.added_at && !isMoving && !swappedCard && row.compartment_id && row.location_id) {
+        const loc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [row.location_id, req.user.id]);
+        if (loc) await rebalanceCompartmentByScheme(db, row.compartment_id, loc.sort_order, loc.foil_sorting);
       }
 
       // Quantity is absolute — it is how many copies the user says they own, and

@@ -18,6 +18,7 @@ test('counted actions are phrased here, with plural forms', () => {
   assert.equal(bulkResultText(tEn, 'condition', 'Near Mint', { affected: 4 }), 'Set the condition of 4 cards');
   assert.equal(bulkResultText(tEn, 'printing', 'Holofoil', { affected: 1 }), 'Set the printing of 1 card');
   assert.equal(bulkResultText(tEn, 'language', 'German', { affected: 2 }), 'Set the language of 2 cards');
+  assert.equal(bulkResultText(tEn, 'added_at', '2024-03-09T18:30:00.000Z', { message: 'Set the date added on 3 card(s)', affected: 3 }), 'Set the date added of 3 cards');
   assert.equal(bulkResultText(tEn, 'add_to_deck', '7', { message: 'Added 5 card(s) to deck', affected: 5, rejected: 0 }), 'Added 5 cards to the deck');
 });
 

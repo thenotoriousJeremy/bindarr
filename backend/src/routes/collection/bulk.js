@@ -1,5 +1,5 @@
-// One action over many selected entries: delete, move, trade, relabel, split a
-// price, add to a deck, link to a sealed unit.
+// One action over many selected entries: delete, move, trade, relabel, redate,
+// split a price, add to a deck, link to a sealed unit.
 const db = require('../../db');
 const languages = require('../../utils/languages');
 const { rebalanceCompartments } = require('../../utils/compartmentSort');
@@ -11,10 +11,10 @@ const { allocateSealedUnitCost } = require('../../utils/sealedCostAllocation');
 const { unitCardProgress } = require('../../utils/sealedContents');
 const { getOwnedUnit } = require('../../utils/sealedOwnership');
 const { trashEntries } = require('../../utils/collectionTrash');
-const { conflictingSealedLinks, cardIdForLanguage, moveCopiesToWishlist, LIST_TYPES, CONDITIONS, PRINTINGS } = require('./shared');
+const { conflictingSealedLinks, cardIdForLanguage, moveCopiesToWishlist, readAddedAt, LIST_TYPES, CONDITIONS, PRINTINGS } = require('./shared');
 
 // 5b. Bulk actions
-const BULK_ACTIONS = ['delete', 'move', 'trade', 'untrade', 'list_type', 'condition', 'printing', 'language', 'purchase_split', 'add_to_deck', 'set_sealed_unit', 'link_sealed_unit'];
+const BULK_ACTIONS = ['delete', 'move', 'trade', 'untrade', 'list_type', 'condition', 'printing', 'language', 'added_at', 'purchase_split', 'add_to_deck', 'set_sealed_unit', 'link_sealed_unit'];
 // Allowed field values: the lists the single edit checks against (./shared), which
 // mirror the collection table CHECK constraints in db.js.
 const BULK_CONDITIONS = CONDITIONS;
@@ -215,6 +215,25 @@ async function bulkAction(req, res) {
         }
       });
       return res.json({ message: `Set language on ${changed} card(s)`, affected: changed });
+    }
+
+    // One date added for the whole selection (read as the single edit reads it,
+    // shared.readAddedAt). Containers can be sorted by date added, so the
+    // compartments the copies sit in are re-sorted in the same transaction.
+    if (action === 'added_at') {
+      const addedAt = readAddedAt(value);
+      if (addedAt.error) return res.status(400).json({ error: addedAt.error, code: 'invalid_added_at' });
+      const changes = await db.withTransaction(async () => {
+        const filed = await selectOwned(
+          `SELECT DISTINCT c.compartment_id FROM collection c
+            WHERE c.compartment_id IS NOT NULL AND c.id IN (%IDS%) AND c.user_id = ?`,
+          ids, req.user.id
+        );
+        const changed = await updateOwned('added_at = ?', [addedAt.value], ids, req.user.id);
+        await rebalanceCompartments(db, filed.map(r => r.compartment_id));
+        return changed;
+      });
+      return res.json({ message: `Set the date added on ${changes} card(s)`, affected: changes });
     }
 
     // Distribute a total price paid (a pack/deck) across the selected entries,
