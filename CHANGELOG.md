@@ -6,9 +6,14 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+## [1.10.3] - 2026-11-24
+
 ### Added
 - **Change when a card was added.** A card's edit form now has a **Date Added** field, and the collection's selection bar sets one date and time on every selected copy (`added_at` on `PUT /api/collection/:id`; bulk action `added_at`). It suits a collection entered long after the cards were bought, or a large import stamped with the day it ran. Dates are entered on your own clock and stored in UTC, a date in the future is refused, and a container sorted by date added re-sorts around the change. Thanks [@sargonas](https://github.com/sargonas) ([#196](https://github.com/thenotoriousJeremy/bindarr/pull/196)).
 - **Imports keep the date added.** A file that says when each copy was added keeps those dates, instead of every copy being dated the day of the import. That includes Bindarr's own CSV and JSON exports, so an export imported back keeps them too; a third-party CSV can supply a "Date Added" column. A missing date, or one that isn't a real date or is in the future, gets the import's date, and the import summary counts the bad ones.
+
+### Fixed
+- **The iOS app builds again.** Microsoft removed the Swift package of ONNX Runtime, which the live scanner's on-device card detection runs on, from GitHub, along with the server that hosted its files, so 1.10.2 shipped without an iOS build. The app now uses the same ONNX Runtime 1.24.2, taken unchanged from Microsoft's NuGet package and hosted on this project's own release with a pinned checksum, through a small C layer of its own in place of Microsoft's Objective-C one ([#197](https://github.com/thenotoriousJeremy/bindarr/pull/197)).
 
 ## [1.10.2] - 2026-11-23
 
