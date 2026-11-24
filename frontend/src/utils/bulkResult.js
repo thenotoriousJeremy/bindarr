@@ -13,6 +13,7 @@ const COUNTED = {
   condition: 'bulk.result.condition',
   printing: 'bulk.result.printing',
   language: 'bulk.result.language',
+  added_at: 'bulk.result.dateAdded',
   add_to_deck: 'bulk.result.addedToDeck',
 };
 

@@ -25,6 +25,7 @@ import { useStableCallback } from '../utils/useStableCallback';
 import { useShownTrigger } from '../utils/useShownTrigger';
 import VirtualGrid from './VirtualGrid';
 import SelectionBar, { BarDivider } from './SelectionBar';
+import BulkDateAdded from './BulkDateAdded';
 import ViewToggle from './ViewToggle';
 import CardInspectorModal from './CardInspectorModal';
 import TrashModal from './TrashModal';
@@ -1002,6 +1003,7 @@ function CollectionList({ active = true, statsTrigger, onUpdate, showToast, sele
             <option value="">{t('bulk.setLanguage')}</option>
             {getLanguageNamesForGame(gameFilter).map(l => <option key={l} value={l}>{l}</option>)}
           </select>
+          <BulkDateAdded onApply={runBulk} disabled={!selectedIds.size} />
           <BarDivider />
           <PackPriceSplitter
             entryIds={Array.from(selectedIds)}

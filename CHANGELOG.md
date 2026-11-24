@@ -6,6 +6,9 @@ release also carries fuller notes on its
 
 ## [Unreleased]
 
+### Added
+- **Change when a card was added.** A card's edit form now has a **Date Added** field, and the collection's selection bar sets the date and time for every selected copy in a bulk edit (`bulk` action `added_at`; `added_at` on `PUT /api/collection/:id`). Ideal QoL improvement for a collection entered long after the cards were bought, or an large import set to the day it ran. Dates are entered on your own clock and stored in UTC, a date in the future is refused, and a container that is sorted by date added now re-sorts around the change.
+
 ## [1.10.2] - 2026-11-23
 
 ### Added

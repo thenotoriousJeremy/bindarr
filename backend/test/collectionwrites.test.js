@@ -10,6 +10,8 @@
 //   - a swap is both moves or neither;
 //   - list_type, game, purchase_price, sort_order and foil_sorting are checked,
 //     and the API-only `stackable` option is gone;
+//   - the date added can be corrected, one copy or a selection at a time, is
+//     stored as UTC, re-sorts a container sorted by it, and is checked;
 //   - a card from a sealed unit the user claimed keeps its sealed link;
 //   - a 500 answers with a fixed message, never the database's own words.
 const path = require('path');
@@ -214,6 +216,67 @@ async function validation() {
   console.log('PASS: list_type, game, purchase_price, sort_order and foil_sorting are validated; stackable is gone');
 }
 
+async function dateAdded() {
+  await card('dated', 'Dated');
+  const entry = await copy('dated', null, null, 0);
+  const addedAt = async (id) => (await db.get(`SELECT added_at FROM collection WHERE id = ?`, [id])).added_at;
+  const stamped = await addedAt(entry);
+
+  // The single edit: an instant with an offset is stored as UTC, the way
+  // CURRENT_TIMESTAMP writes the column; the stored form and a bare day are taken too.
+  for (const [sent, stored] of [
+    ['2020-05-17T09:15:30.000Z', '2020-05-17 09:15:30'],
+    ['2020-05-17T09:15:30+02:00', '2020-05-17 07:15:30'],
+    ['2019-12-31 23:59:59', '2019-12-31 23:59:59'],
+    ['2018-02-03T04:05', '2018-02-03 04:05:00'],
+    ['2018-02-03', '2018-02-03 00:00:00'],
+  ]) {
+    const res = await api('PUT', `/collection/${entry}`, { added_at: sent });
+    assert.strictEqual(res.status, 200, `${sent}: ${JSON.stringify(res.body)}`);
+    assert.strictEqual(await addedAt(entry), stored, `${sent} is stored as ${stored}`);
+  }
+  assert.strictEqual((await api('GET', `/collection/${entry}`)).body.added_at, '2018-02-03 00:00:00', 'the entry reads back the new date');
+
+  const future = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+  for (const bad of ['', 'yesterday', '2020-02-30', '2020-13-01', '2020-05-17T25:00:00Z', '17/05/2020', 1589706930, null, { day: 1 }, future]) {
+    const res = await api('PUT', `/collection/${entry}`, { added_at: bad });
+    assert.strictEqual(res.status, 400, `${JSON.stringify(bad)} is refused: ${JSON.stringify(res.body)}`);
+    assert.strictEqual(res.body.code, 'invalid_added_at');
+    const bulk = await api('POST', '/collection/bulk', { entry_ids: [entry], action: 'added_at', value: bad });
+    assert.strictEqual(bulk.status, 400, `bulk: ${JSON.stringify(bad)} is refused`);
+  }
+  assert.strictEqual(await addedAt(entry), '2018-02-03 00:00:00', 'nothing refused was stored');
+  // An edit that does not name the date leaves it alone.
+  assert.strictEqual((await api('PUT', `/collection/${entry}`, { notes: 'kept' })).status, 200);
+  assert.strictEqual(await addedAt(entry), '2018-02-03 00:00:00');
+
+  // The bulk action: every selected copy of this user's, and no one else's.
+  const second = await copy('dated', null, null, 0);
+  const theirs = await copy('dated', null, null, 0, otherId);
+  const theirStamp = await addedAt(theirs);
+  const res = await api('POST', '/collection/bulk', { entry_ids: [entry, second, theirs], action: 'added_at', value: '2021-06-01T12:00:00Z' });
+  assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+  assert.strictEqual(res.body.affected, 2);
+  assert.deepStrictEqual([await addedAt(entry), await addedAt(second)], ['2021-06-01 12:00:00', '2021-06-01 12:00:00']);
+  assert.strictEqual(await addedAt(theirs), theirStamp, "another user's copy keeps its date");
+  assert.strictEqual((await api('PUT', `/collection/${theirs}`, { added_at: '2021-06-01T12:00:00Z' })).status, 404);
+  assert.ok(stamped, 'a copy starts with a date');
+
+  // A box sorted newest first: redating a copy moves it within its row.
+  const box = await mkLocation('By Date', 'Box', { sort: '[{"id":"1","by":"added_at","dir":"desc","divider":false}]' });
+  const row = await mkPage(box, 10);
+  const first = await copy('dated', box, row, 1000);
+  const last = await copy('dated', box, row, 2000);
+  await db.run(`UPDATE collection SET added_at = '2022-01-02 00:00:00' WHERE id = ?`, [first]);
+  await db.run(`UPDATE collection SET added_at = '2022-01-01 00:00:00' WHERE id = ?`, [last]);
+  const order = async () => (await db.all(`SELECT id FROM collection WHERE compartment_id = ? ORDER BY position`, [row])).map(r => r.id);
+  assert.strictEqual((await api('PUT', `/collection/${last}`, { added_at: '2022-01-03T00:00:00Z' })).status, 200);
+  assert.deepStrictEqual(await order(), [last, first], 'the single edit re-sorts the row');
+  assert.strictEqual((await api('POST', '/collection/bulk', { entry_ids: [last], action: 'added_at', value: '2021-12-31T00:00:00Z' })).status, 200);
+  assert.deepStrictEqual(await order(), [first, last], 'and so does the bulk action');
+  console.log('PASS: the date added is corrected one copy or many at a time, validated and re-sorted');
+}
+
 async function claimedSealedLink() {
   // The other user's shared purchase; this user claimed one of its units.
   const purchase = (await db.run(
@@ -262,6 +325,7 @@ async function main() {
   await hugeSelections();
   await swapIsAtomic();
   await validation();
+  await dateAdded();
   await claimedSealedLink();
   await clientSafeErrors();
 }
