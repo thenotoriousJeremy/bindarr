@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 import Capacitor
-import OnnxRuntimeBindings
+import BindarrOrt
 
 // The live scanner's corner model, run by native ONNX Runtime. The Android twin
 // (android/.../NativeDetectorPlugin.java) explains the why; the protocol is the
@@ -27,13 +27,14 @@ public class NativeDetectorPlugin: CAPPlugin, CAPBridgedPlugin {
     private static let plane = size * size
     private static let mean: [Float] = [0.485, 0.456, 0.406]
     private static let std: [Float] = [0.229, 0.224, 0.225]
-    private static let shape: [NSNumber] = [1, 3, NSNumber(value: size), NSNumber(value: size)]
+    private static let shape: [Int64] = [1, 3, Int64(size), Int64(size)]
 
     // Shared across plugin instances and touched only on `queue`: the session
     // outlives a bridge reload, and ORT work stays off the plugin call queue.
+    // A BindarrOrtSession (BindarrOrt.h, over ORT's C API) is not reference
+    // counted: every one made is released with bindarr_ort_release.
     private static let queue = DispatchQueue(label: "com.bindarr.nativedetector", qos: .userInitiated)
-    private static var env: ORTEnv?
-    private static var session: ORTSession?
+    private static var session: OpaquePointer?
     private static var outputNames: Set<String> = []
     private static var loadedTag: String?
     private static var engine: String?
@@ -61,27 +62,32 @@ public class NativeDetectorPlugin: CAPPlugin, CAPBridgedPlugin {
         Self.queue.async {
             let t0 = Date()
             do {
-                if Self.env == nil { Self.env = try ORTEnv(loggingLevel: .warning) }
+                if let old = Self.session { bindarr_ort_release(old) }
                 Self.session = nil
                 Self.loadedTag = nil
                 Self.engine = nil
-                // ORT's Objective-C API loads from a path, not bytes.
-                let path = FileManager.default.temporaryDirectory.appendingPathComponent("bindarr-detector.onnx")
-                try bytes.write(to: path, options: .atomic)
 
                 // "auto" times each engine on this phone and keeps the fastest; see
                 // the Android twin for why that is decided here and not guessed.
                 let candidates = ep == "auto" ? ["cpu", "coreml"] : [ep]
                 var timings: [String: Any] = [:]
                 var errors: [String: Any] = [:]
-                var best: (ORTSession, String, Double)?
+                var best: (OpaquePointer, String, Double)?
                 for cand in candidates {
+                    var made: OpaquePointer?
                     do {
-                        let s = try Self.create(path: path.path, ep: cand)
+                        let s = try Self.create(model: bytes, ep: cand)
+                        made = s
                         let ms = try Self.bench(s)
                         timings[cand] = (ms * 10).rounded() / 10
-                        if best == nil || ms < best!.2 { best = (s, cand, ms) }
+                        if best == nil || ms < best!.2 {
+                            if let loser = best?.0 { bindarr_ort_release(loser) }
+                            best = (s, cand, ms)
+                        } else {
+                            bindarr_ort_release(s)
+                        }
                     } catch {
+                        if let s = made { bindarr_ort_release(s) }
                         errors[cand] = error.localizedDescription
                         CAPLog.print("[NativeDetector] \(cand) unavailable: \(error.localizedDescription)")
                     }
@@ -92,7 +98,7 @@ public class NativeDetectorPlugin: CAPPlugin, CAPBridgedPlugin {
                 }
                 let (s, bestEp, _) = winner
                 Self.session = s
-                Self.outputNames = Set(try s.outputNames())
+                Self.outputNames = Set(Self.sessionOutputNames(of: s))
                 Self.loadedTag = tag
                 Self.engine = "native-\(bestEp)"
                 CAPLog.print("[NativeDetector] \(Self.engine!) ready, timings \(timings)")
@@ -128,14 +134,9 @@ public class NativeDetectorPlugin: CAPPlugin, CAPBridgedPlugin {
                 let input = try Self.tensor(from: cg)
                 let t1 = CFAbsoluteTimeGetCurrent()
                 let wanted = Self.outputNames.intersection(["corners", "sharpness", "presence"])
-                let out = try session.run(withInputs: ["image": input], outputNames: wanted, runOptions: nil)
+                let out = try Self.run(session, input, outputs: Array(wanted))
                 let t2 = CFAbsoluteTimeGetCurrent()
-                guard let cornerValue = out["corners"] else {
-                    call.reject("model has no corners output")
-                    return
-                }
-                let corners = try Self.floats(cornerValue)
-                guard corners.count >= 8 else {
+                guard let corners = out["corners"], corners.count >= 8 else {
                     call.reject("model has no corners output")
                     return
                 }
@@ -144,8 +145,8 @@ public class NativeDetectorPlugin: CAPPlugin, CAPBridgedPlugin {
                     "prepMs": ((t1 - t0) * 10000).rounded() / 10,
                     "runMs": ((t2 - t1) * 10000).rounded() / 10
                 ]
-                if let v = out["sharpness"], let f = try Self.floats(v).first { r["sharpness"] = Double(f) }
-                if let v = out["presence"], let f = try Self.floats(v).first { r["presence"] = Double(f) }
+                if let f = out["sharpness"]?.first { r["sharpness"] = Double(f) }
+                if let f = out["presence"]?.first { r["presence"] = Double(f) }
                 call.resolve(r)
             } catch {
                 call.reject("detect failed: \(error.localizedDescription)")
@@ -153,40 +154,78 @@ public class NativeDetectorPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    private static func create(path: String, ep: String) throws -> ORTSession {
-        guard let env = env else { throw NSError(domain: "NativeDetector", code: 1, userInfo: [NSLocalizedDescriptionKey: "no ORT environment"]) }
-        let threads = max(1, min(4, ProcessInfo.processInfo.activeProcessorCount))
-        let opts = try ORTSessionOptions()
-        try opts.setGraphOptimizationLevel(.all)
-        try opts.addConfigEntry(withKey: "session.intra_op.allow_spinning", value: "0")
+    private static func failure(_ code: Int, _ message: String) -> NSError {
+        NSError(domain: "NativeDetector", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    private static func message(_ err: [CChar]) -> String {
+        err.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+    }
+
+    // Graph optimisations on, no spinning threads, up to four intra-op threads.
+    // CoreML is added as an MLProgram; whatever it cannot take falls back to the
+    // CPU EP, which gets the same cores.
+    private static func create(model: Data, ep: String) throws -> OpaquePointer {
+        let threads = Int32(max(1, min(4, ProcessInfo.processInfo.activeProcessorCount)))
+        let useCoreML: Int32
         switch ep {
         case "cpu":
-            try opts.setIntraOpNumThreads(Int32(threads))
+            useCoreML = 0
         case "coreml":
-            guard ORTIsCoreMLExecutionProviderAvailable() else {
-                throw NSError(domain: "NativeDetector", code: 2, userInfo: [NSLocalizedDescriptionKey: "CoreML EP not in this ORT build"])
-            }
-            // Whatever CoreML cannot take falls back to the CPU EP, so give that
-            // part the cores too.
-            try opts.setIntraOpNumThreads(Int32(threads))
-            let coreml = ORTCoreMLExecutionProviderOptions()
-            coreml.createMLProgram = true
-            try opts.appendCoreMLExecutionProvider(with: coreml)
+            guard bindarr_ort_coreml_available() != 0 else { throw failure(2, "CoreML EP not in this ORT build") }
+            useCoreML = 1
         default:
-            throw NSError(domain: "NativeDetector", code: 3, userInfo: [NSLocalizedDescriptionKey: "unknown engine \(ep)"])
+            throw failure(3, "unknown engine \(ep)")
         }
-        return try ORTSession(env: env, modelPath: path, sessionOptions: opts)
+        var err = [CChar](repeating: 0, count: 512)
+        let errCount = err.count
+        let made = model.withUnsafeBytes { bytes in
+            bindarr_ort_create(bytes.baseAddress, bytes.count, useCoreML, threads, &err, errCount)
+        }
+        guard let session = made else { throw failure(1, message(err)) }
+        return session
+    }
+
+    private static func sessionOutputNames(of s: OpaquePointer) -> [String] {
+        (0..<bindarr_ort_output_count(s)).compactMap { i in
+            bindarr_ort_output_name(s, i).map { String(cString: $0) }
+        }
+    }
+
+    // One run with the frame as input "image"; each requested output as floats.
+    private static func run(_ s: OpaquePointer, _ input: [Float], outputs: [String]) throws -> [String: [Float]] {
+        var err = [CChar](repeating: 0, count: 512)
+        let errCount = err.count
+        var data = [UnsafeMutablePointer<Float>?](repeating: nil, count: outputs.count)
+        var lens = [Int](repeating: 0, count: outputs.count)
+        let cNames = outputs.map { strdup($0) }
+        defer { cNames.forEach { free($0) } }
+        let names: [UnsafePointer<CChar>?] = cNames.map { $0.map { UnsafePointer($0) } }
+        let rc = input.withUnsafeBufferPointer { inBuf in
+            shape.withUnsafeBufferPointer { dims in
+                names.withUnsafeBufferPointer { n in
+                    bindarr_ort_run(s, "image", inBuf.baseAddress, dims.baseAddress, dims.count,
+                                    n.baseAddress, n.count, &data, &lens, &err, errCount)
+                }
+            }
+        }
+        defer { data.forEach { bindarr_ort_free($0) } }
+        guard rc == 0 else { throw failure(5, message(err)) }
+        var out: [String: [Float]] = [:]
+        for (i, name) in outputs.enumerated() {
+            if let p = data[i] { out[name] = Array(UnsafeBufferPointer(start: p, count: lens[i])) }
+        }
+        return out
     }
 
     // Mean of three runs after two warm-ups, on a blank frame.
-    private static func bench(_ s: ORTSession) throws -> Double {
-        let blank = NSMutableData(length: 3 * plane * MemoryLayout<Float>.size)!
-        let x = try ORTValue(tensorData: blank, elementType: .float, shape: shape)
-        let names = Set(try s.outputNames())
+    private static func bench(_ s: OpaquePointer) throws -> Double {
+        let blank = [Float](repeating: 0, count: 3 * plane)
+        let names = sessionOutputNames(of: s)
         var total = 0.0
         for i in 0..<5 {
             let t = CFAbsoluteTimeGetCurrent()
-            _ = try s.run(withInputs: ["image": x], outputNames: names, runOptions: nil)
+            _ = try run(s, blank, outputs: names)
             if i >= 2 { total += (CFAbsoluteTimeGetCurrent() - t) * 1000 }
         }
         return total / 3
@@ -194,7 +233,7 @@ public class NativeDetectorPlugin: CAPPlugin, CAPBridgedPlugin {
 
     // Draw into a 384x384 RGBX buffer (squashing, the same `fit: fill` as the
     // other paths), then normalise into a CHW float tensor.
-    private static func tensor(from cg: CGImage) throws -> ORTValue {
+    private static func tensor(from cg: CGImage) throws -> [Float] {
         let ok: Bool = rgbx.withUnsafeMutableBytes { buf in
             guard let ctx = CGContext(data: buf.baseAddress, width: size, height: size, bitsPerComponent: 8,
                                       bytesPerRow: size * 4, space: CGColorSpaceCreateDeviceRGB(),
@@ -203,23 +242,19 @@ public class NativeDetectorPlugin: CAPPlugin, CAPBridgedPlugin {
             ctx.draw(cg, in: CGRect(x: 0, y: 0, width: size, height: size))
             return true
         }
-        guard ok else { throw NSError(domain: "NativeDetector", code: 4, userInfo: [NSLocalizedDescriptionKey: "no bitmap context"]) }
-        let data = NSMutableData(length: 3 * plane * MemoryLayout<Float>.size)!
-        let f = data.mutableBytes.assumingMemoryBound(to: Float.self)
+        guard ok else { throw failure(4, "no bitmap context") }
+        var data = [Float](repeating: 0, count: 3 * plane)
         let l0 = lut[0], l1 = lut[1], l2 = lut[2]
-        rgbx.withUnsafeBufferPointer { p in
-            for i in 0..<plane {
-                let j = i * 4
-                f[i] = l0[Int(p[j])]
-                f[plane + i] = l1[Int(p[j + 1])]
-                f[2 * plane + i] = l2[Int(p[j + 2])]
+        data.withUnsafeMutableBufferPointer { f in
+            rgbx.withUnsafeBufferPointer { p in
+                for i in 0..<plane {
+                    let j = i * 4
+                    f[i] = l0[Int(p[j])]
+                    f[plane + i] = l1[Int(p[j + 1])]
+                    f[2 * plane + i] = l2[Int(p[j + 2])]
+                }
             }
         }
-        return try ORTValue(tensorData: data, elementType: .float, shape: shape)
-    }
-
-    private static func floats(_ v: ORTValue) throws -> [Float] {
-        let d = try v.tensorData() as Data
-        return d.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+        return data
     }
 }

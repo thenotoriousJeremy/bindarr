@@ -64,7 +64,12 @@ In the app it runs through native ONNX Runtime instead, in the
 dependency that `npx cap sync` wires into both projects like any other plugin):
 
 - Android: `onnxruntime-android` (Java API), CPU EP on up to 4 threads, or XNNPACK.
-- iOS: `onnxruntime-swift-package-manager`, CPU EP on up to 4 threads, or CoreML.
+- iOS: Microsoft's `onnxruntime.xcframework` 1.24.2 (C API, through the plugin's
+  own `BindarrOrt` shim), CPU EP on up to 4 threads, or CoreML. Microsoft's Swift
+  package for it was removed from GitHub in November 2026, so the framework is
+  taken unmodified from the `Microsoft.ML.OnnxRuntime` NuGet package and served
+  from this repository's `onnxruntime-ios-1.24.2` release, pinned by checksum
+  (`frontend/native-detector/Package.swift` says how to update it).
 - On first load the plugin times each engine on the phone itself and keeps the
   fastest; the console logs the timings, and the scanner's debug row (scan
   settings) shows `native-cpu`, `native-xnnpack` or `native-coreml`. To pin one
