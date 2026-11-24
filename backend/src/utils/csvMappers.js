@@ -147,6 +147,10 @@ function mapRow(row, { defaultGame = 'pokemon', mtgFile = false } = {}) {
     game: gameFrom(col('game', 'productline')) || gameOfId(cardId) || (mtgFile ? 'mtg' : null) || defaultGame,
     // Bindarr's own column for the list a copy was on, which a wishlist row says.
     list_type: col('listtype'),
+    // When the copy was added: Bindarr's export writes "Added At" (UTC, the
+    // column's own form). The import keeps it when it reads as a date and stamps
+    // the copy with the import's time otherwise (routes/importExport.js).
+    added_at: col('addedat', 'dateadded', 'added'),
   };
 }
 
