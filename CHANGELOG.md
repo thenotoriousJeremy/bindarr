@@ -9,6 +9,19 @@ release also carries fuller notes on its
 ### Added
 - **Change when a card was added.** A card's edit form now has a **Date Added** field, and the collection's selection bar sets the date and time for every selected copy in a bulk edit (`bulk` action `added_at`; `added_at` on `PUT /api/collection/:id`). Ideal QoL improvement for a collection entered long after the cards were bought, or an large import set to the day it ran. Dates are entered on your own clock and stored in UTC, a date in the future is refused, and a container that is sorted by date added now re-sorts around the change.
 
+## [1.10.2] - 2026-11-23
+
+### Added
+- **Import a list from Add Cards.** A **Have a list?** row under Scan / Search / Graded Slab offers **Import a file** (a CSV, or a `.txt` decklist with set codes and numbers such as ManaBox, Moxfield or Arena export) and **Import a precon**, the same imports Settings has. A full backup is still restored from Settings ([#193](https://github.com/thenotoriousJeremy/bindarr/issues/193)).
+- **Precons in Search & Add.** A Magic search also looks through the preconstructed decks and Secret Lair drops: those whose name or set matches ("Lorehold", set "C21") are listed above the card results, and one click opens the deck to add to your collection, build as a deck, or both.
+- **Unraid template.** `unraid/bindarr.xml` sets up the ports, the data folder and the environment variables; [docs/install.md](docs/install.md#unraid) explains using it.
+
+### Changed
+- **Dependency updates**, among them axios 1.21.1, which takes in a follow-redirects fix for a credential leak on redirects (CVE-2026-116689), and Capacitor 8.6.2 for the phone apps.
+
+### Documentation
+- **A new README hero image** showing the app on three phones.
+
 ## [1.10.1] - 2026-11-17
 
 ### Fixed
