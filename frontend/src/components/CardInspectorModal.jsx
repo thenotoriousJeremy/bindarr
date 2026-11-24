@@ -28,6 +28,7 @@ import { bulkResultText } from '../utils/bulkResult';
 import { localizedPreview, savedPrintingFields } from '../utils/inspectorCard';
 import { canOpenTradeHistory } from '../utils/tradeAccess';
 import { receivedFromText } from '../utils/transferView';
+import { addedAtFromInput, addedAtInputValue, localInputValue } from '../utils/addedAt';
 import { isDeviceMode } from '../apiBase';
 
 // MTG color identity pip colors (WUBRG), approximating the printed mana colors.
@@ -123,6 +124,8 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
   const [grade, setGrade] = useState('');
   const [certNumber, setCertNumber] = useState('');
   const [marketValue, setMarketValue] = useState('');
+  // When the copy was added, as a datetime-local value on the reader's clock.
+  const [addedAt, setAddedAt] = useState('');
   const [fetchingValue, setFetchingValue] = useState(false);
   const [localizedCard, setLocalizedCard] = useState(null);
   const [prevTargetId, setPrevTargetId] = useState(card?.entry_id || card?.id || null);
@@ -191,6 +194,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     setGrade(from.grade == null ? '' : String(from.grade));
     setCertNumber(from.cert_number || '');
     setMarketValue(from.market_value == null ? '' : String(from.market_value));
+    setAddedAt(addedAtInputValue(from.added_at));
   };
 
   useEffect(() => {
@@ -237,6 +241,9 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
     e.preventDefault();
     if (!targetEntryId) return;
     const qNum = Math.max(1, parseInt(q, 10) || 1);
+    // Only when the field was changed to a whole date and time: it shows minutes,
+    // so sending it back untouched would drop the seconds of every card saved.
+    const newAddedAt = addedAt !== addedAtInputValue(card.added_at) ? addedAtFromInput(addedAt) : null;
     try {
       const res = await fetch(`/api/collection/${targetEntryId}`, {
         method: 'PUT',
@@ -266,7 +273,8 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
           // untouched would relabel it as hand-typed and exempt it from a refresh.
           ...(marketValue !== (card.market_value == null ? '' : String(card.market_value))
             ? { market_value: marketValue === '' ? null : parseFloat(marketValue) }
-            : {})
+            : {}),
+          ...(newAddedAt ? { added_at: newAddedAt } : {})
         })
       });
       if (res.ok) {
@@ -290,6 +298,8 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         card.grade = grade === '' ? null : parseFloat(grade);
         card.cert_number = certNumber.trim() || null;
         card.market_value = marketValue === '' ? null : parseFloat(marketValue);
+        // As the server stores it: UTC, without a zone.
+        if (newAddedAt) card.added_at = newAddedAt.slice(0, 19).replace('T', ' ');
         // The server resolves this per printing on the next fetch; mirror it here so
         // a screen still holding this object does not show the old printing's price.
         card.price_trend = resolveCardPrice(card, printing);
@@ -710,6 +720,18 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                     <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
                   ))}
                 </select>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="date-added">{t('inspector.dateAdded')}</label>
+                <input
+                  id="date-added"
+                  type="datetime-local"
+                  className="input-control"
+                  value={addedAt}
+                  max={localInputValue(new Date())}
+                  onChange={(e) => setAddedAt(e.target.value)}
+                />
               </div>
 
               <div className="form-group">

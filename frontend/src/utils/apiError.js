@@ -12,6 +12,7 @@ const KEYS = {
   entry_not_found: 'apiError.entryNotFound',
   printing_other_game: 'apiError.printingOtherGame',
   invalid_market_value: 'apiError.invalidMarketValue',
+  invalid_added_at: 'apiError.invalidAddedAt',
   update_failed: 'apiError.updateFailed',
   delete_failed: 'apiError.deleteFailed',
   compartment_full: 'apiError.compartmentFull',

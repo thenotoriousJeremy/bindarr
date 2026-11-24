@@ -101,6 +101,32 @@ function readPurchasePrice(value) {
   return { value: n };
 }
 
+// When a copy was added, as its owner corrects it (the single edit and the bulk
+// action): an ISO 8601 instant ('2024-03-09T18:30:00.000Z', an offset instead of
+// Z is fine), or what the column itself holds and GET /collection returns
+// ('2024-03-09 18:30:00', UTC without a zone), or a bare day (midnight UTC).
+// Stored the way CURRENT_TIMESTAMP writes it, so text comparison still orders the
+// column. An invalid date (like a Feb 31st) is refused as is one past tomorrow... a 
+// day's grace covers a client whose clock or zone runs ahead, and no card was added 
+// later than that.
+// Returns { value } or { error }.
+const ADDED_AT_ERROR = 'added_at must be a date and time that is not in the future';
+const ADDED_AT_SHAPE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+function readAddedAt(raw) {
+  const match = typeof raw === 'string' ? ADDED_AT_SHAPE.exec(raw.trim()) : null;
+  if (!match) return { error: ADDED_AT_ERROR };
+  const [, year, month, day, hour = '00', minute = '00', second = '00', zone] = match;
+  const wall = `${year}-${month}-${day}T${hour}:${minute}:${second}`;
+  // The wall-clock reading as UTC must print back unchanged: Date would turn
+  // February 30th into March 2nd and hour 25 into the next day.
+  const asUtc = new Date(`${wall}Z`);
+  if (Number.isNaN(asUtc.getTime()) || asUtc.toISOString().slice(0, 19) !== wall) return { error: ADDED_AT_ERROR };
+  const instant = zone && zone !== 'Z' ? new Date(`${wall}${zone}`) : asUtc;
+  if (Number.isNaN(instant.getTime()) || instant.getUTCFullYear() < 1900) return { error: ADDED_AT_ERROR };
+  if (instant.getTime() > Date.now() + 24 * 60 * 60 * 1000) return { error: ADDED_AT_ERROR };
+  return { value: instant.toISOString().slice(0, 19).replace('T', ' ') };
+}
+
 // A sealed unit id is only ever linked to a card when the unit belongs to the
 // same user. Shared by every write path (single add, bulk add, edit), so none of
 // them can link a card to, and then read through, another user's purchase.
@@ -129,6 +155,7 @@ module.exports = {
   LIST_TYPES,
   moveCopiesToWishlist,
   readPurchasePrice,
+  readAddedAt,
   ownsSealedUnit,
   cardIdForLanguage,
 };

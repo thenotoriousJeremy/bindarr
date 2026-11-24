@@ -14,6 +14,7 @@ const languages = require('../utils/languages');
 const { matcher, normName } = require('../utils/setCatalogueMatch');
 const { importLimiter } = require('../middleware/auth');
 const { MAX_QUANTITY, clampImportQuantity } = require('../utils/requestBounds');
+const { readAddedAt } = require('./collection/shared');
 
 // Every row can cost a provider lookup and the whole file is written in one
 // transaction, so a file has to be bounded. Bigger collections import in parts.
@@ -389,6 +390,7 @@ router.post('/import', importLimiter, async (req, res) => {
 
     let importedCount = 0;
     let clampedRows = 0;
+    let undatedRows = 0;
     let wishlisted = 0;
     // A wishlist row (an older Bindarr file's wanted card) goes on the default
     // Wishlist, its quantity the copies wanted, rather than becoming copies.
@@ -412,11 +414,17 @@ router.post('/import', importLimiter, async (req, res) => {
         // rather than refused, so one odd cell does not sink the file.
         const { copies, clamped } = clampImportQuantity(item.quantity);
         if (clamped) clampedRows++;
+        // The date the file says the copy was added (a Bindarr export, CSV or JSON,
+        // carries it), read the way an edit reads one; without a usable one, now.
+        // A bad cell does not sink the file, as with quantities.
+        const added = item.added_at == null || item.added_at === '' ? null : readAddedAt(String(item.added_at));
+        if (added && added.error) undatedRows++;
+        const addedAt = added && !added.error ? added.value : null;
         for (let i = 0; i < copies; i++) {
           await db.run(
             `INSERT INTO collection
              (card_id, user_id, quantity, condition, printing, language, purchase_price, game, added_at)
-             VALUES (?, ?, 1, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+             VALUES (?, ?, 1, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))`,
             [
               cardId,
               req.user.id,
@@ -424,7 +432,8 @@ router.post('/import', importLimiter, async (req, res) => {
               item.printing || 'Normal',
               item.language || 'English',
               item.purchase_price || 0,
-              gameOfCard.get(cardId)
+              gameOfCard.get(cardId),
+              addedAt
             ]
           );
           importedCount++;
@@ -439,6 +448,9 @@ router.post('/import', importLimiter, async (req, res) => {
     const adjusted = clampedRows
       ? ` ${clampedRows} row${clampedRows === 1 ? '' : 's'} had a quantity outside 1–${MAX_QUANTITY} and ${clampedRows === 1 ? 'was' : 'were'} imported with the nearest number in range.`
       : '';
+    const undated = undatedRows
+      ? ` ${undatedRows} row${undatedRows === 1 ? '' : 's'} had a date added that is not a date (or is in the future) and ${undatedRows === 1 ? 'was' : 'were'} dated today.`
+      : '';
     // Named, not just counted: the list is what lets the user fix the file.
     const examples = unresolved.slice(0, 5).map(r => [r.name, r.set, r.number && `#${r.number}`].filter(Boolean).join(' ')).join(', ');
     const skipped = unresolved.length
@@ -447,7 +459,7 @@ router.post('/import', importLimiter, async (req, res) => {
     const onWishlist = wishlisted
       ? ` ${wishlisted} wishlist card${wishlisted === 1 ? '' : 's'} went on your Wishlist.`
       : '';
-    return res.json({ success: true, count: importedCount, wishlisted, clamped: clampedRows, unresolved, message: `Successfully imported ${importedCount} items.${onWishlist}${unmatched}${empty}${adjusted}${skipped}` });
+    return res.json({ success: true, count: importedCount, wishlisted, clamped: clampedRows, undated: undatedRows, unresolved, message: `Successfully imported ${importedCount} items.${onWishlist}${unmatched}${empty}${adjusted}${undated}${skipped}` });
   } catch (error) {
     console.error('Import failed:', error);
     return res.status(500).json({ error: 'Import failed', code: 'import_failed' });
